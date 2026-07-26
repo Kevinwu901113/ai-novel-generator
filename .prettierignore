@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+coverage/
+*.db
+*.db-journal
+*.db-wal
+pnpm-lock.yaml
