@@ -221,3 +221,372 @@ body {
 .status-item:first-child {
   color: var(--color-status-ok);
 }
+
+/* ── 数据服务状态指示器 ─────────────────────────────── */
+
+.data-service-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 12px;
+}
+
+.data-service-badge.starting {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.data-service-badge.ready {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.data-service-badge.failed,
+.data-service-badge.disconnected {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  .data-service-badge.starting {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+  .data-service-badge.ready {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+  .data-service-badge.failed,
+  .data-service-badge.disconnected {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+}
+
+/* ── 加载指示器 ─────────────────────────────────────── */
+
+.loading-indicator {
+  font-size: 28px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── 重试按钮 ───────────────────────────────────────── */
+
+.btn-retry {
+  margin-top: 12px;
+  padding: 8px 20px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn-retry:hover {
+  background-color: var(--color-primary-hover);
+}
+
+.btn-retry-inline {
+  margin-left: 8px;
+  padding: 2px 8px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.btn-retry-inline:hover {
+  background-color: var(--color-primary-hover);
+}
+
+/* ── 全局错误 ─────────────────────────────────────── */
+
+.global-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  border-bottom: 1px solid #fecaca;
+}
+
+@media (prefers-color-scheme: dark) {
+  .global-error {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-bottom-color: #7f1d1d;
+  }
+}
+
+.global-error button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+/* ── 新建项目按钮 ─────────────────────────────────── */
+
+.btn-new-project {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 14px;
+  transition: background-color 0.15s;
+}
+
+.btn-new-project:hover {
+  background-color: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+/* ── 项目列表 ─────────────────────────────────────── */
+
+.project-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  position: relative;
+}
+
+.project-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.project-item.active {
+  background-color: var(--color-primary);
+  color: white;
+}
+
+.project-item.active .project-item-time {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.project-item.missing {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.project-item-name {
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.project-item-badge {
+  font-size: 11px;
+  color: #b91c1c;
+  background: #fef2f2;
+  padding: 1px 6px;
+  border-radius: 4px;
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.project-item-time {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* ── 创建表单 ─────────────────────────────────────── */
+
+.create-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 600px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.form-field label {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.form-field input,
+.form-field textarea {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
+
+.form-field input:disabled,
+.form-field textarea:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.form-field textarea {
+  resize: vertical;
+  min-height: 150px;
+}
+
+.form-field-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 20px;
+}
+
+.form-error {
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+.char-count {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin-left: auto;
+}
+
+.btn-create {
+  align-self: flex-start;
+  padding: 10px 24px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn-create:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.btn-create:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ── 项目详情 ─────────────────────────────────────── */
+
+.project-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.detail-section h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+.detail-value {
+  font-size: 16px;
+  color: var(--color-text);
+}
+
+.detail-idea {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  background: var(--color-bg-secondary);
+  padding: 12px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+}
+
+.detail-next-step {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--color-bg-secondary);
+  border-radius: 8px;
+  border: 1px dashed var(--color-border);
+}
+
+.detail-next-step p:first-child {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+/* ── 状态面板 ─────────────────────────────────────── */
+
+.status-section {
+  margin-bottom: 16px;
+}
+
+.status-section h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.status-section p {
+  font-size: 14px;
+  color: var(--color-text);
+}
+
+.mono {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+}

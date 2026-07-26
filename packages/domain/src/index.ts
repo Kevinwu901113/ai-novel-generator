@@ -6,8 +6,30 @@
  * 不负责随机 ID 生成 —— ID 由调用方注入。
  */
 
+// ── Unicode 工具 ──────────────────────────────────────────────────
+
+/**
+ * 计算字符串的 Unicode code point 数量。
+ *
+ * String.length 返回 UTF-16 code unit 数量，会误判 emoji 和扩展平面字符。
+ * 此函数使用 Array.from 按 code point 迭代，得到正确计数。
+ */
+export function unicodeCodePointLength(str: string): number {
+  return [...str].length;
+}
+
+// ── 品牌类型 ──────────────────────────────────────────────────────
+
 /** 项目唯一标识符 */
 export type ProjectId = string & { readonly __brand: 'ProjectId' };
+
+/** 项目名称（已验证，trim 后 1-100 Unicode code points） */
+export type ProjectName = string & { readonly __brand: 'ProjectName' };
+
+/** 初始想法（已验证，trim 后 1-20000 Unicode code points） */
+export type InitialIdea = string & { readonly __brand: 'InitialIdea' };
+
+// ── 状态类型 ──────────────────────────────────────────────────────
 
 /** 项目状态 */
 export type ProjectStatus =
@@ -35,6 +57,29 @@ export type DecisionScope =
   | 'scene' // 场景级决策
   | 'line'; // 行级决策
 
+// ── 接口 ──────────────────────────────────────────────────────────
+
+/** 项目摘要 —— 用于列表展示，不含初始想法全文 */
+export interface ProjectSummary {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly status: ProjectStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly lastOpenedAt: string | null;
+}
+
+/** 完整项目 */
+export interface Project {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly initialIdea: string;
+  readonly status: ProjectStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly lastOpenedAt: string | null;
+}
+
 /** 变更集 —— 跨模块更新的最小单位 */
 export interface ChangeSet {
   readonly id: string;
@@ -52,12 +97,55 @@ export interface ChangeEntry {
   readonly newValue: unknown;
 }
 
+// ── 验证函数 ──────────────────────────────────────────────────────
+
+const MAX_PROJECT_NAME_LENGTH = 100;
+const MAX_INITIAL_IDEA_LENGTH = 20_000;
+
 /** 创建 ProjectId（验证，不生成） */
 export function createProjectId(raw: string): ProjectId {
   if (!raw || raw.trim().length === 0) {
     throw new Error('ProjectId 不能为空');
   }
   return raw as ProjectId;
+}
+
+/**
+ * 验证并创建 ProjectName。
+ *
+ * 规则：
+ * - trim 后不能为空
+ * - 最大 100 Unicode code points
+ */
+export function createProjectName(raw: string): ProjectName {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error('项目名称不能为空');
+  }
+  const length = unicodeCodePointLength(trimmed);
+  if (length > MAX_PROJECT_NAME_LENGTH) {
+    throw new Error(`项目名称不能超过 ${MAX_PROJECT_NAME_LENGTH} 个字符（当前 ${length} 个）`);
+  }
+  return trimmed as ProjectName;
+}
+
+/**
+ * 验证并创建 InitialIdea。
+ *
+ * 规则：
+ * - trim 后不能为空
+ * - 最大 20,000 Unicode code points
+ */
+export function createInitialIdea(raw: string): InitialIdea {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    throw new Error('初始想法不能为空');
+  }
+  const length = unicodeCodePointLength(trimmed);
+  if (length > MAX_INITIAL_IDEA_LENGTH) {
+    throw new Error(`初始想法不能超过 ${MAX_INITIAL_IDEA_LENGTH} 个字符（当前 ${length} 个）`);
+  }
+  return trimmed as InitialIdea;
 }
 
 /**

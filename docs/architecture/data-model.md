@@ -129,3 +129,73 @@ API Key 不进入项目备份：
 - 单独存储在用户配置目录
 - 加密存储（可选）
 - 项目备份时排除 API Key
+
+## M1-A 数据模型
+
+### 数据库分层
+
+- **app.sqlite**：应用级项目索引，存储在 `<userData>/app.sqlite`
+- **project.sqlite**：单个项目数据，存储在 `<userData>/projects/<project-id>/project.sqlite`
+
+project.sqlite 是项目的正式数据来源。app.sqlite 仅用于项目列表和快速定位。
+
+### app.sqlite Schema
+
+```sql
+CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  initial_idea TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'idea',
+  project_directory TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_opened_at TEXT
+) STRICT;
+```
+
+### project.sqlite Schema
+
+```sql
+CREATE TABLE schema_migrations (
+  version INTEGER PRIMARY KEY,
+  applied_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE project_metadata (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  initial_idea TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'idea',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+```
+
+### 项目目录结构
+
+```
+<userData>/
+├── app.sqlite
+└── projects/
+    └── <project-id>/
+        ├── project.sqlite
+        ├── assets/
+        ├── sources/
+        ├── snapshots/
+        ├── exports/
+        └── temp/
+```
+
+### SQLite 配置
+
+- `PRAGMA foreign_keys = ON`
+- `PRAGMA journal_mode = WAL`
+- `PRAGMA busy_timeout = 5000`
+- STRICT tables
+- 所有时间使用 UTC ISO 8601

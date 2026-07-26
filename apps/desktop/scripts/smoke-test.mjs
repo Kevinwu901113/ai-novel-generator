@@ -12,9 +12,63 @@ import { execFile } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, '..', 'out');
+
+/** Check asar contents for forbidden files. */
+function checkAsarContents(appPath) {
+  const require = createRequire(import.meta.url);
+  let asar;
+  try {
+    asar = require('@electron/asar');
+  } catch {
+    // Try the legacy package name
+    try {
+      asar = require('asar');
+    } catch {
+      console.warn('[smoke-test] asar package not found, skipping content check');
+      return true;
+    }
+  }
+
+  // Find asar file
+  let asarPath;
+  if (process.platform === 'darwin') {
+    asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar');
+  } else {
+    asarPath = path.join(appPath, 'resources', 'app.asar');
+  }
+
+  if (!existsSync(asarPath)) {
+    console.warn('[smoke-test] asar not found at', asarPath);
+    return true;
+  }
+
+  const files = asar.listPackage(asarPath);
+  const violations = [];
+
+  for (const file of files) {
+    if (file.endsWith('.test.js') || file.endsWith('.test.ts') || file.endsWith('.test.d.ts')) {
+      violations.push(`test file: ${file}`);
+    }
+    if (file.endsWith('.map')) {
+      violations.push(`source map: ${file}`);
+    }
+  }
+
+  if (violations.length > 0) {
+    console.error('[smoke-test] asar contains forbidden files:');
+    for (const v of violations) {
+      console.error(`  - ${v}`);
+    }
+    return false;
+  }
+
+  console.log('[smoke-test] asar content check passed');
+  return true;
+}
 
 /** Find the packaged Electron binary. */
 function findElectronBinary() {
@@ -54,6 +108,13 @@ const binary = findElectronBinary();
 if (!binary) {
   console.error('[smoke-test] Could not find packaged Electron binary in', outDir);
   console.error('  Run "pnpm package" first.');
+  process.exit(1);
+}
+
+// Check asar contents before launching
+const appDir = path.dirname(path.dirname(path.dirname(binary)));
+if (!checkAsarContents(appDir)) {
+  console.error('[smoke-test] asar content check FAILED');
   process.exit(1);
 }
 

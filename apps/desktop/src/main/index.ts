@@ -1,166 +1,61 @@
+/**
+ * Electron Main Process 入口。
+ *
+ * 启动顺序（不阻塞窗口）：
+ * 1. app.whenReady()
+ * 2. 同步创建 BrowserWindow，立即加载 Renderer
+ * 3. 注册 IPC 处理器（不等待 Worker）
+ * 4. 并行启动 Utility Process
+ * 5. ready-to-show / did-finish-load 时显示窗口
+ * 6. Worker ready 后 Renderer 可请求数据
+ */
+
 import { app, BrowserWindow, ipcMain } from 'electron';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { IPC_CHANNELS, type HealthCheckResponse } from '@ai-novel/contracts';
+import crypto from 'node:crypto';
+import {
+  IPC_CHANNELS,
+  isValidCreateProjectInput,
+  isValidOpenProjectInput,
+  type HealthCheckResponse,
+  type CreateProjectResult,
+  type ListProjectsResult,
+  type OpenProjectResult,
+} from '@ai-novel/contracts';
+import { mark } from './startup-timeline.js';
+import { createMainWindow, getMainWindow } from './window-manager.js';
+import {
+  startWorker,
+  shutdownWorker,
+  sendToWorker,
+  getWorkerStatus,
+  retryWorker,
+} from './worker-client.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+mark('process-start');
 
-const isDev = !app.isPackaged;
 const isSmokeTest = process.argv.includes('--smoke-test');
 
-// ── 日志工具 ──────────────────────────────────────────────
-const log = (...args: unknown[]) => {
-  console.log('[main]', ...args);
-};
+const log = (...args: unknown[]) => console.log('[main]', ...args);
 
-const logError = (...args: unknown[]) => {
-  console.error('[main]', ...args);
-};
+// ── IPC 处理器（不等待 Worker，立即注册）──────────────────────────
 
-// ── 窗口单例 ──────────────────────────────────────────────
-let mainWindow: BrowserWindow | null = null;
-
-const WINDOW_DEFAULTS = {
-  width: 1280,
-  height: 800,
-  minWidth: 900,
-  minHeight: 600,
-} as const;
-
-/**
- * 创建主窗口。
- *
- * - 始终以 show: false 创建，由 ready-to-show 或回退计时器控制显示；
- * - smoke test 模式下不显示窗口，由 runSmokeTest 控制生命周期；
- * - 如已有未销毁的窗口，将其提到前台并返回。
- */
-function createMainWindow(): BrowserWindow {
-  // 复用已有窗口
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    log('Reusing existing window');
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
-    return mainWindow;
+/** 包装 sendToWorker 调用，确保错误码传递给 Renderer */
+async function forwardToWorker(request: {
+  requestId: string;
+  command: string;
+  payload: unknown;
+}): Promise<unknown> {
+  try {
+    return await sendToWorker(request);
+  } catch (err) {
+    const code = (err as Error & { code?: string }).code || 'PROJECT_CREATE_FAILED';
+    const message = err instanceof Error ? err.message : '操作失败';
+    const forwarded = new Error(message) as Error & { code?: string };
+    forwarded.code = code;
+    throw forwarded;
   }
-
-  log('Creating new window');
-  const win = new BrowserWindow({
-    ...WINDOW_DEFAULTS,
-    center: true,
-    title: 'AI 小说创作代理',
-    // 始终隐藏，由 ready-to-show 或回退计时器显式控制显示；
-    // 使用 show: true 时，isVisible() 立即返回 true，导致回退计时器失效
-    show: false,
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      preload: path.join(__dirname, '../preload/index.js'),
-    },
-  });
-
-  mainWindow = win;
-
-  // 创建后立即检查窗口状态
-  const bounds = win.getBounds();
-  log('Window created', {
-    bounds,
-    isVisible: win.isVisible(),
-    isDestroyed: win.isDestroyed(),
-    isMinimized: win.isMinimized(),
-  });
-
-  // ── 窗口生命周期事件 ─────────────────────────────────
-  win.on('ready-to-show', () => {
-    log('ready-to-show');
-    if (!isSmokeTest) {
-      win.show();
-      win.focus();
-    }
-  });
-
-  win.on('show', () => {
-    const bounds = win.getBounds();
-    const isVisible = win.isVisible();
-    const isDestroyed = win.isDestroyed();
-    log('window show', { bounds, isVisible, isDestroyed });
-  });
-
-  win.on('closed', () => {
-    log('window closed');
-    if (mainWindow === win) {
-      mainWindow = null;
-    }
-  });
-
-  // ── WebContents 事件 ─────────────────────────────────
-  win.webContents.on('did-finish-load', () => {
-    log('did-finish-load');
-  });
-
-  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
-    logError('did-fail-load:', { errorCode, errorDescription, validatedURL });
-    // 加载失败时确保窗口可见，显示错误而非静默隐藏
-    if (!isSmokeTest && !win.isDestroyed()) {
-      win.show();
-      win.focus();
-    }
-  });
-
-  win.webContents.on('preload-error', (_event, preloadPath, error) => {
-    logError('preload-error:', { preloadPath, error: String(error) });
-  });
-
-  win.webContents.on('render-process-gone', (_event, details) => {
-    logError('render-process-gone:', details.reason, details.exitCode);
-    // 渲染进程崩溃时确保窗口可见，而非静默隐藏
-    if (!isSmokeTest && !win.isDestroyed()) {
-      win.show();
-      win.focus();
-    }
-  });
-
-  // ── 导航保护 ─────────────────────────────────────────
-  win.webContents.on('will-navigate', (event, url) => {
-    if (isDev && url.startsWith('http://localhost:5173')) {
-      return; // 开发模式允许 Vite HMR 导航
-    }
-    event.preventDefault();
-  });
-
-  // ── 加载内容 ─────────────────────────────────────────
-  if (isDev) {
-    void win.loadURL('http://localhost:5173');
-    if (!isSmokeTest) win.webContents.openDevTools();
-  } else {
-    const rendererPath = path.join(__dirname, '../renderer/index.html');
-    log('Loading renderer from:', rendererPath);
-    void win.loadFile(rendererPath);
-  }
-
-  // ── 加载完成回退：防止 ready-to-show 未触发时永远隐藏 ──
-  if (!isSmokeTest) {
-    const SHOW_FALLBACK_MS = 5_000;
-    const fallbackTimer = setTimeout(() => {
-      if (!win.isDestroyed() && !win.isVisible()) {
-        logError(`Fallback: window not visible after ${SHOW_FALLBACK_MS}ms, forcing show`);
-        win.show();
-        win.focus();
-      }
-    }, SHOW_FALLBACK_MS);
-
-    // ready-to-show 已触发则取消回退
-    win.once('ready-to-show', () => {
-      clearTimeout(fallbackTimer);
-    });
-  }
-
-  return win;
 }
 
-// ── IPC 健康检查 ──────────────────────────────────────────
 ipcMain.handle(IPC_CHANNELS.HEALTH_CHECK, async (): Promise<HealthCheckResponse> => {
   return {
     ok: true,
@@ -169,8 +64,66 @@ ipcMain.handle(IPC_CHANNELS.HEALTH_CHECK, async (): Promise<HealthCheckResponse>
   };
 });
 
-// ── Smoke test ────────────────────────────────────────────
-/** Smoke test：启动 → 加载 Renderer → 验证 healthCheck → 退出 */
+/** 数据服务状态查询 */
+ipcMain.handle('ipc:data-service-status', async () => {
+  return { status: getWorkerStatus() };
+});
+
+/** 重试数据服务 */
+ipcMain.handle('ipc:data-service-retry', async () => {
+  retryWorker();
+  return { status: getWorkerStatus() };
+});
+
+ipcMain.handle(
+  IPC_CHANNELS.PROJECT_CREATE,
+  async (_event, input: unknown): Promise<CreateProjectResult> => {
+    if (!isValidCreateProjectInput(input)) {
+      throw Object.assign(new Error('无效的创建项目输入'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'project.create',
+      payload: input,
+    });
+
+    return result as CreateProjectResult;
+  },
+);
+
+ipcMain.handle(IPC_CHANNELS.PROJECT_LIST, async (): Promise<ListProjectsResult> => {
+  const requestId = crypto.randomUUID();
+  const result = await forwardToWorker({
+    requestId,
+    command: 'project.list',
+    payload: null,
+  });
+
+  return result as ListProjectsResult;
+});
+
+ipcMain.handle(
+  IPC_CHANNELS.PROJECT_OPEN,
+  async (_event, projectId: string): Promise<OpenProjectResult> => {
+    if (!isValidOpenProjectInput({ projectId })) {
+      throw Object.assign(new Error('无效的项目 ID'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'project.open',
+      payload: { projectId },
+    });
+
+    return result as OpenProjectResult;
+  },
+);
+
+// ── Smoke test ────────────────────────────────────────────────────
+
 function runSmokeTest(): void {
   log('Running smoke test');
   const win = createMainWindow();
@@ -182,14 +135,12 @@ function runSmokeTest(): void {
     app.exit(1);
   }, 15_000);
 
-  // 拦截 healthCheck 以检测 preload 是否正常工作
   ipcMain.removeHandler(IPC_CHANNELS.HEALTH_CHECK);
   ipcMain.handle(IPC_CHANNELS.HEALTH_CHECK, async (): Promise<HealthCheckResponse> => {
     healthCheckReceived = true;
     console.log('[smoke-test] healthCheck invoked via preload — PASS');
     clearTimeout(timeout);
 
-    // 给 Renderer 一点时间完成渲染，然后退出
     setTimeout(() => {
       console.log('[smoke-test] All checks passed, exiting');
       app.exit(0);
@@ -202,7 +153,6 @@ function runSmokeTest(): void {
     };
   });
 
-  // 监听 Renderer 加载和控制台消息
   win.webContents.on('did-finish-load', () => {
     console.log('[smoke-test] Renderer loaded');
   });
@@ -222,35 +172,36 @@ function runSmokeTest(): void {
   });
 }
 
-// ── 应用生命周期 ──────────────────────────────────────────
+// ── 应用生命周期 ──────────────────────────────────────────────────
+
 app.whenReady().then(() => {
-  log('app ready, isSmokeTest:', isSmokeTest, 'isDev:', isDev);
+  mark('app-ready');
+  log('app ready, isSmokeTest:', isSmokeTest);
 
   if (isSmokeTest) {
     runSmokeTest();
     return;
   }
 
+  // 1. 立即创建窗口（不等待 Worker）
   createMainWindow();
 
-  // macOS activate：点击 Dock 图标或从后台切回
-  app.on('activate', () => {
-    log('activate event, window count:', BrowserWindow.getAllWindows().length);
+  // 2. 并行启动 Worker（不阻塞窗口）
+  startWorker();
 
-    // 没有窗口 → 创建
+  // macOS activate
+  app.on('activate', () => {
+    log('activate event');
     if (BrowserWindow.getAllWindows().length === 0) {
       createMainWindow();
       return;
     }
-
-    // 有窗口但可能隐藏/最小化 → 恢复
-    if (mainWindow && !mainWindow.isDestroyed()) {
+    const win = getMainWindow();
+    if (win && !win.isDestroyed()) {
       app.show();
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.show();
-      mainWindow.focus();
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
     }
   });
 });
@@ -258,6 +209,12 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   log('window-all-closed');
   if (process.platform !== 'darwin') {
+    shutdownWorker();
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  log('before-quit');
+  shutdownWorker();
 });

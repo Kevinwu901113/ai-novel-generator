@@ -4,9 +4,9 @@
 
 ## 技术栈
 
-- **运行时**：Electron + Node.js 24
-- **前端**：React + TypeScript + Vite
-- **数据库**：SQLite（本地优先）
+- **运行时**：Electron 43.2.0 + Node.js 24
+- **前端**：React 19 + TypeScript + Vite 7
+- **数据库**：SQLite（node:sqlite 内置模块，本地优先）
 - **包管理**：pnpm 11 workspace（monorepo）
 - **测试**：Vitest
 - **代码质量**：ESLint + Prettier

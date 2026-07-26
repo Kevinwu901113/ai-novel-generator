@@ -159,3 +159,52 @@
 - API Key 单独存储
 - 备份时排除 API Key
 - 恢复时需要重新配置 Key
+
+## 决策 11：使用 node:sqlite 作为数据库驱动
+
+**决策**：使用 Node.js 内置的 node:sqlite（DatabaseSync），不安装第三方 SQLite 驱动。
+
+**理由**：
+
+- 避免 Electron 原生模块重编译和打包问题
+- 内置模块无需额外依赖
+- 同步 API 适合数据库操作
+- 可封装为可替换适配器
+
+**影响**：
+
+- 只能在 Node.js 22+ 和 Electron 43+ 中使用
+- 同步调用必须在 Utility Process 中运行
+- 需要定义清晰的仓库接口以便未来替换
+
+## 决策 12：project.sqlite 是项目正式数据来源
+
+**决策**：project.sqlite 是单个项目的正式数据来源，app.sqlite 仅是应用级索引。
+
+**理由**：
+
+- 项目数据应独立于应用
+- 便于项目备份和迁移
+- 避免索引与实际数据不一致时的歧义
+
+**影响**：
+
+- 打开项目时从 project.sqlite 读取正式元数据
+- app.sqlite 的 last_opened_at 是辅助信息
+- 两者差异时以 project.sqlite 为准
+
+## 决策 13：Utility Process 是数据库唯一写入者
+
+**决策**：所有数据库写入操作必须通过 Electron Utility Process。
+
+**理由**：
+
+- 同步 SQLite 调用不能阻塞 Renderer
+- 集中写入便于管理和监控
+- 安全隔离：Renderer 不知道数据库路径
+
+**影响**：
+
+- Main Process 通过 RPC 与 Utility Process 通信
+- 需要实现 RPC 协议和错误处理
+- Utility Process 崩溃时需要优雅降级

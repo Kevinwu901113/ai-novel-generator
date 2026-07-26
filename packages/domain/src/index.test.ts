@@ -1,5 +1,41 @@
 import { describe, it, expect } from 'vitest';
-import { createProjectId, createChangeSet, type ChangeEntry } from './index';
+import {
+  createProjectId,
+  createProjectName,
+  createInitialIdea,
+  createChangeSet,
+  unicodeCodePointLength,
+  type ChangeEntry,
+} from './index';
+
+describe('unicodeCodePointLength', () => {
+  it('应该正确计算 ASCII 字符串长度', () => {
+    expect(unicodeCodePointLength('hello')).toBe(5);
+  });
+
+  it('应该正确计算中文字符长度', () => {
+    expect(unicodeCodePointLength('你好世界')).toBe(4);
+  });
+
+  it('应该正确计算 emoji 长度（每个 emoji 算 1）', () => {
+    // 🎉 是 2 个 UTF-16 code unit 但 1 个 code point
+    expect(unicodeCodePointLength('🎉')).toBe(1);
+    expect(unicodeCodePointLength('🎉🎊🎈')).toBe(3);
+  });
+
+  it('应该正确计算混合字符串长度', () => {
+    expect(unicodeCodePointLength('hello你好🎉')).toBe(8);
+  });
+
+  it('空字符串返回 0', () => {
+    expect(unicodeCodePointLength('')).toBe(0);
+  });
+
+  it('应该正确计算扩展平面字符（如 𝌆）', () => {
+    // 𝌆 是 U+1D306，2 个 UTF-16 code unit 但 1 个 code point
+    expect(unicodeCodePointLength('𝌆')).toBe(1);
+  });
+});
 
 describe('createProjectId', () => {
   it('应该从有效字符串创建 ProjectId', () => {
@@ -80,5 +116,84 @@ describe('createChangeSet', () => {
       );
       expect(cs.scope).toBe(scope);
     }
+  });
+});
+
+describe('createProjectName', () => {
+  it('应该从有效字符串创建 ProjectName', () => {
+    const name = createProjectName('我的小说');
+    expect(name).toBe('我的小说');
+  });
+
+  it('应该 trim 前后空白', () => {
+    const name = createProjectName('  我的小说  ');
+    expect(name).toBe('我的小说');
+  });
+
+  it('应该拒绝空字符串', () => {
+    expect(() => createProjectName('')).toThrow('项目名称不能为空');
+  });
+
+  it('应该拒绝纯空白字符串', () => {
+    expect(() => createProjectName('   ')).toThrow('项目名称不能为空');
+  });
+
+  it('应该接受 100 个 Unicode code point 的名称', () => {
+    const name100 = '你'.repeat(100);
+    const name = createProjectName(name100);
+    expect(unicodeCodePointLength(name)).toBe(100);
+  });
+
+  it('应该拒绝 101 个 Unicode code point 的名称', () => {
+    const name101 = '你'.repeat(101);
+    expect(() => createProjectName(name101)).toThrow(/不能超过 100/);
+  });
+
+  it('应该正确计算 emoji 名称长度', () => {
+    const emojiName = '🎉'.repeat(100);
+    const name = createProjectName(emojiName);
+    expect(unicodeCodePointLength(name)).toBe(100);
+  });
+
+  it('应该拒绝超过 100 个 emoji 的名称', () => {
+    const emojiName = '🎉'.repeat(101);
+    expect(() => createProjectName(emojiName)).toThrow(/不能超过 100/);
+  });
+});
+
+describe('createInitialIdea', () => {
+  it('应该从有效字符串创建 InitialIdea', () => {
+    const idea = createInitialIdea('我想写一个科幻故事');
+    expect(idea).toBe('我想写一个科幻故事');
+  });
+
+  it('应该 trim 前后空白', () => {
+    const idea = createInitialIdea('  我想写一个科幻故事  ');
+    expect(idea).toBe('我想写一个科幻故事');
+  });
+
+  it('应该拒绝空字符串', () => {
+    expect(() => createInitialIdea('')).toThrow('初始想法不能为空');
+  });
+
+  it('应该拒绝纯空白字符串', () => {
+    expect(() => createInitialIdea('   ')).toThrow('初始想法不能为空');
+  });
+
+  it('应该接受 20000 个 Unicode code point 的想法', () => {
+    const idea20k = '你'.repeat(20_000);
+    const idea = createInitialIdea(idea20k);
+    expect(unicodeCodePointLength(idea)).toBe(20_000);
+  });
+
+  it('应该拒绝 20001 个 Unicode code point 的想法', () => {
+    const idea20k1 = '你'.repeat(20_001);
+    expect(() => createInitialIdea(idea20k1)).toThrow(/不能超过 20000/);
+  });
+
+  it('应该正确计算 emoji 想法长度', () => {
+    const emojiIdea = '🎉'.repeat(20_000);
+    const idea = createInitialIdea(emojiIdea);
+    expect(unicodeCodePointLength(idea)).toBe(20_000);
   });
 });

@@ -6,11 +6,19 @@
 
 ## 当前技术栈
 
-- Electron + React + TypeScript + Vite
+- Electron 43.2.0 + React + TypeScript + Vite
 - Node.js 24 + pnpm 11 workspace
-- SQLite（本地优先）
+- SQLite（node:sqlite 内置模块，本地优先）
 - Vitest + ESLint + Prettier
 - @electron/packager（打包）
+
+## 数据库架构
+
+- `app.sqlite`：应用级项目索引（`<userData>/app.sqlite`）
+- `project.sqlite`：单个项目正式数据（`<userData>/projects/<id>/project.sqlite`）
+- node:sqlite 封装在 `packages/database`，领域层和应用层不直接导入
+- Utility Process 是数据库唯一写入者
+- 所有时间使用 UTC ISO 8601
 
 ## 模块边界
 

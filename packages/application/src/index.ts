@@ -1,13 +1,47 @@
 /**
  * @ai-novel/application
  *
- * 应用用例和流程接口的占位结构。
- * 不依赖 Electron UI。
+ * 应用用例和流程接口。
+ * 不依赖 Electron UI、React 或 node:sqlite。
  */
 
-export type { ProjectId, ProjectStatus, TaskStatus } from '@ai-novel/domain';
+// ── 端口接口 ──────────────────────────────────────────────────────
 
-/** ID 生成器接口 —— 基础设施侧实现，测试可注入固定值 */
-export interface IdGenerator {
-  generate(): string;
-}
+export type {
+  IdGenerator,
+  Clock,
+  ProjectIndexData,
+  ProjectIndexRow,
+  ProjectIndexRepository,
+  ProjectCreationRow,
+  ProjectCreationRepository,
+  CreationPhase,
+  ProjectMetadataData,
+  ProjectMetadataRow,
+  ProjectMetadataStore,
+  ProjectFileSystem,
+} from './types.js';
+
+// ── 错误 ──────────────────────────────────────────────────────────
+
+export {
+  AppError,
+  ValidationError,
+  ProjectNotFoundError,
+  ProjectDirectoryMissingError,
+  ProjectDatabaseInvalidError,
+  DatabaseVersionUnsupportedError,
+  ProjectCreateFailedError,
+  WorkerUnavailableError,
+} from './errors.js';
+
+// ── 用例 ──────────────────────────────────────────────────────────
+
+export { createProject } from './create-project.js';
+export type { CreateProjectDeps, CreateProjectInput } from './create-project.js';
+
+export { listProjects } from './list-projects.js';
+export type { ListProjectsDeps, ProjectListItem } from './list-projects.js';
+
+export { openProject } from './open-project.js';
+export type { OpenProjectDeps, OpenProjectInput } from './open-project.js';

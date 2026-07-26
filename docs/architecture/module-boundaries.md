@@ -94,13 +94,23 @@
 
 **约束**：
 
-- 只在 Main Process 使用
+- 使用 node:sqlite（Node.js 内置）
+- 所有同步调用只在 Worker/Utility Process 中运行
 - 不暴露给 Renderer
+- 封装为可替换适配器
 
 **导出**：
 
-- 数据库连接管理
-- CRUD 操作
+- `AppDatabase`：app.sqlite 管理
+- `ProjectDatabase`：project.sqlite 管理
+- `SQLiteMigrator`：迁移运行器
+- 仓库接口（ProjectIndexRepository、ProjectMetadataRepository）
+
+**M1-A 实现**：
+
+- 迁移机制（版本控制、事务、幂等）
+- STRICT tables
+- WAL 模式、foreign_keys、busy_timeout
 
 ### `packages/model-gateway`
 
