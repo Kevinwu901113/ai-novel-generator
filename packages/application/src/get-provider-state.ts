@@ -7,23 +7,15 @@
 
 import type { ProviderPublicState } from '@ai-novel/contracts';
 import type { SecretStore, ProviderProfileRepository } from './types.js';
-import { ProviderNotConfiguredError } from './errors.js';
+import { ApiKeyReadFailedError, ProviderNotConfiguredError } from './errors.js';
 
-/** 固定 MiMo profile ID */
 const FIXED_PROVIDER_ID = 'mimo-token-plan-cn';
 
-/** GetProviderState 用例依赖 */
 export interface GetProviderStateDeps {
   readonly providerRepo: ProviderProfileRepository;
   readonly secretStore: SecretStore;
 }
 
-/**
- * 获取提供商公开状态。
- *
- * 从 app.sqlite 读取非敏感配置，通过 SecretStore 检查 hasApiKey。
- * 返回的数据不含 API Key、Authorization 或任何 secret。
- */
 export async function getProviderState(deps: GetProviderStateDeps): Promise<ProviderPublicState> {
   const { providerRepo, secretStore } = deps;
 
@@ -32,7 +24,13 @@ export async function getProviderState(deps: GetProviderStateDeps): Promise<Prov
     throw new ProviderNotConfiguredError();
   }
 
-  const hasApiKey = await secretStore.hasSecret(profile.keychainService, profile.keychainAccount);
+  let hasApiKey: boolean;
+  try {
+    hasApiKey = await secretStore.hasSecret(profile.keychainService, profile.keychainAccount);
+  } catch {
+    // Keychain 故障不能伪装成“尚未配置”。
+    throw new ApiKeyReadFailedError('无法读取 API Key 配置状态');
+  }
 
   return {
     id: profile.id,
