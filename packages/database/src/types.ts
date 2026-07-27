@@ -177,6 +177,170 @@ export interface AppDatabaseManager {
 export interface ProjectDatabaseManager {
   /** 获取项目元数据仓库 */
   getProjectMetadataRepository(): ProjectMetadataRepository;
+  /** 获取任务仓库 */
+  getTaskRepository(): TaskRepository;
+  /** 获取模型调用仓库 */
+  getModelInvocationRepository(): ModelInvocationRepository;
+  /** 执行事务 */
+  transaction<T>(fn: () => T): T;
   /** 关闭数据库连接 */
   close(): void;
+}
+
+// ── 任务（project.sqlite）────────────────────────────────────────
+
+/** 任务状态 */
+export type DbTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'STALE';
+
+/** 任务类型 */
+export type DbTaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST';
+
+/** 任务行 */
+export interface TaskRow {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskType: string;
+  readonly status: string;
+  readonly inputVersionJson: string;
+  readonly payloadJson: string;
+  readonly resultJson: string | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+  readonly attemptCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly staleAt: string | null;
+  readonly cancelledAt: string | null;
+}
+
+/** 创建任务数据 */
+export interface CreateTaskData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskType: string;
+  readonly status: string;
+  readonly inputVersionJson: string;
+  readonly payloadJson: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 任务仓库 */
+export interface TaskRepository {
+  create(data: CreateTaskData): void;
+  getById(id: string): TaskRow | null;
+  listByProject(projectId: string, limit?: number): ReadonlyArray<TaskRow>;
+  listByStatus(status: string): ReadonlyArray<TaskRow>;
+  /** CAS claim：只有当前状态匹配时才更新，返回是否成功 */
+  transition(id: string, fromStatus: string, toStatus: string, updatedAt: string): boolean;
+  /** 更新结果和状态为 SUCCEEDED */
+  updateResult(id: string, resultJson: string, updatedAt: string, finishedAt: string): void;
+  /** 更新失败信息和状态为 FAILED */
+  updateFailure(
+    id: string,
+    errorCode: string,
+    errorMessage: string,
+    updatedAt: string,
+    finishedAt: string,
+  ): void;
+  /** 增加尝试次数 */
+  incrementAttempt(id: string, updatedAt: string, startedAt: string): void;
+  /** 标记为 STALE */
+  markStale(id: string, updatedAt: string, staleAt: string): void;
+  /** 获取所有 RUNNING 任务（用于恢复） */
+  listRunning(): ReadonlyArray<TaskRow>;
+}
+
+// ── 模型调用（project.sqlite）────────────────────────────────────
+
+/** 模型调用状态 */
+export type DbInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+
+/** 模型调用行 */
+export interface ModelInvocationRow {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly providerProfileId: string;
+  readonly model: string;
+  readonly status: string;
+  readonly attemptNumber: number;
+  readonly requestKind: string;
+  readonly promptHash: string;
+  readonly requestMetadataJson: string;
+  readonly responseMetadataJson: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly latencyMs: number | null;
+  readonly finishReason: string | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+  readonly providerRequestId: string | null;
+  readonly createdAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+}
+
+/** 创建调用数据 */
+export interface CreateInvocationData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly providerProfileId: string;
+  readonly model: string;
+  readonly status: string;
+  readonly attemptNumber: number;
+  readonly requestKind: string;
+  readonly promptHash: string;
+  readonly requestMetadataJson: string;
+  readonly createdAt: string;
+}
+
+/** 调用统计数据 */
+export interface InvocationStats {
+  readonly invocationCount: number;
+  readonly succeededCount: number;
+  readonly failedCount: number;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalTokens: number;
+  readonly totalLatencyMs: number;
+}
+
+/** 模型调用仓库 */
+export interface ModelInvocationRepository {
+  create(data: CreateInvocationData): void;
+  getById(id: string): ModelInvocationRow | null;
+  listByTask(taskId: string): ReadonlyArray<ModelInvocationRow>;
+  markRunning(id: string, startedAt: string): void;
+  markSucceeded(
+    id: string,
+    result: {
+      responseMetadataJson: string;
+      inputTokens: number | null;
+      outputTokens: number | null;
+      cacheReadTokens: number | null;
+      cacheWriteTokens: number | null;
+      totalTokens: number | null;
+      latencyMs: number | null;
+      finishReason: string | null;
+      providerRequestId: string | null;
+      finishedAt: string;
+    },
+  ): void;
+  markFailed(
+    id: string,
+    errorCode: string,
+    errorMessage: string,
+    latencyMs: number | null,
+    finishedAt: string,
+  ): void;
+  getStatsByProject(projectId: string): InvocationStats;
+  /** 获取所有 RUNNING 调用（用于恢复） */
+  listRunning(): ReadonlyArray<ModelInvocationRow>;
 }

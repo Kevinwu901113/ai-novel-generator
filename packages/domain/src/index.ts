@@ -46,12 +46,90 @@ export type ProjectStatus =
   | 'completed'; // 已完成
 
 /** 任务状态 */
-export type TaskStatus =
-  | 'pending' // 待处理
-  | 'in-progress' // 进行中
-  | 'blocked' // 被阻塞
-  | 'completed' // 已完成
-  | 'failed'; // 失败
+export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'STALE';
+
+/** 任务类型 —— 本阶段仅支持测试型 */
+export type TaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST';
+
+/** 模型调用状态 */
+export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
+
+// ── 状态转换 ──────────────────────────────────────────────────────
+
+/** 允许的任务状态转换 */
+const ALLOWED_TASK_TRANSITIONS = new Map<TaskStatus, Set<TaskStatus>>([
+  ['PENDING', new Set<TaskStatus>(['RUNNING', 'CANCELLED', 'STALE'])],
+  ['RUNNING', new Set<TaskStatus>(['SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE'])],
+  ['FAILED', new Set<TaskStatus>(['PENDING'])],
+  ['CANCELLED', new Set<TaskStatus>(['PENDING'])],
+  ['STALE', new Set<TaskStatus>(['PENDING'])],
+]);
+
+/**
+ * 校验任务状态转换是否合法。
+ *
+ * 规则：
+ * - PENDING -> RUNNING, CANCELLED, STALE
+ * - RUNNING -> SUCCEEDED, FAILED, CANCELLED, STALE
+ * - FAILED -> PENDING
+ * - CANCELLED -> PENDING
+ * - STALE -> PENDING
+ * - 禁止从 terminal 状态恢复到 RUNNING 或 SUCCEEDED
+ */
+export function isValidTaskTransition(from: TaskStatus, to: TaskStatus): boolean {
+  const allowed = ALLOWED_TASK_TRANSITIONS.get(from);
+  if (!allowed) return false;
+  return allowed.has(to);
+}
+
+/**
+ * 断言任务状态转换合法。非法时抛出明确错误。
+ */
+export function assertValidTaskTransition(from: TaskStatus, to: TaskStatus): void {
+  if (!isValidTaskTransition(from, to)) {
+    throw new Error(`非法任务状态转换: ${from} -> ${to}`);
+  }
+}
+
+/** 允许的模型调用状态转换 */
+const ALLOWED_INVOCATION_TRANSITIONS = new Map<ModelInvocationStatus, Set<ModelInvocationStatus>>([
+  ['PENDING', new Set<ModelInvocationStatus>(['RUNNING', 'CANCELLED'])],
+  ['RUNNING', new Set<ModelInvocationStatus>(['SUCCEEDED', 'FAILED', 'CANCELLED'])],
+]);
+
+/**
+ * 校验模型调用状态转换是否合法。
+ */
+export function isValidInvocationTransition(
+  from: ModelInvocationStatus,
+  to: ModelInvocationStatus,
+): boolean {
+  const allowed = ALLOWED_INVOCATION_TRANSITIONS.get(from);
+  if (!allowed) return false;
+  return allowed.has(to);
+}
+
+/**
+ * 断言模型调用状态转换合法。
+ */
+export function assertValidInvocationTransition(
+  from: ModelInvocationStatus,
+  to: ModelInvocationStatus,
+): void {
+  if (!isValidInvocationTransition(from, to)) {
+    throw new Error(`非法调用状态转换: ${from} -> ${to}`);
+  }
+}
+
+/** 检查任务是否处于终态 */
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return status === 'SUCCEEDED' || status === 'FAILED' || status === 'CANCELLED';
+}
+
+/** 检查调用是否处于终态 */
+export function isTerminalInvocationStatus(status: ModelInvocationStatus): boolean {
+  return status === 'SUCCEEDED' || status === 'FAILED' || status === 'CANCELLED';
+}
 
 /** 决策范围 */
 export type DecisionScope =

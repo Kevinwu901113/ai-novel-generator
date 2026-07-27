@@ -23,6 +23,14 @@ export type {
   SecretStore,
   ProviderProfileData,
   ProviderProfileRepository,
+  TaskData,
+  CreateTaskInput,
+  TaskRepositoryPort,
+  ModelInvocationData,
+  CreateInvocationInput,
+  InvocationSuccessResult,
+  InvocationStatsData,
+  ModelInvocationRepositoryPort,
 } from './types.js';
 
 // ── 错误 ──────────────────────────────────────────────────────────

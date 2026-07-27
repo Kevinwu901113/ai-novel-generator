@@ -179,3 +179,128 @@ export interface ProviderProfileRepository {
     },
   ): void;
 }
+
+// ── 任务（应用层端口）────────────────────────────────────────────
+
+/** 任务数据 */
+export interface TaskData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskType: string;
+  readonly status: string;
+  readonly inputVersionJson: string;
+  readonly payloadJson: string;
+  readonly resultJson: string | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+  readonly attemptCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+  readonly staleAt: string | null;
+  readonly cancelledAt: string | null;
+}
+
+/** 创建任务输入 */
+export interface CreateTaskInput {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskType: string;
+  readonly inputVersionJson: string;
+  readonly payloadJson: string;
+}
+
+/** 任务仓库端口 */
+export interface TaskRepositoryPort {
+  create(data: CreateTaskInput): void;
+  getById(id: string): TaskData | null;
+  listByProject(projectId: string, limit?: number): ReadonlyArray<TaskData>;
+  listByStatus(status: string): ReadonlyArray<TaskData>;
+  /** CAS 状态转换 */
+  transition(id: string, fromStatus: string, toStatus: string): boolean;
+  updateResult(id: string, resultJson: string): void;
+  updateFailure(id: string, errorCode: string, errorMessage: string): void;
+  incrementAttempt(id: string): void;
+  markStale(id: string): void;
+  listRunning(): ReadonlyArray<TaskData>;
+}
+
+// ── 模型调用（应用层端口）────────────────────────────────────────
+
+/** 模型调用数据 */
+export interface ModelInvocationData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly providerProfileId: string;
+  readonly model: string;
+  readonly status: string;
+  readonly attemptNumber: number;
+  readonly requestKind: string;
+  readonly promptHash: string;
+  readonly requestMetadataJson: string;
+  readonly responseMetadataJson: string | null;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly latencyMs: number | null;
+  readonly finishReason: string | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+  readonly providerRequestId: string | null;
+  readonly createdAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+}
+
+/** 创建调用输入 */
+export interface CreateInvocationInput {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly providerProfileId: string;
+  readonly model: string;
+  readonly attemptNumber: number;
+  readonly requestKind: string;
+  readonly promptHash: string;
+  readonly requestMetadataJson: string;
+}
+
+/** 调用成功结果 */
+export interface InvocationSuccessResult {
+  readonly responseMetadataJson: string;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly latencyMs: number | null;
+  readonly finishReason: string | null;
+  readonly providerRequestId: string | null;
+}
+
+/** 调用统计数据 */
+export interface InvocationStatsData {
+  readonly invocationCount: number;
+  readonly succeededCount: number;
+  readonly failedCount: number;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalTokens: number;
+  readonly totalLatencyMs: number;
+}
+
+/** 模型调用仓库端口 */
+export interface ModelInvocationRepositoryPort {
+  create(data: CreateInvocationInput): void;
+  getById(id: string): ModelInvocationData | null;
+  listByTask(taskId: string): ReadonlyArray<ModelInvocationData>;
+  markRunning(id: string): void;
+  markSucceeded(id: string, result: InvocationSuccessResult): void;
+  markFailed(id: string, errorCode: string, errorMessage: string, latencyMs: number | null): void;
+  getStatsByProject(projectId: string): InvocationStatsData;
+  listRunning(): ReadonlyArray<ModelInvocationData>;
+}
