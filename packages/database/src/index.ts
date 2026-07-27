@@ -37,6 +37,22 @@ export type {
   CreateInvocationData,
   DbInvocationStatus,
   InvocationStats,
+  GrillSessionRepository,
+  GrillSessionRow,
+  CreateGrillSessionData,
+  DbGrillSessionStatus,
+  GrillQuestionRepository,
+  GrillQuestionRow,
+  CreateGrillQuestionData,
+  DbGrillQuestionStatus,
+  GrillAnswerRepository,
+  GrillAnswerRow,
+  CreateGrillAnswerData,
+  DbGrillAnswerSource,
+  GrillProposalRepository,
+  GrillProposalRow,
+  CreateGrillProposalData,
+  DbGrillProposalStatus,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
