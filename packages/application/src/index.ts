@@ -55,6 +55,7 @@ export {
   GrillProposalNotFoundError,
   GrillStateConflictError,
   GrillVersionConflictError,
+  GrillOwnershipConflictError,
   GrillValidationError,
 } from './errors.js';
 

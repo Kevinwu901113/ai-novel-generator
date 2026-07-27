@@ -46,6 +46,7 @@ export type ErrorCode =
   | 'GRILL_PROPOSAL_NOT_FOUND'
   | 'GRILL_STATE_CONFLICT'
   | 'GRILL_VERSION_CONFLICT'
+  | 'GRILL_OWNERSHIP_CONFLICT'
   | 'GRILL_VALIDATION_ERROR'
   | 'INTERNAL_ERROR';
 
@@ -308,6 +309,7 @@ export function isAppError(data: unknown): data is AppError {
     'GRILL_PROPOSAL_NOT_FOUND',
     'GRILL_STATE_CONFLICT',
     'GRILL_VERSION_CONFLICT',
+    'GRILL_OWNERSHIP_CONFLICT',
     'GRILL_VALIDATION_ERROR',
     'INTERNAL_ERROR',
   ]);
@@ -437,6 +439,7 @@ export interface GrillAddQuestionsInput {
   readonly sessionId: string;
   readonly expectedVersion: number;
   readonly questions: ReadonlyArray<{
+    id?: string;
     topic: string;
     text: string;
     rationale: string;
@@ -466,6 +469,7 @@ export interface GrillQuestionActionInput {
 export interface GrillCreateProposalInput {
   readonly projectId: string;
   readonly sessionId: string;
+  readonly expectedVersion: number;
   readonly basedOnAnswerIds: ReadonlyArray<string>;
   readonly key: string;
   readonly proposedValueJson: string;
@@ -491,6 +495,7 @@ export interface GrillListProposalsInput {
 /** 列出答案历史输入 */
 export interface GrillListAnswerHistoryInput {
   readonly projectId: string;
+  readonly sessionId: string;
   readonly questionId: string;
 }
 
@@ -590,6 +595,8 @@ export function isValidGrillAddQuestionsInput(data: unknown): data is GrillAddQu
     (q: unknown) =>
       typeof q === 'object' &&
       q !== null &&
+      ((q as Record<string, unknown>).id === undefined ||
+        typeof (q as Record<string, unknown>).id === 'string') &&
       typeof (q as Record<string, unknown>).topic === 'string' &&
       typeof (q as Record<string, unknown>).text === 'string' &&
       typeof (q as Record<string, unknown>).rationale === 'string' &&
@@ -629,6 +636,7 @@ export function isValidGrillCreateProposalInput(data: unknown): data is GrillCre
   return (
     typeof obj.projectId === 'string' &&
     typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number' &&
     Array.isArray(obj.basedOnAnswerIds) &&
     typeof obj.key === 'string' &&
     typeof obj.proposedValueJson === 'string' &&
@@ -662,5 +670,9 @@ export function isValidGrillListAnswerHistoryInput(
 ): data is GrillListAnswerHistoryInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return typeof obj.projectId === 'string' && typeof obj.questionId === 'string';
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.questionId === 'string'
+  );
 }

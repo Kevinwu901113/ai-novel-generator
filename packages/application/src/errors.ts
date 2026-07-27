@@ -164,6 +164,14 @@ export class GrillVersionConflictError extends AppError {
   }
 }
 
+/** 烧烤归属冲突 —— 子实体不属于指定会话 */
+export class GrillOwnershipConflictError extends AppError {
+  constructor(message: string) {
+    super('GRILL_OWNERSHIP_CONFLICT', message);
+    this.name = 'GrillOwnershipConflictError';
+  }
+}
+
 /** 烧烤验证错误 */
 export class GrillValidationError extends AppError {
   constructor(message: string) {

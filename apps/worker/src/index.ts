@@ -1116,6 +1116,7 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'grill.addQuestions':
       case 'grill.answerQuestion':
       case 'grill.skipQuestion':
+      case 'grill.supersedeQuestion':
       case 'grill.getCurrentAnswers':
       case 'grill.listAnswerHistory':
       case 'grill.createProposal':

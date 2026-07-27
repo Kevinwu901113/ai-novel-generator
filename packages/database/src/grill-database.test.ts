@@ -989,15 +989,6 @@ describe('GrillAnswerRepository', () => {
       setupSessionAndQuestion(db);
       const repo = db.getGrillAnswerRepository();
       repo.create({
-        id: 'a2',
-        sessionId: 's1',
-        questionId: 'q1',
-        revision: 2,
-        source: 'USER',
-        text: 'v2',
-        createdAt: LATER,
-      });
-      repo.create({
         id: 'a1',
         sessionId: 's1',
         questionId: 'q1',
@@ -1005,6 +996,16 @@ describe('GrillAnswerRepository', () => {
         source: 'USER',
         text: 'v1',
         createdAt: NOW,
+      });
+      repo.supersedeCurrent('q1', LATER);
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 2,
+        source: 'USER',
+        text: 'v2',
+        createdAt: LATER,
       });
 
       const list = repo.listByQuestion('q1');
@@ -1485,6 +1486,156 @@ describe('Grill 故障注入', () => {
       // proposal 回滚到 PROPOSED
       expect(proposalRepo.getById('pr1')?.status).toBe('PROPOSED');
       expect(proposalRepo.getById('pr1')?.reviewedAt).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// ── current-answer partial unique index 测试 ──────────────────────
+
+describe('grill_answers current-answer 唯一索引', () => {
+  function setupSessionAndQuestion(db: ProjectDatabase): void {
+    db.getGrillSessionRepository().create({
+      id: 's1',
+      projectId: 'p1',
+      goal: 'g',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.getGrillQuestionRepository().create({
+      id: 'q1',
+      sessionId: 's1',
+      sequence: 1,
+      topic: 't',
+      text: 'x',
+      rationale: '',
+      dependsOnQuestionIds: '[]',
+      createdAt: NOW,
+    });
+  }
+
+  it('同一 question 不能直接插入两个 current answers', () => {
+    const db = createDb();
+    try {
+      setupSessionAndQuestion(db);
+      const raw = new DatabaseSync(join(tempDir, 'project.sqlite'));
+      raw.exec('PRAGMA foreign_keys = ON');
+      raw
+        .prepare(
+          `INSERT INTO grill_answers (id, session_id, question_id, revision, source, text, created_at)
+           VALUES ('a1', 's1', 'q1', 1, 'USER', 'v1', '${NOW}')`,
+        )
+        .run();
+      expect(() =>
+        raw
+          .prepare(
+            `INSERT INTO grill_answers (id, session_id, question_id, revision, source, text, created_at)
+             VALUES ('a2', 's1', 'q1', 2, 'USER', 'v2', '${LATER}')`,
+          )
+          .run(),
+      ).toThrow();
+      raw.close();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('不同 revision 但都 superseded_at NULL 时第二条失败', () => {
+    const db = createDb();
+    try {
+      setupSessionAndQuestion(db);
+      const repo = db.getGrillAnswerRepository();
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
+      expect(() =>
+        repo.create({
+          id: 'a2',
+          sessionId: 's1',
+          questionId: 'q1',
+          revision: 2,
+          source: 'USER',
+          text: 'v2',
+          createdAt: LATER,
+        }),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('旧答案 superseded 后允许插入新答案', () => {
+    const db = createDb();
+    try {
+      setupSessionAndQuestion(db);
+      const repo = db.getGrillAnswerRepository();
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
+      repo.supersedeCurrent('q1', LATER);
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 2,
+        source: 'USER',
+        text: 'v2',
+        createdAt: LATER,
+      });
+      expect(repo.getCurrentByQuestion('q1')?.id).toBe('a2');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('不同 question 可各有一个 current answer', () => {
+    const db = createDb();
+    try {
+      setupSessionAndQuestion(db);
+      db.getGrillQuestionRepository().create({
+        id: 'q2',
+        sessionId: 's1',
+        sequence: 2,
+        topic: 't2',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+      const repo = db.getGrillAnswerRepository();
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q2',
+        revision: 1,
+        source: 'USER',
+        text: 'v2',
+        createdAt: NOW,
+      });
+      expect(repo.getCurrentByQuestion('q1')?.id).toBe('a1');
+      expect(repo.getCurrentByQuestion('q2')?.id).toBe('a2');
     } finally {
       db.close();
     }

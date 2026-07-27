@@ -348,12 +348,37 @@ describe('Grill RPC redaction', () => {
       ctx,
     );
 
+    const questions = dispatchGrillCommand(
+      'grill.addQuestions',
+      {
+        projectId,
+        sessionId: session.id,
+        expectedVersion: 2,
+        questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+      },
+      ctx,
+    ) as Array<{ id: string }>;
+
+    const answer = dispatchGrillCommand(
+      'grill.answerQuestion',
+      {
+        projectId,
+        sessionId: session.id,
+        expectedVersion: 3,
+        questionId: questions[0].id,
+        text: '回答',
+        source: 'USER',
+      },
+      ctx,
+    ) as { id: string };
+
     const proposal = dispatchGrillCommand(
       'grill.createProposal',
       {
         projectId,
         sessionId: session.id,
-        basedOnAnswerIds: [],
+        expectedVersion: 4,
+        basedOnAnswerIds: [answer.id],
         key: 'genre',
         proposedValueJson: '"奇幻"',
         confidence: 0.9,
@@ -386,5 +411,493 @@ describe('Grill RPC 未知命令', () => {
       expect((err as AppError).code).toBe('VALIDATION_ERROR');
       expect((err as AppError).code).not.toBe('PROJECT_CREATE_FAILED');
     }
+  });
+});
+
+// ── 真实 SQLite 完整性测试 ────────────────────────────────────────
+
+interface SessionRef {
+  id: string;
+  version: number;
+}
+
+function newActiveSession(ctx: GrillHandlerContext, projectId: string): SessionRef {
+  const session = dispatchGrillCommand('grill.createSession', { projectId, goal: 'g' }, ctx) as {
+    id: string;
+    version: number;
+  };
+  const started = dispatchGrillCommand(
+    'grill.startSession',
+    { projectId, sessionId: session.id, expectedVersion: session.version },
+    ctx,
+  ) as { id: string; version: number };
+  return { id: started.id, version: started.version };
+}
+
+function newQuestion(
+  ctx: GrillHandlerContext,
+  projectId: string,
+  session: SessionRef,
+): { questionId: string; session: SessionRef } {
+  const questions = dispatchGrillCommand(
+    'grill.addQuestions',
+    {
+      projectId,
+      sessionId: session.id,
+      expectedVersion: session.version,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    },
+    ctx,
+  ) as Array<{ id: string }>;
+  return {
+    questionId: questions[0].id,
+    session: { id: session.id, version: session.version + 1 },
+  };
+}
+
+function newAnswer(
+  ctx: GrillHandlerContext,
+  projectId: string,
+  session: SessionRef,
+  questionId: string,
+): { answerId: string; session: SessionRef } {
+  const answer = dispatchGrillCommand(
+    'grill.answerQuestion',
+    {
+      projectId,
+      sessionId: session.id,
+      expectedVersion: session.version,
+      questionId,
+      text: '回答',
+      source: 'USER',
+    },
+    ctx,
+  ) as { id: string };
+  return { answerId: answer.id, session: { id: session.id, version: session.version + 1 } };
+}
+
+function getSessionVersion(ctx: GrillHandlerContext, projectId: string, sessionId: string): number {
+  const session = dispatchGrillCommand('grill.getSession', { projectId, sessionId }, ctx) as {
+    version: number;
+  };
+  return session.version;
+}
+
+describe('Grill 真实 SQLite 完整性', () => {
+  it('1. 会话 A 不能回答会话 B 的问题', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId } = newQuestion(ctx, projectId, a);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.answerQuestion',
+          {
+            projectId,
+            sessionId: b.id,
+            expectedVersion: b.version,
+            questionId,
+            text: '回答',
+            source: 'USER',
+          },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+  });
+
+  it('2. 会话 A 不能 skip/supersede 会话 B 的问题', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId } = newQuestion(ctx, projectId, a);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.skipQuestion',
+          { projectId, sessionId: b.id, expectedVersion: b.version, questionId },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.supersedeQuestion',
+          { projectId, sessionId: b.id, expectedVersion: b.version, questionId },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+  });
+
+  it('3. 会话 A 不能审核会话 B 的 proposal', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { answerId, session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+
+    const proposal = dispatchGrillCommand(
+      'grill.createProposal',
+      {
+        projectId,
+        sessionId: a3.id,
+        expectedVersion: a3.version,
+        basedOnAnswerIds: [answerId],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      },
+      ctx,
+    ) as { id: string };
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.reviewProposal',
+          {
+            projectId,
+            sessionId: b.id,
+            expectedVersion: b.version,
+            proposalId: proposal.id,
+            decision: 'ACCEPTED',
+          },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+  });
+
+  it('4. 跨会话失败时两个 session version 都不变', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId } = newQuestion(ctx, projectId, a);
+
+    const aVersionBefore = getSessionVersion(ctx, projectId, a.id);
+    const bVersionBefore = getSessionVersion(ctx, projectId, b.id);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.answerQuestion',
+          {
+            projectId,
+            sessionId: b.id,
+            expectedVersion: b.version,
+            questionId,
+            text: '回答',
+            source: 'USER',
+          },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+
+    expect(getSessionVersion(ctx, projectId, a.id)).toBe(aVersionBefore);
+    expect(getSessionVersion(ctx, projectId, b.id)).toBe(bVersionBefore);
+  });
+
+  it('5. SKIPPED 问题不能回答', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const skipped = dispatchGrillCommand(
+      'grill.skipQuestion',
+      { projectId, sessionId: a2.id, expectedVersion: a2.version, questionId },
+      ctx,
+    ) as { status: string; version?: number };
+    expect(skipped.status).toBe('SKIPPED');
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.answerQuestion',
+          {
+            projectId,
+            sessionId: a2.id,
+            expectedVersion: a2.version + 1,
+            questionId,
+            text: '回答',
+            source: 'USER',
+          },
+          ctx,
+        ),
+      'GRILL_STATE_CONFLICT',
+    );
+  });
+
+  it('6. SUPERSEDED 问题不能回答', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+    dispatchGrillCommand(
+      'grill.supersedeQuestion',
+      { projectId, sessionId: a3.id, expectedVersion: a3.version, questionId },
+      ctx,
+    );
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.answerQuestion',
+          {
+            projectId,
+            sessionId: a3.id,
+            expectedVersion: a3.version + 1,
+            questionId,
+            text: '回答',
+            source: 'USER',
+          },
+          ctx,
+        ),
+      'GRILL_STATE_CONFLICT',
+    );
+  });
+
+  it('7. ANSWERED 问题可生成 revision 2', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+
+    const answer2 = dispatchGrillCommand(
+      'grill.answerQuestion',
+      {
+        projectId,
+        sessionId: a3.id,
+        expectedVersion: a3.version,
+        questionId,
+        text: '修订',
+        source: 'USER',
+      },
+      ctx,
+    ) as { revision: number };
+    expect(answer2.revision).toBe(2);
+
+    const history = dispatchGrillCommand(
+      'grill.listAnswerHistory',
+      { projectId, sessionId: a3.id, questionId },
+      ctx,
+    ) as Array<{ revision: number; supersededAt: string | null }>;
+    expect(history).toHaveLength(2);
+    expect(history[0].supersededAt).not.toBeNull();
+    expect(history[1].supersededAt).toBeNull();
+  });
+
+  it('8. ANSWERED 但无 current answer 时拒绝并回滚', () => {
+    const { projectId, projectDir } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+
+    // 人为制造不一致：直接废弃当前答案但不新增
+    const raw = new ProjectDatabase(join(projectDir, 'project.sqlite'));
+    raw.getGrillAnswerRepository().supersedeCurrent(questionId, '2024-06-15T13:00:00.000Z');
+    raw.close();
+
+    const versionBefore = getSessionVersion(ctx, projectId, a3.id);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.answerQuestion',
+          {
+            projectId,
+            sessionId: a3.id,
+            expectedVersion: a3.version,
+            questionId,
+            text: '回答',
+            source: 'USER',
+          },
+          ctx,
+        ),
+      'GRILL_STATE_CONFLICT',
+    );
+
+    // 版本不变（事务回滚）
+    expect(getSessionVersion(ctx, projectId, a3.id)).toBe(versionBefore);
+  });
+
+  it('10. proposal 不能引用不存在的 answer', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.createProposal',
+          {
+            projectId,
+            sessionId: a.id,
+            expectedVersion: a.version,
+            basedOnAnswerIds: ['ghost'],
+            key: 'k',
+            proposedValueJson: '"v"',
+            confidence: 0.5,
+            rationale: '',
+          },
+          ctx,
+        ),
+      'GRILL_VALIDATION_ERROR',
+    );
+  });
+
+  it('11. proposal 不能引用其他 session 的 answer', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { answerId } = newAnswer(ctx, projectId, a2, questionId);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.createProposal',
+          {
+            projectId,
+            sessionId: b.id,
+            expectedVersion: b.version,
+            basedOnAnswerIds: [answerId],
+            key: 'k',
+            proposedValueJson: '"v"',
+            confidence: 0.5,
+            rationale: '',
+          },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+  });
+
+  it('12. proposal 不能引用 superseded answer', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { answerId, session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+    // 再次回答以废弃第一个答案
+    const { session: a4 } = newAnswer(ctx, projectId, a3, questionId);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.createProposal',
+          {
+            projectId,
+            sessionId: a4.id,
+            expectedVersion: a4.version,
+            basedOnAnswerIds: [answerId],
+            key: 'k',
+            proposedValueJson: '"v"',
+            confidence: 0.5,
+            rationale: '',
+          },
+          ctx,
+        ),
+      'GRILL_VALIDATION_ERROR',
+    );
+  });
+
+  it('13. dependsOn 不能引用其他 session 的 question', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const b = newActiveSession(ctx, projectId);
+    const { questionId } = newQuestion(ctx, projectId, a);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.addQuestions',
+          {
+            projectId,
+            sessionId: b.id,
+            expectedVersion: b.version,
+            questions: [
+              { topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [questionId] },
+            ],
+          },
+          ctx,
+        ),
+      'GRILL_OWNERSHIP_CONFLICT',
+    );
+  });
+
+  it('14. dependsOn 不能自引用', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.addQuestions',
+          {
+            projectId,
+            sessionId: a.id,
+            expectedVersion: a.version,
+            questions: [
+              { id: 'q1', topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: ['q1'] },
+            ],
+          },
+          ctx,
+        ),
+      'GRILL_VALIDATION_ERROR',
+    );
+  });
+
+  it('15. createProposal version CAS 冲突回滚', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+    const a = newActiveSession(ctx, projectId);
+    const { questionId, session: a2 } = newQuestion(ctx, projectId, a);
+    const { answerId, session: a3 } = newAnswer(ctx, projectId, a2, questionId);
+
+    const versionBefore = getSessionVersion(ctx, projectId, a3.id);
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.createProposal',
+          {
+            projectId,
+            sessionId: a3.id,
+            expectedVersion: 99,
+            basedOnAnswerIds: [answerId],
+            key: 'k',
+            proposedValueJson: '"v"',
+            confidence: 0.5,
+            rationale: '',
+          },
+          ctx,
+        ),
+      'GRILL_VERSION_CONFLICT',
+    );
+
+    // 版本不变，提案未创建
+    expect(getSessionVersion(ctx, projectId, a3.id)).toBe(versionBefore);
+    const proposals = dispatchGrillCommand(
+      'grill.listProposals',
+      { projectId, sessionId: a3.id },
+      ctx,
+    ) as unknown[];
+    expect(proposals).toHaveLength(0);
   });
 });

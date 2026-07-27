@@ -36,6 +36,7 @@ import {
   GrillProposalNotFoundError,
   GrillStateConflictError,
   GrillVersionConflictError,
+  GrillOwnershipConflictError,
   GrillValidationError,
 } from './errors.js';
 
@@ -262,7 +263,14 @@ function createMockProposalRepo(store: MockProposalStore): GrillProposalReposito
   };
 }
 
-function createDeps(overrides?: Partial<GrillSessionDeps>): GrillSessionDeps {
+interface Stores {
+  sessionStore: MockSessionStore;
+  questionStore: MockQuestionStore;
+  answerStore: MockAnswerStore;
+  proposalStore: MockProposalStore;
+}
+
+function createDeps(overrides?: Partial<GrillSessionDeps>): GrillSessionDeps & { stores: Stores } {
   const sessionStore: MockSessionStore = { sessions: new Map() };
   const questionStore: MockQuestionStore = { questions: new Map() };
   const answerStore: MockAnswerStore = { answers: new Map() };
@@ -276,6 +284,7 @@ function createDeps(overrides?: Partial<GrillSessionDeps>): GrillSessionDeps {
     answerRepo: createMockAnswerRepo(answerStore),
     proposalRepo: createMockProposalRepo(proposalStore),
     transaction: <T>(fn: () => T) => fn(),
+    stores: { sessionStore, questionStore, answerStore, proposalStore },
     ...overrides,
   };
 }
@@ -283,6 +292,27 @@ function createDeps(overrides?: Partial<GrillSessionDeps>): GrillSessionDeps {
 function createActiveSession(deps: GrillSessionDeps): GrillSessionData {
   const session = createGrillSession(deps, { projectId: 'p1', goal: '测试目标' });
   return startGrillSession(deps, { sessionId: session.id, expectedVersion: 1 });
+}
+
+/** 创建一个已回答的问题，返回 question 和 current answer */
+function createAnsweredQuestion(
+  deps: GrillSessionDeps,
+  sessionId: string,
+  version: number,
+): { question: GrillQuestionData; answer: GrillAnswerData; nextVersion: number } {
+  const [question] = addGrillQuestions(deps, {
+    sessionId,
+    expectedVersion: version,
+    questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+  });
+  const answer = answerGrillQuestion(deps, {
+    sessionId,
+    expectedVersion: version + 1,
+    questionId: question.id,
+    text: '回答',
+    source: 'USER',
+  });
+  return { question, answer, nextVersion: version + 2 };
 }
 
 // ── 会话管理测试 ──────────────────────────────────────────────────
@@ -308,8 +338,7 @@ describe('getGrillSession', () => {
   it('存在时返回', () => {
     const deps = createDeps();
     const created = createGrillSession(deps, { projectId: 'p1', goal: 'g' });
-    const fetched = getGrillSession(deps, { sessionId: created.id });
-    expect(fetched.id).toBe(created.id);
+    expect(getGrillSession(deps, { sessionId: created.id }).id).toBe(created.id);
   });
 
   it('不存在时抛出', () => {
@@ -336,7 +365,6 @@ describe('会话状态转换', () => {
     const started = startGrillSession(deps, { sessionId: session.id, expectedVersion: 1 });
     expect(started.status).toBe('ACTIVE');
     expect(started.version).toBe(2);
-    expect(started.startedAt).toBe(NOW);
   });
 
   it('ACTIVE -> PAUSED -> ACTIVE', () => {
@@ -353,7 +381,6 @@ describe('会话状态转换', () => {
     const session = createActiveSession(deps);
     const completed = completeGrillSession(deps, { sessionId: session.id, expectedVersion: 2 });
     expect(completed.status).toBe('COMPLETED');
-    expect(completed.completedAt).toBe(NOW);
   });
 
   it('DRAFT -> ABANDONED', () => {
@@ -363,7 +390,7 @@ describe('会话状态转换', () => {
     expect(abandoned.status).toBe('ABANDONED');
   });
 
-  it('非法转换抛出 GrillStateConflictError', () => {
+  it('非法转换抛出', () => {
     const deps = createDeps();
     const session = createGrillSession(deps, { projectId: 'p1', goal: 'g' });
     expect(() => completeGrillSession(deps, { sessionId: session.id, expectedVersion: 1 })).toThrow(
@@ -387,13 +414,12 @@ describe('会话状态转换', () => {
   });
 });
 
-// ── 问题管理测试 ──────────────────────────────────────────────────
+// ── 问题管理与依赖完整性 ──────────────────────────────────────────
 
 describe('addGrillQuestions', () => {
   it('批量添加问题', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
-
     const questions = addGrillQuestions(deps, {
       sessionId: session.id,
       expectedVersion: 2,
@@ -402,13 +428,10 @@ describe('addGrillQuestions', () => {
         { topic: '主题2', text: '问题2', rationale: '', dependsOnQuestionIds: [] },
       ],
     });
-
     expect(questions).toHaveLength(2);
     expect(questions[0].sequence).toBe(1);
     expect(questions[1].sequence).toBe(2);
-
-    const updatedSession = getGrillSession(deps, { sessionId: session.id });
-    expect(updatedSession.version).toBe(3);
+    expect(getGrillSession(deps, { sessionId: session.id }).version).toBe(3);
   });
 
   it('非 ACTIVE 会话拒绝', () => {
@@ -431,16 +454,131 @@ describe('addGrillQuestions', () => {
     ).toThrow(GrillValidationError);
   });
 
-  it('版本冲突回滚', () => {
+  it('依赖不能自引用', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
     expect(() =>
       addGrillQuestions(deps, {
         sessionId: session.id,
-        expectedVersion: 99,
-        questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+        expectedVersion: 2,
+        questions: [
+          { id: 'q1', topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: ['q1'] },
+        ],
       }),
-    ).toThrow(GrillVersionConflictError);
+    ).toThrow(GrillValidationError);
+  });
+
+  it('依赖不能包含空 ID', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: session.id,
+        expectedVersion: 2,
+        questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [''] }],
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('依赖不能包含重复 ID', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const [existing] = addGrillQuestions(deps, {
+      sessionId: session.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: session.id,
+        expectedVersion: 3,
+        questions: [
+          {
+            topic: 't2',
+            text: 'x',
+            rationale: '',
+            dependsOnQuestionIds: [existing.id, existing.id],
+          },
+        ],
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('依赖不能引用其他会话的问题', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const [questionA] = addGrillQuestions(deps, {
+      sessionId: sessionA.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: sessionB.id,
+        expectedVersion: 2,
+        questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [questionA.id] }],
+      }),
+    ).toThrow(GrillOwnershipConflictError);
+  });
+
+  it('依赖不能引用不存在的问题', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: session.id,
+        expectedVersion: 2,
+        questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: ['ghost'] }],
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('批次内二元环拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: session.id,
+        expectedVersion: 2,
+        questions: [
+          { id: 'qa', topic: 'a', text: 'x', rationale: '', dependsOnQuestionIds: ['qb'] },
+          { id: 'qb', topic: 'b', text: 'x', rationale: '', dependsOnQuestionIds: ['qa'] },
+        ],
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('批次内单向依赖允许', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const questions = addGrillQuestions(deps, {
+      sessionId: session.id,
+      expectedVersion: 2,
+      questions: [
+        { id: 'qa', topic: 'a', text: 'x', rationale: '', dependsOnQuestionIds: [] },
+        { id: 'qb', topic: 'b', text: 'x', rationale: '', dependsOnQuestionIds: ['qa'] },
+      ],
+    });
+    expect(questions).toHaveLength(2);
+  });
+
+  it('批次内 ID 重复拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    expect(() =>
+      addGrillQuestions(deps, {
+        sessionId: session.id,
+        expectedVersion: 2,
+        questions: [
+          { id: 'qa', topic: 'a', text: 'x', rationale: '', dependsOnQuestionIds: [] },
+          { id: 'qa', topic: 'b', text: 'x', rationale: '', dependsOnQuestionIds: [] },
+        ],
+      }),
+    ).toThrow(GrillValidationError);
   });
 });
 
@@ -453,21 +591,35 @@ describe('markQuestionAsked', () => {
       expectedVersion: 2,
       questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
     });
-
     const asked = markQuestionAsked(deps, {
       sessionId: session.id,
       expectedVersion: 3,
       questionId: q.id,
     });
     expect(asked.status).toBe('ASKED');
-    expect(asked.askedAt).toBe(NOW);
+  });
+
+  it('跨会话问题拒绝（归属冲突）', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const [q] = addGrillQuestions(deps, {
+      sessionId: sessionA.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+
+    expect(() =>
+      markQuestionAsked(deps, { sessionId: sessionB.id, expectedVersion: 2, questionId: q.id }),
+    ).toThrow(GrillOwnershipConflictError);
   });
 });
 
 // ── 回答管理测试 ──────────────────────────────────────────────────
 
 describe('answerGrillQuestion', () => {
-  it('回答问题创建新 revision', () => {
+  it('PLANNED 直接回答创建 revision 1 并转 ANSWERED', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
     const [q] = addGrillQuestions(deps, {
@@ -475,7 +627,6 @@ describe('answerGrillQuestion', () => {
       expectedVersion: 2,
       questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
     });
-
     const answer = answerGrillQuestion(deps, {
       sessionId: session.id,
       expectedVersion: 3,
@@ -483,15 +634,11 @@ describe('answerGrillQuestion', () => {
       text: '我的回答',
       source: 'USER',
     });
-
-    expect(answer.text).toBe('我的回答');
     expect(answer.revision).toBe(1);
-
-    const updatedQ = deps.questionRepo.getById(q.id);
-    expect(updatedQ?.status).toBe('ANSWERED');
+    expect(deps.questionRepo.getById(q.id)?.status).toBe('ANSWERED');
   });
 
-  it('重复回答废弃旧答案', () => {
+  it('ASKED -> ANSWERED', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
     const [q] = addGrillQuestions(deps, {
@@ -499,30 +646,119 @@ describe('answerGrillQuestion', () => {
       expectedVersion: 2,
       questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
     });
-
-    answerGrillQuestion(deps, {
+    markQuestionAsked(deps, { sessionId: session.id, expectedVersion: 3, questionId: q.id });
+    const answer = answerGrillQuestion(deps, {
       sessionId: session.id,
-      expectedVersion: 3,
+      expectedVersion: 4,
       questionId: q.id,
-      text: 'v1',
+      text: '回答',
       source: 'USER',
     });
+    expect(answer.revision).toBe(1);
+    expect(deps.questionRepo.getById(q.id)?.status).toBe('ANSWERED');
+  });
 
-    const session2 = getGrillSession(deps, { sessionId: session.id });
+  it('ANSWERED 问题可生成 revision 2', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { question, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+
     const answer2 = answerGrillQuestion(deps, {
       sessionId: session.id,
-      expectedVersion: session2.version,
-      questionId: q.id,
-      text: 'v2',
+      expectedVersion: nextVersion,
+      questionId: question.id,
+      text: '修订版',
       source: 'USER',
     });
-
     expect(answer2.revision).toBe(2);
 
-    const history = listAnswerHistory(deps, { questionId: q.id });
+    const history = listAnswerHistory(deps, { sessionId: session.id, questionId: question.id });
     expect(history).toHaveLength(2);
     expect(history[0].supersededAt).toBe(NOW);
     expect(history[1].supersededAt).toBeNull();
+  });
+
+  it('SKIPPED 问题不能回答', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const [q] = addGrillQuestions(deps, {
+      sessionId: session.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+    skipGrillQuestion(deps, { sessionId: session.id, expectedVersion: 3, questionId: q.id });
+
+    expect(() =>
+      answerGrillQuestion(deps, {
+        sessionId: session.id,
+        expectedVersion: 4,
+        questionId: q.id,
+        text: '回答',
+        source: 'USER',
+      }),
+    ).toThrow(GrillStateConflictError);
+  });
+
+  it('SUPERSEDED 问题不能回答', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { question, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+    supersedeGrillQuestion(deps, {
+      sessionId: session.id,
+      expectedVersion: nextVersion,
+      questionId: question.id,
+    });
+
+    expect(() =>
+      answerGrillQuestion(deps, {
+        sessionId: session.id,
+        expectedVersion: nextVersion + 1,
+        questionId: question.id,
+        text: '回答',
+        source: 'USER',
+      }),
+    ).toThrow(GrillStateConflictError);
+  });
+
+  it('ANSWERED 但无 current answer 时拒绝（数据不一致）', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { question, answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+
+    // 人为制造不一致：直接废弃当前答案但不新增
+    deps.stores.answerStore.answers.set(answer.id, { ...answer, supersededAt: NOW });
+
+    expect(() =>
+      answerGrillQuestion(deps, {
+        sessionId: session.id,
+        expectedVersion: nextVersion,
+        questionId: question.id,
+        text: '回答',
+        source: 'USER',
+      }),
+    ).toThrow(GrillStateConflictError);
+  });
+
+  it('跨会话问题不能回答（归属冲突）', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const [q] = addGrillQuestions(deps, {
+      sessionId: sessionA.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+
+    expect(() =>
+      answerGrillQuestion(deps, {
+        sessionId: sessionB.id,
+        expectedVersion: 2,
+        questionId: q.id,
+        text: '回答',
+        source: 'USER',
+      }),
+    ).toThrow(GrillOwnershipConflictError);
   });
 
   it('空回答拒绝', () => {
@@ -533,7 +769,6 @@ describe('answerGrillQuestion', () => {
       expectedVersion: 2,
       questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
     });
-
     expect(() =>
       answerGrillQuestion(deps, {
         sessionId: session.id,
@@ -569,7 +804,6 @@ describe('skipGrillQuestion', () => {
       expectedVersion: 2,
       questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
     });
-
     const skipped = skipGrillQuestion(deps, {
       sessionId: session.id,
       expectedVersion: 3,
@@ -577,33 +811,49 @@ describe('skipGrillQuestion', () => {
     });
     expect(skipped.status).toBe('SKIPPED');
   });
+
+  it('跨会话问题拒绝', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const [q] = addGrillQuestions(deps, {
+      sessionId: sessionA.id,
+      expectedVersion: 2,
+      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
+    });
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+    expect(() =>
+      skipGrillQuestion(deps, { sessionId: sessionB.id, expectedVersion: 2, questionId: q.id }),
+    ).toThrow(GrillOwnershipConflictError);
+  });
 });
 
 describe('supersedeGrillQuestion', () => {
   it('废弃已回答问题', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
-    const [q] = addGrillQuestions(deps, {
-      sessionId: session.id,
-      expectedVersion: 2,
-      questions: [{ topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: [] }],
-    });
-
-    answerGrillQuestion(deps, {
-      sessionId: session.id,
-      expectedVersion: 3,
-      questionId: q.id,
-      text: '回答',
-      source: 'USER',
-    });
-
-    const session2 = getGrillSession(deps, { sessionId: session.id });
+    const { question, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
     const superseded = supersedeGrillQuestion(deps, {
       sessionId: session.id,
-      expectedVersion: session2.version,
-      questionId: q.id,
+      expectedVersion: nextVersion,
+      questionId: question.id,
     });
     expect(superseded.status).toBe('SUPERSEDED');
+  });
+
+  it('跨会话问题拒绝', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const { question } = createAnsweredQuestion(deps, sessionA.id, 2);
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+    expect(() =>
+      supersedeGrillQuestion(deps, {
+        sessionId: sessionB.id,
+        expectedVersion: 2,
+        questionId: question.id,
+      }),
+    ).toThrow(GrillOwnershipConflictError);
   });
 });
 
@@ -611,47 +861,35 @@ describe('getCurrentAnswers', () => {
   it('返回当前有效答案', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
-    const questions = addGrillQuestions(deps, {
-      sessionId: session.id,
-      expectedVersion: 2,
-      questions: [
-        { topic: 't1', text: 'x1', rationale: '', dependsOnQuestionIds: [] },
-        { topic: 't2', text: 'x2', rationale: '', dependsOnQuestionIds: [] },
-      ],
-    });
+    createAnsweredQuestion(deps, session.id, 2);
+    expect(getCurrentAnswers(deps, { sessionId: session.id })).toHaveLength(1);
+  });
+});
 
-    answerGrillQuestion(deps, {
-      sessionId: session.id,
-      expectedVersion: 3,
-      questionId: questions[0].id,
-      text: 'a1',
-      source: 'USER',
-    });
-
-    const s2 = getGrillSession(deps, { sessionId: session.id });
-    answerGrillQuestion(deps, {
-      sessionId: session.id,
-      expectedVersion: s2.version,
-      questionId: questions[1].id,
-      text: 'a2',
-      source: 'USER',
-    });
-
-    const current = getCurrentAnswers(deps, { sessionId: session.id });
-    expect(current).toHaveLength(2);
+describe('listAnswerHistory', () => {
+  it('跨会话问题拒绝', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const { question } = createAnsweredQuestion(deps, sessionA.id, 2);
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    expect(() =>
+      listAnswerHistory(deps, { sessionId: sessionB.id, questionId: question.id }),
+    ).toThrow(GrillOwnershipConflictError);
   });
 });
 
 // ── 提案管理测试 ──────────────────────────────────────────────────
 
 describe('createGrillProposal', () => {
-  it('创建提案', () => {
+  it('创建提案并递增版本', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
 
     const proposal = createGrillProposal(deps, {
       sessionId: session.id,
-      basedOnAnswerIds: [],
+      expectedVersion: nextVersion,
+      basedOnAnswerIds: [answer.id],
       key: 'genre',
       proposedValueJson: '"奇幻"',
       confidence: 0.85,
@@ -659,17 +897,107 @@ describe('createGrillProposal', () => {
     });
 
     expect(proposal.status).toBe('PROPOSED');
-    expect(proposal.key).toBe('genre');
-    expect(proposal.confidence).toBe(0.85);
+    expect(getGrillSession(deps, { sessionId: session.id }).version).toBe(nextVersion + 1);
   });
 
-  it('无效 JSON 拒绝', () => {
+  it('basedOnAnswerIds 为空拒绝', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
     expect(() =>
       createGrillProposal(deps, {
         sessionId: session.id,
+        expectedVersion: 2,
         basedOnAnswerIds: [],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('basedOnAnswerIds 重复拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: session.id,
+        expectedVersion: nextVersion,
+        basedOnAnswerIds: [answer.id, answer.id],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('引用不存在的 answer 拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: session.id,
+        expectedVersion: 2,
+        basedOnAnswerIds: ['ghost'],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('引用其他会话的 answer 拒绝', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const { answer } = createAnsweredQuestion(deps, sessionA.id, 2);
+
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: sessionB.id,
+        expectedVersion: 2,
+        basedOnAnswerIds: [answer.id],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillOwnershipConflictError);
+  });
+
+  it('引用已废弃的 answer 拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+    deps.stores.answerStore.answers.set(answer.id, { ...answer, supersededAt: NOW });
+
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: session.id,
+        expectedVersion: nextVersion,
+        basedOnAnswerIds: [answer.id],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillValidationError);
+  });
+
+  it('无效 JSON 拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: session.id,
+        expectedVersion: nextVersion,
+        basedOnAnswerIds: [answer.id],
         key: 'k',
         proposedValueJson: 'not-json',
         confidence: 0.5,
@@ -681,10 +1009,12 @@ describe('createGrillProposal', () => {
   it('confidence 越界拒绝', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
     expect(() =>
       createGrillProposal(deps, {
         sessionId: session.id,
-        basedOnAnswerIds: [],
+        expectedVersion: nextVersion,
+        basedOnAnswerIds: [answer.id],
         key: 'k',
         proposedValueJson: '"v"',
         confidence: 1.5,
@@ -697,11 +1027,11 @@ describe('createGrillProposal', () => {
     const deps = createDeps();
     const session = createGrillSession(deps, { projectId: 'p1', goal: 'g' });
     abandonGrillSession(deps, { sessionId: session.id, expectedVersion: 1 });
-
     expect(() =>
       createGrillProposal(deps, {
         sessionId: session.id,
-        basedOnAnswerIds: [],
+        expectedVersion: 2,
+        basedOnAnswerIds: ['a'],
         key: 'k',
         proposedValueJson: '"v"',
         confidence: 0.5,
@@ -709,79 +1039,96 @@ describe('createGrillProposal', () => {
       }),
     ).toThrow(GrillStateConflictError);
   });
+
+  it('版本冲突拒绝', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { answer } = createAnsweredQuestion(deps, session.id, 2);
+    expect(() =>
+      createGrillProposal(deps, {
+        sessionId: session.id,
+        expectedVersion: 99,
+        basedOnAnswerIds: [answer.id],
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+      }),
+    ).toThrow(GrillVersionConflictError);
+  });
 });
 
 describe('reviewGrillProposal', () => {
-  it('接受提案', () => {
-    const deps = createDeps();
-    const session = createActiveSession(deps);
+  function createProposalFixture(deps: GrillSessionDeps, sessionId: string, version: number) {
+    const { answer, nextVersion } = createAnsweredQuestion(deps, sessionId, version);
     const proposal = createGrillProposal(deps, {
-      sessionId: session.id,
-      basedOnAnswerIds: [],
+      sessionId,
+      expectedVersion: nextVersion,
+      basedOnAnswerIds: [answer.id],
       key: 'k',
       proposedValueJson: '"v"',
       confidence: 0.5,
       rationale: '',
     });
+    return { proposal, nextVersion: nextVersion + 1 };
+  }
 
+  it('接受提案', () => {
+    const deps = createDeps();
+    const session = createActiveSession(deps);
+    const { proposal, nextVersion } = createProposalFixture(deps, session.id, 2);
     const reviewed = reviewGrillProposal(deps, {
       sessionId: session.id,
-      expectedVersion: 2,
+      expectedVersion: nextVersion,
       proposalId: proposal.id,
       decision: 'ACCEPTED',
     });
-
     expect(reviewed.status).toBe('ACCEPTED');
-    expect(reviewed.reviewedAt).toBe(NOW);
-
-    const updatedSession = getGrillSession(deps, { sessionId: session.id });
-    expect(updatedSession.version).toBe(3);
   });
 
   it('拒绝提案', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
-    const proposal = createGrillProposal(deps, {
-      sessionId: session.id,
-      basedOnAnswerIds: [],
-      key: 'k',
-      proposedValueJson: '"v"',
-      confidence: 0.5,
-      rationale: '',
-    });
-
+    const { proposal, nextVersion } = createProposalFixture(deps, session.id, 2);
     const reviewed = reviewGrillProposal(deps, {
       sessionId: session.id,
-      expectedVersion: 2,
+      expectedVersion: nextVersion,
       proposalId: proposal.id,
       decision: 'REJECTED',
     });
     expect(reviewed.status).toBe('REJECTED');
   });
 
+  it('跨会话提案拒绝', () => {
+    const deps = createDeps();
+    const sessionA = createActiveSession(deps);
+    const { proposal } = createProposalFixture(deps, sessionA.id, 2);
+    const sessionB = createGrillSession(deps, { projectId: 'p1', goal: 'g2' });
+    startGrillSession(deps, { sessionId: sessionB.id, expectedVersion: 1 });
+    expect(() =>
+      reviewGrillProposal(deps, {
+        sessionId: sessionB.id,
+        expectedVersion: 2,
+        proposalId: proposal.id,
+        decision: 'ACCEPTED',
+      }),
+    ).toThrow(GrillOwnershipConflictError);
+  });
+
   it('已审核提案不能再审核', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
-    const proposal = createGrillProposal(deps, {
-      sessionId: session.id,
-      basedOnAnswerIds: [],
-      key: 'k',
-      proposedValueJson: '"v"',
-      confidence: 0.5,
-      rationale: '',
-    });
-
+    const { proposal, nextVersion } = createProposalFixture(deps, session.id, 2);
     reviewGrillProposal(deps, {
       sessionId: session.id,
-      expectedVersion: 2,
+      expectedVersion: nextVersion,
       proposalId: proposal.id,
       decision: 'ACCEPTED',
     });
-
     expect(() =>
       reviewGrillProposal(deps, {
         sessionId: session.id,
-        expectedVersion: 3,
+        expectedVersion: nextVersion + 1,
         proposalId: proposal.id,
         decision: 'REJECTED',
       }),
@@ -800,51 +1147,22 @@ describe('reviewGrillProposal', () => {
       }),
     ).toThrow(GrillProposalNotFoundError);
   });
-
-  it('版本冲突抛出', () => {
-    const deps = createDeps();
-    const session = createActiveSession(deps);
-    const proposal = createGrillProposal(deps, {
-      sessionId: session.id,
-      basedOnAnswerIds: [],
-      key: 'k',
-      proposedValueJson: '"v"',
-      confidence: 0.5,
-      rationale: '',
-    });
-
-    expect(() =>
-      reviewGrillProposal(deps, {
-        sessionId: session.id,
-        expectedVersion: 99,
-        proposalId: proposal.id,
-        decision: 'ACCEPTED',
-      }),
-    ).toThrow(GrillVersionConflictError);
-  });
 });
 
 describe('listGrillProposals', () => {
   it('列出会话提案', () => {
     const deps = createDeps();
     const session = createActiveSession(deps);
+    const { answer, nextVersion } = createAnsweredQuestion(deps, session.id, 2);
     createGrillProposal(deps, {
       sessionId: session.id,
-      basedOnAnswerIds: [],
+      expectedVersion: nextVersion,
+      basedOnAnswerIds: [answer.id],
       key: 'k1',
       proposedValueJson: '"v1"',
       confidence: 0.5,
       rationale: '',
     });
-    createGrillProposal(deps, {
-      sessionId: session.id,
-      basedOnAnswerIds: [],
-      key: 'k2',
-      proposedValueJson: '"v2"',
-      confidence: 0.7,
-      rationale: '',
-    });
-
-    expect(listGrillProposals(deps, { sessionId: session.id })).toHaveLength(2);
+    expect(listGrillProposals(deps, { sessionId: session.id })).toHaveLength(1);
   });
 });

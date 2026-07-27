@@ -193,6 +193,10 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
       CREATE UNIQUE INDEX idx_grill_answers_question_revision
         ON grill_answers(question_id, revision);
 
+      CREATE UNIQUE INDEX idx_grill_answers_one_current
+        ON grill_answers(question_id)
+        WHERE superseded_at IS NULL;
+
       CREATE TABLE grill_inference_proposals (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,

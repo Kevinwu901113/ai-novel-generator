@@ -33,6 +33,7 @@ import {
   addGrillQuestions,
   answerGrillQuestion,
   skipGrillQuestion,
+  supersedeGrillQuestion,
   getCurrentAnswers,
   listAnswerHistory,
   createGrillProposal,
@@ -597,6 +598,25 @@ function handleSkipQuestion(payload: unknown, ctx: GrillHandlerContext): unknown
   }
 }
 
+function handleSupersedeQuestion(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillQuestionActionInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的废弃问题输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildDeps(projDb, ctx);
+    return toQuestionPublicData(
+      supersedeGrillQuestion(deps, {
+        sessionId: payload.sessionId,
+        expectedVersion: payload.expectedVersion,
+        questionId: payload.questionId,
+      }),
+    );
+  } finally {
+    projDb.close();
+  }
+}
+
 function handleGetCurrentAnswers(payload: unknown, ctx: GrillHandlerContext): unknown {
   if (!isValidGrillSessionIdInput(payload)) {
     throw new AppError('GRILL_VALIDATION_ERROR', '无效的答案查询输入');
@@ -617,7 +637,10 @@ function handleListAnswerHistory(payload: unknown, ctx: GrillHandlerContext): un
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
     const deps = buildDeps(projDb, ctx);
-    return listAnswerHistory(deps, { questionId: payload.questionId }).map(toAnswerPublicData);
+    return listAnswerHistory(deps, {
+      sessionId: payload.sessionId,
+      questionId: payload.questionId,
+    }).map(toAnswerPublicData);
   } finally {
     projDb.close();
   }
@@ -633,6 +656,7 @@ function handleCreateProposal(payload: unknown, ctx: GrillHandlerContext): unkno
     return toProposalPublicData(
       createGrillProposal(deps, {
         sessionId: payload.sessionId,
+        expectedVersion: payload.expectedVersion,
         basedOnAnswerIds: payload.basedOnAnswerIds,
         key: payload.key,
         proposedValueJson: payload.proposedValueJson,
@@ -708,6 +732,8 @@ export function dispatchGrillCommand(
       return handleAnswerQuestion(payload, ctx);
     case 'grill.skipQuestion':
       return handleSkipQuestion(payload, ctx);
+    case 'grill.supersedeQuestion':
+      return handleSupersedeQuestion(payload, ctx);
     case 'grill.getCurrentAnswers':
       return handleGetCurrentAnswers(payload, ctx);
     case 'grill.listAnswerHistory':
