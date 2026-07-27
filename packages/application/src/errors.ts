@@ -73,3 +73,43 @@ export class WorkerUnavailableError extends AppError {
     this.name = 'WorkerUnavailableError';
   }
 }
+
+/** 提供商未配置 */
+export class ProviderNotConfiguredError extends AppError {
+  constructor() {
+    super('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+    this.name = 'ProviderNotConfiguredError';
+  }
+}
+
+/** API Key 必需 */
+export class ApiKeyRequiredError extends AppError {
+  constructor() {
+    super('API_KEY_REQUIRED', '请先配置 API Key');
+    this.name = 'ApiKeyRequiredError';
+  }
+}
+
+/** API Key 存储失败 */
+export class ApiKeyStoreFailedError extends AppError {
+  constructor(message: string) {
+    super('API_KEY_STORE_FAILED', message);
+    this.name = 'ApiKeyStoreFailedError';
+  }
+}
+
+/** API Key 读取失败 */
+export class ApiKeyReadFailedError extends AppError {
+  constructor(message: string) {
+    super('API_KEY_READ_FAILED', message);
+    this.name = 'ApiKeyReadFailedError';
+  }
+}
+
+/** API Key 删除失败 */
+export class ApiKeyDeleteFailedError extends AppError {
+  constructor(message: string) {
+    super('API_KEY_DELETE_FAILED', message);
+    this.name = 'ApiKeyDeleteFailedError';
+  }
+}

@@ -255,6 +255,87 @@
 
 **状态**：已确认
 
+### 2026-07-27 API Key 存储在 macOS Keychain
+
+**背景**：需要安全存储用户的 API Key。
+
+**决策**：使用 macOS Keychain 存储 API Key，通过 `/usr/bin/security` 命令交互。
+
+**理由**：
+
+- macOS 原生安全存储，加密保护
+- 不需要额外依赖
+- 应用专属 namespace 避免冲突
+- stdin 写入避免进程列表泄露
+
+**影响**：
+
+- 需要实现 SecretStore 接口和 macOS 实现
+- Windows/Linux 尚未实现
+- 测试使用 fake SecretStore，不访问真实 Keychain
+
+**状态**：已确认
+
+### 2026-07-27 固定 MiMo V2.5 Pro 作为唯一提供商
+
+**背景**：M1-B1 需要配置模型提供商。
+
+**决策**：当前阶段固定使用 MiMo V2.5 Pro，Base URL 和 Model 只读。
+
+**理由**：
+
+- 当前开发和验收固定使用 MiMo V2.5 Pro
+- 避免任意 URL 带来的 SSRF 和配置复杂度
+- 多提供商和自定义端点以后再实现
+
+**影响**：
+
+- UI 不允许用户修改 Base URL 和 Model
+- provider_profiles 表中只有一条固定记录
+- 未来多提供商需要扩展
+
+**状态**：已确认
+
+### 2026-07-27 不安装 Anthropic SDK
+
+**背景**：需要与 Anthropic-compatible API 通信。
+
+**决策**：不安装 Anthropic SDK，使用 Node 24 内置 fetch。
+
+**理由**：
+
+- 减少依赖
+- 连接测试只需要最小请求
+- 避免 SDK 版本锁定
+
+**影响**：
+
+- 需要手动构造请求和验证响应
+- 错误映射需要自行实现
+- 未来完整调用可能需要更完善的实现
+
+**状态**：已确认
+
+### 2026-07-27 provider_profiles 在 app.sqlite
+
+**背景**：需要存储提供商非敏感配置。
+
+**决策**：provider_profiles 表放在 app.sqlite，不在 project.sqlite。
+
+**理由**：
+
+- 提供商配置是应用级配置，不是项目级
+- 避免每个项目重复存储
+- API Key 不进入任何 SQLite 数据库
+
+**影响**：
+
+- app.sqlite 新增 migration 3
+- provider_profiles 只存储非敏感信息
+- API Key 通过 Keychain 的 service/account 引用
+
+**状态**：已确认
+
 ---
 
 ## 待确认决策

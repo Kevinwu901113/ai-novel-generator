@@ -23,6 +23,9 @@ export function unicodeCodePointLength(str: string): number {
 /** 项目唯一标识符 */
 export type ProjectId = string & { readonly __brand: 'ProjectId' };
 
+/** 提供商配置唯一标识符 */
+export type ProviderProfileId = string & { readonly __brand: 'ProviderProfileId' };
+
 /** 项目名称（已验证，trim 后 1-100 Unicode code points） */
 export type ProjectName = string & { readonly __brand: 'ProjectName' };
 
@@ -108,6 +111,14 @@ export function createProjectId(raw: string): ProjectId {
     throw new Error('ProjectId 不能为空');
   }
   return raw as ProjectId;
+}
+
+/** 创建 ProviderProfileId（验证，不生成） */
+export function createProviderProfileId(raw: string): ProviderProfileId {
+  if (!raw || raw.trim().length === 0) {
+    throw new Error('ProviderProfileId 不能为空');
+  }
+  return raw as ProviderProfileId;
 }
 
 /**

@@ -126,9 +126,10 @@ interface Version {
 
 API Key 不进入项目备份：
 
-- 单独存储在用户配置目录
-- 加密存储（可选）
+- 存储在 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
+- app.sqlite 只保存非敏感 provider profile（不含 API Key）
 - 项目备份时排除 API Key
+- Windows/Linux Keychain 尚未实现
 
 ## M1-A 数据模型
 
@@ -156,6 +157,32 @@ CREATE TABLE projects (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_opened_at TEXT
+) STRICT;
+
+CREATE TABLE project_creations (
+  project_id TEXT PRIMARY KEY,
+  temp_directory_name TEXT NOT NULL,
+  final_directory_name TEXT NOT NULL,
+  phase TEXT NOT NULL DEFAULT 'preparing',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE provider_profiles (
+  id TEXT PRIMARY KEY,
+  provider_type TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  base_url TEXT NOT NULL,
+  model TEXT NOT NULL,
+  keychain_service TEXT NOT NULL,
+  keychain_account TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_tested_at TEXT,
+  last_test_status TEXT,
+  last_test_error_code TEXT,
+  last_test_latency_ms INTEGER
 ) STRICT;
 ```
 

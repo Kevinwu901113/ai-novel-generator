@@ -20,6 +20,9 @@ export type {
   ProjectMetadataRow,
   ProjectMetadataStore,
   ProjectFileSystem,
+  SecretStore,
+  ProviderProfileData,
+  ProviderProfileRepository,
 } from './types.js';
 
 // ── 错误 ──────────────────────────────────────────────────────────
@@ -33,6 +36,11 @@ export {
   DatabaseVersionUnsupportedError,
   ProjectCreateFailedError,
   WorkerUnavailableError,
+  ProviderNotConfiguredError,
+  ApiKeyRequiredError,
+  ApiKeyStoreFailedError,
+  ApiKeyReadFailedError,
+  ApiKeyDeleteFailedError,
 } from './errors.js';
 
 // ── 用例 ──────────────────────────────────────────────────────────
@@ -45,3 +53,15 @@ export type { ListProjectsDeps, ProjectListItem } from './list-projects.js';
 
 export { openProject } from './open-project.js';
 export type { OpenProjectDeps, OpenProjectInput } from './open-project.js';
+
+export { getProviderState } from './get-provider-state.js';
+export type { GetProviderStateDeps } from './get-provider-state.js';
+
+export { saveProviderApiKey } from './save-provider-api-key.js';
+export type { SaveProviderApiKeyDeps, SaveProviderApiKeyInput } from './save-provider-api-key.js';
+
+export { deleteProviderApiKey } from './delete-provider-api-key.js';
+export type { DeleteProviderApiKeyDeps } from './delete-provider-api-key.js';
+
+export { testProviderConnection } from './test-provider-connection.js';
+export type { TestProviderConnectionDeps } from './test-provider-connection.js';

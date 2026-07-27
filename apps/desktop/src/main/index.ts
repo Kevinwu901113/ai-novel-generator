@@ -16,10 +16,13 @@ import {
   IPC_CHANNELS,
   isValidCreateProjectInput,
   isValidOpenProjectInput,
+  isValidSaveApiKeyInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
   type OpenProjectResult,
+  type ProviderPublicState,
+  type ConnectionTestResult,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -121,6 +124,59 @@ ipcMain.handle(
     return result as OpenProjectResult;
   },
 );
+
+// ── 提供商 IPC 处理器 ──────────────────────────────────────────────
+
+ipcMain.handle(IPC_CHANNELS.PROVIDER_GET_STATE, async (): Promise<ProviderPublicState> => {
+  const requestId = crypto.randomUUID();
+  const result = await forwardToWorker({
+    requestId,
+    command: 'provider.getState',
+    payload: null,
+  });
+
+  return result as ProviderPublicState;
+});
+
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_SAVE_API_KEY,
+  async (_event, input: unknown): Promise<ProviderPublicState> => {
+    if (!isValidSaveApiKeyInput(input)) {
+      throw Object.assign(new Error('无效的 API Key 输入'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.saveApiKey',
+      payload: input,
+    });
+
+    return result as ProviderPublicState;
+  },
+);
+
+ipcMain.handle(IPC_CHANNELS.PROVIDER_DELETE_API_KEY, async (): Promise<ProviderPublicState> => {
+  const requestId = crypto.randomUUID();
+  const result = await forwardToWorker({
+    requestId,
+    command: 'provider.deleteApiKey',
+    payload: null,
+  });
+
+  return result as ProviderPublicState;
+});
+
+ipcMain.handle(IPC_CHANNELS.PROVIDER_TEST_CONNECTION, async (): Promise<ConnectionTestResult> => {
+  const requestId = crypto.randomUUID();
+  const result = await forwardToWorker({
+    requestId,
+    command: 'provider.testConnection',
+    payload: null,
+  });
+
+  return result as ConnectionTestResult;
+});
 
 // ── Smoke test ────────────────────────────────────────────────────
 

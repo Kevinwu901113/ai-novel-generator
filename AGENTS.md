@@ -14,11 +14,18 @@
 
 ## 数据库架构
 
-- `app.sqlite`：应用级项目索引（`<userData>/app.sqlite`）
+- `app.sqlite`：应用级项目索引和提供商配置（`<userData>/app.sqlite`）
 - `project.sqlite`：单个项目正式数据（`<userData>/projects/<id>/project.sqlite`）
 - node:sqlite 封装在 `packages/database`，领域层和应用层不直接导入
 - Utility Process 是数据库唯一写入者
 - 所有时间使用 UTC ISO 8601
+
+## 模型配置
+
+- 固定 MiMo V2.5 Pro（Anthropic-compatible）
+- API Key 存 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
+- app.sqlite provider_profiles 只存非敏感配置
+- Base URL 和 Model 只读
 
 ## 模块边界
 

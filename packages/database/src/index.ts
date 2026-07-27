@@ -23,11 +23,13 @@ export type {
   CreateProjectCreationData,
   CreationPhase,
   ProjectCreationRepository,
+  ProviderProfileRow,
+  ProviderProfileRepository,
   AppDatabaseManager,
   ProjectDatabaseManager,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
-export { AppDatabase } from './app-database.js';
+export { AppDatabase, FIXED_PROVIDER_PROFILE } from './app-database.js';
 export { ProjectDatabase, checkProjectDatabaseVersion } from './project-database.js';
 export { SQLiteMigrator } from './migrator.js';

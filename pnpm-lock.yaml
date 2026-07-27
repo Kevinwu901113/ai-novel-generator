@@ -78,6 +78,9 @@ importers:
       '@ai-novel/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@ai-novel/model-gateway':
+        specifier: workspace:*
+        version: link:../../packages/model-gateway
     devDependencies:
       esbuild:
         specifier: ^0.25.0

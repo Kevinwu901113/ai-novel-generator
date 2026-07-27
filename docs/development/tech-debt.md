@@ -87,3 +87,35 @@ Electron 42+ 改为在首次运行时动态下载二进制文件，不再在 `po
 1. 使用 `ELECTRON_MIRROR` 环境变量指定镜像
 2. 在 CI 中预先下载 Electron 二进制
 3. 使用 electron-builder 替代 electron-packager
+
+## M1-B1 技术债务
+
+### TD-005: Windows/Linux SecretStore 尚未实现
+
+**状态**: 未解决
+**优先级**: M1-B2 前
+**创建日期**: 2026-07-27
+
+#### 问题描述
+
+macOS Keychain 实现已完成，但 Windows（Credential Manager）和 Linux（Secret Service）尚未实现。
+
+#### 影响
+
+- 应用只能在 macOS 上运行
+- 需要实现 SecretStore 接口的跨平台适配
+
+### TD-006: `--no-prune` 仍为技术债务
+
+**状态**: 未解决
+**优先级**: M1 结束前
+**创建日期**: 2026-07-26
+
+#### 问题描述
+
+`@electron/packager` 的 `--no-prune` 标志导致所有 `devDependencies` 被打包进生产 asar。
+
+#### 影响
+
+- 生产 asar 包含不必要的开发依赖
+- 包体积 ~72MB（理想情况下应 < 20MB）

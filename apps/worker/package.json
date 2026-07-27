@@ -19,7 +19,8 @@
     "@ai-novel/application": "workspace:*",
     "@ai-novel/contracts": "workspace:*",
     "@ai-novel/database": "workspace:*",
-    "@ai-novel/domain": "workspace:*"
+    "@ai-novel/domain": "workspace:*",
+    "@ai-novel/model-gateway": "workspace:*"
   },
   "devDependencies": {
     "esbuild": "^0.25.0",

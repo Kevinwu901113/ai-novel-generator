@@ -24,7 +24,7 @@ Thumbs.db
 
 # Environment
 .env
-.env.local
+.env.*
 .env.*.local
 
 # Logs
@@ -36,9 +36,17 @@ pnpm-debug.log*
 coverage/
 
 # SQLite
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 *.db
 *.db-journal
 *.db-wal
+
+# Certificates and keys
+*.pem
+*.key
+*.p12
 
 # Temporary
 tmp/

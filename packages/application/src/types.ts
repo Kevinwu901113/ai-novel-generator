@@ -131,3 +131,51 @@ export interface ProjectFileSystem {
   /** 判断是否为本应用的临时目录 */
   isTempDirectory(name: string): boolean;
 }
+
+// ── SecretStore ────────────────────────────────────────────────────
+
+/** 密钥存储接口 —— 基础设施侧实现，应用层不依赖具体实现 */
+export interface SecretStore {
+  /** 检查密钥是否存在 */
+  hasSecret(service: string, account: string): Promise<boolean>;
+  /** 存储密钥（覆盖旧值） */
+  setSecret(service: string, account: string, secret: string): Promise<void>;
+  /** 读取密钥 */
+  getSecret(service: string, account: string): Promise<string | null>;
+  /** 删除密钥（幂等） */
+  deleteSecret(service: string, account: string): Promise<void>;
+}
+
+// ── 提供商配置（应用层端口）────────────────────────────────────────
+
+/** 提供商配置数据 */
+export interface ProviderProfileData {
+  readonly id: string;
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly keychainService: string;
+  readonly keychainAccount: string;
+  readonly enabled: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly lastTestedAt: string | null;
+  readonly lastTestStatus: string | null;
+  readonly lastTestErrorCode: string | null;
+  readonly lastTestLatencyMs: number | null;
+}
+
+/** 提供商配置仓库接口 */
+export interface ProviderProfileRepository {
+  getById(id: string): ProviderProfileData | null;
+  updateTestResult(
+    id: string,
+    result: {
+      lastTestedAt: string;
+      lastTestStatus: string;
+      lastTestErrorCode: string | null;
+      lastTestLatencyMs: number | null;
+    },
+  ): void;
+}

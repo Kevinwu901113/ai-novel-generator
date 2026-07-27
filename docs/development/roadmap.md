@@ -72,6 +72,33 @@
 
 **未实现**：Grill-me、AI、创作契约、正文编辑器、任务系统。
 
+### M1-B1：模型提供商配置 ✅
+
+**目标**：配置 MiMo V2.5 Pro 模型提供商，API Key 存 macOS Keychain，实现连接测试。
+
+**范围**：
+
+- 领域层：ProviderProfileId 品牌类型
+- 契约层：ProviderPublicState、ConnectionTestResult、SaveApiKeyInput 类型，错误码扩展，验证函数
+- 数据库层：app.sqlite 迁移 3（provider_profiles 表）、ProviderProfileRepository
+- 模型网关：Anthropic-compatible 客户端（fetch、超时、错误码映射）
+- 应用层：SecretStore 接口、GetProviderState、SaveProviderApiKey、DeleteProviderApiKey、TestProviderConnection 用例
+- Worker：macOS Keychain SecretStore 实现、4 个 provider 命令处理
+- IPC：provider.getState、provider.saveApiKey、provider.deleteApiKey、provider.testConnection
+- Preload：暴露 provider API
+- Renderer：右栏"模型服务"区域
+- 测试：232 个测试全部通过
+
+**关键设计决策**：
+
+- 固定 MiMo V2.5 Pro，Base URL 和 Model 只读
+- API Key 存 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
+- app.sqlite 只保存非敏感 provider profile
+- 不安装 Anthropic SDK，使用 Node 24 内置 fetch
+- 不复用 Claude Code Keychain
+
+**未实现**：多提供商切换、自定义端点、Grill-me、创作契约、任务系统。
+
 ## M2：正文编辑与版本
 
 **目标**：实现正文编辑和版本管理。

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createProjectId,
+  createProviderProfileId,
   createProjectName,
   createInitialIdea,
   createChangeSet,
@@ -195,5 +196,26 @@ describe('createInitialIdea', () => {
     const emojiIdea = '🎉'.repeat(20_000);
     const idea = createInitialIdea(emojiIdea);
     expect(unicodeCodePointLength(idea)).toBe(20_000);
+  });
+});
+
+describe('createProviderProfileId', () => {
+  it('应该从有效字符串创建 ProviderProfileId', () => {
+    const id = createProviderProfileId('mimo-token-plan-cn');
+    expect(id).toBe('mimo-token-plan-cn');
+  });
+
+  it('应该拒绝空字符串', () => {
+    expect(() => createProviderProfileId('')).toThrow('ProviderProfileId 不能为空');
+  });
+
+  it('应该拒绝纯空白字符串', () => {
+    expect(() => createProviderProfileId('   ')).toThrow('ProviderProfileId 不能为空');
+  });
+
+  it('应该保留原始字符串值', () => {
+    const raw = 'test-provider-123';
+    const id = createProviderProfileId(raw);
+    expect(id).toBe(raw);
   });
 });

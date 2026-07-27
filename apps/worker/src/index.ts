@@ -22,17 +22,28 @@ import { existsSync, mkdirSync, rmSync, readdirSync, statSync, renameSync } from
 import {
   isValidCreateProjectInput,
   isValidOpenProjectInput,
+  isValidSaveApiKeyInput,
   type AppError as AppErrorType,
   type ErrorCode,
+  type ProviderPublicState,
+  type ConnectionTestResult,
 } from '@ai-novel/contracts';
 import {
   createProject,
   listProjects,
   openProject,
+  getProviderState,
+  saveProviderApiKey,
+  deleteProviderApiKey,
+  testProviderConnection,
   AppError,
   type CreateProjectDeps,
   type ListProjectsDeps,
   type OpenProjectDeps,
+  type GetProviderStateDeps,
+  type SaveProviderApiKeyDeps,
+  type DeleteProviderApiKeyDeps,
+  type TestProviderConnectionDeps,
   type ProjectFileSystem,
   type IdGenerator,
   type Clock,
@@ -41,6 +52,9 @@ import {
   type ProjectCreationRow,
   type ProjectMetadataStore,
   type CreationPhase,
+  type SecretStore,
+  type ProviderProfileData,
+  type ProviderProfileRepository as AppProviderProfileRepository,
 } from '@ai-novel/application';
 import { AppDatabase, ProjectDatabase, checkProjectDatabaseVersion } from '@ai-novel/database';
 import type {
@@ -48,7 +62,10 @@ import type {
   ProjectMetadataRow,
   CreateProjectIndexData,
   CreateProjectMetadataData,
+  ProviderProfileRow,
 } from '@ai-novel/database';
+import { testConnection as modelGatewayTestConnection } from '@ai-novel/model-gateway';
+import { createMacOSKeychainSecretStore } from './secret-store.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -81,6 +98,7 @@ declare const process: NodeJS.Process & {
 
 let appDb: AppDatabase | null = null;
 let projectsDir: string;
+let secretStore: SecretStore | null = null;
 
 /** 获取数据根目录。允许通过环境变量覆盖（仅限测试/开发）。 */
 function getDataRoot(): string {
@@ -250,6 +268,49 @@ class ProjectFileSystemImpl implements ProjectFileSystem {
   }
 }
 
+// ── 提供商配置仓库适配器 ────────────────────────────────────────────
+
+class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
+  constructor(private readonly appDb: AppDatabase) {}
+
+  getById(id: string): ProviderProfileData | null {
+    const row = this.appDb.getProviderProfileRepository().getById(id);
+    if (!row) return null;
+    return this.toAppData(row);
+  }
+
+  updateTestResult(
+    id: string,
+    result: {
+      lastTestedAt: string;
+      lastTestStatus: string;
+      lastTestErrorCode: string | null;
+      lastTestLatencyMs: number | null;
+    },
+  ): void {
+    this.appDb.getProviderProfileRepository().updateTestResult(id, result);
+  }
+
+  private toAppData(row: ProviderProfileRow): ProviderProfileData {
+    return {
+      id: row.id,
+      providerType: row.providerType,
+      displayName: row.displayName,
+      baseUrl: row.baseUrl,
+      model: row.model,
+      keychainService: row.keychainService,
+      keychainAccount: row.keychainAccount,
+      enabled: row.enabled,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastTestedAt: row.lastTestedAt,
+      lastTestStatus: row.lastTestStatus,
+      lastTestErrorCode: row.lastTestErrorCode,
+      lastTestLatencyMs: row.lastTestLatencyMs,
+    };
+  }
+}
+
 // ── 初始化 ────────────────────────────────────────────────────────
 
 /**
@@ -408,6 +469,9 @@ function initialize(): void {
   const dbPath = join(dataRoot, 'app.sqlite');
   appDb = new AppDatabase(dbPath);
 
+  // 初始化 SecretStore
+  secretStore = createMacOSKeychainSecretStore();
+
   // 启动时恢复一致性
   reconcile(dataRoot);
 }
@@ -493,7 +557,73 @@ function handleOpenProject(payload: unknown): unknown {
   };
 }
 
-function dispatchCommand(request: RPCRequest): RPCResponse {
+// ── 提供商命令处理 ─────────────────────────────────────────────────
+
+async function handleGetProviderState(): Promise<ProviderPublicState> {
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const deps: GetProviderStateDeps = {
+    providerRepo: new ProviderProfileRepositoryAdapter(appDb),
+    secretStore,
+  };
+
+  return getProviderState(deps);
+}
+
+async function handleSaveProviderApiKey(payload: unknown): Promise<ProviderPublicState> {
+  if (!isValidSaveApiKeyInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的 API Key 输入');
+  }
+
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const deps: SaveProviderApiKeyDeps = {
+    providerRepo: new ProviderProfileRepositoryAdapter(appDb),
+    secretStore,
+    clock: createClock(),
+  };
+
+  return saveProviderApiKey(deps, { apiKey: payload.apiKey });
+}
+
+async function handleDeleteProviderApiKey(): Promise<ProviderPublicState> {
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const deps: DeleteProviderApiKeyDeps = {
+    providerRepo: new ProviderProfileRepositoryAdapter(appDb),
+    secretStore,
+    clock: createClock(),
+  };
+
+  return deleteProviderApiKey(deps);
+}
+
+async function handleTestProviderConnection(): Promise<ConnectionTestResult> {
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const deps: TestProviderConnectionDeps = {
+    providerRepo: new ProviderProfileRepositoryAdapter(appDb),
+    secretStore,
+    clock: createClock(),
+    testConnection: async (input: { baseUrl: string; model: string; apiKey: string }) => {
+      return modelGatewayTestConnection({ fetch: globalThis.fetch, clock: createClock() }, input);
+    },
+  };
+
+  return testProviderConnection(deps);
+}
+
+// ── 命令分发 ──────────────────────────────────────────────────────
+
+async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
   try {
     let data: unknown;
 
@@ -506,6 +636,18 @@ function dispatchCommand(request: RPCRequest): RPCResponse {
         break;
       case 'project.open':
         data = handleOpenProject(request.payload);
+        break;
+      case 'provider.getState':
+        data = await handleGetProviderState();
+        break;
+      case 'provider.saveApiKey':
+        data = await handleSaveProviderApiKey(request.payload);
+        break;
+      case 'provider.deleteApiKey':
+        data = await handleDeleteProviderApiKey();
+        break;
+      case 'provider.testConnection':
+        data = await handleTestProviderConnection();
         break;
       default:
         throw new AppError('VALIDATION_ERROR', `未知命令: ${request.command}`);
@@ -558,8 +700,18 @@ function handleMessage(data: unknown): void {
     return; // 忽略无效消息
   }
 
-  const response = dispatchCommand(request);
-  sendToParent(response);
+  // dispatchCommand 可能是 async 的（如 provider.testConnection）
+  void dispatchCommand(request).then(
+    (response) => sendToParent(response),
+    (_err) => {
+      // 不泄露内部错误细节
+      sendToParent({
+        requestId: request.requestId,
+        success: false,
+        error: { code: 'WORKER_UNAVAILABLE' as ErrorCode, message: '操作失败' },
+      });
+    },
+  );
 }
 
 // ── 生命周期 ──────────────────────────────────────────────────────

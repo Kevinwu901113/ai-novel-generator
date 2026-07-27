@@ -20,7 +20,20 @@ export type ErrorCode =
   | 'PROJECT_DATABASE_INVALID'
   | 'DATABASE_VERSION_UNSUPPORTED'
   | 'PROJECT_CREATE_FAILED'
-  | 'WORKER_UNAVAILABLE';
+  | 'WORKER_UNAVAILABLE'
+  | 'PROVIDER_NOT_CONFIGURED'
+  | 'API_KEY_REQUIRED'
+  | 'API_KEY_STORE_FAILED'
+  | 'API_KEY_READ_FAILED'
+  | 'API_KEY_DELETE_FAILED'
+  | 'PROVIDER_CONNECTION_FAILED'
+  | 'PROVIDER_AUTH_FAILED'
+  | 'PROVIDER_ACCESS_DENIED'
+  | 'PROVIDER_MODEL_UNAVAILABLE'
+  | 'PROVIDER_RATE_LIMITED'
+  | 'PROVIDER_TIMEOUT'
+  | 'PROVIDER_RESPONSE_INVALID'
+  | 'NETWORK_UNAVAILABLE';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
 export interface AppError {
@@ -85,6 +98,42 @@ export interface OpenProjectResult {
   readonly lastOpenedAt: string | null;
 }
 
+// ── 提供商类型 ─────────────────────────────────────────────────────
+
+/** 提供商类型 */
+export type ProviderType = 'anthropic-compatible';
+
+/** 连接测试状态 */
+export type ConnectionTestStatus = 'never' | 'success' | 'failed';
+
+/** 提供商公开状态 —— 返回给 Renderer，不含 secret */
+export interface ProviderPublicState {
+  readonly id: string;
+  readonly displayName: string;
+  readonly providerType: ProviderType;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly enabled: boolean;
+  readonly hasApiKey: boolean;
+  readonly lastTestedAt: string | null;
+  readonly lastTestStatus: ConnectionTestStatus;
+  readonly lastTestErrorCode: string | null;
+  readonly lastTestLatencyMs: number | null;
+}
+
+/** 连接测试结果 */
+export interface ConnectionTestResult {
+  readonly success: boolean;
+  readonly latencyMs: number;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+}
+
+/** 保存 API Key 输入 */
+export interface SaveApiKeyInput {
+  readonly apiKey: string;
+}
+
 // ── IPC 频道 ──────────────────────────────────────────────────────
 
 /** IPC 频道定义 */
@@ -93,6 +142,10 @@ export const IPC_CHANNELS = {
   PROJECT_CREATE: 'ipc:project-create',
   PROJECT_LIST: 'ipc:project-list',
   PROJECT_OPEN: 'ipc:project-open',
+  PROVIDER_GET_STATE: 'ipc:provider-get-state',
+  PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
+  PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
+  PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -102,6 +155,14 @@ export interface ProjectsAPI {
   create(input: CreateProjectInput): Promise<CreateProjectResult>;
   list(): Promise<ListProjectsResult>;
   open(projectId: string): Promise<OpenProjectResult>;
+}
+
+/** 提供商 API */
+export interface ProviderAPI {
+  getState(): Promise<ProviderPublicState>;
+  saveApiKey(input: SaveApiKeyInput): Promise<ProviderPublicState>;
+  deleteApiKey(): Promise<ProviderPublicState>;
+  testConnection(): Promise<ConnectionTestResult>;
 }
 
 /** 数据服务状态 */
@@ -118,6 +179,7 @@ export interface DesktopAPI {
   getDataServiceStatus(): Promise<DataServiceStatusResponse>;
   retryDataService(): Promise<DataServiceStatusResponse>;
   projects: ProjectsAPI;
+  provider: ProviderAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -159,8 +221,63 @@ export function isAppError(data: unknown): data is AppError {
     'DATABASE_VERSION_UNSUPPORTED',
     'PROJECT_CREATE_FAILED',
     'WORKER_UNAVAILABLE',
+    'PROVIDER_NOT_CONFIGURED',
+    'API_KEY_REQUIRED',
+    'API_KEY_STORE_FAILED',
+    'API_KEY_READ_FAILED',
+    'API_KEY_DELETE_FAILED',
+    'PROVIDER_CONNECTION_FAILED',
+    'PROVIDER_AUTH_FAILED',
+    'PROVIDER_ACCESS_DENIED',
+    'PROVIDER_MODEL_UNAVAILABLE',
+    'PROVIDER_RATE_LIMITED',
+    'PROVIDER_TIMEOUT',
+    'PROVIDER_RESPONSE_INVALID',
+    'NETWORK_UNAVAILABLE',
   ]);
   return (
     typeof obj.code === 'string' && validCodes.has(obj.code) && typeof obj.message === 'string'
+  );
+}
+
+/** 验证保存 API Key 输入 */
+export function isValidSaveApiKeyInput(data: unknown): data is SaveApiKeyInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.apiKey === 'string';
+}
+
+/** 验证 ProviderPublicState 结构 */
+export function isValidProviderPublicState(data: unknown): data is ProviderPublicState {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  const validProviderTypes: ReadonlySet<string> = new Set(['anthropic-compatible']);
+  const validTestStatuses: ReadonlySet<string> = new Set(['never', 'success', 'failed']);
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.displayName === 'string' &&
+    typeof obj.providerType === 'string' &&
+    validProviderTypes.has(obj.providerType) &&
+    typeof obj.baseUrl === 'string' &&
+    typeof obj.model === 'string' &&
+    typeof obj.enabled === 'boolean' &&
+    typeof obj.hasApiKey === 'boolean' &&
+    (obj.lastTestedAt === null || typeof obj.lastTestedAt === 'string') &&
+    typeof obj.lastTestStatus === 'string' &&
+    validTestStatuses.has(obj.lastTestStatus) &&
+    (obj.lastTestErrorCode === null || typeof obj.lastTestErrorCode === 'string') &&
+    (obj.lastTestLatencyMs === null || typeof obj.lastTestLatencyMs === 'number')
+  );
+}
+
+/** 验证 ConnectionTestResult 结构 */
+export function isValidConnectionTestResult(data: unknown): data is ConnectionTestResult {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.success === 'boolean' &&
+    typeof obj.latencyMs === 'number' &&
+    (obj.errorCode === null || typeof obj.errorCode === 'string') &&
+    (obj.errorMessage === null || typeof obj.errorMessage === 'string')
   );
 }

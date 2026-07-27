@@ -4,9 +4,29 @@ import type {
   ProjectListItem,
   OpenProjectResult,
   DataServiceStatus,
+  ProviderPublicState,
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
+
+// ── 错误码中文映射 ────────────────────────────────────────────────
+
+const ERROR_CODE_MESSAGES: Record<string, string> = {
+  PROVIDER_NOT_CONFIGURED: '模型提供商未配置',
+  API_KEY_REQUIRED: '请先配置 API Key',
+  API_KEY_STORE_FAILED: '无法保存 API Key',
+  API_KEY_READ_FAILED: '无法读取 API Key',
+  API_KEY_DELETE_FAILED: '无法删除 API Key',
+  PROVIDER_CONNECTION_FAILED: '连接失败',
+  PROVIDER_AUTH_FAILED: '认证失败，请检查 API Key',
+  PROVIDER_ACCESS_DENIED: '访问被拒绝',
+  PROVIDER_MODEL_UNAVAILABLE: '模型不可用',
+  PROVIDER_RATE_LIMITED: '请求频率超限，请稍后重试',
+  PROVIDER_TIMEOUT: '连接超时',
+  PROVIDER_RESPONSE_INVALID: '响应格式异常',
+  NETWORK_UNAVAILABLE: '网络不可用',
+  WORKER_UNAVAILABLE: '数据服务不可用',
+};
 
 const MAX_NAME_LENGTH = 100;
 const MAX_IDEA_LENGTH = 20_000;
@@ -36,6 +56,14 @@ export function App() {
 
   // 追踪是否已加载过项目列表
   const hasLoadedProjects = useRef(false);
+
+  // 提供商状态
+  const [providerState, setProviderState] = useState<ProviderPublicState | null>(null);
+  const [apiKeyInput, setApiKeyInput] = useState('');
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
+  const [providerError, setProviderError] = useState<string | null>(null);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setPanelState((prev) => togglePanel(prev, panel));
@@ -103,11 +131,29 @@ export function App() {
     }
   }, []);
 
+  // 加载提供商状态
+  const loadProviderState = useCallback(async () => {
+    try {
+      const state = await window.desktop.provider.getState();
+      setProviderState(state);
+    } catch (err) {
+      // 提供商状态加载失败不阻塞
+      console.error('Failed to load provider state:', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (dataServiceStatus === 'ready' && !hasLoadedProjects.current) {
       void loadProjects();
     }
   }, [dataServiceStatus, loadProjects]);
+
+  // 数据服务就绪后加载提供商状态
+  useEffect(() => {
+    if (dataServiceStatus === 'ready') {
+      void loadProviderState();
+    }
+  }, [dataServiceStatus, loadProviderState]);
 
   // 验证表单
   const validateForm = useCallback((): boolean => {
@@ -191,6 +237,67 @@ export function App() {
       // 忽略
     }
   }, []);
+
+  // 保存 API Key
+  const handleSaveApiKey = useCallback(async () => {
+    if (isSavingKey || dataServiceStatus !== 'ready') return;
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) return;
+
+    setIsSavingKey(true);
+    setProviderError(null);
+
+    try {
+      const state = await window.desktop.provider.saveApiKey({ apiKey: trimmed });
+      setProviderState(state);
+      setApiKeyInput('');
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      const message = err instanceof Error ? err.message : '保存失败';
+      setProviderError(code ? `[${code}] ${message}` : message);
+    } finally {
+      setIsSavingKey(false);
+    }
+  }, [apiKeyInput, isSavingKey, dataServiceStatus]);
+
+  // 删除 API Key
+  const handleDeleteApiKey = useCallback(async () => {
+    if (dataServiceStatus !== 'ready') return;
+
+    setProviderError(null);
+
+    try {
+      const state = await window.desktop.provider.deleteApiKey();
+      setProviderState(state);
+      setDeleteConfirmVisible(false);
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      const message = err instanceof Error ? err.message : '删除失败';
+      setProviderError(code ? `[${code}] ${message}` : message);
+    }
+  }, [dataServiceStatus]);
+
+  // 测试连接
+  const handleTestConnection = useCallback(async () => {
+    if (isTestingConnection || dataServiceStatus !== 'ready') return;
+
+    setIsTestingConnection(true);
+    setProviderError(null);
+
+    try {
+      await window.desktop.provider.testConnection();
+      // 重新加载状态以获取更新的测试结果
+      await loadProviderState();
+    } catch (err) {
+      const code = (err as Error & { code?: string }).code;
+      const message = err instanceof Error ? err.message : '测试失败';
+      setProviderError(code ? `[${code}] ${message}` : message);
+      // 重新加载状态以获取错误码
+      await loadProviderState();
+    } finally {
+      setIsTestingConnection(false);
+    }
+  }, [isTestingConnection, dataServiceStatus, loadProviderState]);
 
   // 格式化短 ID
   const shortId = (id: string) => id.slice(0, 8);
@@ -453,6 +560,122 @@ export function App() {
                   </div>
                 </>
               )}
+
+              {/* 模型服务 */}
+              <div className="status-section provider-section">
+                <h3>模型服务</h3>
+                {providerState && (
+                  <>
+                    <div className="provider-info">
+                      <p>
+                        <strong>提供商：</strong>
+                        {providerState.displayName}
+                      </p>
+                      <p>
+                        <strong>模型：</strong>
+                        {providerState.model}
+                      </p>
+                      <p>
+                        <strong>接口类型：</strong>
+                        {providerState.providerType}
+                      </p>
+                      <p>
+                        <strong>API Key：</strong>
+                        {providerState.hasApiKey ? '已配置' : '未配置'}
+                      </p>
+                      {providerState.lastTestStatus !== 'never' && (
+                        <>
+                          <p>
+                            <strong>最近测试：</strong>
+                            {providerState.lastTestStatus === 'success'
+                              ? '连接正常'
+                              : providerState.lastTestErrorCode
+                                ? `[${providerState.lastTestErrorCode}] ${ERROR_CODE_MESSAGES[providerState.lastTestErrorCode] ?? '测试失败'}`
+                                : '测试失败'}
+                          </p>
+                          <p>
+                            <strong>测试时间：</strong>
+                            {formatTime(providerState.lastTestedAt)}
+                          </p>
+                          {providerState.lastTestLatencyMs !== null && (
+                            <p>
+                              <strong>延迟：</strong>
+                              {providerState.lastTestLatencyMs}ms
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {/* API Key 编辑 */}
+                    <div className="provider-key-section">
+                      {!providerState.hasApiKey ? (
+                        <div className="provider-key-input">
+                          <input
+                            type="password"
+                            value={apiKeyInput}
+                            onChange={(e) => setApiKeyInput(e.target.value)}
+                            placeholder="输入 API Key"
+                            disabled={isSavingKey || dataServiceStatus !== 'ready'}
+                            maxLength={8192}
+                          />
+                          <button
+                            onClick={handleSaveApiKey}
+                            disabled={
+                              isSavingKey || !apiKeyInput.trim() || dataServiceStatus !== 'ready'
+                            }
+                          >
+                            {isSavingKey ? '保存中…' : '保存'}
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="provider-key-actions">
+                          {!deleteConfirmVisible ? (
+                            <button
+                              className="btn-danger"
+                              onClick={() => setDeleteConfirmVisible(true)}
+                              disabled={dataServiceStatus !== 'ready'}
+                            >
+                              删除密钥
+                            </button>
+                          ) : (
+                            <div className="delete-confirm">
+                              <span>确认删除？</span>
+                              <button className="btn-danger" onClick={handleDeleteApiKey}>
+                                确认
+                              </button>
+                              <button onClick={() => setDeleteConfirmVisible(false)}>取消</button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 连接测试 */}
+                    <div className="provider-test-section">
+                      <button
+                        onClick={handleTestConnection}
+                        disabled={
+                          isTestingConnection ||
+                          !providerState.hasApiKey ||
+                          dataServiceStatus !== 'ready'
+                        }
+                        title={!providerState.hasApiKey ? '请先配置 API Key' : undefined}
+                      >
+                        {isTestingConnection ? '正在连接…' : '测试连接'}
+                      </button>
+                    </div>
+
+                    {/* 错误信息 */}
+                    {providerError && (
+                      <div className="provider-error">
+                        <span>{providerError}</span>
+                        <button onClick={() => setProviderError(null)}>✕</button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           </aside>
         )}

@@ -590,3 +590,169 @@ body {
   font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
   font-size: 13px;
 }
+
+/* ── 提供商配置 ─────────────────────────────────────── */
+
+.provider-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  margin-top: 8px;
+}
+
+.provider-info p {
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.provider-info strong {
+  font-weight: 600;
+}
+
+.provider-key-section {
+  margin-top: 12px;
+}
+
+.provider-key-input {
+  display: flex;
+  gap: 8px;
+}
+
+.provider-key-input input {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.provider-key-input input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.provider-key-input input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.provider-key-input button {
+  padding: 6px 12px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.provider-key-input button:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.provider-key-input button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.provider-key-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.btn-danger {
+  padding: 6px 12px;
+  background-color: #dc2626;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.delete-confirm button {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.delete-confirm .btn-danger {
+  border: none;
+}
+
+.provider-test-section {
+  margin-top: 12px;
+}
+
+.provider-test-section button {
+  padding: 6px 16px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.provider-test-section button:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.provider-test-section button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.provider-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 6px 10px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+}
+
+@media (prefers-color-scheme: dark) {
+  .provider-error {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+}
+
+.provider-error button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 4px;
+}

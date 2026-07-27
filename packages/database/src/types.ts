@@ -118,6 +118,47 @@ export interface ProjectCreationRepository {
   delete(projectId: string): void;
 }
 
+// ── 提供商配置（app.sqlite）──────────────────────────────────────
+
+/** 提供商配置行 */
+export interface ProviderProfileRow {
+  readonly id: string;
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly keychainService: string;
+  readonly keychainAccount: string;
+  readonly enabled: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly lastTestedAt: string | null;
+  readonly lastTestStatus: string | null;
+  readonly lastTestErrorCode: string | null;
+  readonly lastTestLatencyMs: number | null;
+}
+
+/** 提供商配置仓库 */
+export interface ProviderProfileRepository {
+  getById(id: string): ProviderProfileRow | null;
+  list(): ReadonlyArray<ProviderProfileRow>;
+  upsert(
+    data: Omit<
+      ProviderProfileRow,
+      'lastTestedAt' | 'lastTestStatus' | 'lastTestErrorCode' | 'lastTestLatencyMs'
+    >,
+  ): void;
+  updateTestResult(
+    id: string,
+    result: {
+      lastTestedAt: string;
+      lastTestStatus: string;
+      lastTestErrorCode: string | null;
+      lastTestLatencyMs: number | null;
+    },
+  ): void;
+}
+
 // ── 数据库管理 ────────────────────────────────────────────────────
 
 /** AppDatabase 管理接口 */
@@ -126,6 +167,8 @@ export interface AppDatabaseManager {
   getProjectIndexRepository(): ProjectIndexRepository;
   /** 获取创建事务仓库 */
   getProjectCreationRepository(): ProjectCreationRepository;
+  /** 获取提供商配置仓库 */
+  getProviderProfileRepository(): ProviderProfileRepository;
   /** 关闭数据库连接 */
   close(): void;
 }
