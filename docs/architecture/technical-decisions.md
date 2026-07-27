@@ -275,3 +275,87 @@
 - provider_profiles 只存储非敏感信息（不含 API Key）
 - API Key 通过 Keychain 的 service/account 引用
 - 固定 profile 通过 INSERT OR IGNORE 初始化，不覆盖已有的测试状态
+
+## 决策 18：任务和调用记录在 project.sqlite
+
+**决策**：tasks 和 model_invocations 表放在 project.sqlite，随项目数据一起管理。
+
+**理由**：
+
+- 任务属于具体项目，不是应用级数据
+- 项目备份时应包含任务历史
+- 便于项目迁移和恢复
+
+**影响**：
+
+- project.sqlite 新增 migration 2
+- tasks 和 model_invocations 通过 FOREIGN KEY 关联
+- UNIQUE(task_id, attempt_number) 防止重复调用记录
+- prompt 不持久化，只保存 SHA-256 hash
+
+## 决策 19：prompt 不持久化
+
+**决策**：prompt 不写入任何数据库、日志或测试快照。
+
+**理由**：
+
+- 安全性：prompt 可能包含敏感内容
+- 隐私：用户创作内容不应被意外泄露
+- 合规：避免不必要的数据保留
+
+**影响**：
+
+- prompt 只存在于调用栈内
+- 数据库只保存 promptHash（SHA-256 hex）和 promptLength
+- request_metadata_json 只包含安全元数据
+- 错误消息不包含 prompt 内容
+
+## 决策 20：CAS claim 防止并发执行
+
+**决策**：任务领取使用 compare-and-set 模式。
+
+**理由**：
+
+- 防止多个 Worker 同时执行同一任务
+- 不依赖进程内 mutex
+- SQLite 是 source of truth
+
+**影响**：
+
+- `UPDATE tasks SET status = 'RUNNING' WHERE id = ? AND status = 'PENDING'`
+- 受影响行数不是 1 时视为冲突
+- 每次执行前从数据库重新读取任务状态
+
+## 决策 21：token 统计语义
+
+**决策**：null token 在统计时按 0 处理，但不改写数据库中的 null。
+
+**理由**：
+
+- provider 可能不返回 usage 信息
+- 统计时需要数值聚合
+- 保留 null 表示"未知"而非"0"
+
+**影响**：
+
+- `COALESCE(SUM(COALESCE(input_tokens, 0)), 0)` 聚合
+- 数据库中 null 保持 null
+- 总 token 在上游缺失时不自行推断（除非 input + output 都有值）
+
+## 决策 22：任务恢复策略
+
+**决策**：Worker 启动时将 RUNNING 任务恢复为 FAILED。
+
+**理由**：
+
+- 应用崩溃后数据库中可能遗留 RUNNING 状态
+- 需要明确标记这些任务为中断
+- 不自动重新执行（避免意外消耗配额）
+
+**影响**：
+
+- RUNNING task → FAILED (TASK_INTERRUPTED)
+- RUNNING invocation → FAILED (INVOCATION_INTERRUPTED)
+- 两者在同一事务中恢复
+- 已恢复的记录不会被重复修改
+- PENDING 任务保持 PENDING

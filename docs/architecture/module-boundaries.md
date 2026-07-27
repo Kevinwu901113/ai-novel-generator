@@ -145,11 +145,22 @@
 
 - 管理任务生命周期
 - 协调多个 engine
+- 任务先落库再调用模型
+- prompt 不写入数据库
 
 **导出**：
 
-- 任务调度器
-- 任务执行器
+- `executeModelInvocationTest`：执行测试型任务
+- `sha256Hex`：计算 prompt hash
+- `TaskExecutionError`：任务执行错误
+- `TaskEngineDeps`：依赖接口
+
+**M1-B2 实现**：
+
+- MODEL_INVOCATION_TEST 任务类型
+- CAS claim 防止并发执行
+- 原子提交 success/failure
+- prompt hash 而非 prompt 明文
 
 ## 依赖规则
 
