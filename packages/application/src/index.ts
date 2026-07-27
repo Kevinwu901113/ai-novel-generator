@@ -49,6 +49,13 @@ export {
   ApiKeyStoreFailedError,
   ApiKeyReadFailedError,
   ApiKeyDeleteFailedError,
+  GrillSessionNotFoundError,
+  GrillQuestionNotFoundError,
+  GrillAnswerNotFoundError,
+  GrillProposalNotFoundError,
+  GrillStateConflictError,
+  GrillVersionConflictError,
+  GrillValidationError,
 } from './errors.js';
 
 // ── 用例 ──────────────────────────────────────────────────────────
@@ -73,3 +80,48 @@ export type { DeleteProviderApiKeyDeps } from './delete-provider-api-key.js';
 
 export { testProviderConnection } from './test-provider-connection.js';
 export type { TestProviderConnectionDeps } from './test-provider-connection.js';
+
+// ── Grill-me 端口和用例 ───────────────────────────────────────────
+
+export type {
+  GrillSessionData,
+  GrillQuestionData,
+  GrillAnswerData,
+  GrillProposalData,
+  CreateGrillSessionInput,
+  CreateGrillQuestionInput,
+  CreateGrillAnswerInput,
+  CreateGrillProposalInput,
+  GrillSessionRepositoryPort,
+  GrillQuestionRepositoryPort,
+  GrillAnswerRepositoryPort,
+  GrillProposalRepositoryPort,
+} from './grill-types.js';
+
+export {
+  createGrillSession,
+  getGrillSession,
+  listGrillSessions,
+  startGrillSession,
+  pauseGrillSession,
+  resumeGrillSession,
+  completeGrillSession,
+  abandonGrillSession,
+  addGrillQuestions,
+  markQuestionAsked,
+  answerGrillQuestion,
+  skipGrillQuestion,
+  supersedeGrillQuestion,
+  getCurrentAnswers,
+  listAnswerHistory,
+  createGrillProposal,
+  reviewGrillProposal,
+  listGrillProposals,
+} from './grill-session.js';
+export type {
+  GrillSessionDeps,
+  AddGrillQuestionsInput,
+  AnswerGrillQuestionInput,
+  CreateGrillProposalInput2,
+  ReviewGrillProposalInput,
+} from './grill-session.js';
