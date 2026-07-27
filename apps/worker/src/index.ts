@@ -81,6 +81,7 @@ import type {
 import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
 import { executeModelInvocationTest, sha256Hex } from '@ai-novel/task-engine';
 import { createMacOSKeychainSecretStore } from './secret-store.js';
+import { dispatchGrillCommand, type GrillHandlerContext } from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -1104,6 +1105,30 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'task.getStats':
         data = handleGetTaskStats(request.payload);
         break;
+      case 'grill.createSession':
+      case 'grill.getSession':
+      case 'grill.listSessions':
+      case 'grill.startSession':
+      case 'grill.pauseSession':
+      case 'grill.resumeSession':
+      case 'grill.completeSession':
+      case 'grill.abandonSession':
+      case 'grill.addQuestions':
+      case 'grill.answerQuestion':
+      case 'grill.skipQuestion':
+      case 'grill.getCurrentAnswers':
+      case 'grill.listAnswerHistory':
+      case 'grill.createProposal':
+      case 'grill.reviewProposal':
+      case 'grill.listProposals': {
+        const grillCtx: GrillHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchGrillCommand(request.command, request.payload, grillCtx);
+        break;
+      }
       default:
         throw new AppError('VALIDATION_ERROR', `未知命令: ${request.command}`);
     }
