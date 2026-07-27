@@ -45,10 +45,7 @@ function isItemNotFound(error: unknown): boolean {
   return (error as SecurityCommandError).exitCode === ERR_SEC_ITEM_NOT_FOUND;
 }
 
-function execSecurity(
-  args: string[],
-  maxBuffer = SMALL_MAX_BUFFER,
-): Promise<{ stdout: string }> {
+function execSecurity(args: string[], maxBuffer = SMALL_MAX_BUFFER): Promise<{ stdout: string }> {
   return new Promise((resolve, reject) => {
     execFile(
       SECURITY_PATH,
