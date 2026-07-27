@@ -6,6 +6,12 @@ import {
   createInitialIdea,
   createChangeSet,
   unicodeCodePointLength,
+  isValidTaskTransition,
+  assertValidTaskTransition,
+  isValidInvocationTransition,
+  assertValidInvocationTransition,
+  isTerminalTaskStatus,
+  isTerminalInvocationStatus,
   type ChangeEntry,
 } from './index';
 
@@ -217,5 +223,144 @@ describe('createProviderProfileId', () => {
     const raw = 'test-provider-123';
     const id = createProviderProfileId(raw);
     expect(id).toBe(raw);
+  });
+});
+
+// ── 任务状态转换 ─────────────────────────────────────────────────
+
+describe('isValidTaskTransition', () => {
+  it.each([
+    ['PENDING', 'RUNNING'],
+    ['PENDING', 'CANCELLED'],
+    ['PENDING', 'STALE'],
+    ['RUNNING', 'SUCCEEDED'],
+    ['RUNNING', 'FAILED'],
+    ['RUNNING', 'CANCELLED'],
+    ['RUNNING', 'STALE'],
+    ['FAILED', 'PENDING'],
+    ['CANCELLED', 'PENDING'],
+    ['STALE', 'PENDING'],
+  ] as const)('应该允许 %s -> %s', (from, to) => {
+    expect(isValidTaskTransition(from, to)).toBe(true);
+  });
+
+  it.each([
+    ['SUCCEEDED', 'RUNNING'],
+    ['SUCCEEDED', 'FAILED'],
+    ['FAILED', 'SUCCEEDED'],
+    ['CANCELLED', 'SUCCEEDED'],
+    ['STALE', 'SUCCEEDED'],
+    ['SUCCEEDED', 'PENDING'],
+    ['SUCCEEDED', 'CANCELLED'],
+    ['SUCCEEDED', 'STALE'],
+  ] as const)('应该禁止 %s -> %s', (from, to) => {
+    expect(isValidTaskTransition(from, to)).toBe(false);
+  });
+});
+
+describe('assertValidTaskTransition', () => {
+  it('应该允许合法转换', () => {
+    expect(() => assertValidTaskTransition('PENDING', 'RUNNING')).not.toThrow();
+  });
+
+  it('应该拒绝非法转换', () => {
+    expect(() => assertValidTaskTransition('SUCCEEDED', 'RUNNING')).toThrow(
+      '非法任务状态转换: SUCCEEDED -> RUNNING',
+    );
+  });
+
+  it('应该拒绝 SUCCEEDED -> FAILED', () => {
+    expect(() => assertValidTaskTransition('SUCCEEDED', 'FAILED')).toThrow();
+  });
+
+  it('应该拒绝 FAILED -> SUCCEEDED', () => {
+    expect(() => assertValidTaskTransition('FAILED', 'SUCCEEDED')).toThrow();
+  });
+});
+
+describe('isTerminalTaskStatus', () => {
+  it('SUCCEEDED 是终态', () => {
+    expect(isTerminalTaskStatus('SUCCEEDED')).toBe(true);
+  });
+
+  it('FAILED 是终态', () => {
+    expect(isTerminalTaskStatus('FAILED')).toBe(true);
+  });
+
+  it('CANCELLED 是终态', () => {
+    expect(isTerminalTaskStatus('CANCELLED')).toBe(true);
+  });
+
+  it('PENDING 不是终态', () => {
+    expect(isTerminalTaskStatus('PENDING')).toBe(false);
+  });
+
+  it('RUNNING 不是终态', () => {
+    expect(isTerminalTaskStatus('RUNNING')).toBe(false);
+  });
+
+  it('STALE 不是终态', () => {
+    expect(isTerminalTaskStatus('STALE')).toBe(false);
+  });
+});
+
+// ── 模型调用状态转换 ─────────────────────────────────────────────
+
+describe('isValidInvocationTransition', () => {
+  it.each([
+    ['PENDING', 'RUNNING'],
+    ['PENDING', 'CANCELLED'],
+    ['RUNNING', 'SUCCEEDED'],
+    ['RUNNING', 'FAILED'],
+    ['RUNNING', 'CANCELLED'],
+  ] as const)('应该允许 %s -> %s', (from, to) => {
+    expect(isValidInvocationTransition(from, to)).toBe(true);
+  });
+
+  it.each([
+    ['SUCCEEDED', 'RUNNING'],
+    ['SUCCEEDED', 'FAILED'],
+    ['FAILED', 'SUCCEEDED'],
+    ['FAILED', 'RUNNING'],
+    ['CANCELLED', 'SUCCEEDED'],
+    ['CANCELLED', 'RUNNING'],
+    ['PENDING', 'SUCCEEDED'],
+    ['PENDING', 'FAILED'],
+  ] as const)('应该禁止 %s -> %s', (from, to) => {
+    expect(isValidInvocationTransition(from, to)).toBe(false);
+  });
+});
+
+describe('assertValidInvocationTransition', () => {
+  it('应该允许合法转换', () => {
+    expect(() => assertValidInvocationTransition('PENDING', 'RUNNING')).not.toThrow();
+  });
+
+  it('应该拒绝非法转换', () => {
+    expect(() => assertValidInvocationTransition('SUCCEEDED', 'RUNNING')).toThrow(
+      '非法调用状态转换: SUCCEEDED -> RUNNING',
+    );
+  });
+});
+
+describe('isTerminalInvocationStatus', () => {
+  it('SUCCEEDED 是终态', () => {
+    expect(isTerminalInvocationStatus('SUCCEEDED')).toBe(true);
+  });
+
+  it('FAILED 是终态', () => {
+    expect(isTerminalInvocationStatus('FAILED')).toBe(true);
+  });
+
+  it('CANCELLED 是终态', () => {
+    expect(isTerminalInvocationStatus('CANCELLED')).toBe(true);
+  });
+
+  it('PENDING 不是终态', () => {
+    expect(isTerminalInvocationStatus('PENDING')).toBe(false);
+  });
+
+  it('RUNNING 不是终态', () => {
+    expect(isTerminalInvocationStatus('RUNNING')).toBe(false);
   });
 });

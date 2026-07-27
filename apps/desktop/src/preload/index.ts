@@ -13,6 +13,10 @@ const IPC_CHANNELS = {
   PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
   PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
   PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
+  TASK_CREATE_MODEL_INVOCATION_TEST: 'ipc:task-create-model-invocation-test',
+  TASK_GET: 'ipc:task-get',
+  TASK_LIST: 'ipc:task-list',
+  TASK_GET_STATS: 'ipc:task-get-stats',
 } as const;
 
 /**
@@ -30,6 +34,9 @@ import type {
   ProviderPublicState,
   SaveApiKeyInput,
   ConnectionTestResult,
+  CreateModelInvocationTestInput,
+  TaskPublicData,
+  TaskStatsPublicData,
 } from '@ai-novel/contracts';
 
 /**
@@ -78,6 +85,26 @@ const desktopAPI: DesktopAPI = {
 
     async testConnection(): Promise<ConnectionTestResult> {
       return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_TEST_CONNECTION);
+    },
+  },
+
+  tasks: {
+    async createModelInvocationTest(
+      input: CreateModelInvocationTestInput,
+    ): Promise<TaskPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.TASK_CREATE_MODEL_INVOCATION_TEST, input);
+    },
+
+    async get(projectId: string, taskId: string): Promise<TaskPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.TASK_GET, { projectId, taskId });
+    },
+
+    async list(projectId: string): Promise<ReadonlyArray<TaskPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.TASK_LIST, { projectId });
+    },
+
+    async getStats(projectId: string): Promise<TaskStatsPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.TASK_GET_STATS, { projectId });
     },
   },
 };

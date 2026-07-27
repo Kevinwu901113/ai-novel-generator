@@ -202,6 +202,73 @@ CREATE TABLE project_metadata (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
+
+CREATE TABLE tasks (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_type TEXT NOT NULL,
+  status TEXT NOT NULL,
+  input_version_json TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  result_json TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  stale_at TEXT,
+  cancelled_at TEXT,
+  CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST')),
+  CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+  CHECK (attempt_count >= 0),
+  CHECK (json_valid(input_version_json)),
+  CHECK (json_valid(payload_json)),
+  CHECK (result_json IS NULL OR json_valid(result_json))
+) STRICT;
+
+CREATE TABLE model_invocations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  provider_profile_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL,
+  request_kind TEXT NOT NULL,
+  prompt_hash TEXT NOT NULL,
+  request_metadata_json TEXT NOT NULL,
+  response_metadata_json TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  cache_read_tokens INTEGER,
+  cache_write_tokens INTEGER,
+  total_tokens INTEGER,
+  latency_ms INTEGER,
+  finish_reason TEXT,
+  error_code TEXT,
+  error_message TEXT,
+  provider_request_id TEXT,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  FOREIGN KEY (task_id) REFERENCES tasks(id),
+  CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED')),
+  CHECK (attempt_number >= 1),
+  CHECK (length(prompt_hash) = 64),
+  CHECK (json_valid(request_metadata_json)),
+  CHECK (response_metadata_json IS NULL OR json_valid(response_metadata_json)),
+  CHECK (input_tokens IS NULL OR input_tokens >= 0),
+  CHECK (output_tokens IS NULL OR output_tokens >= 0),
+  CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+  CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+  CHECK (total_tokens IS NULL OR total_tokens >= 0),
+  CHECK (latency_ms IS NULL OR latency_ms >= 0)
+) STRICT;
+
+CREATE UNIQUE INDEX idx_invocations_task_attempt_unique
+  ON model_invocations(task_id, attempt_number);
 ```
 
 ### 项目目录结构

@@ -99,6 +99,35 @@
 
 **未实现**：多提供商切换、自定义端点、Grill-me、创作契约、任务系统。
 
+### M1-B2：持久化任务与模型调用基础设施
+
+**目标**：建立任务持久化、模型调用记录、恢复机制、token 与错误统计基础设施。
+
+**范围**：
+
+- 领域层：TaskStatus、TaskType、ModelInvocationStatus 状态机
+- 数据库层：project.sqlite 迁移 2（tasks、model_invocations 表）
+- 应用层：TaskRepositoryPort、ModelInvocationRepositoryPort 端口接口
+- 契约层：TaskPublicData、TaskStatsPublicData、新错误码、验证函数
+- 模型网关：通用 invokeModel 调用、usage 提取、安全结果
+- 任务引擎：MODEL_INVOCATION_TEST 执行、prompt hashing、原子提交
+- Worker：任务恢复逻辑、4 个 task RPC 命令
+- IPC：task.createModelInvocationTest、task.get、task.list、task.getStats
+- Preload：暴露 tasks API
+- 测试：365 个测试全部通过
+
+**关键设计决策**：
+
+- 任务和调用记录在 project.sqlite（随项目数据）
+- prompt 不持久化，只保存 SHA-256 hash
+- CAS claim 防止并发执行
+- token 统计时 null 按 0 处理，但不改写数据库
+- RUNNING 任务在启动时恢复为 FAILED（TASK_INTERRUPTED）
+- 当前不支持自动重试和队列自动调度
+- 当前只支持 MODEL_INVOCATION_TEST 任务类型
+
+**未实现**：Grill-me、创作契约、大纲、人物、世界观、正文生成、多 Agent 编排、流式 UI、取消按钮、重试 UI、多模态、搜索、导入导出。
+
 ## M2：正文编辑与版本
 
 **目标**：实现正文编辑和版本管理。

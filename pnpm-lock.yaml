@@ -81,6 +81,9 @@ importers:
       '@ai-novel/model-gateway':
         specifier: workspace:*
         version: link:../../packages/model-gateway
+      '@ai-novel/task-engine':
+        specifier: workspace:*
+        version: link:../../packages/task-engine
     devDependencies:
       esbuild:
         specifier: ^0.25.0
@@ -178,13 +181,22 @@ importers:
 
   packages/task-engine:
     dependencies:
+      '@ai-novel/application':
+        specifier: workspace:*
+        version: link:../application
       '@ai-novel/contracts':
         specifier: workspace:*
         version: link:../contracts
       '@ai-novel/domain':
         specifier: workspace:*
         version: link:../domain
+      '@ai-novel/model-gateway':
+        specifier: workspace:*
+        version: link:../model-gateway
     devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       typescript:
         specifier: ^5.8.0
         version: 5.9.3

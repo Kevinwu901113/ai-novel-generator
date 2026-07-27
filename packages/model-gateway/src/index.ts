@@ -3,7 +3,7 @@
  *
  * Anthropic-compatible 模型网关。
  *
- * 本阶段仅支持 MiMo V2.5 Pro 连接测试。
+ * 本阶段支持 MiMo V2.5 Pro 连接测试和通用模型调用。
  * 不安装 Anthropic SDK，使用 Node 24 内置 fetch。
  */
 
@@ -99,6 +99,52 @@ function hasNonEmptyTextContent(content: ReadonlyArray<AnthropicContentBlock>): 
   return content.some(
     (block) => block.type === 'text' && typeof block.text === 'string' && block.text.length > 0,
   );
+}
+
+// ── 通用调用类型 ──────────────────────────────────────────────────
+
+/** 模型调用输入 */
+export interface ModelInvocationInput {
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly apiKey: string;
+  readonly prompt: string;
+  readonly maxTokens?: number;
+  readonly systemPrompt?: string;
+  readonly temperature?: number;
+}
+
+/** 模型调用安全结果 —— 不包含原始响应正文 */
+export interface ModelInvocationOutput {
+  readonly text: string;
+  readonly providerRequestId: string | null;
+  readonly finishReason: string | null;
+  readonly usage: {
+    readonly inputTokens: number | null;
+    readonly outputTokens: number | null;
+    readonly cacheReadTokens: number | null;
+    readonly cacheWriteTokens: number | null;
+    readonly totalTokens: number | null;
+  };
+  readonly latencyMs: number;
+  readonly errorCode: ErrorCode | null;
+  readonly errorMessage: string | null;
+}
+
+// ── Anthropic 响应类型 ────────────────────────────────────────────
+
+interface AnthropicUsage {
+  readonly input_tokens?: number;
+  readonly output_tokens?: number;
+  readonly cache_read_input_tokens?: number;
+  readonly cache_creation_input_tokens?: number;
+}
+
+interface AnthropicFullResponse {
+  readonly id?: string;
+  readonly content?: ReadonlyArray<AnthropicContentBlock>;
+  readonly stop_reason?: string;
+  readonly usage?: AnthropicUsage;
 }
 
 // ── 连接测试 ──────────────────────────────────────────────────────
@@ -233,6 +279,231 @@ export async function testConnection(
     // 其他错误
     return {
       success: false,
+      latencyMs,
+      errorCode: 'PROVIDER_CONNECTION_FAILED',
+      errorMessage: errorCodeToMessage('PROVIDER_CONNECTION_FAILED'),
+    };
+  }
+}
+
+// ── 通用模型调用 ──────────────────────────────────────────────────
+
+const INVOCATION_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_TOKENS = 4096;
+
+/**
+ * 调用 Anthropic-compatible 模型。
+ *
+ * 发送用户消息，返回安全结果（不含原始响应正文）。
+ * 不自动重试。prompt 和 API Key 不进入异常。
+ */
+export async function invokeModel(
+  deps: ModelGatewayDeps,
+  input: ModelInvocationInput,
+): Promise<ModelInvocationOutput> {
+  const { fetch } = deps;
+  const startTime = Date.now();
+
+  const url = `${input.baseUrl.replace(/\/+$/, '')}/v1/messages`;
+
+  const messages: Array<{ role: string; content: string }> = [
+    { role: 'user', content: input.prompt },
+  ];
+
+  const requestBody: Record<string, unknown> = {
+    model: input.model,
+    max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
+    messages,
+  };
+
+  if (input.systemPrompt) {
+    requestBody.system = input.systemPrompt;
+  }
+  if (input.temperature !== undefined) {
+    requestBody.temperature = input.temperature;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), INVOCATION_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'api-key': input.apiKey,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+    const latencyMs = Date.now() - startTime;
+
+    if (!response.ok) {
+      try {
+        await response.text();
+      } catch {
+        // 忽略
+      }
+
+      const errorCode = mapHttpStatusToErrorCode(response.status);
+      return {
+        text: '',
+        providerRequestId: null,
+        finishReason: null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode,
+        errorMessage: errorCodeToMessage(errorCode),
+      };
+    }
+
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      return {
+        text: '',
+        providerRequestId: null,
+        finishReason: null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode: 'PROVIDER_RESPONSE_INVALID',
+        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
+      };
+    }
+
+    if (!isValidAnthropicResponse(data)) {
+      return {
+        text: '',
+        providerRequestId: null,
+        finishReason: null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode: 'PROVIDER_RESPONSE_INVALID',
+        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
+      };
+    }
+
+    const fullData = data as AnthropicFullResponse;
+
+    // 提取文本
+    const textBlocks = fullData.content?.filter((b) => b.type === 'text' && b.text) ?? [];
+    const text = textBlocks.map((b) => b.text ?? '').join('');
+
+    if (!text) {
+      return {
+        text: '',
+        providerRequestId: fullData.id ?? null,
+        finishReason: fullData.stop_reason ?? null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode: 'PROVIDER_RESPONSE_INVALID',
+        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
+      };
+    }
+
+    // 提取 usage
+    const usage = fullData.usage;
+    const inputTokens = usage?.input_tokens ?? null;
+    const outputTokens = usage?.output_tokens ?? null;
+    const cacheReadTokens = usage?.cache_read_input_tokens ?? null;
+    const cacheWriteTokens = usage?.cache_creation_input_tokens ?? null;
+    // total tokens 不自行推断，除非上游明确提供
+    const totalTokens =
+      inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null;
+
+    return {
+      text,
+      providerRequestId: fullData.id ?? null,
+      finishReason: fullData.stop_reason ?? null,
+      usage: {
+        inputTokens,
+        outputTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        totalTokens,
+      },
+      latencyMs,
+      errorCode: null,
+      errorMessage: null,
+    };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const latencyMs = Date.now() - startTime;
+
+    if (err instanceof Error && err.name === 'AbortError') {
+      return {
+        text: '',
+        providerRequestId: null,
+        finishReason: null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode: 'PROVIDER_TIMEOUT',
+        errorMessage: errorCodeToMessage('PROVIDER_TIMEOUT'),
+      };
+    }
+
+    if (err instanceof TypeError || (err instanceof Error && err.message.includes('fetch'))) {
+      return {
+        text: '',
+        providerRequestId: null,
+        finishReason: null,
+        usage: {
+          inputTokens: null,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: null,
+        },
+        latencyMs,
+        errorCode: 'NETWORK_UNAVAILABLE',
+        errorMessage: errorCodeToMessage('NETWORK_UNAVAILABLE'),
+      };
+    }
+
+    return {
+      text: '',
+      providerRequestId: null,
+      finishReason: null,
+      usage: {
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        totalTokens: null,
+      },
       latencyMs,
       errorCode: 'PROVIDER_CONNECTION_FAILED',
       errorMessage: errorCodeToMessage('PROVIDER_CONNECTION_FAILED'),

@@ -23,10 +23,13 @@ import {
   isValidCreateProjectInput,
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
+  isValidCreateModelInvocationTestInput,
   type AppError as AppErrorType,
   type ErrorCode,
   type ProviderPublicState,
   type ConnectionTestResult,
+  type TaskPublicData,
+  type TaskStatsPublicData,
 } from '@ai-novel/contracts';
 import {
   createProject,
@@ -55,7 +58,16 @@ import {
   type SecretStore,
   type ProviderProfileData,
   type ProviderProfileRepository as AppProviderProfileRepository,
+  type TaskRepositoryPort,
+  type TaskData,
+  type CreateTaskInput,
+  type ModelInvocationRepositoryPort,
+  type ModelInvocationData,
+  type CreateInvocationInput,
+  type InvocationSuccessResult,
+  type InvocationStatsData,
 } from '@ai-novel/application';
+import type { TaskStatus, ModelInvocationStatus } from '@ai-novel/domain';
 import { AppDatabase, ProjectDatabase, checkProjectDatabaseVersion } from '@ai-novel/database';
 import type {
   ProjectIndexRow,
@@ -63,8 +75,11 @@ import type {
   CreateProjectIndexData,
   CreateProjectMetadataData,
   ProviderProfileRow,
+  TaskRow,
+  ModelInvocationRow,
 } from '@ai-novel/database';
-import { testConnection as modelGatewayTestConnection } from '@ai-novel/model-gateway';
+import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
+import { executeModelInvocationTest, sha256Hex } from '@ai-novel/task-engine';
 import { createMacOSKeychainSecretStore } from './secret-store.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
@@ -311,6 +326,194 @@ class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
   }
 }
 
+// ── 任务仓库适配器 ────────────────────────────────────────────────
+
+class TaskRepositoryAdapter implements TaskRepositoryPort {
+  constructor(private readonly projDb: ProjectDatabase) {}
+
+  create(data: CreateTaskInput): void {
+    const now = createClock().now();
+    this.projDb.getTaskRepository().create({
+      id: data.id,
+      projectId: data.projectId,
+      taskType: data.taskType,
+      status: 'PENDING',
+      inputVersionJson: data.inputVersionJson,
+      payloadJson: data.payloadJson,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  getById(id: string): TaskData | null {
+    const row = this.projDb.getTaskRepository().getById(id);
+    if (!row) return null;
+    return this.toTaskData(row);
+  }
+
+  listByProject(projectId: string, limit?: number): ReadonlyArray<TaskData> {
+    return this.projDb.getTaskRepository().listByProject(projectId, limit).map(this.toTaskData);
+  }
+
+  listByStatus(status: TaskStatus): ReadonlyArray<TaskData> {
+    return this.projDb.getTaskRepository().listByStatus(status).map(this.toTaskData);
+  }
+
+  claimPending(id: string): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().claimPending(id, now);
+  }
+
+  completeRunning(id: string, resultJson: string): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().completeRunning(id, resultJson, now);
+  }
+
+  failRunning(id: string, errorCode: string, errorMessage: string): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().failRunning(id, errorCode, errorMessage, now);
+  }
+
+  markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().markStale(id, expectedStatuses, now);
+  }
+
+  resetToPending(id: string, expectedStatus: TaskStatus): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().resetToPending(id, expectedStatus, now);
+  }
+
+  listRunning(): ReadonlyArray<TaskData> {
+    return this.projDb.getTaskRepository().listRunning().map(this.toTaskData);
+  }
+
+  private toTaskData(row: TaskRow): TaskData {
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      taskType: row.taskType,
+      status: row.status,
+      inputVersionJson: row.inputVersionJson,
+      payloadJson: row.payloadJson,
+      resultJson: row.resultJson,
+      errorCode: row.errorCode,
+      errorMessage: row.errorMessage,
+      attemptCount: row.attemptCount,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      startedAt: row.startedAt,
+      finishedAt: row.finishedAt,
+      staleAt: row.staleAt,
+      cancelledAt: row.cancelledAt,
+    };
+  }
+}
+
+// ── 模型调用仓库适配器 ────────────────────────────────────────────
+
+class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort {
+  constructor(private readonly projDb: ProjectDatabase) {}
+
+  create(data: CreateInvocationInput): void {
+    const now = createClock().now();
+    this.projDb.getModelInvocationRepository().create({
+      id: data.id,
+      projectId: data.projectId,
+      taskId: data.taskId,
+      providerProfileId: data.providerProfileId,
+      model: data.model,
+      status: 'PENDING',
+      attemptNumber: data.attemptNumber,
+      requestKind: data.requestKind,
+      promptHash: data.promptHash,
+      requestMetadataJson: data.requestMetadataJson,
+      createdAt: now,
+    });
+  }
+
+  getById(id: string): ModelInvocationData | null {
+    const row = this.projDb.getModelInvocationRepository().getById(id);
+    if (!row) return null;
+    return this.toInvocationData(row);
+  }
+
+  listByTask(taskId: string): ReadonlyArray<ModelInvocationData> {
+    return this.projDb.getModelInvocationRepository().listByTask(taskId).map(this.toInvocationData);
+  }
+
+  markRunning(id: string, expectedStatus: 'PENDING'): boolean {
+    const now = createClock().now();
+    return this.projDb.getModelInvocationRepository().markRunning(id, expectedStatus, now);
+  }
+
+  markSucceeded(id: string, expectedStatus: 'RUNNING', result: InvocationSuccessResult): boolean {
+    const now = createClock().now();
+    return this.projDb.getModelInvocationRepository().markSucceeded(id, expectedStatus, {
+      responseMetadataJson: result.responseMetadataJson,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
+      totalTokens: result.totalTokens,
+      latencyMs: result.latencyMs,
+      finishReason: result.finishReason,
+      providerRequestId: result.providerRequestId,
+      finishedAt: now,
+    });
+  }
+
+  markFailed(
+    id: string,
+    expectedStatuses: ReadonlyArray<ModelInvocationStatus>,
+    errorCode: string,
+    errorMessage: string,
+    latencyMs: number | null,
+  ): boolean {
+    const now = createClock().now();
+    return this.projDb
+      .getModelInvocationRepository()
+      .markFailed(id, expectedStatuses, errorCode, errorMessage, latencyMs, now);
+  }
+
+  getStatsByProject(projectId: string): InvocationStatsData {
+    return this.projDb.getModelInvocationRepository().getStatsByProject(projectId);
+  }
+
+  listRunning(): ReadonlyArray<ModelInvocationData> {
+    return this.projDb.getModelInvocationRepository().listRunning().map(this.toInvocationData);
+  }
+
+  private toInvocationData(row: ModelInvocationRow): ModelInvocationData {
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      taskId: row.taskId,
+      providerProfileId: row.providerProfileId,
+      model: row.model,
+      status: row.status,
+      attemptNumber: row.attemptNumber,
+      requestKind: row.requestKind,
+      promptHash: row.promptHash,
+      requestMetadataJson: row.requestMetadataJson,
+      responseMetadataJson: row.responseMetadataJson,
+      inputTokens: row.inputTokens,
+      outputTokens: row.outputTokens,
+      cacheReadTokens: row.cacheReadTokens,
+      cacheWriteTokens: row.cacheWriteTokens,
+      totalTokens: row.totalTokens,
+      latencyMs: row.latencyMs,
+      finishReason: row.finishReason,
+      errorCode: row.errorCode,
+      errorMessage: row.errorMessage,
+      providerRequestId: row.providerRequestId,
+      createdAt: row.createdAt,
+      startedAt: row.startedAt,
+      finishedAt: row.finishedAt,
+    };
+  }
+}
+
 // ── 初始化 ────────────────────────────────────────────────────────
 
 /**
@@ -474,6 +677,84 @@ function initialize(): void {
 
   // 启动时恢复一致性
   reconcile(dataRoot);
+
+  // 恢复中断的任务
+  reconcileTasks(dataRoot);
+}
+
+/**
+ * 任务恢复：将 RUNNING 任务和调用标记为 FAILED。
+ *
+ * 应用崩溃后，数据库中可能遗留 RUNNING 状态的记录。
+ * 启动时将这些记录恢复为 FAILED，并记录 TASK_INTERRUPTED。
+ *
+ * 每个 task 的恢复在同一事务中完成：
+ * - 该 task 下所有 RUNNING invocation → FAILED（CAS 检查）
+ * - 该 task → FAILED（CAS 检查）
+ * - 任一 CAS false 整组回滚
+ * - 重复执行幂等（已 FAILED 的不修改）
+ * - attempt_count 不变
+ */
+function reconcileTasks(dataRoot: string): void {
+  const projectsPath = join(dataRoot, 'projects');
+  if (!existsSync(projectsPath)) return;
+
+  const now = createClock().now();
+
+  // 遍历所有项目目录
+  for (const entry of readdirSync(projectsPath)) {
+    const projectDir = join(projectsPath, entry);
+    const dbPath = join(projectDir, 'project.sqlite');
+    if (!existsSync(dbPath)) continue;
+
+    try {
+      const projDb = new ProjectDatabase(dbPath);
+      try {
+        const taskRepo = projDb.getTaskRepository();
+        const invocationRepo = projDb.getModelInvocationRepository();
+
+        // 恢复 RUNNING tasks
+        const runningTasks = taskRepo.listRunning();
+        for (const task of runningTasks) {
+          projDb.transaction(() => {
+            // 恢复该 task 下的 RUNNING invocations
+            const invocations = invocationRepo.listByTask(task.id);
+            for (const inv of invocations) {
+              if (inv.status === 'RUNNING') {
+                const ok = invocationRepo.markFailed(
+                  inv.id,
+                  ['RUNNING'],
+                  'INVOCATION_INTERRUPTED',
+                  '模型调用因应用中断而未完成',
+                  null,
+                  now,
+                );
+                if (!ok) {
+                  throw new Error(`恢复调用 ${inv.id} 失败：CAS 冲突`);
+                }
+              }
+              // 已 FAILED/其他状态的 invocation 不修改
+            }
+
+            // 恢复 task（CAS：RUNNING → FAILED）
+            const taskOk = taskRepo.failRunning(
+              task.id,
+              'TASK_INTERRUPTED',
+              '任务因应用中断而未完成',
+              now,
+            );
+            if (!taskOk) {
+              throw new Error(`恢复任务 ${task.id} 失败：CAS 冲突`);
+            }
+          });
+        }
+      } finally {
+        projDb.close();
+      }
+    } catch {
+      // 忽略无法打开的项目数据库
+    }
+  }
 }
 
 // ── 命令处理 ──────────────────────────────────────────────────────
@@ -621,6 +902,168 @@ async function handleTestProviderConnection(): Promise<ConnectionTestResult> {
   return testProviderConnection(deps);
 }
 
+// ── 任务命令处理 ─────────────────────────────────────────────────
+
+/**
+ * 获取项目的 ProjectDatabase。
+ * 从 app.sqlite 查找项目目录，打开 project.sqlite。
+ */
+function getProjectDb(projectId: string): ProjectDatabase {
+  if (!appDb) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const indexRepo = appDb.getProjectIndexRepository();
+  const project = indexRepo.getById(projectId);
+  if (!project) {
+    throw new AppError('PROJECT_NOT_FOUND', `项目 ${projectId} 不存在`);
+  }
+
+  const dbPath = join(project.projectDirectory, 'project.sqlite');
+  if (!existsSync(dbPath)) {
+    throw new AppError('PROJECT_DATABASE_INVALID', '项目数据库不存在');
+  }
+
+  return new ProjectDatabase(dbPath);
+}
+
+/** 将 TaskData 转换为 TaskPublicData（清理敏感数据） */
+function toTaskPublicData(task: TaskData): TaskPublicData {
+  return {
+    id: task.id,
+    projectId: task.projectId,
+    taskType: task.taskType,
+    status: task.status,
+    attemptCount: task.attemptCount,
+    result: task.resultJson ? JSON.parse(task.resultJson) : null,
+    errorCode: task.errorCode,
+    errorMessage: task.errorMessage,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    startedAt: task.startedAt,
+    finishedAt: task.finishedAt,
+  };
+}
+
+async function handleCreateModelInvocationTest(payload: unknown): Promise<TaskPublicData> {
+  if (!isValidCreateModelInvocationTestInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的创建任务输入');
+  }
+
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const projDb = getProjectDb(payload.projectId);
+  try {
+    const taskRepo = new TaskRepositoryAdapter(projDb);
+    const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
+    const providerRepo = new ProviderProfileRepositoryAdapter(appDb);
+    const idGen = createIdGenerator();
+    const clock = createClock();
+
+    // 创建任务
+    const taskId = idGen.generate();
+    const promptHash = sha256Hex(payload.prompt);
+
+    taskRepo.create({
+      id: taskId,
+      projectId: payload.projectId,
+      taskType: 'MODEL_INVOCATION_TEST',
+      inputVersionJson: '{}',
+      payloadJson: JSON.stringify({
+        promptHash,
+        promptLength: payload.prompt.length,
+      }),
+    });
+
+    // 执行任务
+    const result = await executeModelInvocationTest(
+      {
+        taskRepo,
+        invocationRepo,
+        secretStore,
+        providerRepo,
+        idGenerator: idGen,
+        clock,
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transaction(fn),
+      },
+      taskId,
+      payload.prompt,
+    );
+
+    return toTaskPublicData(result.task);
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleGetTask(payload: unknown): TaskPublicData {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new AppError('VALIDATION_ERROR', '无效的任务查询输入');
+  }
+  const { projectId, taskId } = payload as { projectId?: string; taskId?: string };
+  if (typeof projectId !== 'string' || typeof taskId !== 'string') {
+    throw new AppError('VALIDATION_ERROR', '缺少 projectId 或 taskId');
+  }
+
+  const projDb = getProjectDb(projectId);
+  try {
+    const taskRepo = new TaskRepositoryAdapter(projDb);
+    const task = taskRepo.getById(taskId);
+    if (!task) {
+      throw new AppError('TASK_NOT_FOUND', `任务 ${taskId} 不存在`);
+    }
+    return toTaskPublicData(task);
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleListTasks(payload: unknown): ReadonlyArray<TaskPublicData> {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new AppError('VALIDATION_ERROR', '无效的任务列表输入');
+  }
+  const { projectId } = payload as { projectId?: string };
+  if (typeof projectId !== 'string') {
+    throw new AppError('VALIDATION_ERROR', '缺少 projectId');
+  }
+
+  const projDb = getProjectDb(projectId);
+  try {
+    const taskRepo = new TaskRepositoryAdapter(projDb);
+    return taskRepo.listByProject(projectId).map(toTaskPublicData);
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleGetTaskStats(payload: unknown): TaskStatsPublicData {
+  if (typeof payload !== 'object' || payload === null) {
+    throw new AppError('VALIDATION_ERROR', '无效的统计查询输入');
+  }
+  const { projectId } = payload as { projectId?: string };
+  if (typeof projectId !== 'string') {
+    throw new AppError('VALIDATION_ERROR', '缺少 projectId');
+  }
+
+  const projDb = getProjectDb(projectId);
+  try {
+    const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
+    return invocationRepo.getStatsByProject(projectId);
+  } finally {
+    projDb.close();
+  }
+}
+
 // ── 命令分发 ──────────────────────────────────────────────────────
 
 async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
@@ -649,6 +1092,18 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'provider.testConnection':
         data = await handleTestProviderConnection();
         break;
+      case 'task.createModelInvocationTest':
+        data = await handleCreateModelInvocationTest(request.payload);
+        break;
+      case 'task.get':
+        data = handleGetTask(request.payload);
+        break;
+      case 'task.list':
+        data = handleListTasks(request.payload);
+        break;
+      case 'task.getStats':
+        data = handleGetTaskStats(request.payload);
+        break;
       default:
         throw new AppError('VALIDATION_ERROR', `未知命令: ${request.command}`);
     }
@@ -663,11 +1118,11 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       };
     }
 
-    // 不泄露内部错误细节
+    // 不泄露内部错误细节，使用 INTERNAL_ERROR 而非 PROJECT_CREATE_FAILED
     return {
       requestId: request.requestId,
       success: false,
-      error: { code: 'PROJECT_CREATE_FAILED' as ErrorCode, message: '操作失败' },
+      error: { code: 'INTERNAL_ERROR' as ErrorCode, message: '操作失败' },
     };
   }
 }
@@ -708,7 +1163,7 @@ function handleMessage(data: unknown): void {
       sendToParent({
         requestId: request.requestId,
         success: false,
-        error: { code: 'WORKER_UNAVAILABLE' as ErrorCode, message: '操作失败' },
+        error: { code: 'INTERNAL_ERROR' as ErrorCode, message: '操作失败' },
       });
     },
   );

@@ -17,9 +17,12 @@
   },
   "dependencies": {
     "@ai-novel/domain": "workspace:*",
-    "@ai-novel/contracts": "workspace:*"
+    "@ai-novel/contracts": "workspace:*",
+    "@ai-novel/application": "workspace:*",
+    "@ai-novel/model-gateway": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "typescript": "^5.8.0"
   }
 }

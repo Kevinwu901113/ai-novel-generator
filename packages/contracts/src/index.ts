@@ -33,7 +33,14 @@ export type ErrorCode =
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_TIMEOUT'
   | 'PROVIDER_RESPONSE_INVALID'
-  | 'NETWORK_UNAVAILABLE';
+  | 'NETWORK_UNAVAILABLE'
+  | 'TASK_NOT_FOUND'
+  | 'TASK_STATE_CONFLICT'
+  | 'TASK_INTERRUPTED'
+  | 'TASK_EXECUTION_FAILED'
+  | 'INVOCATION_INTERRUPTED'
+  | 'MODEL_RESPONSE_INVALID'
+  | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
 export interface AppError {
@@ -134,6 +141,41 @@ export interface SaveApiKeyInput {
   readonly apiKey: string;
 }
 
+// ── 任务类型 ──────────────────────────────────────────────────────
+
+/** 任务公开数据 —— 返回给 Renderer，不含 prompt、API Key 或完整响应 */
+export interface TaskPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskType: string;
+  readonly status: string;
+  readonly attemptCount: number;
+  readonly result: unknown | null;
+  readonly errorCode: string | null;
+  readonly errorMessage: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt: string | null;
+  readonly finishedAt: string | null;
+}
+
+/** 创建模型调用测试输入 */
+export interface CreateModelInvocationTestInput {
+  readonly projectId: string;
+  readonly prompt: string;
+}
+
+/** 任务统计公开数据 */
+export interface TaskStatsPublicData {
+  readonly invocationCount: number;
+  readonly succeededCount: number;
+  readonly failedCount: number;
+  readonly totalInputTokens: number;
+  readonly totalOutputTokens: number;
+  readonly totalTokens: number;
+  readonly totalLatencyMs: number;
+}
+
 // ── IPC 频道 ──────────────────────────────────────────────────────
 
 /** IPC 频道定义 */
@@ -146,9 +188,21 @@ export const IPC_CHANNELS = {
   PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
   PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
   PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
+  TASK_CREATE_MODEL_INVOCATION_TEST: 'ipc:task-create-model-invocation-test',
+  TASK_GET: 'ipc:task-get',
+  TASK_LIST: 'ipc:task-list',
+  TASK_GET_STATS: 'ipc:task-get-stats',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
+
+/** 任务 API */
+export interface TasksAPI {
+  createModelInvocationTest(input: CreateModelInvocationTestInput): Promise<TaskPublicData>;
+  get(projectId: string, taskId: string): Promise<TaskPublicData>;
+  list(projectId: string): Promise<ReadonlyArray<TaskPublicData>>;
+  getStats(projectId: string): Promise<TaskStatsPublicData>;
+}
 
 /** 项目 API */
 export interface ProjectsAPI {
@@ -180,6 +234,7 @@ export interface DesktopAPI {
   retryDataService(): Promise<DataServiceStatusResponse>;
   projects: ProjectsAPI;
   provider: ProviderAPI;
+  tasks: TasksAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -234,6 +289,13 @@ export function isAppError(data: unknown): data is AppError {
     'PROVIDER_TIMEOUT',
     'PROVIDER_RESPONSE_INVALID',
     'NETWORK_UNAVAILABLE',
+    'TASK_NOT_FOUND',
+    'TASK_STATE_CONFLICT',
+    'TASK_INTERRUPTED',
+    'TASK_EXECUTION_FAILED',
+    'INVOCATION_INTERRUPTED',
+    'MODEL_RESPONSE_INVALID',
+    'INTERNAL_ERROR',
   ]);
   return (
     typeof obj.code === 'string' && validCodes.has(obj.code) && typeof obj.message === 'string'
@@ -279,5 +341,57 @@ export function isValidConnectionTestResult(data: unknown): data is ConnectionTe
     typeof obj.latencyMs === 'number' &&
     (obj.errorCode === null || typeof obj.errorCode === 'string') &&
     (obj.errorMessage === null || typeof obj.errorMessage === 'string')
+  );
+}
+
+/** 验证 CreateModelInvocationTestInput 结构 */
+export function isValidCreateModelInvocationTestInput(
+  data: unknown,
+): data is CreateModelInvocationTestInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.prompt === 'string';
+}
+
+/** 验证 TaskPublicData 结构 */
+export function isValidTaskPublicData(data: unknown): data is TaskPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  const validStatuses: ReadonlySet<string> = new Set([
+    'PENDING',
+    'RUNNING',
+    'SUCCEEDED',
+    'FAILED',
+    'CANCELLED',
+    'STALE',
+  ]);
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.taskType === 'string' &&
+    typeof obj.status === 'string' &&
+    validStatuses.has(obj.status) &&
+    typeof obj.attemptCount === 'number' &&
+    (obj.errorCode === null || typeof obj.errorCode === 'string') &&
+    (obj.errorMessage === null || typeof obj.errorMessage === 'string') &&
+    typeof obj.createdAt === 'string' &&
+    typeof obj.updatedAt === 'string' &&
+    (obj.startedAt === null || typeof obj.startedAt === 'string') &&
+    (obj.finishedAt === null || typeof obj.finishedAt === 'string')
+  );
+}
+
+/** 验证 TaskStatsPublicData 结构 */
+export function isValidTaskStatsPublicData(data: unknown): data is TaskStatsPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.invocationCount === 'number' &&
+    typeof obj.succeededCount === 'number' &&
+    typeof obj.failedCount === 'number' &&
+    typeof obj.totalInputTokens === 'number' &&
+    typeof obj.totalOutputTokens === 'number' &&
+    typeof obj.totalTokens === 'number' &&
+    typeof obj.totalLatencyMs === 'number'
   );
 }

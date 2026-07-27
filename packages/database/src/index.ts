@@ -27,6 +27,16 @@ export type {
   ProviderProfileRepository,
   AppDatabaseManager,
   ProjectDatabaseManager,
+  TaskRepository,
+  TaskRow,
+  CreateTaskData,
+  DbTaskStatus,
+  DbTaskType,
+  ModelInvocationRepository,
+  ModelInvocationRow,
+  CreateInvocationData,
+  DbInvocationStatus,
+  InvocationStats,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
