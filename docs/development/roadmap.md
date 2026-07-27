@@ -2,17 +2,17 @@
 
 ## 里程碑概览
 
-| 里程碑 | 名称               | 目标             | 状态   |
-| ------ | ------------------ | ---------------- | ------ |
-| M0     | 仓库与开发基线     | 建立工程基础     | 进行中 |
-| M1     | 项目创建至创作契约 | 纵向切片         | 待开始 |
-| M2     | 正文编辑与版本     | 编辑器和版本管理 | 待开始 |
-| M3     | 规划和正文生成     | AI 生成能力      | 待开始 |
-| M4     | 状态与连续性       | 状态管理         | 待开始 |
-| M5     | 审稿和定点修复     | 审稿流程         | 待开始 |
-| M6     | 研究、上下文和成本 | 研究和优化       | 待开始 |
-| M7     | 完整 V1 功能       | 功能完整         | 待开始 |
-| M8     | 真实短篇质量验收   | 质量验收         | 待开始 |
+| 里程碑 | 名称               | 目标             | 状态    |
+| ------ | ------------------ | ---------------- | ------- |
+| M0     | 仓库与开发基线     | 建立工程基础     | ✅ 完成 |
+| M1     | 项目创建至创作契约 | 纵向切片         | 进行中  |
+| M2     | 正文编辑与版本     | 编辑器和版本管理 | 待开始  |
+| M3     | 规划和正文生成     | AI 生成能力      | 待开始  |
+| M4     | 状态与连续性       | 状态管理         | 待开始  |
+| M5     | 审稿和定点修复     | 审稿流程         | 待开始  |
+| M6     | 研究、上下文和成本 | 研究和优化       | 待开始  |
+| M7     | 完整 V1 功能       | 功能完整         | 待开始  |
+| M8     | 真实短篇质量验收   | 质量验收         | 待开始  |
 
 ## M0：仓库与开发基线
 
@@ -53,6 +53,51 @@
 - 可以创建新项目
 - Grill-me 流程可用
 - 生成创作契约草案
+
+### M1-A：本地项目与数据库 ✅
+
+**目标**：创建本地项目、保存初始想法、显示项目列表、打开项目、重启后恢复。
+
+**范围**：
+
+- Electron 升级到 43.2.0
+- 领域层：ProjectName、InitialIdea、ProjectSummary、Project、Unicode 长度工具
+- 数据库层：node:sqlite 封装、AppDatabase（app.sqlite）、ProjectDatabase（project.sqlite）、迁移机制
+- 应用层：CreateProject、ListProjects、OpenProject 用例及补偿逻辑
+- Utility Process：RPC 协议、命令分发、生命周期管理
+- IPC：project.create、project.list、project.open
+- Preload：暴露 projects API
+- Renderer：三栏 UI（项目列表、创建表单、状态面板）
+- 测试：120 个测试全部通过
+
+**未实现**：Grill-me、AI、创作契约、正文编辑器、任务系统。
+
+### M1-B1：模型提供商配置 ✅
+
+**目标**：配置 MiMo V2.5 Pro 模型提供商，API Key 存 macOS Keychain，实现连接测试。
+
+**范围**：
+
+- 领域层：ProviderProfileId 品牌类型
+- 契约层：ProviderPublicState、ConnectionTestResult、SaveApiKeyInput 类型，错误码扩展，验证函数
+- 数据库层：app.sqlite 迁移 3（provider_profiles 表）、ProviderProfileRepository
+- 模型网关：Anthropic-compatible 客户端（fetch、超时、错误码映射）
+- 应用层：SecretStore 接口、GetProviderState、SaveProviderApiKey、DeleteProviderApiKey、TestProviderConnection 用例
+- Worker：macOS Keychain SecretStore 实现、4 个 provider 命令处理
+- IPC：provider.getState、provider.saveApiKey、provider.deleteApiKey、provider.testConnection
+- Preload：暴露 provider API
+- Renderer：右栏"模型服务"区域
+- 测试：232 个测试全部通过
+
+**关键设计决策**：
+
+- 固定 MiMo V2.5 Pro，Base URL 和 Model 只读
+- API Key 存 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
+- app.sqlite 只保存非敏感 provider profile
+- 不安装 Anthropic SDK，使用 Node 24 内置 fetch
+- 不复用 Claude Code Keychain
+
+**未实现**：多提供商切换、自定义端点、Grill-me、创作契约、任务系统。
 
 ## M2：正文编辑与版本
 

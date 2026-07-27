@@ -66,11 +66,14 @@
 
 - 不依赖 Electron UI
 - 定义接口，不包含具体实现
+- 不依赖 Electron、React、node:sqlite、`/usr/bin/security`、process.env
 
 **导出**：
 
-- 用例接口
-- 流程定义
+- 用例接口（CreateProject、ListProjects、OpenProject）
+- 提供商用例（GetProviderState、SaveProviderApiKey、DeleteProviderApiKey、TestProviderConnection）
+- 端口接口（SecretStore、ProviderProfileRepository、Clock、IdGenerator）
+- 错误类（AppError 及子类）
 
 ### `packages/contracts`
 
@@ -94,13 +97,23 @@
 
 **约束**：
 
-- 只在 Main Process 使用
+- 使用 node:sqlite（Node.js 内置）
+- 所有同步调用只在 Worker/Utility Process 中运行
 - 不暴露给 Renderer
+- 封装为可替换适配器
 
 **导出**：
 
-- 数据库连接管理
-- CRUD 操作
+- `AppDatabase`：app.sqlite 管理
+- `ProjectDatabase`：project.sqlite 管理
+- `SQLiteMigrator`：迁移运行器
+- 仓库接口（ProjectIndexRepository、ProjectMetadataRepository）
+
+**M1-A 实现**：
+
+- 迁移机制（版本控制、事务、幂等）
+- STRICT tables
+- WAL 模式、foreign_keys、busy_timeout
 
 ### `packages/model-gateway`
 
@@ -110,11 +123,19 @@
 
 - 屏蔽提供商差异
 - 统一接口
+- 不安装 Anthropic SDK，使用 Node 内置 fetch
+- 不接受 Renderer URL，从固定 profile 构造
 
 **导出**：
 
-- 模型调用接口
-- 提供商适配器
+- `testConnection`：Anthropic-compatible 连接测试
+- `ConnectionTestInput`、`ConnectionTestOutput` 类型
+
+**M1-B1 实现**：
+
+- Anthropic-compatible 客户端（fetch、AbortController 超时、错误码映射）
+- 固定 MiMo V2.5 Pro，不支持自定义端点
+- 支持依赖注入 fetch 和 clock
 
 ### `packages/task-engine`
 

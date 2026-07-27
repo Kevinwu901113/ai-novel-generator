@@ -16,6 +16,7 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@ai-novel/contracts": "workspace:*",
     "@ai-novel/domain": "workspace:*"
   },
   "devDependencies": {

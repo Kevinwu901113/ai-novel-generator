@@ -6,10 +6,10 @@
   "main": "./dist/main/index.js",
   "scripts": {
     "dev": "vite",
-    "build:deps": "pnpm --filter @ai-novel/contracts build",
-    "build:app": "vite build && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json",
+    "build:deps": "pnpm --filter @ai-novel/contracts build && pnpm --filter @ai-novel/domain build && pnpm --filter @ai-novel/database build && pnpm --filter @ai-novel/model-gateway build && pnpm --filter @ai-novel/application build && pnpm --filter @ai-novel/worker build",
+    "build:app": "vite build && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete && rm -rf dist/worker && cp -r ../worker/dist ./dist/worker",
     "build": "pnpm build:deps && pnpm build:app",
-    "package": "pnpm build && electron-packager . --platform=darwin --arch=arm64 --out=out --overwrite --name='AI 小说创作代理' --executable-name=ai-novel-generator --no-prune",
+    "package": "pnpm build && electron-packager . --platform=darwin --arch=arm64 --out=out --overwrite --name='AI 小说创作代理' --executable-name=ai-novel-generator --no-prune --ignore='src/' --ignore='scripts/' --ignore='\\.(map)$'",
     "smoke-test": "node scripts/smoke-test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.main.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.renderer.json",
     "start": "electron ."
@@ -18,11 +18,12 @@
     "@ai-novel/contracts": "workspace:*"
   },
   "devDependencies": {
+    "@electron/asar": "^4.2.1",
     "@electron/packager": "^20.0.4",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.6.0",
-    "electron": "^36.0.0",
+    "electron": "43.2.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "typescript": "^5.8.0",

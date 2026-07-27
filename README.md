@@ -4,9 +4,9 @@
 
 ## 技术栈
 
-- **运行时**：Electron + Node.js 24
-- **前端**：React + TypeScript + Vite
-- **数据库**：SQLite（本地优先）
+- **运行时**：Electron 43.2.0 + Node.js 24
+- **前端**：React 19 + TypeScript + Vite 7
+- **数据库**：SQLite（node:sqlite 内置模块，本地优先）
 - **包管理**：pnpm 11 workspace（monorepo）
 - **测试**：Vitest
 - **代码质量**：ESLint + Prettier
@@ -90,6 +90,16 @@ ai-novel-generator/
 - `sandbox: true`
 - Renderer 不直接访问 Node.js、数据库、文件系统或 API Key
 - Preload 只暴露最小、显式、带类型的 API
+- API Key 存储在 macOS Keychain（不进入 SQLite 或日志）
+
+## 模型配置
+
+当前固定使用 MiMo V2.5 Pro（Anthropic-compatible）：
+
+- Base URL: `https://token-plan-cn.xiaomimimo.com/anthropic`
+- Model: `mimo-v2.5-pro`
+
+Base URL 和 Model 为只读配置，不支持用户修改。
 
 ## 许可证
 

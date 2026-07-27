@@ -13,12 +13,17 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete && node scripts/bundle.mjs"
   },
   "dependencies": {
-    "@ai-novel/contracts": "workspace:*"
+    "@ai-novel/application": "workspace:*",
+    "@ai-novel/contracts": "workspace:*",
+    "@ai-novel/database": "workspace:*",
+    "@ai-novel/domain": "workspace:*",
+    "@ai-novel/model-gateway": "workspace:*"
   },
   "devDependencies": {
+    "esbuild": "^0.25.0",
     "typescript": "^5.8.0"
   }
 }
