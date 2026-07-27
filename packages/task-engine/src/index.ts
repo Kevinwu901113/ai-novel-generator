@@ -9,8 +9,10 @@
  * 关键约束：
  * - claim 和 attempt 原子递增
  * - 所有状态转换使用 CAS（affected rows = 1）
+ * - 事务内每个 CAS 返回值必须检查，false 即抛 TASK_STATE_CONFLICT 回滚事务
  * - 成功/失败路径在同一事务中提交 task + invocation
  * - prompt 不持久化，API Key 不进入日志/数据库/错误
+ * - Provider profile 在 claim 前验证，缺失时不增加 attempt_count
  */
 
 import { createHash } from 'node:crypto';
@@ -63,20 +65,29 @@ export function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
 }
 
+/**
+ * 检查 CAS 返回值。false 时抛出 TASK_STATE_CONFLICT，使事务回滚。
+ */
+function requireCas(updated: boolean, message: string): void {
+  if (!updated) {
+    throw new TaskExecutionError('TASK_STATE_CONFLICT', message);
+  }
+}
+
 // ── 任务执行 ──────────────────────────────────────────────────────
 
 /**
  * 执行 MODEL_INVOCATION_TEST 任务。
  *
- * 流程：
+ * 流程（方案 A：provider profile 在 claim 前验证）：
  * 1. 读取任务，验证 PENDING
- * 2. CAS claim（PENDING → RUNNING + attempt_count++）
- * 3. 读取 provider profile
- * 4. 创建 invocation（PENDING）
- * 5. 读取 API Key（失败则 invocation + task 同事务标记 FAILED）
+ * 2. 验证 provider profile 存在（缺失则不 claim、不增加 attempt）
+ * 3. 读取 API Key（失败则不 claim、不增加 attempt）
+ * 4. CAS claim（PENDING → RUNNING + attempt_count++）
+ * 5. 创建 invocation（PENDING）
  * 6. 标记 invocation RUNNING
  * 7. 调用 model gateway
- * 8. 原子提交 success/failure（task + invocation 同事务）
+ * 8. 原子提交 success/failure（task + invocation 同事务，每个 CAS 必须成功）
  *
  * prompt 不写入数据库，只存在于调用栈内。
  */
@@ -105,7 +116,25 @@ export async function executeModelInvocationTest(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
   }
 
-  // 2. CAS claim：PENDING → RUNNING + attempt_count++（原子）
+  // 2. 验证 provider profile（claim 前，不增加 attempt_count）
+  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
+  if (!profile) {
+    throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+  }
+
+  // 3. 读取 API Key（claim 前，不增加 attempt_count）
+  let apiKey: string | null;
+  try {
+    apiKey = await secretStore.getSecret(profile.keychainService, profile.keychainAccount);
+  } catch {
+    throw new TaskExecutionError('API_KEY_READ_FAILED', '无法读取 API Key');
+  }
+
+  if (!apiKey) {
+    throw new TaskExecutionError('API_KEY_REQUIRED', '请先配置 API Key');
+  }
+
+  // 4. CAS claim：PENDING → RUNNING + attempt_count++（原子）
   const claimed = taskRepo.claimPending(taskId);
   if (!claimed) {
     throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
@@ -114,16 +143,7 @@ export async function executeModelInvocationTest(
   // 读取更新后的任务（attempt_count 已递增）
   const updatedTask = taskRepo.getById(taskId)!;
 
-  // 3. 获取 provider profile
-  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
-  if (!profile) {
-    // Provider 缺失：task FAILED（无 invocation 需要创建）
-    taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '模型提供商未配置');
-    const failedTask = taskRepo.getById(taskId)!;
-    return { task: failedTask, invocation: null };
-  }
-
-  // 4. 创建 invocation
+  // 5. 创建 invocation
   const invocationId = idGenerator.generate();
   const promptHash = sha256Hex(prompt);
 
@@ -142,52 +162,10 @@ export async function executeModelInvocationTest(
     }),
   });
 
-  // 5. 读取 API Key
-  let apiKey: string | null;
-  try {
-    apiKey = await secretStore.getSecret(profile.keychainService, profile.keychainAccount);
-  } catch {
-    // Keychain 读取失败：invocation + task 同事务标记 FAILED
-    transaction(() => {
-      invocationRepo.markFailed(
-        invocationId,
-        ['PENDING'],
-        'API_KEY_READ_FAILED',
-        '无法读取 API Key',
-        null,
-      );
-      taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '无法读取 API Key');
-    });
-    const failedTask = taskRepo.getById(taskId)!;
-    const failedInvocation = invocationRepo.getById(invocationId);
-    return { task: failedTask, invocation: failedInvocation };
-  }
-
-  if (!apiKey) {
-    // API Key 缺失：invocation + task 同事务标记 FAILED
-    transaction(() => {
-      invocationRepo.markFailed(
-        invocationId,
-        ['PENDING'],
-        'API_KEY_REQUIRED',
-        '请先配置 API Key',
-        null,
-      );
-      taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '请先配置 API Key');
-    });
-    const failedTask = taskRepo.getById(taskId)!;
-    const failedInvocation = invocationRepo.getById(invocationId);
-    return { task: failedTask, invocation: failedInvocation };
-  }
-
-  // 6. 标记 invocation RUNNING
-  const invRunning = invocationRepo.markRunning(invocationId, 'PENDING');
-  if (!invRunning) {
-    // invocation 状态冲突（理论上不应发生）
-    taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '调用状态冲突');
-    const failedTask = taskRepo.getById(taskId)!;
-    return { task: failedTask, invocation: invocationRepo.getById(invocationId) };
-  }
+  // 6. 标记 invocation RUNNING（CAS）
+  transaction(() => {
+    requireCas(invocationRepo.markRunning(invocationId, 'PENDING'), '无法标记调用为 RUNNING');
+  });
 
   // 7. 调用模型
   let result: ModelInvocationOutput;
@@ -199,33 +177,49 @@ export async function executeModelInvocationTest(
       prompt,
     });
   } catch {
-    // 调用异常：invocation + task 同事务标记 FAILED
+    // 调用异常：invocation + task 同事务标记 FAILED，每个 CAS 必须成功
     transaction(() => {
-      invocationRepo.markFailed(
-        invocationId,
-        ['RUNNING'],
-        'PROVIDER_CONNECTION_FAILED',
-        '模型调用异常',
-        null,
+      requireCas(
+        invocationRepo.markFailed(
+          invocationId,
+          ['RUNNING'],
+          'PROVIDER_CONNECTION_FAILED',
+          '模型调用异常',
+          null,
+        ),
+        '无法标记调用失败',
       );
-      taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '模型调用异常');
+      requireCas(
+        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '模型调用异常'),
+        '无法标记任务失败',
+      );
     });
     const failedTask = taskRepo.getById(taskId)!;
     const failedInvocation = invocationRepo.getById(invocationId);
     return { task: failedTask, invocation: failedInvocation };
   }
 
-  // 8. 原子提交 success/failure
+  // 8. 原子提交 success/failure，每个 CAS 必须成功
   if (result.errorCode) {
     transaction(() => {
-      invocationRepo.markFailed(
-        invocationId,
-        ['RUNNING'],
-        result.errorCode!,
-        result.errorMessage ?? '模型调用失败',
-        result.latencyMs,
+      requireCas(
+        invocationRepo.markFailed(
+          invocationId,
+          ['RUNNING'],
+          result.errorCode!,
+          result.errorMessage ?? '模型调用失败',
+          result.latencyMs,
+        ),
+        '无法标记调用失败',
       );
-      taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', result.errorMessage ?? '模型调用失败');
+      requireCas(
+        taskRepo.failRunning(
+          taskId,
+          'TASK_EXECUTION_FAILED',
+          result.errorMessage ?? '模型调用失败',
+        ),
+        '无法标记任务失败',
+      );
     });
     const failedTask = taskRepo.getById(taskId)!;
     const failedInvocation = invocationRepo.getById(invocationId);
@@ -239,20 +233,23 @@ export async function executeModelInvocationTest(
   };
 
   transaction(() => {
-    invocationRepo.markSucceeded(invocationId, 'RUNNING', {
-      responseMetadataJson: JSON.stringify({
-        textLength: result.text.length,
+    requireCas(
+      invocationRepo.markSucceeded(invocationId, 'RUNNING', {
+        responseMetadataJson: JSON.stringify({
+          textLength: result.text.length,
+        }),
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+        cacheWriteTokens: result.usage.cacheWriteTokens,
+        totalTokens: result.usage.totalTokens,
+        latencyMs: result.latencyMs,
+        finishReason: result.finishReason,
+        providerRequestId: result.providerRequestId,
       }),
-      inputTokens: result.usage.inputTokens,
-      outputTokens: result.usage.outputTokens,
-      cacheReadTokens: result.usage.cacheReadTokens,
-      cacheWriteTokens: result.usage.cacheWriteTokens,
-      totalTokens: result.usage.totalTokens,
-      latencyMs: result.latencyMs,
-      finishReason: result.finishReason,
-      providerRequestId: result.providerRequestId,
-    });
-    taskRepo.completeRunning(taskId, JSON.stringify(safeResult));
+      '无法标记调用成功',
+    );
+    requireCas(taskRepo.completeRunning(taskId, JSON.stringify(safeResult)), '无法标记任务成功');
   });
 
   const succeededTask = taskRepo.getById(taskId)!;

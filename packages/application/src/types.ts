@@ -5,6 +5,8 @@
  * 不依赖 Electron、React 或 node:sqlite。
  */
 
+import type { TaskStatus, TaskType, ModelInvocationStatus } from '@ai-novel/domain';
+
 // ── ID 生成器 ─────────────────────────────────────────────────────
 
 /** ID 生成器接口 —— 基础设施侧实现（crypto.randomUUID()），测试可注入固定值 */
@@ -186,8 +188,8 @@ export interface ProviderProfileRepository {
 export interface TaskData {
   readonly id: string;
   readonly projectId: string;
-  readonly taskType: string;
-  readonly status: string;
+  readonly taskType: TaskType;
+  readonly status: TaskStatus;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
   readonly resultJson: string | null;
@@ -206,7 +208,7 @@ export interface TaskData {
 export interface CreateTaskInput {
   readonly id: string;
   readonly projectId: string;
-  readonly taskType: string;
+  readonly taskType: TaskType;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
 }
@@ -216,7 +218,7 @@ export interface TaskRepositoryPort {
   create(data: CreateTaskInput): void;
   getById(id: string): TaskData | null;
   listByProject(projectId: string, limit?: number): ReadonlyArray<TaskData>;
-  listByStatus(status: string): ReadonlyArray<TaskData>;
+  listByStatus(status: TaskStatus): ReadonlyArray<TaskData>;
   /** CAS claim：PENDING → RUNNING 并递增 attempt_count，原子操作 */
   claimPending(id: string): boolean;
   /** CAS 完成：RUNNING → SUCCEEDED */
@@ -224,9 +226,9 @@ export interface TaskRepositoryPort {
   /** CAS 失败：RUNNING → FAILED */
   failRunning(id: string, errorCode: string, errorMessage: string): boolean;
   /** CAS 标记 STALE */
-  markStale(id: string, expectedStatuses: ReadonlyArray<string>): boolean;
+  markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean;
   /** CAS 重置为 PENDING */
-  resetToPending(id: string, expectedStatus: string): boolean;
+  resetToPending(id: string, expectedStatus: TaskStatus): boolean;
   /** 获取所有 RUNNING 任务 */
   listRunning(): ReadonlyArray<TaskData>;
 }
@@ -240,7 +242,7 @@ export interface ModelInvocationData {
   readonly taskId: string;
   readonly providerProfileId: string;
   readonly model: string;
-  readonly status: string;
+  readonly status: ModelInvocationStatus;
   readonly attemptNumber: number;
   readonly requestKind: string;
   readonly promptHash: string;
@@ -310,7 +312,7 @@ export interface ModelInvocationRepositoryPort {
   /** CAS：expectedStatuses → FAILED */
   markFailed(
     id: string,
-    expectedStatuses: ReadonlyArray<string>,
+    expectedStatuses: ReadonlyArray<ModelInvocationStatus>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,

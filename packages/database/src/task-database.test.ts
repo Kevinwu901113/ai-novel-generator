@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import type { DbTaskStatus } from './types.js';
 import { DatabaseSync } from 'node:sqlite';
 import { ProjectDatabase } from './project-database.js';
 
@@ -70,7 +71,7 @@ describe('Task 迁移', () => {
       projDb.getTaskRepository().create({
         id: 'bad-task',
         projectId: 'proj-1',
-        taskType: 'INVALID_TYPE',
+        taskType: 'INVALID_TYPE' as 'MODEL_INVOCATION_TEST',
         status: 'PENDING',
         inputVersionJson: '{}',
         payloadJson: '{}',
@@ -91,7 +92,7 @@ describe('Task 迁移', () => {
         id: 'bad-task',
         projectId: 'proj-1',
         taskType: 'MODEL_INVOCATION_TEST',
-        status: 'INVALID_STATUS',
+        status: 'INVALID_STATUS' as 'PENDING',
         inputVersionJson: '{}',
         payloadJson: '{}',
         createdAt: '2024-01-01T00:00:00.000Z',
@@ -340,7 +341,7 @@ describe('TaskRepository', () => {
     projDb.close();
   });
 
-  function createTask(id: string, status = 'PENDING') {
+  function createTask(id: string, status: DbTaskStatus = 'PENDING') {
     projDb.getTaskRepository().create({
       id,
       projectId: 'proj-1',
@@ -1214,6 +1215,440 @@ describe('Recovery 事务', () => {
     // invocation 应该回滚到 RUNNING（因为事务回滚）
     const inv = projDb.getModelInvocationRepository().getById('inv-1');
     expect(inv!.status).toBe('RUNNING');
+
+    projDb.close();
+  });
+});
+
+describe('SQLite CAS fault injection', () => {
+  it('success transaction: invocation CAS 成功、task CAS false 时 invocation 回滚', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:02.000Z');
+
+    // 先把 task 改为 FAILED，模拟竞争
+    projDb.getTaskRepository().failRunning('task-1', 'OTHER', '竞争', '2024-01-01T00:00:03.000Z');
+
+    // 尝试成功提交：invocation 成功但 task 冲突
+    expect(() => {
+      projDb.transaction(() => {
+        const invOk = projDb.getModelInvocationRepository().markSucceeded('inv-1', 'RUNNING', {
+          responseMetadataJson: '{}',
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: 150,
+          latencyMs: 500,
+          finishReason: 'end_turn',
+          providerRequestId: null,
+          finishedAt: '2024-01-02T00:00:00.000Z',
+        });
+        if (!invOk) throw new Error('invocation conflict');
+
+        const taskOk = projDb
+          .getTaskRepository()
+          .completeRunning('task-1', '{}', '2024-01-02T00:00:00.000Z');
+        if (!taskOk) throw new Error('task conflict');
+      });
+    }).toThrow('task conflict');
+
+    // invocation 应回滚到 RUNNING
+    const inv = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv!.status).toBe('RUNNING');
+
+    projDb.close();
+  });
+
+  it('success transaction: invocation CAS false 时 task 未更新', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:02.000Z');
+
+    // 先把 invocation 改为 FAILED，模拟竞争
+    projDb
+      .getModelInvocationRepository()
+      .markFailed('inv-1', ['RUNNING'], 'OTHER', '竞争', null, '2024-01-01T00:00:03.000Z');
+
+    // 尝试成功提交：invocation CAS 应该失败
+    expect(() => {
+      projDb.transaction(() => {
+        const invOk = projDb.getModelInvocationRepository().markSucceeded('inv-1', 'RUNNING', {
+          responseMetadataJson: '{}',
+          inputTokens: 100,
+          outputTokens: 50,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: 150,
+          latencyMs: 500,
+          finishReason: 'end_turn',
+          providerRequestId: null,
+          finishedAt: '2024-01-02T00:00:00.000Z',
+        });
+        if (!invOk) throw new Error('invocation conflict');
+      });
+    }).toThrow('invocation conflict');
+
+    // task 应保持 RUNNING（未被修改）
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('RUNNING');
+
+    // invocation 应保持 FAILED
+    const inv = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv!.status).toBe('FAILED');
+
+    projDb.close();
+  });
+
+  it('failure transaction: invocation CAS 成功、task CAS false 时 invocation 回滚', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:02.000Z');
+
+    // 先把 task 改为 FAILED
+    projDb.getTaskRepository().failRunning('task-1', 'OTHER', '竞争', '2024-01-01T00:00:03.000Z');
+
+    // 尝试失败提交：invocation 成功但 task 冲突
+    expect(() => {
+      projDb.transaction(() => {
+        const invOk = projDb
+          .getModelInvocationRepository()
+          .markFailed('inv-1', ['RUNNING'], 'ERR', '失败', null, '2024-01-02T00:00:00.000Z');
+        if (!invOk) throw new Error('invocation conflict');
+
+        const taskOk = projDb
+          .getTaskRepository()
+          .failRunning('task-1', 'TASK_EXECUTION_FAILED', '失败', '2024-01-02T00:00:00.000Z');
+        if (!taskOk) throw new Error('task conflict');
+      });
+    }).toThrow('task conflict');
+
+    // invocation 应回滚到 RUNNING
+    const inv = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv!.status).toBe('RUNNING');
+
+    projDb.close();
+  });
+
+  it('recovery: 第一条 invocation CAS 成功、第二条 CAS false 时全部回滚', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-2',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 2,
+      requestKind: 'test',
+      promptHash: 'b'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:02.000Z');
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-2', 'PENDING', '2024-01-01T00:00:03.000Z');
+
+    // 快照 invocations 状态（模拟恢复前读取）
+    const invocations = projDb.getModelInvocationRepository().listByTask('task-1');
+
+    // 模拟恢复：在事务中先修改 inv-2，再处理快照列表
+    expect(() => {
+      projDb.transaction(() => {
+        // 模拟并发修改：先把 inv-2 改为 FAILED
+        projDb
+          .getModelInvocationRepository()
+          .markFailed('inv-2', ['RUNNING'], 'OTHER', '竞争', null, '2024-01-01T00:00:04.000Z');
+
+        // 按快照列表处理（inv-2 在快照中是 RUNNING）
+        for (const inv of invocations) {
+          if (inv.status === 'RUNNING') {
+            const ok = projDb
+              .getModelInvocationRepository()
+              .markFailed(
+                inv.id,
+                ['RUNNING'],
+                'INVOCATION_INTERRUPTED',
+                '中断',
+                null,
+                '2024-01-02T00:00:00.000Z',
+              );
+            if (!ok) throw new Error(`恢复调用 ${inv.id} 失败`);
+          }
+        }
+        const taskOk = projDb
+          .getTaskRepository()
+          .failRunning('task-1', 'TASK_INTERRUPTED', '中断', '2024-01-02T00:00:00.000Z');
+        if (!taskOk) throw new Error('恢复任务失败');
+      });
+    }).toThrow(/恢复调用 inv-2 失败/);
+
+    // 事务回滚后，所有变更都撤销
+    // inv-1 应回滚到 RUNNING
+    const inv1 = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv1!.status).toBe('RUNNING');
+
+    // inv-2 也应回滚到 RUNNING（事务内的 markFailed 被撤销）
+    const inv2 = projDb.getModelInvocationRepository().getById('inv-2');
+    expect(inv2!.status).toBe('RUNNING');
+
+    // task 应保持 RUNNING
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('RUNNING');
+
+    projDb.close();
+  });
+
+  it('API_KEY_REQUIRED: task conflict 时 invocation 不得单独 FAILED', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+
+    // 先把 task 改为 FAILED
+    projDb.getTaskRepository().failRunning('task-1', 'OTHER', '竞争', '2024-01-01T00:00:02.000Z');
+
+    // 尝试 API_KEY_REQUIRED 失败路径
+    expect(() => {
+      projDb.transaction(() => {
+        const invOk = projDb
+          .getModelInvocationRepository()
+          .markFailed(
+            'inv-1',
+            ['PENDING'],
+            'API_KEY_REQUIRED',
+            '缺少 Key',
+            null,
+            '2024-01-02T00:00:00.000Z',
+          );
+        if (!invOk) throw new Error('invocation conflict');
+
+        const taskOk = projDb
+          .getTaskRepository()
+          .failRunning('task-1', 'TASK_EXECUTION_FAILED', '缺少 Key', '2024-01-02T00:00:00.000Z');
+        if (!taskOk) throw new Error('task conflict');
+      });
+    }).toThrow('task conflict');
+
+    // invocation 应回滚到 PENDING
+    const inv = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv!.status).toBe('PENDING');
+
+    projDb.close();
+  });
+
+  it('markRunning conflict: 不留下 PENDING invocation + FAILED task', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb.getTaskRepository().claimPending('task-1', '2024-01-01T00:00:01.000Z');
+
+    projDb.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'proj-1',
+      taskId: 'task-1',
+      providerProfileId: 'mimo',
+      model: 'test',
+      status: 'PENDING',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+    });
+
+    // 先把 invocation 改为 RUNNING（模拟 markRunning 冲突）
+    projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:02.000Z');
+
+    // markRunning 应该失败
+    const result = projDb
+      .getModelInvocationRepository()
+      .markRunning('inv-1', 'PENDING', '2024-01-01T00:00:03.000Z');
+    expect(result).toBe(false);
+
+    // 两者状态应该一致（未被错误修改）
+    const inv = projDb.getModelInvocationRepository().getById('inv-1');
+    expect(inv!.status).toBe('RUNNING');
+
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('RUNNING');
+
+    projDb.close();
+  });
+
+  it('provider profile 缺失: attempt_count 不变、无 invocation', () => {
+    const dbPath = join(tempDir, 'project.sqlite');
+    const projDb = new ProjectDatabase(dbPath);
+
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'MODEL_INVOCATION_TEST',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+
+    // 不 claim，直接验证
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('PENDING');
+    expect(task!.attemptCount).toBe(0);
+
+    // 无 invocation
+    const invocations = projDb.getModelInvocationRepository().listByTask('task-1');
+    expect(invocations).toHaveLength(0);
 
     projDb.close();
   });

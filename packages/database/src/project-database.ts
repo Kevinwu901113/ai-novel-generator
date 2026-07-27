@@ -15,9 +15,12 @@ import type {
   TaskRepository,
   TaskRow,
   CreateTaskData,
+  DbTaskType,
+  DbTaskStatus,
   ModelInvocationRepository,
   ModelInvocationRow,
   CreateInvocationData,
+  DbInvocationStatus,
   InvocationStats,
   Migration,
 } from './types.js';
@@ -296,7 +299,7 @@ class TaskRepositoryImpl implements TaskRepository {
     return result.changes === 1;
   }
 
-  markStale(id: string, expectedStatuses: ReadonlyArray<string>, now: string): boolean {
+  markStale(id: string, expectedStatuses: ReadonlyArray<DbTaskStatus>, now: string): boolean {
     if (expectedStatuses.length === 0) return false;
     const placeholders = expectedStatuses.map(() => '?').join(', ');
     const result = this.db
@@ -308,7 +311,7 @@ class TaskRepositoryImpl implements TaskRepository {
     return result.changes === 1;
   }
 
-  resetToPending(id: string, expectedStatus: string, now: string): boolean {
+  resetToPending(id: string, expectedStatus: DbTaskStatus, now: string): boolean {
     const result = this.db
       .prepare(
         `UPDATE tasks SET status = 'PENDING', updated_at = ?
@@ -335,8 +338,8 @@ class TaskRepositoryImpl implements TaskRepository {
     return {
       id: row.id as string,
       projectId: row.project_id as string,
-      taskType: row.task_type as string,
-      status: row.status as string,
+      taskType: row.task_type as DbTaskType,
+      status: row.status as DbTaskStatus,
       inputVersionJson: row.input_version_json as string,
       payloadJson: row.payload_json as string,
       resultJson: (row.result_json as string) ?? null,
@@ -475,7 +478,7 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
 
   markFailed(
     id: string,
-    expectedStatuses: ReadonlyArray<string>,
+    expectedStatuses: ReadonlyArray<DbInvocationStatus>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,
@@ -543,7 +546,7 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
       taskId: row.task_id as string,
       providerProfileId: row.provider_profile_id as string,
       model: row.model as string,
-      status: row.status as string,
+      status: row.status as DbInvocationStatus,
       attemptNumber: row.attempt_number as number,
       requestKind: row.request_kind as string,
       promptHash: row.prompt_hash as string,

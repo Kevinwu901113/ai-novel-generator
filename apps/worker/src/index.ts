@@ -67,6 +67,7 @@ import {
   type InvocationSuccessResult,
   type InvocationStatsData,
 } from '@ai-novel/application';
+import type { TaskStatus, ModelInvocationStatus } from '@ai-novel/domain';
 import { AppDatabase, ProjectDatabase, checkProjectDatabaseVersion } from '@ai-novel/database';
 import type {
   ProjectIndexRow,
@@ -354,7 +355,7 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
     return this.projDb.getTaskRepository().listByProject(projectId, limit).map(this.toTaskData);
   }
 
-  listByStatus(status: string): ReadonlyArray<TaskData> {
+  listByStatus(status: TaskStatus): ReadonlyArray<TaskData> {
     return this.projDb.getTaskRepository().listByStatus(status).map(this.toTaskData);
   }
 
@@ -373,12 +374,12 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
     return this.projDb.getTaskRepository().failRunning(id, errorCode, errorMessage, now);
   }
 
-  markStale(id: string, expectedStatuses: ReadonlyArray<string>): boolean {
+  markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean {
     const now = createClock().now();
     return this.projDb.getTaskRepository().markStale(id, expectedStatuses, now);
   }
 
-  resetToPending(id: string, expectedStatus: string): boolean {
+  resetToPending(id: string, expectedStatus: TaskStatus): boolean {
     const now = createClock().now();
     return this.projDb.getTaskRepository().resetToPending(id, expectedStatus, now);
   }
@@ -464,7 +465,7 @@ class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort 
 
   markFailed(
     id: string,
-    expectedStatuses: ReadonlyArray<string>,
+    expectedStatuses: ReadonlyArray<ModelInvocationStatus>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,
@@ -688,9 +689,9 @@ function initialize(): void {
  * 启动时将这些记录恢复为 FAILED，并记录 TASK_INTERRUPTED。
  *
  * 每个 task 的恢复在同一事务中完成：
- * - 该 task 下所有 RUNNING invocation → FAILED
- * - 该 task → FAILED
- * - 失败时整组回滚
+ * - 该 task 下所有 RUNNING invocation → FAILED（CAS 检查）
+ * - 该 task → FAILED（CAS 检查）
+ * - 任一 CAS false 整组回滚
  * - 重复执行幂等（已 FAILED 的不修改）
  * - attempt_count 不变
  */
@@ -720,7 +721,7 @@ function reconcileTasks(dataRoot: string): void {
             const invocations = invocationRepo.listByTask(task.id);
             for (const inv of invocations) {
               if (inv.status === 'RUNNING') {
-                invocationRepo.markFailed(
+                const ok = invocationRepo.markFailed(
                   inv.id,
                   ['RUNNING'],
                   'INVOCATION_INTERRUPTED',
@@ -728,12 +729,23 @@ function reconcileTasks(dataRoot: string): void {
                   null,
                   now,
                 );
+                if (!ok) {
+                  throw new Error(`恢复调用 ${inv.id} 失败：CAS 冲突`);
+                }
               }
               // 已 FAILED/其他状态的 invocation 不修改
             }
 
             // 恢复 task（CAS：RUNNING → FAILED）
-            taskRepo.failRunning(task.id, 'TASK_INTERRUPTED', '任务因应用中断而未完成', now);
+            const taskOk = taskRepo.failRunning(
+              task.id,
+              'TASK_INTERRUPTED',
+              '任务因应用中断而未完成',
+              now,
+            );
+            if (!taskOk) {
+              throw new Error(`恢复任务 ${task.id} 失败：CAS 冲突`);
+            }
           });
         }
       } finally {

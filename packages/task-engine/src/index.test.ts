@@ -381,29 +381,33 @@ describe('executeModelInvocationTest', () => {
     expect(createCall[0].attemptNumber).toBe(1);
   });
 
-  it('API Key 缺失时应该返回 FAILED（有 invocation 记录）', async () => {
-    const { deps } = createMockDeps({ apiKey: null });
+  it('API Key 缺失时应该抛出 API_KEY_REQUIRED（claim 前）', async () => {
+    const { deps, taskStore } = createMockDeps({ apiKey: null });
 
-    const result = await executeModelInvocationTest(deps, 'task-1', '测试');
+    await expect(executeModelInvocationTest(deps, 'task-1', '测试')).rejects.toThrow(
+      TaskExecutionError,
+    );
 
-    expect(result.task.status).toBe('FAILED');
-    expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
-    // invocation 应该被创建并标记 FAILED
-    expect(result.invocation).not.toBeNull();
-    expect(result.invocation!.status).toBe('FAILED');
-    expect(result.invocation!.errorCode).toBe('API_KEY_REQUIRED');
+    // 不应该 claim（attempt_count 不变）
+    expect(deps.taskRepo.claimPending).not.toHaveBeenCalled();
+    const task = taskStore.get('task-1')!;
+    expect(task.attemptCount).toBe(0);
+    expect(task.status).toBe('PENDING');
   });
 
-  it('provider 不存在时应该返回 FAILED', async () => {
-    const { deps } = createMockDeps();
+  it('provider 不存在时应该抛出 PROVIDER_NOT_CONFIGURED（claim 前）', async () => {
+    const { deps, taskStore } = createMockDeps();
     (deps.providerRepo.getById as ReturnType<typeof vi.fn>).mockReturnValue(null);
 
-    const result = await executeModelInvocationTest(deps, 'task-1', '测试');
+    await expect(executeModelInvocationTest(deps, 'task-1', '测试')).rejects.toThrow(
+      TaskExecutionError,
+    );
 
-    expect(result.task.status).toBe('FAILED');
-    expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
-    // provider 不存在时没有 invocation
-    expect(result.invocation).toBeNull();
+    // 不应该 claim（attempt_count 不变）
+    expect(deps.taskRepo.claimPending).not.toHaveBeenCalled();
+    const task = taskStore.get('task-1')!;
+    expect(task.attemptCount).toBe(0);
+    expect(task.status).toBe('PENDING');
   });
 
   it('provider failure 时应该原子提交失败', async () => {
@@ -492,17 +496,21 @@ describe('executeModelInvocationTest', () => {
     expect(createCall[0].promptHash).toHaveLength(64);
   });
 
-  it('Keychain 读取失败时 invocation 使用 API_KEY_READ_FAILED', async () => {
-    const { deps } = createMockDeps();
+  it('Keychain 读取失败时应该抛出 API_KEY_READ_FAILED（claim 前）', async () => {
+    const { deps, taskStore } = createMockDeps();
     (deps.secretStore.getSecret as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error('keychain error'),
     );
 
-    const result = await executeModelInvocationTest(deps, 'task-1', '测试');
+    await expect(executeModelInvocationTest(deps, 'task-1', '测试')).rejects.toThrow(
+      TaskExecutionError,
+    );
 
-    expect(result.task.status).toBe('FAILED');
-    expect(result.invocation).not.toBeNull();
-    expect(result.invocation!.errorCode).toBe('API_KEY_READ_FAILED');
+    // 不应该 claim（attempt_count 不变）
+    expect(deps.taskRepo.claimPending).not.toHaveBeenCalled();
+    const task = taskStore.get('task-1')!;
+    expect(task.attemptCount).toBe(0);
+    expect(task.status).toBe('PENDING');
   });
 
   it('claim 失败不增加 attempt', async () => {

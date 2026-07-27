@@ -199,8 +199,8 @@ export type DbTaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST';
 export interface TaskRow {
   readonly id: string;
   readonly projectId: string;
-  readonly taskType: string;
-  readonly status: string;
+  readonly taskType: DbTaskType;
+  readonly status: DbTaskStatus;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
   readonly resultJson: string | null;
@@ -219,8 +219,8 @@ export interface TaskRow {
 export interface CreateTaskData {
   readonly id: string;
   readonly projectId: string;
-  readonly taskType: string;
-  readonly status: string;
+  readonly taskType: DbTaskType;
+  readonly status: DbTaskStatus;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
   readonly createdAt: string;
@@ -232,7 +232,7 @@ export interface TaskRepository {
   create(data: CreateTaskData): void;
   getById(id: string): TaskRow | null;
   listByProject(projectId: string, limit?: number): ReadonlyArray<TaskRow>;
-  listByStatus(status: string): ReadonlyArray<TaskRow>;
+  listByStatus(status: DbTaskStatus): ReadonlyArray<TaskRow>;
   /** CAS claim：PENDING → RUNNING 并递增 attempt_count，原子操作 */
   claimPending(id: string, now: string): boolean;
   /** CAS 完成：RUNNING → SUCCEEDED，返回是否成功 */
@@ -240,9 +240,9 @@ export interface TaskRepository {
   /** CAS 失败：RUNNING → FAILED，返回是否成功 */
   failRunning(id: string, errorCode: string, errorMessage: string, now: string): boolean;
   /** CAS 标记 STALE，expectedStatuses 限制当前状态 */
-  markStale(id: string, expectedStatuses: ReadonlyArray<string>, now: string): boolean;
+  markStale(id: string, expectedStatuses: ReadonlyArray<DbTaskStatus>, now: string): boolean;
   /** CAS 重置为 PENDING，expectedStatus 限制当前状态 */
-  resetToPending(id: string, expectedStatus: string, now: string): boolean;
+  resetToPending(id: string, expectedStatus: DbTaskStatus, now: string): boolean;
   /** 获取所有 RUNNING 任务（用于恢复） */
   listRunning(): ReadonlyArray<TaskRow>;
 }
@@ -259,7 +259,7 @@ export interface ModelInvocationRow {
   readonly taskId: string;
   readonly providerProfileId: string;
   readonly model: string;
-  readonly status: string;
+  readonly status: DbInvocationStatus;
   readonly attemptNumber: number;
   readonly requestKind: string;
   readonly promptHash: string;
@@ -287,7 +287,7 @@ export interface CreateInvocationData {
   readonly taskId: string;
   readonly providerProfileId: string;
   readonly model: string;
-  readonly status: string;
+  readonly status: DbInvocationStatus;
   readonly attemptNumber: number;
   readonly requestKind: string;
   readonly promptHash: string;
@@ -333,7 +333,7 @@ export interface ModelInvocationRepository {
   /** CAS：expectedStatuses → FAILED，返回是否成功 */
   markFailed(
     id: string,
-    expectedStatuses: ReadonlyArray<string>,
+    expectedStatuses: ReadonlyArray<DbInvocationStatus>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,
