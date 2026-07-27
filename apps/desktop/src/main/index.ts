@@ -17,12 +17,15 @@ import {
   isValidCreateProjectInput,
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
+  isValidCreateModelInvocationTestInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
   type OpenProjectResult,
   type ProviderPublicState,
   type ConnectionTestResult,
+  type TaskPublicData,
+  type TaskStatsPublicData,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -177,6 +180,65 @@ ipcMain.handle(IPC_CHANNELS.PROVIDER_TEST_CONNECTION, async (): Promise<Connecti
 
   return result as ConnectionTestResult;
 });
+
+// ── 任务 IPC 处理器 ────────────────────────────────────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.TASK_CREATE_MODEL_INVOCATION_TEST,
+  async (_event, input: unknown): Promise<TaskPublicData> => {
+    if (!isValidCreateModelInvocationTestInput(input)) {
+      throw Object.assign(new Error('无效的创建任务输入'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'task.createModelInvocationTest',
+      payload: input,
+    });
+
+    return result as TaskPublicData;
+  },
+);
+
+ipcMain.handle(IPC_CHANNELS.TASK_GET, async (_event, payload: unknown): Promise<TaskPublicData> => {
+  const requestId = crypto.randomUUID();
+  const result = await forwardToWorker({
+    requestId,
+    command: 'task.get',
+    payload,
+  });
+
+  return result as TaskPublicData;
+});
+
+ipcMain.handle(
+  IPC_CHANNELS.TASK_LIST,
+  async (_event, payload: unknown): Promise<ReadonlyArray<TaskPublicData>> => {
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'task.list',
+      payload,
+    });
+
+    return result as ReadonlyArray<TaskPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.TASK_GET_STATS,
+  async (_event, payload: unknown): Promise<TaskStatsPublicData> => {
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'task.getStats',
+      payload,
+    });
+
+    return result as TaskStatsPublicData;
+  },
+);
 
 // ── Smoke test ────────────────────────────────────────────────────
 
