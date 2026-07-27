@@ -61,7 +61,9 @@ function getSessionOrThrow(deps: GrillSessionDeps, sessionId: string): GrillSess
 
 function assertSessionActive(session: GrillSessionData): void {
   if (session.status !== 'ACTIVE') {
-    throw new GrillStateConflictError(`会话 ${session.id} 当前状态为 ${session.status}，需要 ACTIVE`);
+    throw new GrillStateConflictError(
+      `会话 ${session.id} 当前状态为 ${session.status}，需要 ACTIVE`,
+    );
   }
 }
 
@@ -446,7 +448,9 @@ export function reviewGrillProposal(
   if (!proposal) throw new GrillProposalNotFoundError(input.proposalId);
 
   if (proposal.status !== 'PROPOSED') {
-    throw new GrillStateConflictError(`提案 ${input.proposalId} 当前状态为 ${proposal.status}，不能审核`);
+    throw new GrillStateConflictError(
+      `提案 ${input.proposalId} 当前状态为 ${proposal.status}，不能审核`,
+    );
   }
 
   deps.transaction(() => {

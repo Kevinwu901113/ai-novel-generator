@@ -64,7 +64,10 @@ export interface GrillHandlerContext {
 // ── 适配器 ────────────────────────────────────────────────────────
 
 class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
-  constructor(private readonly projDb: ProjectDatabase, private readonly clock: Clock) {}
+  constructor(
+    private readonly projDb: ProjectDatabase,
+    private readonly clock: Clock,
+  ) {}
 
   create(data: { id: string; projectId: string; goal: string }): void {
     const now = this.clock.now();
@@ -95,18 +98,21 @@ class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
   }
 
   listByProject(projectId: string): ReadonlyArray<GrillSessionData> {
-    return this.projDb.getGrillSessionRepository().listByProject(projectId).map((row) => ({
-      id: row.id,
-      projectId: row.projectId,
-      status: row.status,
-      version: row.version,
-      goal: row.goal,
-      createdAt: row.createdAt,
-      updatedAt: row.updatedAt,
-      startedAt: row.startedAt,
-      completedAt: row.completedAt,
-      abandonedAt: row.abandonedAt,
-    }));
+    return this.projDb
+      .getGrillSessionRepository()
+      .listByProject(projectId)
+      .map((row) => ({
+        id: row.id,
+        projectId: row.projectId,
+        status: row.status,
+        version: row.version,
+        goal: row.goal,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+        startedAt: row.startedAt,
+        completedAt: row.completedAt,
+        abandonedAt: row.abandonedAt,
+      }));
   }
 
   transitionStatus(id: string, expectedVersion: number, newStatus: string): boolean {
@@ -123,7 +129,10 @@ class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
 }
 
 class GrillQuestionRepositoryAdapter implements GrillQuestionRepositoryPort {
-  constructor(private readonly projDb: ProjectDatabase, private readonly clock: Clock) {}
+  constructor(
+    private readonly projDb: ProjectDatabase,
+    private readonly clock: Clock,
+  ) {}
 
   create(data: {
     id: string;
@@ -224,7 +233,10 @@ class GrillQuestionRepositoryAdapter implements GrillQuestionRepositoryPort {
 }
 
 class GrillAnswerRepositoryAdapter implements GrillAnswerRepositoryPort {
-  constructor(private readonly projDb: ProjectDatabase, private readonly clock: Clock) {}
+  constructor(
+    private readonly projDb: ProjectDatabase,
+    private readonly clock: Clock,
+  ) {}
 
   create(data: {
     id: string;
@@ -295,7 +307,10 @@ class GrillAnswerRepositoryAdapter implements GrillAnswerRepositoryPort {
 }
 
 class GrillProposalRepositoryAdapter implements GrillProposalRepositoryPort {
-  constructor(private readonly projDb: ProjectDatabase, private readonly clock: Clock) {}
+  constructor(
+    private readonly projDb: ProjectDatabase,
+    private readonly clock: Clock,
+  ) {}
 
   create(data: {
     id: string;
@@ -331,12 +346,16 @@ class GrillProposalRepositoryAdapter implements GrillProposalRepositoryPort {
 
   markAccepted(id: string): boolean {
     const now = this.clock.now();
-    return this.projDb.getGrillProposalRepository().transitionStatus(id, 'PROPOSED', 'ACCEPTED', now);
+    return this.projDb
+      .getGrillProposalRepository()
+      .transitionStatus(id, 'PROPOSED', 'ACCEPTED', now);
   }
 
   markRejected(id: string): boolean {
     const now = this.clock.now();
-    return this.projDb.getGrillProposalRepository().transitionStatus(id, 'PROPOSED', 'REJECTED', now);
+    return this.projDb
+      .getGrillProposalRepository()
+      .transitionStatus(id, 'PROPOSED', 'REJECTED', now);
   }
 
   markSuperseded(id: string): boolean {

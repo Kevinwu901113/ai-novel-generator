@@ -776,8 +776,26 @@ describe('GrillQuestionRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillQuestionRepository();
-      repo.create({ id: 'q2', sessionId: 's1', sequence: 2, topic: 't2', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
-      repo.create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't1', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+      repo.create({
+        id: 'q2',
+        sessionId: 's1',
+        sequence: 2,
+        topic: 't2',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+      repo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't1',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
 
       const list = repo.listBySession('s1');
       expect(list[0].id).toBe('q1');
@@ -792,7 +810,16 @@ describe('GrillQuestionRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillQuestionRepository();
-      repo.create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+      repo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
 
       expect(repo.transitionStatus('q1', 'PLANNED', 'ASKED', LATER)).toBe(true);
       expect(repo.getById('q1')?.askedAt).toBe(LATER);
@@ -810,7 +837,16 @@ describe('GrillQuestionRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillQuestionRepository();
-      repo.create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+      repo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
 
       expect(repo.transitionStatus('q1', 'ASKED', 'ANSWERED', LATER)).toBe(false);
       expect(repo.getById('q1')?.status).toBe('PLANNED');
@@ -826,7 +862,16 @@ describe('GrillQuestionRepository', () => {
       const repo = db.getGrillQuestionRepository();
       expect(repo.getMaxSequence('s1')).toBe(0);
 
-      repo.create({ id: 'q1', sessionId: 's1', sequence: 3, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+      repo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 3,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
       expect(repo.getMaxSequence('s1')).toBe(3);
     } finally {
       db.close();
@@ -838,8 +883,23 @@ describe('GrillQuestionRepository', () => {
 
 describe('GrillAnswerRepository', () => {
   function setupSessionAndQuestion(db: ProjectDatabase): void {
-    db.getGrillSessionRepository().create({ id: 's1', projectId: 'p1', goal: 'g', createdAt: NOW, updatedAt: NOW });
-    db.getGrillQuestionRepository().create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+    db.getGrillSessionRepository().create({
+      id: 's1',
+      projectId: 'p1',
+      goal: 'g',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.getGrillQuestionRepository().create({
+      id: 'q1',
+      sessionId: 's1',
+      sequence: 1,
+      topic: 't',
+      text: 'x',
+      rationale: '',
+      dependsOnQuestionIds: '[]',
+      createdAt: NOW,
+    });
   }
 
   it('create + getById', () => {
@@ -847,7 +907,15 @@ describe('GrillAnswerRepository', () => {
     try {
       setupSessionAndQuestion(db);
       const repo = db.getGrillAnswerRepository();
-      repo.create({ id: 'a1', sessionId: 's1', questionId: 'q1', revision: 1, source: 'USER', text: '答案', createdAt: NOW });
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: '答案',
+        createdAt: NOW,
+      });
 
       const answer = repo.getById('a1');
       expect(answer?.text).toBe('答案');
@@ -863,12 +931,28 @@ describe('GrillAnswerRepository', () => {
     try {
       setupSessionAndQuestion(db);
       const repo = db.getGrillAnswerRepository();
-      repo.create({ id: 'a1', sessionId: 's1', questionId: 'q1', revision: 1, source: 'USER', text: 'v1', createdAt: NOW });
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
 
       expect(repo.getCurrentByQuestion('q1')?.id).toBe('a1');
 
       repo.supersedeCurrent('q1', LATER);
-      repo.create({ id: 'a2', sessionId: 's1', questionId: 'q1', revision: 2, source: 'USER', text: 'v2', createdAt: LATER });
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 2,
+        source: 'USER',
+        text: 'v2',
+        createdAt: LATER,
+      });
 
       expect(repo.getCurrentByQuestion('q1')?.id).toBe('a2');
     } finally {
@@ -881,7 +965,15 @@ describe('GrillAnswerRepository', () => {
     try {
       setupSessionAndQuestion(db);
       const repo = db.getGrillAnswerRepository();
-      repo.create({ id: 'a1', sessionId: 's1', questionId: 'q1', revision: 1, source: 'USER', text: 'v1', createdAt: NOW });
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
 
       const ok = repo.supersedeCurrent('q1', LATER);
       expect(ok).toBe(true);
@@ -896,8 +988,24 @@ describe('GrillAnswerRepository', () => {
     try {
       setupSessionAndQuestion(db);
       const repo = db.getGrillAnswerRepository();
-      repo.create({ id: 'a2', sessionId: 's1', questionId: 'q1', revision: 2, source: 'USER', text: 'v2', createdAt: LATER });
-      repo.create({ id: 'a1', sessionId: 's1', questionId: 'q1', revision: 1, source: 'USER', text: 'v1', createdAt: NOW });
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 2,
+        source: 'USER',
+        text: 'v2',
+        createdAt: LATER,
+      });
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
 
       const list = repo.listByQuestion('q1');
       expect(list[0].revision).toBe(1);
@@ -911,11 +1019,36 @@ describe('GrillAnswerRepository', () => {
     const db = createDb();
     try {
       setupSessionAndQuestion(db);
-      db.getGrillQuestionRepository().create({ id: 'q2', sessionId: 's1', sequence: 2, topic: 't2', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+      db.getGrillQuestionRepository().create({
+        id: 'q2',
+        sessionId: 's1',
+        sequence: 2,
+        topic: 't2',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
 
       const repo = db.getGrillAnswerRepository();
-      repo.create({ id: 'a1', sessionId: 's1', questionId: 'q1', revision: 1, source: 'USER', text: 'v1', createdAt: NOW });
-      repo.create({ id: 'a2', sessionId: 's1', questionId: 'q2', revision: 1, source: 'USER', text: 'v2', createdAt: NOW });
+      repo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
+      repo.create({
+        id: 'a2',
+        sessionId: 's1',
+        questionId: 'q2',
+        revision: 1,
+        source: 'USER',
+        text: 'v2',
+        createdAt: NOW,
+      });
 
       repo.supersedeCurrent('q1', LATER);
 
@@ -932,7 +1065,13 @@ describe('GrillAnswerRepository', () => {
 
 describe('GrillProposalRepository', () => {
   function setupSession(db: ProjectDatabase): void {
-    db.getGrillSessionRepository().create({ id: 's1', projectId: 'p1', goal: 'g', createdAt: NOW, updatedAt: NOW });
+    db.getGrillSessionRepository().create({
+      id: 's1',
+      projectId: 'p1',
+      goal: 'g',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
   }
 
   it('create + getById', () => {
@@ -966,8 +1105,26 @@ describe('GrillProposalRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillProposalRepository();
-      repo.create({ id: 'pr1', sessionId: 's1', basedOnAnswerIds: '[]', key: 'k1', proposedValueJson: '"v1"', confidence: 0.5, rationale: '', createdAt: NOW });
-      repo.create({ id: 'pr2', sessionId: 's1', basedOnAnswerIds: '[]', key: 'k2', proposedValueJson: '"v2"', confidence: 0.7, rationale: '', createdAt: LATER });
+      repo.create({
+        id: 'pr1',
+        sessionId: 's1',
+        basedOnAnswerIds: '[]',
+        key: 'k1',
+        proposedValueJson: '"v1"',
+        confidence: 0.5,
+        rationale: '',
+        createdAt: NOW,
+      });
+      repo.create({
+        id: 'pr2',
+        sessionId: 's1',
+        basedOnAnswerIds: '[]',
+        key: 'k2',
+        proposedValueJson: '"v2"',
+        confidence: 0.7,
+        rationale: '',
+        createdAt: LATER,
+      });
 
       expect(repo.listBySession('s1')).toHaveLength(2);
     } finally {
@@ -980,7 +1137,16 @@ describe('GrillProposalRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillProposalRepository();
-      repo.create({ id: 'pr1', sessionId: 's1', basedOnAnswerIds: '[]', key: 'k', proposedValueJson: '"v"', confidence: 0.5, rationale: '', createdAt: NOW });
+      repo.create({
+        id: 'pr1',
+        sessionId: 's1',
+        basedOnAnswerIds: '[]',
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+        createdAt: NOW,
+      });
 
       const ok = repo.transitionStatus('pr1', 'PROPOSED', 'ACCEPTED', LATER);
       expect(ok).toBe(true);
@@ -996,7 +1162,16 @@ describe('GrillProposalRepository', () => {
     try {
       setupSession(db);
       const repo = db.getGrillProposalRepository();
-      repo.create({ id: 'pr1', sessionId: 's1', basedOnAnswerIds: '[]', key: 'k', proposedValueJson: '"v"', confidence: 0.5, rationale: '', createdAt: NOW });
+      repo.create({
+        id: 'pr1',
+        sessionId: 's1',
+        basedOnAnswerIds: '[]',
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+        createdAt: NOW,
+      });
 
       const ok = repo.transitionStatus('pr1', 'ACCEPTED', 'REJECTED', LATER);
       expect(ok).toBe(false);
@@ -1018,7 +1193,16 @@ describe('Grill 事务', () => {
       sessionRepo.create({ id: 's1', projectId: 'p1', goal: 'g', createdAt: NOW, updatedAt: NOW });
 
       db.transaction(() => {
-        questionRepo.create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+        questionRepo.create({
+          id: 'q1',
+          sessionId: 's1',
+          sequence: 1,
+          topic: 't',
+          text: 'x',
+          rationale: '',
+          dependsOnQuestionIds: '[]',
+          createdAt: NOW,
+        });
         sessionRepo.bumpVersion('s1', 1, LATER);
       });
 
@@ -1038,13 +1222,269 @@ describe('Grill 事务', () => {
 
       expect(() =>
         db.transaction(() => {
-          questionRepo.create({ id: 'q1', sessionId: 's1', sequence: 1, topic: 't', text: 'x', rationale: '', dependsOnQuestionIds: '[]', createdAt: NOW });
+          questionRepo.create({
+            id: 'q1',
+            sessionId: 's1',
+            sequence: 1,
+            topic: 't',
+            text: 'x',
+            rationale: '',
+            dependsOnQuestionIds: '[]',
+            createdAt: NOW,
+          });
           throw new Error('模拟失败');
         }),
       ).toThrow('模拟失败');
 
       expect(questionRepo.getById('q1')).toBeNull();
       expect(sessionRepo.getById('s1')?.version).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+// ── 故障注入测试 ──────────────────────────────────────────────────
+
+describe('Grill 故障注入', () => {
+  function setupActiveSession(db: ProjectDatabase): void {
+    db.getGrillSessionRepository().create({
+      id: 's1',
+      projectId: 'p1',
+      goal: 'g',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.getGrillSessionRepository().transitionStatus('s1', 1, 'ACTIVE', NOW);
+  }
+
+  it('旧答案 supersede 后插入失败，整组回滚', () => {
+    const db = createDb();
+    try {
+      setupActiveSession(db);
+      const questionRepo = db.getGrillQuestionRepository();
+      const answerRepo = db.getGrillAnswerRepository();
+
+      questionRepo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+      questionRepo.transitionStatus('q1', 'PLANNED', 'ASKED', NOW);
+      answerRepo.create({
+        id: 'a1',
+        sessionId: 's1',
+        questionId: 'q1',
+        revision: 1,
+        source: 'USER',
+        text: 'v1',
+        createdAt: NOW,
+      });
+
+      expect(() =>
+        db.transaction(() => {
+          answerRepo.supersedeCurrent('q1', LATER);
+          // 模拟插入失败：使用非法 revision
+          const raw = new DatabaseSync(join(tempDir, 'project.sqlite'));
+          raw.exec('PRAGMA foreign_keys = ON');
+          raw
+            .prepare(
+              `INSERT INTO grill_answers (id, session_id, question_id, revision, source, text, created_at)
+             VALUES ('a2', 's1', 'q1', 0, 'USER', 'v2', '${LATER}')`,
+            )
+            .run();
+          raw.close();
+        }),
+      ).toThrow();
+
+      // 旧答案未被废弃
+      expect(answerRepo.getById('a1')?.supersededAt).toBeNull();
+      expect(answerRepo.getCurrentByQuestion('q1')?.id).toBe('a1');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('新答案插入后 question CAS 失败，整组回滚', () => {
+    const db = createDb();
+    try {
+      setupActiveSession(db);
+      const questionRepo = db.getGrillQuestionRepository();
+      const answerRepo = db.getGrillAnswerRepository();
+
+      questionRepo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+      // 不将问题转为 ASKED，保持 PLANNED
+
+      expect(() =>
+        db.transaction(() => {
+          answerRepo.create({
+            id: 'a1',
+            sessionId: 's1',
+            questionId: 'q1',
+            revision: 1,
+            source: 'USER',
+            text: 'v1',
+            createdAt: NOW,
+          });
+          // CAS 失败：问题不是 ASKED 状态
+          const ok = questionRepo.transitionStatus('q1', 'ASKED', 'ANSWERED', LATER);
+          if (!ok) throw new Error('CAS 冲突');
+        }),
+      ).toThrow('CAS 冲突');
+
+      // 答案未持久化
+      expect(answerRepo.getById('a1')).toBeNull();
+      expect(questionRepo.getById('q1')?.status).toBe('PLANNED');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('question 更新后 session version CAS 失败，整组回滚', () => {
+    const db = createDb();
+    try {
+      setupActiveSession(db);
+      const questionRepo = db.getGrillQuestionRepository();
+      const answerRepo = db.getGrillAnswerRepository();
+      const sessionRepo = db.getGrillSessionRepository();
+
+      questionRepo.create({
+        id: 'q1',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+      questionRepo.transitionStatus('q1', 'PLANNED', 'ASKED', NOW);
+
+      expect(() =>
+        db.transaction(() => {
+          answerRepo.create({
+            id: 'a1',
+            sessionId: 's1',
+            questionId: 'q1',
+            revision: 1,
+            source: 'USER',
+            text: 'v1',
+            createdAt: NOW,
+          });
+          questionRepo.transitionStatus('q1', 'ASKED', 'ANSWERED', LATER);
+          // session CAS 失败：版本不匹配
+          const ok = sessionRepo.bumpVersion('s1', 99, LATER);
+          if (!ok) throw new Error('版本冲突');
+        }),
+      ).toThrow('版本冲突');
+
+      // 全部回滚
+      expect(answerRepo.getById('a1')).toBeNull();
+      expect(questionRepo.getById('q1')?.status).toBe('ASKED');
+      expect(sessionRepo.getById('s1')?.version).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('批量问题中途唯一约束失败，全部回滚', () => {
+    const db = createDb();
+    try {
+      setupActiveSession(db);
+      const questionRepo = db.getGrillQuestionRepository();
+      const sessionRepo = db.getGrillSessionRepository();
+
+      // 先插入 sequence=1 的问题
+      questionRepo.create({
+        id: 'q0',
+        sessionId: 's1',
+        sequence: 1,
+        topic: 't0',
+        text: 'x',
+        rationale: '',
+        dependsOnQuestionIds: '[]',
+        createdAt: NOW,
+      });
+
+      expect(() =>
+        db.transaction(() => {
+          questionRepo.create({
+            id: 'q1',
+            sessionId: 's1',
+            sequence: 2,
+            topic: 't1',
+            text: 'x',
+            rationale: '',
+            dependsOnQuestionIds: '[]',
+            createdAt: NOW,
+          });
+          // 重复 sequence=1 触发 UNIQUE 约束
+          questionRepo.create({
+            id: 'q2',
+            sessionId: 's1',
+            sequence: 1,
+            topic: 't2',
+            text: 'x',
+            rationale: '',
+            dependsOnQuestionIds: '[]',
+            createdAt: NOW,
+          });
+        }),
+      ).toThrow();
+
+      // q1 也回滚
+      expect(questionRepo.getById('q1')).toBeNull();
+      expect(questionRepo.getById('q2')).toBeNull();
+      expect(sessionRepo.getById('s1')?.version).toBe(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('proposal 更新成功但 session CAS 失败，proposal 回滚', () => {
+    const db = createDb();
+    try {
+      setupActiveSession(db);
+      const proposalRepo = db.getGrillProposalRepository();
+      const sessionRepo = db.getGrillSessionRepository();
+
+      proposalRepo.create({
+        id: 'pr1',
+        sessionId: 's1',
+        basedOnAnswerIds: '[]',
+        key: 'k',
+        proposedValueJson: '"v"',
+        confidence: 0.5,
+        rationale: '',
+        createdAt: NOW,
+      });
+
+      expect(() =>
+        db.transaction(() => {
+          proposalRepo.transitionStatus('pr1', 'PROPOSED', 'ACCEPTED', LATER);
+          // session CAS 失败
+          const ok = sessionRepo.bumpVersion('s1', 99, LATER);
+          if (!ok) throw new Error('版本冲突');
+        }),
+      ).toThrow('版本冲突');
+
+      // proposal 回滚到 PROPOSED
+      expect(proposalRepo.getById('pr1')?.status).toBe('PROPOSED');
+      expect(proposalRepo.getById('pr1')?.reviewedAt).toBeNull();
     } finally {
       db.close();
     }

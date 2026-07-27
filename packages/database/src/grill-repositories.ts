@@ -84,7 +84,8 @@ export class GrillSessionRepositoryImpl implements GrillSessionRepository {
         break;
     }
 
-    const needsTimestamp = newStatus === 'ACTIVE' || newStatus === 'COMPLETED' || newStatus === 'ABANDONED';
+    const needsTimestamp =
+      newStatus === 'ACTIVE' || newStatus === 'COMPLETED' || newStatus === 'ABANDONED';
 
     const sql = needsTimestamp
       ? `UPDATE grill_sessions SET status = ?, version = version + 1, updated_at = ?, ${timestampClause}
@@ -209,7 +210,9 @@ export class GrillQuestionRepositoryImpl implements GrillQuestionRepository {
 
   getMaxSequence(sessionId: string): number {
     const row = this.db
-      .prepare('SELECT COALESCE(MAX(sequence), 0) as max_seq FROM grill_questions WHERE session_id = ?')
+      .prepare(
+        'SELECT COALESCE(MAX(sequence), 0) as max_seq FROM grill_questions WHERE session_id = ?',
+      )
       .get(sessionId) as { max_seq: number };
     return row.max_seq;
   }
@@ -244,7 +247,15 @@ export class GrillAnswerRepositoryImpl implements GrillAnswerRepository {
         `INSERT INTO grill_answers (id, session_id, question_id, revision, source, text, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(data.id, data.sessionId, data.questionId, data.revision, data.source, data.text, data.createdAt);
+      .run(
+        data.id,
+        data.sessionId,
+        data.questionId,
+        data.revision,
+        data.source,
+        data.text,
+        data.createdAt,
+      );
   }
 
   getById(id: string): GrillAnswerRow | null {

@@ -374,18 +374,16 @@ describe('会话状态转换', () => {
   it('版本冲突抛出 GrillVersionConflictError', () => {
     const deps = createDeps();
     const session = createGrillSession(deps, { projectId: 'p1', goal: 'g' });
-    expect(() =>
-      startGrillSession(deps, { sessionId: session.id, expectedVersion: 99 }),
-    ).toThrow(GrillVersionConflictError);
+    expect(() => startGrillSession(deps, { sessionId: session.id, expectedVersion: 99 })).toThrow(
+      GrillVersionConflictError,
+    );
   });
 
   it('终态不可转换', () => {
     const deps = createDeps();
     const session = createGrillSession(deps, { projectId: 'p1', goal: 'g' });
     abandonGrillSession(deps, { sessionId: session.id, expectedVersion: 1 });
-    expect(() =>
-      startGrillSession(deps, { sessionId: session.id, expectedVersion: 2 }),
-    ).toThrow();
+    expect(() => startGrillSession(deps, { sessionId: session.id, expectedVersion: 2 })).toThrow();
   });
 });
 
