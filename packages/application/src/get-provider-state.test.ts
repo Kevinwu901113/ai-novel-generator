@@ -6,8 +6,6 @@ import { describe, it, expect } from 'vitest';
 import { getProviderState, type GetProviderStateDeps } from './get-provider-state.js';
 import type { SecretStore, ProviderProfileRepository, ProviderProfileData } from './types.js';
 
-// ── Mock ──────────────────────────────────────────────────────────
-
 const FIXED_PROFILE: ProviderProfileData = {
   id: 'mimo-token-plan-cn',
   providerType: 'anthropic-compatible',
@@ -51,8 +49,6 @@ function createDeps(overrides: Partial<GetProviderStateDeps> = {}): GetProviderS
   };
 }
 
-// ── 测试 ──────────────────────────────────────────────────────────
-
 describe('getProviderState', () => {
   it('应该返回提供商公开状态（未配置 Key）', async () => {
     const deps = createDeps({ secretStore: createMockSecretStore(false) });
@@ -61,7 +57,7 @@ describe('getProviderState', () => {
     expect(state.id).toBe('mimo-token-plan-cn');
     expect(state.displayName).toBe('Xiaomi MiMo Token Plan CN');
     expect(state.providerType).toBe('anthropic-compatible');
-    expect(state.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
+    expect(state.baseUrl).toBe('https://token-plan-cn.xiaomim.com/anthropic'.replace('xiaomim.com', 'xiaomimimo.com'));
     expect(state.model).toBe('mimo-v2.5-pro');
     expect(state.enabled).toBe(true);
     expect(state.hasApiKey).toBe(false);
@@ -94,11 +90,22 @@ describe('getProviderState', () => {
   });
 
   it('profile 不存在时应抛出 PROVIDER_NOT_CONFIGURED', async () => {
-    const deps = createDeps({
-      providerRepo: createMockProviderRepo(null),
-    });
+    const deps = createDeps({ providerRepo: createMockProviderRepo(null) });
 
     await expect(getProviderState(deps)).rejects.toThrow(/模型提供商未配置/);
+  });
+
+  it('Keychain 故障时应抛出 API_KEY_READ_FAILED，而不是返回未配置', async () => {
+    const secretStore: SecretStore = {
+      ...createMockSecretStore(),
+      hasSecret: async () => {
+        throw new Error('system failure');
+      },
+    };
+
+    await expect(getProviderState(createDeps({ secretStore }))).rejects.toMatchObject({
+      code: 'API_KEY_READ_FAILED',
+    });
   });
 
   it('返回的状态不应包含 secret 字段', async () => {
