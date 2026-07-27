@@ -162,25 +162,31 @@ function createMockDeps(
     getById: vi.fn((id: string) => taskStore.get(id) ?? null),
     listByProject: vi.fn(() => []),
     listByStatus: vi.fn(() => []),
-    transition: vi.fn((id: string, from: string, to: string) => {
+    claimPending: vi.fn((id: string) => {
       const t = taskStore.get(id);
-      if (!t || t.status !== from) return false;
-      taskStore.set(id, { ...t, status: to });
+      if (!t || t.status !== 'PENDING') return false;
+      taskStore.set(id, {
+        ...t,
+        status: 'RUNNING',
+        attemptCount: t.attemptCount + 1,
+        startedAt: '2024-01-01T00:00:00.000Z',
+      });
       return true;
     }),
-    updateResult: vi.fn((id: string, resultJson: string) => {
+    completeRunning: vi.fn((id: string, resultJson: string) => {
       const t = taskStore.get(id);
-      if (t) taskStore.set(id, { ...t, status: 'SUCCEEDED', resultJson });
+      if (!t || t.status !== 'RUNNING') return false;
+      taskStore.set(id, { ...t, status: 'SUCCEEDED', resultJson });
+      return true;
     }),
-    updateFailure: vi.fn((id: string, errorCode: string, errorMessage: string) => {
+    failRunning: vi.fn((id: string, errorCode: string, errorMessage: string) => {
       const t = taskStore.get(id);
-      if (t) taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      if (!t || t.status !== 'RUNNING') return false;
+      taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
     }),
-    incrementAttempt: vi.fn((id: string) => {
-      const t = taskStore.get(id);
-      if (t) taskStore.set(id, { ...t, attemptCount: t.attemptCount + 1, status: 'RUNNING' });
-    }),
-    markStale: vi.fn(),
+    markStale: vi.fn(() => true),
+    resetToPending: vi.fn(() => true),
     listRunning: vi.fn(() => []),
   };
 
@@ -190,13 +196,16 @@ function createMockDeps(
     }),
     getById: vi.fn((id: string) => invocationStore.get(id) ?? null),
     listByTask: vi.fn(() => []),
-    markRunning: vi.fn((id: string) => {
+    markRunning: vi.fn((id: string, _expectedStatus: 'PENDING') => {
       const inv = invocationStore.get(id);
-      if (inv) invocationStore.set(id, { ...inv, status: 'RUNNING' });
+      if (!inv || inv.status !== 'PENDING') return false;
+      invocationStore.set(id, { ...inv, status: 'RUNNING' });
+      return true;
     }),
-    markSucceeded: vi.fn((id: string, result: InvocationSuccessResult) => {
-      const inv = invocationStore.get(id);
-      if (inv) {
+    markSucceeded: vi.fn(
+      (id: string, _expectedStatus: 'RUNNING', result: InvocationSuccessResult) => {
+        const inv = invocationStore.get(id);
+        if (!inv || inv.status !== 'RUNNING') return false;
         invocationStore.set(id, {
           ...inv,
           status: 'SUCCEEDED',
@@ -207,12 +216,22 @@ function createMockDeps(
           finishReason: result.finishReason,
           providerRequestId: result.providerRequestId,
         });
-      }
-    }),
-    markFailed: vi.fn((id: string, errorCode: string, errorMessage: string) => {
-      const inv = invocationStore.get(id);
-      if (inv) invocationStore.set(id, { ...inv, status: 'FAILED', errorCode, errorMessage });
-    }),
+        return true;
+      },
+    ),
+    markFailed: vi.fn(
+      (
+        id: string,
+        expectedStatuses: ReadonlyArray<string>,
+        errorCode: string,
+        errorMessage: string,
+      ) => {
+        const inv = invocationStore.get(id);
+        if (!inv || !expectedStatuses.includes(inv.status)) return false;
+        invocationStore.set(id, { ...inv, status: 'FAILED', errorCode, errorMessage });
+        return true;
+      },
+    ),
     getStatsByProject: vi.fn(() => ({
       invocationCount: 0,
       succeededCount: 0,
@@ -310,8 +329,8 @@ describe('executeModelInvocationTest', () => {
 
     const result = await executeModelInvocationTest(deps, 'task-1', '测试提示词');
 
-    // 任务应该先被 claim
-    expect(deps.taskRepo.transition).toHaveBeenCalledWith('task-1', 'PENDING', 'RUNNING');
+    // 任务应该先被 claim（原子 claim + attempt）
+    expect(deps.taskRepo.claimPending).toHaveBeenCalledWith('task-1');
 
     // invocation 应该被创建并标记 RUNNING
     expect(deps.invocationRepo.create).toHaveBeenCalled();
@@ -333,8 +352,7 @@ describe('executeModelInvocationTest', () => {
     const createCall = (deps.invocationRepo.create as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(createCall).toBeDefined();
     const metadata = JSON.parse(createCall[0].requestMetadataJson);
-    expect(metadata.promptLength).toBe(8); // '非常机密的提示词' 是 8 个 Unicode code points
-    // prompt 本身不应该在 metadata 中
+    expect(metadata.promptLength).toBe(8);
     expect(JSON.stringify(createCall[0])).not.toContain('非常机密的提示词');
   });
 
@@ -345,34 +363,35 @@ describe('executeModelInvocationTest', () => {
 
     const result = await executeModelInvocationTest(deps, 'task-1', '提示词');
 
-    // resultJson 应该只包含 accepted 和 textLength
     const resultData = JSON.parse(result.task.resultJson!);
     expect(resultData.accepted).toBe(true);
-    expect(resultData.textLength).toBe(7); // '很长的模型输出' 长度
-    // 不应该包含模型正文
+    expect(resultData.textLength).toBe(7);
     expect(result.task.resultJson).not.toContain('很长的模型输出');
   });
 
-  it('attempt_number 应该正确递增', async () => {
+  it('claim 应该原子递增 attempt_count', async () => {
     const { deps } = createMockDeps();
 
     await executeModelInvocationTest(deps, 'task-1', '测试');
 
-    expect(deps.taskRepo.incrementAttempt).toHaveBeenCalledWith('task-1');
+    expect(deps.taskRepo.claimPending).toHaveBeenCalledWith('task-1');
 
-    // invocation 的 attemptNumber 应该是 1（因为初始 attemptCount 是 0，increment 后是 1）
+    // invocation 的 attemptNumber 应该是 1（claim 后 attemptCount=1）
     const createCall = (deps.invocationRepo.create as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(createCall[0].attemptNumber).toBe(1);
   });
 
-  it('API Key 缺失时应该返回 FAILED', async () => {
+  it('API Key 缺失时应该返回 FAILED（有 invocation 记录）', async () => {
     const { deps } = createMockDeps({ apiKey: null });
 
     const result = await executeModelInvocationTest(deps, 'task-1', '测试');
 
     expect(result.task.status).toBe('FAILED');
     expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
-    expect(result.invocation).toBeNull();
+    // invocation 应该被创建并标记 FAILED
+    expect(result.invocation).not.toBeNull();
+    expect(result.invocation!.status).toBe('FAILED');
+    expect(result.invocation!.errorCode).toBe('API_KEY_REQUIRED');
   });
 
   it('provider 不存在时应该返回 FAILED', async () => {
@@ -383,6 +402,8 @@ describe('executeModelInvocationTest', () => {
 
     expect(result.task.status).toBe('FAILED');
     expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
+    // provider 不存在时没有 invocation
+    expect(result.invocation).toBeNull();
   });
 
   it('provider failure 时应该原子提交失败', async () => {
@@ -431,7 +452,7 @@ describe('executeModelInvocationTest', () => {
 
   it('CAS claim 失败时应该抛出 TASK_STATE_CONFLICT', async () => {
     const { deps } = createMockDeps();
-    (deps.taskRepo.transition as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    (deps.taskRepo.claimPending as ReturnType<typeof vi.fn>).mockReturnValue(false);
 
     try {
       await executeModelInvocationTest(deps, 'task-1', '测试');
@@ -447,7 +468,6 @@ describe('executeModelInvocationTest', () => {
 
     const result = await executeModelInvocationTest(deps, 'task-1', '测试');
 
-    // 两者都应该是 SUCCEEDED
     expect(result.task.status).toBe('SUCCEEDED');
     expect(result.invocation!.status).toBe('SUCCEEDED');
   });
@@ -457,7 +477,6 @@ describe('executeModelInvocationTest', () => {
 
     const result = await executeModelInvocationTest(deps, 'task-1', '测试');
 
-    // 两者都应该是 FAILED
     expect(result.task.status).toBe('FAILED');
     expect(result.invocation!.status).toBe('FAILED');
   });
@@ -471,5 +490,61 @@ describe('executeModelInvocationTest', () => {
     const createCall = (deps.invocationRepo.create as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(createCall[0].promptHash).toBe(sha256Hex(prompt));
     expect(createCall[0].promptHash).toHaveLength(64);
+  });
+
+  it('Keychain 读取失败时 invocation 使用 API_KEY_READ_FAILED', async () => {
+    const { deps } = createMockDeps();
+    (deps.secretStore.getSecret as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('keychain error'),
+    );
+
+    const result = await executeModelInvocationTest(deps, 'task-1', '测试');
+
+    expect(result.task.status).toBe('FAILED');
+    expect(result.invocation).not.toBeNull();
+    expect(result.invocation!.errorCode).toBe('API_KEY_READ_FAILED');
+  });
+
+  it('claim 失败不增加 attempt', async () => {
+    const { deps, taskStore } = createMockDeps();
+    (deps.taskRepo.claimPending as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    try {
+      await executeModelInvocationTest(deps, 'task-1', '测试');
+    } catch {
+      // expected
+    }
+
+    // attempt_count 应该不变
+    const task = taskStore.get('task-1')!;
+    expect(task.attemptCount).toBe(0);
+  });
+
+  it('SUCCEEDED task 不可再次执行', async () => {
+    const { deps } = createMockDeps({
+      task: createMockTask({ status: 'SUCCEEDED' }),
+    });
+
+    try {
+      await executeModelInvocationTest(deps, 'task-1', '测试');
+      expect.fail('应该抛出错误');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskExecutionError);
+      expect((err as TaskExecutionError).code).toBe('TASK_STATE_CONFLICT');
+    }
+  });
+
+  it('FAILED task 不可直接执行（需先 resetToPending）', async () => {
+    const { deps } = createMockDeps({
+      task: createMockTask({ status: 'FAILED' }),
+    });
+
+    try {
+      await executeModelInvocationTest(deps, 'task-1', '测试');
+      expect.fail('应该抛出错误');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskExecutionError);
+      expect((err as TaskExecutionError).code).toBe('TASK_STATE_CONFLICT');
+    }
   });
 });

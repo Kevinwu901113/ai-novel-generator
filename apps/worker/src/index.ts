@@ -358,29 +358,29 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
     return this.projDb.getTaskRepository().listByStatus(status).map(this.toTaskData);
   }
 
-  transition(id: string, fromStatus: string, toStatus: string): boolean {
+  claimPending(id: string): boolean {
     const now = createClock().now();
-    return this.projDb.getTaskRepository().transition(id, fromStatus, toStatus, now);
+    return this.projDb.getTaskRepository().claimPending(id, now);
   }
 
-  updateResult(id: string, resultJson: string): void {
+  completeRunning(id: string, resultJson: string): boolean {
     const now = createClock().now();
-    this.projDb.getTaskRepository().updateResult(id, resultJson, now, now);
+    return this.projDb.getTaskRepository().completeRunning(id, resultJson, now);
   }
 
-  updateFailure(id: string, errorCode: string, errorMessage: string): void {
+  failRunning(id: string, errorCode: string, errorMessage: string): boolean {
     const now = createClock().now();
-    this.projDb.getTaskRepository().updateFailure(id, errorCode, errorMessage, now, now);
+    return this.projDb.getTaskRepository().failRunning(id, errorCode, errorMessage, now);
   }
 
-  incrementAttempt(id: string): void {
+  markStale(id: string, expectedStatuses: ReadonlyArray<string>): boolean {
     const now = createClock().now();
-    this.projDb.getTaskRepository().incrementAttempt(id, now, now);
+    return this.projDb.getTaskRepository().markStale(id, expectedStatuses, now);
   }
 
-  markStale(id: string): void {
+  resetToPending(id: string, expectedStatus: string): boolean {
     const now = createClock().now();
-    this.projDb.getTaskRepository().markStale(id, now, now);
+    return this.projDb.getTaskRepository().resetToPending(id, expectedStatus, now);
   }
 
   listRunning(): ReadonlyArray<TaskData> {
@@ -441,14 +441,14 @@ class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort 
     return this.projDb.getModelInvocationRepository().listByTask(taskId).map(this.toInvocationData);
   }
 
-  markRunning(id: string): void {
+  markRunning(id: string, expectedStatus: 'PENDING'): boolean {
     const now = createClock().now();
-    this.projDb.getModelInvocationRepository().markRunning(id, now);
+    return this.projDb.getModelInvocationRepository().markRunning(id, expectedStatus, now);
   }
 
-  markSucceeded(id: string, result: InvocationSuccessResult): void {
+  markSucceeded(id: string, expectedStatus: 'RUNNING', result: InvocationSuccessResult): boolean {
     const now = createClock().now();
-    this.projDb.getModelInvocationRepository().markSucceeded(id, {
+    return this.projDb.getModelInvocationRepository().markSucceeded(id, expectedStatus, {
       responseMetadataJson: result.responseMetadataJson,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
@@ -462,11 +462,17 @@ class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort 
     });
   }
 
-  markFailed(id: string, errorCode: string, errorMessage: string, latencyMs: number | null): void {
+  markFailed(
+    id: string,
+    expectedStatuses: ReadonlyArray<string>,
+    errorCode: string,
+    errorMessage: string,
+    latencyMs: number | null,
+  ): boolean {
     const now = createClock().now();
-    this.projDb
+    return this.projDb
       .getModelInvocationRepository()
-      .markFailed(id, errorCode, errorMessage, latencyMs, now);
+      .markFailed(id, expectedStatuses, errorCode, errorMessage, latencyMs, now);
   }
 
   getStatsByProject(projectId: string): InvocationStatsData {
@@ -680,6 +686,13 @@ function initialize(): void {
  *
  * 应用崩溃后，数据库中可能遗留 RUNNING 状态的记录。
  * 启动时将这些记录恢复为 FAILED，并记录 TASK_INTERRUPTED。
+ *
+ * 每个 task 的恢复在同一事务中完成：
+ * - 该 task 下所有 RUNNING invocation → FAILED
+ * - 该 task → FAILED
+ * - 失败时整组回滚
+ * - 重复执行幂等（已 FAILED 的不修改）
+ * - attempt_count 不变
  */
 function reconcileTasks(dataRoot: string): void {
   const projectsPath = join(dataRoot, 'projects');
@@ -702,22 +715,26 @@ function reconcileTasks(dataRoot: string): void {
         // 恢复 RUNNING tasks
         const runningTasks = taskRepo.listRunning();
         for (const task of runningTasks) {
-          // 恢复该 task 下的 RUNNING invocations
-          const invocations = invocationRepo.listByTask(task.id);
-          for (const inv of invocations) {
-            if (inv.status === 'RUNNING') {
-              invocationRepo.markFailed(
-                inv.id,
-                'INVOCATION_INTERRUPTED',
-                '模型调用因应用中断而未完成',
-                null,
-                now,
-              );
+          projDb.transaction(() => {
+            // 恢复该 task 下的 RUNNING invocations
+            const invocations = invocationRepo.listByTask(task.id);
+            for (const inv of invocations) {
+              if (inv.status === 'RUNNING') {
+                invocationRepo.markFailed(
+                  inv.id,
+                  ['RUNNING'],
+                  'INVOCATION_INTERRUPTED',
+                  '模型调用因应用中断而未完成',
+                  null,
+                  now,
+                );
+              }
+              // 已 FAILED/其他状态的 invocation 不修改
             }
-          }
 
-          // 恢复 task
-          taskRepo.updateFailure(task.id, 'TASK_INTERRUPTED', '任务因应用中断而未完成', now, now);
+            // 恢复 task（CAS：RUNNING → FAILED）
+            taskRepo.failRunning(task.id, 'TASK_INTERRUPTED', '任务因应用中断而未完成', now);
+          });
         }
       } finally {
         projDb.close();

@@ -233,22 +233,16 @@ export interface TaskRepository {
   getById(id: string): TaskRow | null;
   listByProject(projectId: string, limit?: number): ReadonlyArray<TaskRow>;
   listByStatus(status: string): ReadonlyArray<TaskRow>;
-  /** CAS claim：只有当前状态匹配时才更新，返回是否成功 */
-  transition(id: string, fromStatus: string, toStatus: string, updatedAt: string): boolean;
-  /** 更新结果和状态为 SUCCEEDED */
-  updateResult(id: string, resultJson: string, updatedAt: string, finishedAt: string): void;
-  /** 更新失败信息和状态为 FAILED */
-  updateFailure(
-    id: string,
-    errorCode: string,
-    errorMessage: string,
-    updatedAt: string,
-    finishedAt: string,
-  ): void;
-  /** 增加尝试次数 */
-  incrementAttempt(id: string, updatedAt: string, startedAt: string): void;
-  /** 标记为 STALE */
-  markStale(id: string, updatedAt: string, staleAt: string): void;
+  /** CAS claim：PENDING → RUNNING 并递增 attempt_count，原子操作 */
+  claimPending(id: string, now: string): boolean;
+  /** CAS 完成：RUNNING → SUCCEEDED，返回是否成功 */
+  completeRunning(id: string, resultJson: string, now: string): boolean;
+  /** CAS 失败：RUNNING → FAILED，返回是否成功 */
+  failRunning(id: string, errorCode: string, errorMessage: string, now: string): boolean;
+  /** CAS 标记 STALE，expectedStatuses 限制当前状态 */
+  markStale(id: string, expectedStatuses: ReadonlyArray<string>, now: string): boolean;
+  /** CAS 重置为 PENDING，expectedStatus 限制当前状态 */
+  resetToPending(id: string, expectedStatus: string, now: string): boolean;
   /** 获取所有 RUNNING 任务（用于恢复） */
   listRunning(): ReadonlyArray<TaskRow>;
 }
@@ -317,9 +311,12 @@ export interface ModelInvocationRepository {
   create(data: CreateInvocationData): void;
   getById(id: string): ModelInvocationRow | null;
   listByTask(taskId: string): ReadonlyArray<ModelInvocationRow>;
-  markRunning(id: string, startedAt: string): void;
+  /** CAS：PENDING → RUNNING，返回是否成功 */
+  markRunning(id: string, expectedStatus: 'PENDING', now: string): boolean;
+  /** CAS：RUNNING → SUCCEEDED，返回是否成功 */
   markSucceeded(
     id: string,
+    expectedStatus: 'RUNNING',
     result: {
       responseMetadataJson: string;
       inputTokens: number | null;
@@ -332,14 +329,16 @@ export interface ModelInvocationRepository {
       providerRequestId: string | null;
       finishedAt: string;
     },
-  ): void;
+  ): boolean;
+  /** CAS：expectedStatuses → FAILED，返回是否成功 */
   markFailed(
     id: string,
+    expectedStatuses: ReadonlyArray<string>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,
     finishedAt: string,
-  ): void;
+  ): boolean;
   getStatsByProject(projectId: string): InvocationStats;
   /** 获取所有 RUNNING 调用（用于恢复） */
   listRunning(): ReadonlyArray<ModelInvocationRow>;

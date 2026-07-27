@@ -259,50 +259,63 @@ class TaskRepositoryImpl implements TaskRepository {
     return rows.map((r) => this.toRow(r));
   }
 
-  transition(id: string, fromStatus: string, toStatus: string, updatedAt: string): boolean {
+  claimPending(id: string, now: string): boolean {
     const result = this.db
-      .prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND status = ?`)
-      .run(toStatus, updatedAt, id, fromStatus);
+      .prepare(
+        `UPDATE tasks SET
+           status = 'RUNNING',
+           attempt_count = attempt_count + 1,
+           started_at = ?,
+           updated_at = ?,
+           finished_at = NULL,
+           error_code = NULL,
+           error_message = NULL
+         WHERE id = ? AND status = 'PENDING'`,
+      )
+      .run(now, now, id);
     return result.changes === 1;
   }
 
-  updateResult(id: string, resultJson: string, updatedAt: string, finishedAt: string): void {
-    this.db
+  completeRunning(id: string, resultJson: string, now: string): boolean {
+    const result = this.db
       .prepare(
         `UPDATE tasks SET status = 'SUCCEEDED', result_json = ?, updated_at = ?, finished_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'RUNNING'`,
       )
-      .run(resultJson, updatedAt, finishedAt, id);
+      .run(resultJson, now, now, id);
+    return result.changes === 1;
   }
 
-  updateFailure(
-    id: string,
-    errorCode: string,
-    errorMessage: string,
-    updatedAt: string,
-    finishedAt: string,
-  ): void {
-    this.db
+  failRunning(id: string, errorCode: string, errorMessage: string, now: string): boolean {
+    const result = this.db
       .prepare(
         `UPDATE tasks SET status = 'FAILED', error_code = ?, error_message = ?, updated_at = ?, finished_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = 'RUNNING'`,
       )
-      .run(errorCode, errorMessage, updatedAt, finishedAt, id);
+      .run(errorCode, errorMessage, now, now, id);
+    return result.changes === 1;
   }
 
-  incrementAttempt(id: string, updatedAt: string, startedAt: string): void {
-    this.db
+  markStale(id: string, expectedStatuses: ReadonlyArray<string>, now: string): boolean {
+    if (expectedStatuses.length === 0) return false;
+    const placeholders = expectedStatuses.map(() => '?').join(', ');
+    const result = this.db
       .prepare(
-        `UPDATE tasks SET attempt_count = attempt_count + 1, status = 'RUNNING',
-         updated_at = ?, started_at = ? WHERE id = ?`,
+        `UPDATE tasks SET status = 'STALE', updated_at = ?, stale_at = ?
+         WHERE id = ? AND status IN (${placeholders})`,
       )
-      .run(updatedAt, startedAt, id);
+      .run(now, now, id, ...expectedStatuses);
+    return result.changes === 1;
   }
 
-  markStale(id: string, updatedAt: string, staleAt: string): void {
-    this.db
-      .prepare(`UPDATE tasks SET status = 'STALE', updated_at = ?, stale_at = ? WHERE id = ?`)
-      .run(updatedAt, staleAt, id);
+  resetToPending(id: string, expectedStatus: string, now: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE tasks SET status = 'PENDING', updated_at = ?
+         WHERE id = ? AND status = ?`,
+      )
+      .run(now, id, expectedStatus);
+    return result.changes === 1;
   }
 
   listRunning(): ReadonlyArray<TaskRow> {
@@ -401,14 +414,19 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
     return rows.map((r) => this.toRow(r));
   }
 
-  markRunning(id: string, startedAt: string): void {
-    this.db
-      .prepare(`UPDATE model_invocations SET status = 'RUNNING', started_at = ? WHERE id = ?`)
-      .run(startedAt, id);
+  markRunning(id: string, expectedStatus: 'PENDING', now: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE model_invocations SET status = 'RUNNING', started_at = ?
+         WHERE id = ? AND status = ?`,
+      )
+      .run(now, id, expectedStatus);
+    return result.changes === 1;
   }
 
   markSucceeded(
     id: string,
+    expectedStatus: 'RUNNING',
     result: {
       responseMetadataJson: string;
       inputTokens: number | null;
@@ -421,8 +439,8 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
       providerRequestId: string | null;
       finishedAt: string;
     },
-  ): void {
-    this.db
+  ): boolean {
+    const updateResult = this.db
       .prepare(
         `UPDATE model_invocations SET
            status = 'SUCCEEDED',
@@ -436,7 +454,7 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
            finish_reason = ?,
            provider_request_id = ?,
            finished_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status = ?`,
       )
       .run(
         result.responseMetadataJson,
@@ -450,24 +468,30 @@ class ModelInvocationRepositoryImpl implements ModelInvocationRepository {
         result.providerRequestId,
         result.finishedAt,
         id,
+        expectedStatus,
       );
+    return updateResult.changes === 1;
   }
 
   markFailed(
     id: string,
+    expectedStatuses: ReadonlyArray<string>,
     errorCode: string,
     errorMessage: string,
     latencyMs: number | null,
     finishedAt: string,
-  ): void {
-    this.db
+  ): boolean {
+    if (expectedStatuses.length === 0) return false;
+    const placeholders = expectedStatuses.map(() => '?').join(', ');
+    const result = this.db
       .prepare(
         `UPDATE model_invocations SET
            status = 'FAILED', error_code = ?, error_message = ?,
            latency_ms = ?, finished_at = ?
-         WHERE id = ?`,
+         WHERE id = ? AND status IN (${placeholders})`,
       )
-      .run(errorCode, errorMessage, latencyMs, finishedAt, id);
+      .run(errorCode, errorMessage, latencyMs, finishedAt, id, ...expectedStatuses);
+    return result.changes === 1;
   }
 
   getStatsByProject(projectId: string): InvocationStats {

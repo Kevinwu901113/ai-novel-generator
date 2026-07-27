@@ -217,12 +217,17 @@ export interface TaskRepositoryPort {
   getById(id: string): TaskData | null;
   listByProject(projectId: string, limit?: number): ReadonlyArray<TaskData>;
   listByStatus(status: string): ReadonlyArray<TaskData>;
-  /** CAS 状态转换 */
-  transition(id: string, fromStatus: string, toStatus: string): boolean;
-  updateResult(id: string, resultJson: string): void;
-  updateFailure(id: string, errorCode: string, errorMessage: string): void;
-  incrementAttempt(id: string): void;
-  markStale(id: string): void;
+  /** CAS claim：PENDING → RUNNING 并递增 attempt_count，原子操作 */
+  claimPending(id: string): boolean;
+  /** CAS 完成：RUNNING → SUCCEEDED */
+  completeRunning(id: string, resultJson: string): boolean;
+  /** CAS 失败：RUNNING → FAILED */
+  failRunning(id: string, errorCode: string, errorMessage: string): boolean;
+  /** CAS 标记 STALE */
+  markStale(id: string, expectedStatuses: ReadonlyArray<string>): boolean;
+  /** CAS 重置为 PENDING */
+  resetToPending(id: string, expectedStatus: string): boolean;
+  /** 获取所有 RUNNING 任务 */
   listRunning(): ReadonlyArray<TaskData>;
 }
 
@@ -298,9 +303,18 @@ export interface ModelInvocationRepositoryPort {
   create(data: CreateInvocationInput): void;
   getById(id: string): ModelInvocationData | null;
   listByTask(taskId: string): ReadonlyArray<ModelInvocationData>;
-  markRunning(id: string): void;
-  markSucceeded(id: string, result: InvocationSuccessResult): void;
-  markFailed(id: string, errorCode: string, errorMessage: string, latencyMs: number | null): void;
+  /** CAS：PENDING → RUNNING */
+  markRunning(id: string, expectedStatus: 'PENDING'): boolean;
+  /** CAS：RUNNING → SUCCEEDED */
+  markSucceeded(id: string, expectedStatus: 'RUNNING', result: InvocationSuccessResult): boolean;
+  /** CAS：expectedStatuses → FAILED */
+  markFailed(
+    id: string,
+    expectedStatuses: ReadonlyArray<string>,
+    errorCode: string,
+    errorMessage: string,
+    latencyMs: number | null,
+  ): boolean;
   getStatsByProject(projectId: string): InvocationStatsData;
   listRunning(): ReadonlyArray<ModelInvocationData>;
 }
