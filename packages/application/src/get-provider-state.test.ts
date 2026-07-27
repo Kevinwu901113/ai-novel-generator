@@ -57,7 +57,7 @@ describe('getProviderState', () => {
     expect(state.id).toBe('mimo-token-plan-cn');
     expect(state.displayName).toBe('Xiaomi MiMo Token Plan CN');
     expect(state.providerType).toBe('anthropic-compatible');
-    expect(state.baseUrl).toBe('https://token-plan-cn.xiaomim.com/anthropic'.replace('xiaomim.com', 'xiaomimimo.com'));
+    expect(state.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
     expect(state.model).toBe('mimo-v2.5-pro');
     expect(state.enabled).toBe(true);
     expect(state.hasApiKey).toBe(false);
