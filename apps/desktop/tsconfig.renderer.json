@@ -10,5 +10,6 @@
     "rootDir": "./src/renderer",
     "strict": true
   },
-  "include": ["src/renderer"]
+  "include": ["src/renderer"],
+  "exclude": ["src/renderer/**/*.test.ts", "src/renderer/**/*.test.tsx"]
 }
