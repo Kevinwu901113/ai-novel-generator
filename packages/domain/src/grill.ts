@@ -11,6 +11,9 @@ export type GrillSessionId = string & { readonly __brand: 'GrillSessionId' };
 export type GrillQuestionId = string & { readonly __brand: 'GrillQuestionId' };
 export type GrillAnswerId = string & { readonly __brand: 'GrillAnswerId' };
 export type GrillProposalId = string & { readonly __brand: 'GrillProposalId' };
+export type GrillQuestionPlanProposalId = string & {
+  readonly __brand: 'GrillQuestionPlanProposalId';
+};
 
 // ── 状态类型 ──────────────────────────────────────────────────────
 
@@ -21,6 +24,8 @@ export type GrillQuestionStatus = 'PLANNED' | 'ASKED' | 'ANSWERED' | 'SKIPPED' |
 export type GrillAnswerSource = 'USER' | 'IMPORTED';
 
 export type GrillProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'SUPERSEDED';
+
+export type GrillQuestionPlanProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'STALE';
 
 // ── 实体接口 ──────────────────────────────────────────────────────
 
@@ -73,6 +78,19 @@ export interface GrillInferenceProposal {
   readonly confidence: number;
   readonly rationale: string;
   readonly status: GrillProposalStatus;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+export interface GrillQuestionPlanProposal {
+  readonly id: GrillQuestionPlanProposalId;
+  readonly sessionId: GrillSessionId;
+  readonly basedOnSessionVersion: number;
+  readonly status: GrillQuestionPlanProposalStatus;
+  readonly questionsJson: string;
+  readonly stopRecommendationJson: string;
+  readonly taskId: string;
+  readonly invocationId: string;
   readonly createdAt: string;
   readonly reviewedAt: string | null;
 }

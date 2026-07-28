@@ -145,6 +145,34 @@
 - 版本历史可查看
 - 可以回滚到历史版本
 
+### M2-A1.5：Grill-me 桌面工作台
+
+**目标**：在现有 Electron 桌面应用中提供最小但完整可用的 Grill-me 操作界面。
+
+**范围**：
+
+- 完成 DesktopAPI 链路（contracts IPC channels → main ipcMain.handle → preload contextBridge → renderer type）
+- 三栏 UI：session 列表、session 面板与问题列表、问题详情与提案审核
+- 创建/启动/暂停/恢复/完成/放弃 session
+- 添加问题、标记已提问、回答、修订、跳过、废弃
+- 创建/接受/拒绝 proposal
+- 版本冲突检测与自动刷新
+- 终态控件禁用
+- 表单基础验证
+- 61 个新增测试
+- 文档更新
+
+**关键设计决策**：
+
+- 开发工作台，非最终产品 UI
+- 全部通过 preload 暴露的 DesktopAPI，不直接访问 SQLite
+- 所有 mutation 携带 expectedVersion
+- 版本冲突：显示提示 + 自动刷新，不自动重试
+- 不引入状态管理库，使用 React hooks
+- 不修改 domain 规则、数据库 schema、task engine
+
+**未实现**：AI 问题规划、创作契约、正式视觉设计、自动问题生成。
+
 ## M3：规划和正文生成
 
 **目标**：实现 AI 辅助的规划和正文生成。
