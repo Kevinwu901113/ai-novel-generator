@@ -20,6 +20,7 @@ const IPC_CHANNELS = {
   GRILL_CREATE_SESSION: 'ipc:grill-create-session',
   GRILL_GET_SESSION: 'ipc:grill-get-session',
   GRILL_LIST_SESSIONS: 'ipc:grill-list-sessions',
+  GRILL_LIST_QUESTIONS: 'ipc:grill-list-questions',
   GRILL_START_SESSION: 'ipc:grill-start-session',
   GRILL_PAUSE_SESSION: 'ipc:grill-pause-session',
   GRILL_RESUME_SESSION: 'ipc:grill-resume-session',
@@ -64,6 +65,7 @@ import type {
   GrillReviewProposalInput,
   GrillListProposalsInput,
   GrillListAnswerHistoryInput,
+  GrillListQuestionsInput,
   GrillSessionPublicData,
   GrillQuestionPublicData,
   GrillAnswerPublicData,
@@ -150,6 +152,12 @@ const desktopAPI: DesktopAPI = {
 
     async listSessions(projectId: string): Promise<ReadonlyArray<GrillSessionPublicData>> {
       return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_SESSIONS, { projectId });
+    },
+
+    async listQuestions(
+      input: GrillListQuestionsInput,
+    ): Promise<ReadonlyArray<GrillQuestionPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_QUESTIONS, input);
     },
 
     async startSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {

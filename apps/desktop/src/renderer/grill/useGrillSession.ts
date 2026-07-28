@@ -2,6 +2,7 @@
  * 单个 Grill session 管理 hook。
  *
  * 处理 session 状态操作、version conflict、loading lock。
+ * version conflict 横幅在刷新后保持可见，直到用户关闭或下次成功 mutation。
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -12,6 +13,7 @@ interface UseGrillSessionResult {
   session: GrillSessionPublicData | null;
   isLoading: boolean;
   error: string | null;
+  /** 版本冲突标记 —— 刷新后保持，直到用户关闭或成功 mutation */
   versionConflict: boolean;
   startSession: () => Promise<void>;
   pauseSession: () => Promise<void>;
@@ -25,13 +27,13 @@ interface UseGrillSessionResult {
 export function useGrillSession(
   projectId: string | null,
   sessionId: string | null,
-  onVersionConflict?: () => void,
 ): UseGrillSessionResult {
   const [session, setSession] = useState<GrillSessionPublicData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versionConflict, setVersionConflict] = useState(false);
 
+  /** 刷新 session 数据 —— 不清除 conflict/error 状态 */
   const refresh = useCallback(async () => {
     if (!projectId || !sessionId) {
       setSession(null);
@@ -40,14 +42,13 @@ export function useGrillSession(
     try {
       const s = await window.desktop.grill.getSession(projectId, sessionId);
       setSession(s);
-      setVersionConflict(false);
-      setError(null);
     } catch (err) {
       const code = (err as Error & { code?: string }).code;
       setError(grillErrorMessage(code, '加载会话失败'));
     }
   }, [projectId, sessionId]);
 
+  // Session 切换时重置所有状态
   useEffect(() => {
     void refresh();
     setVersionConflict(false);
@@ -73,14 +74,15 @@ export function useGrillSession(
           expectedVersion: session.version,
         });
         setSession(updated);
+        // 成功后清除冲突状态
         setVersionConflict(false);
       } catch (err) {
         const code = (err as Error & { code?: string }).code;
         if (code === 'GRILL_VERSION_CONFLICT') {
           setVersionConflict(true);
           setError('会话已在其他操作中更新');
+          // 刷新数据但保留冲突提示
           await refresh();
-          onVersionConflict?.();
         } else if (code === 'GRILL_OWNERSHIP_CONFLICT') {
           setError('资源不属于当前会话');
         } else {
@@ -90,7 +92,7 @@ export function useGrillSession(
         setIsLoading(false);
       }
     },
-    [projectId, sessionId, session, isLoading, refresh, onVersionConflict],
+    [projectId, sessionId, session, isLoading, refresh],
   );
 
   const startSession = useCallback(

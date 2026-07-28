@@ -6,13 +6,14 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { IPC_CHANNELS } from '@ai-novel/contracts';
+import { IPC_CHANNELS, isValidGrillListQuestionsInput } from '@ai-novel/contracts';
 
 describe('Grill IPC channels', () => {
   const GRILL_CHANNELS = [
     'GRILL_CREATE_SESSION',
     'GRILL_GET_SESSION',
     'GRILL_LIST_SESSIONS',
+    'GRILL_LIST_QUESTIONS',
     'GRILL_START_SESSION',
     'GRILL_PAUSE_SESSION',
     'GRILL_RESUME_SESSION',
@@ -36,9 +37,9 @@ describe('Grill IPC channels', () => {
     expect(IPC_CHANNELS[channelKey]).toMatch(/^ipc:grill-/);
   });
 
-  it('共有 18 个 grill 频道', () => {
+  it('共有 19 个 grill 频道', () => {
     const grillChannelKeys = Object.keys(IPC_CHANNELS).filter((k) => k.startsWith('GRILL_'));
-    expect(grillChannelKeys).toHaveLength(18);
+    expect(grillChannelKeys).toHaveLength(19);
   });
 
   it('所有 grill 频道值唯一', () => {
@@ -47,5 +48,27 @@ describe('Grill IPC channels', () => {
       .map(([, v]) => v);
     const unique = new Set(grillChannelValues);
     expect(unique.size).toBe(grillChannelValues.length);
+  });
+});
+
+describe('grill.listQuestions validation', () => {
+  it('有效输入通过验证', () => {
+    expect(isValidGrillListQuestionsInput({ projectId: 'proj-1', sessionId: 'sess-1' })).toBe(true);
+  });
+
+  it('缺少 projectId 失败', () => {
+    expect(isValidGrillListQuestionsInput({ sessionId: 'sess-1' })).toBe(false);
+  });
+
+  it('缺少 sessionId 失败', () => {
+    expect(isValidGrillListQuestionsInput({ projectId: 'proj-1' })).toBe(false);
+  });
+
+  it('null 失败', () => {
+    expect(isValidGrillListQuestionsInput(null)).toBe(false);
+  });
+
+  it('非对象失败', () => {
+    expect(isValidGrillListQuestionsInput('string')).toBe(false);
   });
 });

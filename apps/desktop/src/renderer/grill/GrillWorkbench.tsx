@@ -3,10 +3,11 @@
  *
  * 组合 session 列表、session 面板、问题详情。
  * 管理选中状态，处理 session 切换时清除陈旧状态。
+ * 问题列表通过 grill.listQuestions API 从服务端获取。
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { GrillQuestionPublicData, GrillAnswerPublicData } from '@ai-novel/contracts';
+import type { GrillAnswerPublicData } from '@ai-novel/contracts';
 import { useGrillSessions } from './useGrillSessions';
 import { useGrillSession } from './useGrillSession';
 import { useGrillQuestions } from './useGrillQuestions';
@@ -30,7 +31,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   // Single session
   const sessionHook = useGrillSession(projectId, selectedSessionId);
 
-  // Questions
+  // Questions — manages its own question list via API
   const questionsHook = useGrillQuestions(
     projectId,
     selectedSessionId,
@@ -46,111 +47,101 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     sessionHook.refresh,
   );
 
-  // Questions from session data (questions are part of the session in the domain model,
-  // but we need to fetch them separately via the session's question list)
-  const [questions, setQuestions] = useState<ReadonlyArray<GrillQuestionPublicData>>([]);
-
-  // Load questions when session changes
-  const loadQuestionsAndAnswers = useCallback(async () => {
+  /**
+   * 并行加载当前答案。
+   * 问题列表由 useGrillQuestions 内部管理。
+   */
+  const loadAnswers = useCallback(async () => {
     if (!projectId || !selectedSessionId) {
-      setQuestions([]);
       setCurrentAnswers([]);
       return;
     }
     try {
-      // Questions are stored in the session; we get them via the session data
-      // For now, we use getCurrentAnswers to get answers, and the session data for questions
       const answers = await questionsHook.getCurrentAnswers();
       setCurrentAnswers(answers);
     } catch {
-      // Not critical
+      // Non-critical
     }
   }, [projectId, selectedSessionId, questionsHook]);
 
-  // Load questions from session - they're embedded in the domain model
-  // We need to fetch them via a dedicated API. Since the worker has listSessions/getSession
-  // but not a separate listQuestions, we load questions through the session.
-  // The session data from the worker doesn't include questions directly.
-  // We need to track questions separately. For this workbench, we'll use the
-  // addQuestions return value and refresh via getCurrentAnswers.
+  // Session 切换时并行加载所有数据
   useEffect(() => {
-    void loadQuestionsAndAnswers();
-  }, [loadQuestionsAndAnswers]);
-
-  // Refresh proposals when session changes
-  useEffect(() => {
+    if (!selectedSessionId) {
+      setCurrentAnswers([]);
+      return;
+    }
+    // questionsHook.listQuestions() is called automatically by useGrillQuestions on session change
+    void loadAnswers();
     void proposalsHook.refresh();
-  }, [selectedSessionId, proposalsHook.refresh]);
+  }, [selectedSessionId, loadAnswers, proposalsHook.refresh]);
 
-  // Clear stale state on session switch
+  // 清除陈旧状态：session 切换
   useEffect(() => {
     setSelectedQuestionId(null);
-    setQuestions([]);
     setCurrentAnswers([]);
   }, [selectedSessionId]);
 
-  // Clear stale state on project switch
+  // 清除陈旧状态：project 切换
   useEffect(() => {
     setSelectedSessionId(null);
     setSelectedQuestionId(null);
-    setQuestions([]);
     setCurrentAnswers([]);
   }, [projectId]);
 
-  // Wrap addQuestions to track questions locally
+  /** mutation 成功后刷新所有数据 */
+  const refreshAll = useCallback(async () => {
+    await sessionHook.refresh();
+    await questionsHook.listQuestions();
+    await loadAnswers();
+    await proposalsHook.refresh();
+  }, [sessionHook, questionsHook, loadAnswers, proposalsHook]);
+
   const handleAddQuestions = useCallback(
     async (
       questionInputs: ReadonlyArray<{ topic: string; text: string; rationale: string }>,
     ): Promise<boolean> => {
       const ok = await questionsHook.addQuestions(questionInputs);
       if (ok) {
-        // Reload everything after adding questions
-        await sessionHook.refresh();
-        await loadQuestionsAndAnswers();
-        await proposalsHook.refresh();
+        await refreshAll();
       }
       return ok;
     },
-    [questionsHook, sessionHook, loadQuestionsAndAnswers, proposalsHook],
+    [questionsHook, refreshAll],
   );
 
-  // Wrap answerQuestion to refresh answers
   const handleAnswer = useCallback(
     async (questionId: string, text: string): Promise<boolean> => {
       const ok = await questionsHook.answerQuestion(questionId, text);
       if (ok) {
-        await sessionHook.refresh();
-        await loadQuestionsAndAnswers();
-        await proposalsHook.refresh();
+        await refreshAll();
       }
       return ok;
     },
-    [questionsHook, sessionHook, loadQuestionsAndAnswers, proposalsHook],
+    [questionsHook, refreshAll],
   );
 
-  // Wrap mark/skip/supersede to refresh
   const handleMarkAsked = useCallback(
     async (questionId: string) => {
       await questionsHook.markQuestionAsked(questionId);
-      await sessionHook.refresh();
+      await refreshAll();
     },
-    [questionsHook, sessionHook],
+    [questionsHook, refreshAll],
   );
 
   const handleSkip = useCallback(
     async (questionId: string) => {
       await questionsHook.skipQuestion(questionId);
-      await sessionHook.refresh();
+      await refreshAll();
     },
-    [questionsHook, sessionHook],
+    [questionsHook, refreshAll],
   );
 
   const handleSupersede = useCallback(
     async (questionId: string) => {
       await questionsHook.supersedeQuestion(questionId);
-      await sessionHook.refresh();
+      await refreshAll();
     },
-    [questionsHook, sessionHook],
+    [questionsHook, refreshAll],
   );
 
   const handleSelectSession = useCallback((sessionId: string) => {
@@ -161,8 +152,10 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     setSelectedQuestionId(questionId);
   }, []);
 
-  // Merge all errors
+  // 合并所有错误源
   const combinedError = sessionHook.error || questionsHook.error || proposalsHook.error;
+  // 版本冲突来自 session hook 或 questions hook
+  const hasVersionConflict = sessionHook.versionConflict || questionsHook.conflictNotice;
   const isAnyLoading =
     sessionsHook.isLoading ||
     sessionHook.isLoading ||
@@ -170,8 +163,8 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     proposalsHook.isLoading;
 
   const selectedQuestion = useMemo(
-    () => questions.find((q) => q.id === selectedQuestionId) ?? null,
-    [questions, selectedQuestionId],
+    () => questionsHook.questions.find((q) => q.id === selectedQuestionId) ?? null,
+    [questionsHook.questions, selectedQuestionId],
   );
 
   return (
@@ -193,8 +186,18 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
       )}
 
       {/* 版本冲突提示 */}
-      {sessionHook.versionConflict && (
-        <div className="grill-conflict-banner">会话已在其他操作中更新，数据已自动刷新。</div>
+      {hasVersionConflict && (
+        <div className="grill-conflict-banner">
+          <span>会话已在其他操作中更新，数据已自动刷新。</span>
+          <button
+            onClick={() => {
+              sessionHook.clearError();
+              questionsHook.clearConflictNotice();
+            }}
+          >
+            ✕
+          </button>
+        </div>
       )}
 
       <div className="grill-workbench-columns">
@@ -214,7 +217,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
           {sessionHook.session ? (
             <GrillSessionPanel
               session={sessionHook.session}
-              questions={questions}
+              questions={questionsHook.questions}
               isLoading={isAnyLoading}
               onStart={sessionHook.startSession}
               onPause={sessionHook.pauseSession}
@@ -244,7 +247,6 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
               sessionIsActive={sessionHook.session.status === 'ACTIVE'}
               currentAnswers={currentAnswers}
               proposals={proposalsHook.proposals.filter((p) =>
-                // Show proposals that reference answers for this question
                 p.basedOnAnswerIds.some((id) =>
                   currentAnswers.some((a) => a.id === id && a.questionId === selectedQuestion.id),
                 ),

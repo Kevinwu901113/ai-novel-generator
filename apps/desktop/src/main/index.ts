@@ -28,6 +28,7 @@ import {
   isValidGrillReviewProposalInput,
   isValidGrillListProposalsInput,
   isValidGrillListAnswerHistoryInput,
+  isValidGrillListQuestionsInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -295,6 +296,21 @@ ipcMain.handle(
       command: 'grill.listSessions',
       payload,
     })) as ReadonlyArray<GrillSessionPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_LIST_QUESTIONS,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillQuestionPublicData>> => {
+    if (!isValidGrillListQuestionsInput(input)) {
+      throw Object.assign(new Error('无效的问题列表输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.listQuestions',
+      payload: input,
+    })) as ReadonlyArray<GrillQuestionPublicData>;
   },
 );
 

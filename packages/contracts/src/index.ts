@@ -203,6 +203,7 @@ export const IPC_CHANNELS = {
   GRILL_CREATE_SESSION: 'ipc:grill-create-session',
   GRILL_GET_SESSION: 'ipc:grill-get-session',
   GRILL_LIST_SESSIONS: 'ipc:grill-list-sessions',
+  GRILL_LIST_QUESTIONS: 'ipc:grill-list-questions',
   GRILL_START_SESSION: 'ipc:grill-start-session',
   GRILL_PAUSE_SESSION: 'ipc:grill-pause-session',
   GRILL_RESUME_SESSION: 'ipc:grill-resume-session',
@@ -245,11 +246,18 @@ export interface ProviderAPI {
   testConnection(): Promise<ConnectionTestResult>;
 }
 
+/** 列出问题输入 */
+export interface GrillListQuestionsInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
 /** Grill-me API */
 export interface GrillAPI {
   createSession(input: GrillCreateSessionInput): Promise<GrillSessionPublicData>;
   getSession(projectId: string, sessionId: string): Promise<GrillSessionPublicData>;
   listSessions(projectId: string): Promise<ReadonlyArray<GrillSessionPublicData>>;
+  listQuestions(input: GrillListQuestionsInput): Promise<ReadonlyArray<GrillQuestionPublicData>>;
   startSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
   pauseSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
   resumeSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
@@ -706,6 +714,12 @@ export function isValidGrillReviewProposalInput(data: unknown): data is GrillRev
 }
 
 export function isValidGrillListProposalsInput(data: unknown): data is GrillListProposalsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
+}
+
+export function isValidGrillListQuestionsInput(data: unknown): data is GrillListQuestionsInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
