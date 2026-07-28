@@ -8,6 +8,7 @@ import type {
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
+import { GrillWorkbench } from './grill/GrillWorkbench';
 
 // ── 错误码中文映射 ────────────────────────────────────────────────
 
@@ -410,98 +411,85 @@ export function App() {
           </aside>
         )}
 
-        {/* 中栏：新建项目 / 项目详情 */}
-        <section className="panel panel-center">
-          <div className="panel-header">
-            <h2>{currentProject ? currentProject.name : '新建项目'}</h2>
-          </div>
-          <div className="panel-content">
-            {currentProject ? (
-              <div className="project-detail">
-                <div className="detail-section">
-                  <h3>项目名称</h3>
-                  <p className="detail-value">{currentProject.name}</p>
+        {/* 中栏：新建项目 / Grill 工作台 */}
+        {currentProject ? (
+          <section className="panel panel-center" style={{ padding: 0 }}>
+            <GrillWorkbench projectId={currentProject.id} />
+          </section>
+        ) : (
+          <section className="panel panel-center">
+            <div className="panel-header">
+              <h2>新建项目</h2>
+            </div>
+            <div className="panel-content">
+              {isDataServiceStarting ? (
+                <div className="empty-state">
+                  <p className="loading-indicator">⟳</p>
+                  <p>数据服务启动中，请稍候…</p>
                 </div>
-                <div className="detail-section">
-                  <h3>初始想法</h3>
-                  <p className="detail-idea">{currentProject.initialIdea}</p>
+              ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
+                <div className="empty-state">
+                  <p>数据服务不可用</p>
+                  <p className="empty-hint">无法创建项目，请检查数据服务状态</p>
+                  <button className="btn-retry" onClick={handleRetry}>
+                    重试数据服务
+                  </button>
                 </div>
-                <div className="detail-section">
-                  <h3>状态</h3>
-                  <p className="detail-value">{currentProject.status}</p>
-                </div>
-                <div className="detail-next-step">
-                  <p>下一阶段：需求理解与 Grill-me</p>
-                  <p className="empty-hint">（Grill-me 尚未实现）</p>
-                </div>
-              </div>
-            ) : isDataServiceStarting ? (
-              <div className="empty-state">
-                <p className="loading-indicator">⟳</p>
-                <p>数据服务启动中，请稍候…</p>
-              </div>
-            ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
-              <div className="empty-state">
-                <p>数据服务不可用</p>
-                <p className="empty-hint">无法创建项目，请检查数据服务状态</p>
-                <button className="btn-retry" onClick={handleRetry}>
-                  重试数据服务
-                </button>
-              </div>
-            ) : (
-              <div className="create-form">
-                <div className="form-field">
-                  <label htmlFor="project-name">项目名称</label>
-                  <input
-                    id="project-name"
-                    type="text"
-                    value={formName}
-                    onChange={(e) => {
-                      setFormName(e.target.value);
-                      setFormErrors((prev) => ({ ...prev, name: '' }));
-                    }}
-                    placeholder="给你的小说起个名字"
-                    maxLength={200}
-                    disabled={isCreating}
-                  />
-                  <div className="form-field-footer">
-                    {formErrors.name && <span className="form-error">{formErrors.name}</span>}
-                    <span className="char-count">
-                      {unicodeLength(formName.trim())} / {MAX_NAME_LENGTH}
-                    </span>
+              ) : (
+                <div className="create-form">
+                  <div className="form-field">
+                    <label htmlFor="project-name">项目名称</label>
+                    <input
+                      id="project-name"
+                      type="text"
+                      value={formName}
+                      onChange={(e) => {
+                        setFormName(e.target.value);
+                        setFormErrors((prev) => ({ ...prev, name: '' }));
+                      }}
+                      placeholder="给你的小说起个名字"
+                      maxLength={200}
+                      disabled={isCreating}
+                    />
+                    <div className="form-field-footer">
+                      {formErrors.name && <span className="form-error">{formErrors.name}</span>}
+                      <span className="char-count">
+                        {unicodeLength(formName.trim())} / {MAX_NAME_LENGTH}
+                      </span>
+                    </div>
                   </div>
-                </div>
 
-                <div className="form-field">
-                  <label htmlFor="project-idea">描述你想写的小说……</label>
-                  <textarea
-                    id="project-idea"
-                    value={formIdea}
-                    onChange={(e) => {
-                      setFormIdea(e.target.value);
-                      setFormErrors((prev) => ({ ...prev, initialIdea: '' }));
-                    }}
-                    placeholder="可以是模糊的想法、灵感片段、想写的题材……"
-                    rows={10}
-                    disabled={isCreating}
-                  />
-                  <div className="form-field-footer">
-                    {formErrors.initialIdea && (
-                      <span className="form-error">{formErrors.initialIdea}</span>
-                    )}
-                    <span className="char-count">
-                      {unicodeLength(formIdea.trim())} / {MAX_IDEA_LENGTH.toLocaleString()}
-                    </span>
+                  <div className="form-field">
+                    <label htmlFor="project-idea">描述你想写的小说……</label>
+                    <textarea
+                      id="project-idea"
+                      value={formIdea}
+                      onChange={(e) => {
+                        setFormIdea(e.target.value);
+                        setFormErrors((prev) => ({ ...prev, initialIdea: '' }));
+                      }}
+                      placeholder="可以是模糊的想法、灵感片段、想写的题材……"
+                      rows={10}
+                      disabled={isCreating}
+                    />
+                    <div className="form-field-footer">
+                      {formErrors.initialIdea && (
+                        <span className="form-error">{formErrors.initialIdea}</span>
+                      )}
+                      <span className="char-count">
+                        {unicodeLength(formIdea.trim())} / {MAX_IDEA_LENGTH.toLocaleString()}
+                      </span>
+                    </div>
                   </div>
-                </div>
 
-                <button className="btn-create" onClick={handleCreate} disabled={isCreating}>
-                  {isCreating ? '创建中…' : '创建项目'}
-                </button>
-              </div>
-            )}
-          </div>
-        </section>
+                  <button className="btn-create" onClick={handleCreate} disabled={isCreating}>
+                    {isCreating ? '创建中…' : '创建项目'}
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* 右栏：状态 */}
         {panelState.right && (
@@ -538,7 +526,7 @@ export function App() {
               </div>
               <div className="status-section">
                 <h3>当前阶段</h3>
-                <p>{currentProject ? '项目创建' : '—'}</p>
+                <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
               </div>
               {currentProject && (
                 <>

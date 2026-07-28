@@ -756,3 +756,780 @@ body {
   font-size: 12px;
   padding: 0 4px;
 }
+
+/* ── Grill 工作台 ────────────────────────────────────── */
+
+.grill-workbench {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.grill-workbench-columns {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.grill-workbench-left {
+  width: 240px;
+  min-width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.grill-workbench-center {
+  flex: 1;
+  border-right: 1px solid var(--color-border);
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.grill-workbench-right {
+  width: 320px;
+  min-width: 240px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* 错误和冲突横幅 */
+.grill-error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  border-bottom: 1px solid #fecaca;
+  flex-shrink: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-error-banner {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-bottom-color: #7f1d1d;
+  }
+}
+
+.grill-error-banner button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.grill-conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #fef3c7;
+  color: #92400e;
+  font-size: 13px;
+  border-bottom: 1px solid #fde68a;
+  flex-shrink: 0;
+}
+
+.grill-conflict-banner button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-conflict-banner {
+    background-color: #451a03;
+    color: #fbbf24;
+    border-bottom-color: #78350f;
+  }
+}
+
+/* Session 列表 */
+.grill-session-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.grill-session-list-header h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.grill-session-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding: 8px;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+}
+
+.grill-session-form input {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.grill-session-items {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.grill-session-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  gap: 4px;
+}
+
+.grill-session-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.grill-session-item.active {
+  background-color: var(--color-primary);
+  color: white;
+}
+
+.grill-session-item-goal {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grill-session-item-time {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.grill-session-item.active .grill-session-item-time {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* 状态标签 */
+.grill-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 10px;
+  align-self: flex-start;
+}
+
+.grill-status-badge.status-draft {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+.grill-status-badge.status-active {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.grill-status-badge.status-paused {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.grill-status-badge.status-completed {
+  color: #2563eb;
+  background-color: #dbeafe;
+}
+
+.grill-status-badge.status-abandoned {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+.grill-status-badge.status-planned {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+.grill-status-badge.status-asked {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.grill-status-badge.status-answered {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.grill-status-badge.status-skipped,
+.grill-status-badge.status-superseded {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+.grill-status-badge.status-proposed {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.grill-status-badge.status-accepted {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.grill-status-badge.status-rejected {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-status-badge.status-draft {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+  .grill-status-badge.status-active {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+  .grill-status-badge.status-paused {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+  .grill-status-badge.status-completed {
+    color: #3b82f6;
+    background-color: #172554;
+  }
+  .grill-status-badge.status-abandoned {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+  .grill-status-badge.status-planned {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+  .grill-status-badge.status-asked {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+  .grill-status-badge.status-answered {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+  .grill-status-badge.status-skipped,
+  .grill-status-badge.status-superseded {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+  .grill-status-badge.status-proposed {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+  .grill-status-badge.status-accepted {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+  .grill-status-badge.status-rejected {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+}
+
+/* Session 面板 */
+.grill-session-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.grill-session-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.grill-session-info h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+
+.grill-session-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grill-version {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+.grill-session-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.grill-session-actions button {
+  padding: 6px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.grill-session-actions button:hover:not(:disabled) {
+  background-color: var(--color-bg-secondary);
+}
+
+.grill-session-actions button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.grill-session-actions .btn-primary {
+  background-color: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.grill-session-actions .btn-primary:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.grill-session-actions .btn-danger {
+  background-color: #dc2626;
+  color: white;
+  border-color: #dc2626;
+}
+
+.grill-session-actions .btn-danger:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+/* 问题列表 */
+.grill-questions-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.grill-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.grill-section-header h4,
+.grill-section-header h5 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.grill-add-question-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.grill-add-question-form .form-field {
+  gap: 4px;
+}
+
+.grill-add-question-form .form-field label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.grill-add-question-form .form-field input,
+.grill-add-question-form .form-field textarea {
+  padding: 6px 10px;
+  font-size: 13px;
+  min-height: auto;
+}
+
+.grill-add-question-form .form-field textarea {
+  min-height: 60px;
+}
+
+.grill-question-items {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.grill-question-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  gap: 8px;
+}
+
+.grill-question-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.grill-question-item.active {
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-primary);
+}
+
+.grill-question-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.grill-question-topic {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grill-question-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.grill-session-timestamps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  border-top: 1px solid var(--color-border);
+  padding-top: 8px;
+  margin-top: 8px;
+}
+
+/* 小按钮 */
+.btn-small {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.btn-small:hover:not(:disabled) {
+  background-color: var(--color-bg-secondary);
+}
+
+.btn-small:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-small.btn-primary {
+  background-color: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.btn-small.btn-primary:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.btn-small.btn-danger {
+  background-color: #dc2626;
+  color: white;
+  border-color: #dc2626;
+}
+
+.btn-small.btn-danger:hover:not(:disabled) {
+  background-color: #b91c1c;
+}
+
+/* 空状态小号 */
+.empty-state-small {
+  padding: 16px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+/* 问题详情 */
+.grill-question-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.grill-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.grill-question-header h4 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.grill-question-text {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.grill-question-rationale {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
+/* 当前答案 */
+.grill-current-answer {
+  padding: 12px;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.grill-current-answer h5 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 6px;
+}
+
+.grill-answer-text {
+  font-size: 14px;
+  color: var(--color-text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.grill-answer-time {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+  display: block;
+}
+
+.grill-revision {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+/* 回答表单 */
+.grill-answer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grill-answer-form h5 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.grill-answer-form textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.grill-answer-form textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.grill-answer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* 答案历史 */
+.grill-answer-history {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.grill-answer-history h5 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 8px;
+}
+
+.grill-answer-history ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grill-history-item {
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+  font-size: 13px;
+}
+
+.grill-history-item.superseded {
+  opacity: 0.6;
+}
+
+.grill-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+
+.grill-badge-old {
+  font-size: 10px;
+  color: #b91c1c;
+  background: #fef2f2;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+/* 提案列表 */
+.grill-proposals-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.grill-proposal-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--color-bg-secondary);
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
+
+.grill-proposal-form .form-field {
+  gap: 4px;
+}
+
+.grill-proposal-form .form-field label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.grill-proposal-form .form-field input,
+.grill-proposal-form .form-field textarea {
+  padding: 6px 10px;
+  font-size: 13px;
+  min-height: auto;
+}
+
+.grill-proposal-form .form-field textarea {
+  min-height: 60px;
+}
+
+.grill-proposal-form .form-field input[type='number'] {
+  width: 100px;
+}
+
+.grill-proposal-items {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.grill-proposal-item {
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.grill-proposal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.grill-proposal-header strong {
+  font-size: 14px;
+}
+
+.grill-proposal-value {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  background: var(--color-bg-secondary);
+  padding: 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-bottom: 6px;
+}
+
+.grill-proposal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+}
+
+.grill-proposal-actions {
+  display: flex;
+  gap: 8px;
+}

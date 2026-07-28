@@ -17,7 +17,7 @@ import { createRequire } from 'node:module';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const outDir = path.resolve(__dirname, '..', 'out');
 
-/** Check asar contents for forbidden files. */
+/** Check asar contents for forbidden files and verify grill API presence. */
 function checkAsarContents(appPath) {
   const require = createRequire(import.meta.url);
   let asar;
@@ -64,6 +64,44 @@ function checkAsarContents(appPath) {
       console.error(`  - ${v}`);
     }
     return false;
+  }
+
+  // Verify grill API channels are present in preload
+  const preloadFile = files.find((f) => f.includes('preload') && f.endsWith('index.js'));
+  if (preloadFile) {
+    // asar paths may have leading slash; extractFile expects no leading slash
+    const extractPath = preloadFile.startsWith('/') ? preloadFile.slice(1) : preloadFile;
+    const preloadContent = asar.extractFile(asarPath, extractPath).toString();
+    const grillChannels = [
+      'ipc:grill-create-session',
+      'ipc:grill-get-session',
+      'ipc:grill-list-sessions',
+      'ipc:grill-answer-question',
+      'ipc:grill-create-proposal',
+    ];
+    const missingChannels = grillChannels.filter((ch) => !preloadContent.includes(ch));
+    if (missingChannels.length > 0) {
+      console.error('[smoke-test] preload missing grill channels:', missingChannels);
+      return false;
+    }
+    // Verify grill API object is exposed
+    if (!preloadContent.includes('grill:')) {
+      console.error('[smoke-test] preload does not expose grill API');
+      return false;
+    }
+    console.log('[smoke-test] grill API presence check passed');
+  }
+
+  // Verify no workspace runtime packages in preload
+  if (preloadFile) {
+    const extractPath2 = preloadFile.startsWith('/') ? preloadFile.slice(1) : preloadFile;
+    const preloadContent = asar.extractFile(asarPath, extractPath2).toString();
+    const forbiddenImports = ['require("@ai-novel/', "require('@ai-novel/"];
+    const hasForbidden = forbiddenImports.some((imp) => preloadContent.includes(imp));
+    if (hasForbidden) {
+      console.error('[smoke-test] preload references workspace runtime packages');
+      return false;
+    }
   }
 
   console.log('[smoke-test] asar content check passed');

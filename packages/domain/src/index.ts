@@ -48,8 +48,8 @@ export type ProjectStatus =
 /** 任务状态 */
 export type TaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'STALE';
 
-/** 任务类型 —— 本阶段仅支持测试型 */
-export type TaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST';
+/** 任务类型 */
+export type TaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST' | 'GRILL_QUESTION_PLAN';
 
 /** 模型调用状态 */
 export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

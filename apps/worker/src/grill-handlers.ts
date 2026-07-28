@@ -15,6 +15,7 @@ import {
   isValidGrillReviewProposalInput,
   isValidGrillListProposalsInput,
   isValidGrillListAnswerHistoryInput,
+  isValidGrillListQuestionsInput,
   type GrillSessionPublicData,
   type GrillQuestionPublicData,
   type GrillAnswerPublicData,
@@ -630,6 +631,22 @@ function handleGetCurrentAnswers(payload: unknown, ctx: GrillHandlerContext): un
   }
 }
 
+function handleListQuestions(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillListQuestionsInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的问题列表输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildDeps(projDb, ctx);
+    // Verify session exists
+    getGrillSession(deps, { sessionId: payload.sessionId });
+    // List questions from repository
+    return deps.questionRepo.listBySession(payload.sessionId).map(toQuestionPublicData);
+  } finally {
+    projDb.close();
+  }
+}
+
 function handleListAnswerHistory(payload: unknown, ctx: GrillHandlerContext): unknown {
   if (!isValidGrillListAnswerHistoryInput(payload)) {
     throw new AppError('GRILL_VALIDATION_ERROR', '无效的答案历史输入');
@@ -716,6 +733,8 @@ export function dispatchGrillCommand(
       return handleGetSession(payload, ctx);
     case 'grill.listSessions':
       return handleListSessions(payload, ctx);
+    case 'grill.listQuestions':
+      return handleListQuestions(payload, ctx);
     case 'grill.startSession':
       return handleSessionTransition(payload, ctx, 'start');
     case 'grill.pauseSession':

@@ -901,3 +901,162 @@ describe('Grill 真实 SQLite 完整性', () => {
     expect(proposals).toHaveLength(0);
   });
 });
+
+// ── grill.listQuestions 测试 ──────────────────────────────────────
+
+describe('grill.listQuestions', () => {
+  it('返回 session 下的所有问题', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+
+    // 创建 session
+    const session = dispatchGrillCommand(
+      'grill.createSession',
+      { projectId, goal: '测试目标' },
+      ctx,
+    ) as { id: string; version: number };
+
+    // 启动 session
+    const started = dispatchGrillCommand(
+      'grill.startSession',
+      { projectId, sessionId: session.id, expectedVersion: session.version },
+      ctx,
+    ) as { id: string; version: number };
+
+    // 添加问题（使用启动后的 version）
+    dispatchGrillCommand(
+      'grill.addQuestions',
+      {
+        projectId,
+        sessionId: session.id,
+        expectedVersion: started.version,
+        questions: [
+          { topic: '主题A', text: '问题A', rationale: '理由A', dependsOnQuestionIds: [] },
+          { topic: '主题B', text: '问题B', rationale: '理由B', dependsOnQuestionIds: [] },
+        ],
+      },
+      ctx,
+    );
+
+    // 列出问题
+    const listed = dispatchGrillCommand(
+      'grill.listQuestions',
+      { projectId, sessionId: session.id },
+      ctx,
+    ) as Array<{ id: string; topic: string; text: string; status: string }>;
+
+    expect(listed).toHaveLength(2);
+    expect(listed[0].topic).toBe('主题A');
+    expect(listed[1].topic).toBe('主题B');
+    expect(listed[0].status).toBe('PLANNED');
+    expect(listed[0].text).toBe('问题A');
+  });
+
+  it('空 session 返回空数组', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+
+    const session = dispatchGrillCommand(
+      'grill.createSession',
+      { projectId, goal: '测试目标' },
+      ctx,
+    ) as { id: string };
+
+    const listed = dispatchGrillCommand(
+      'grill.listQuestions',
+      { projectId, sessionId: session.id },
+      ctx,
+    ) as unknown[];
+
+    expect(listed).toHaveLength(0);
+  });
+
+  it('session 不存在时抛出 GRILL_SESSION_NOT_FOUND', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand('grill.listQuestions', { projectId, sessionId: 'nonexistent' }, ctx),
+      'GRILL_SESSION_NOT_FOUND',
+    );
+  });
+
+  it('project 不存在时抛出 PROJECT_NOT_FOUND', () => {
+    const ctx = createContext();
+
+    expectErrorCode(
+      () =>
+        dispatchGrillCommand(
+          'grill.listQuestions',
+          { projectId: 'nonexistent', sessionId: 'sess-1' },
+          ctx,
+        ),
+      'PROJECT_NOT_FOUND',
+    );
+  });
+
+  it('DTO 不暴露内部 JSON 字符串', () => {
+    const { projectId } = createProjectWithDb();
+    const ctx = createContext();
+
+    const session = dispatchGrillCommand(
+      'grill.createSession',
+      { projectId, goal: '测试目标' },
+      ctx,
+    ) as { id: string; version: number };
+
+    const started = dispatchGrillCommand(
+      'grill.startSession',
+      { projectId, sessionId: session.id, expectedVersion: session.version },
+      ctx,
+    ) as { id: string; version: number };
+
+    dispatchGrillCommand(
+      'grill.addQuestions',
+      {
+        projectId,
+        sessionId: session.id,
+        expectedVersion: started.version,
+        questions: [
+          {
+            topic: '主题',
+            text: '问题',
+            rationale: '理由',
+            dependsOnQuestionIds: [],
+          },
+        ],
+      },
+      ctx,
+    );
+
+    const listed = dispatchGrillCommand(
+      'grill.listQuestions',
+      { projectId, sessionId: session.id },
+      ctx,
+    ) as Array<{ dependsOnQuestionIds: unknown }>;
+
+    // dependsOnQuestionIds 应该是结构化数组，不是 JSON 字符串
+    expect(Array.isArray(listed[0].dependsOnQuestionIds)).toBe(true);
+    expect(typeof listed[0].dependsOnQuestionIds).not.toBe('string');
+  });
+
+  it('输入验证失败时抛出 GRILL_VALIDATION_ERROR', () => {
+    const ctx = createContext();
+
+    expectErrorCode(
+      () => dispatchGrillCommand('grill.listQuestions', null, ctx),
+      'GRILL_VALIDATION_ERROR',
+    );
+
+    expectErrorCode(
+      () => dispatchGrillCommand('grill.listQuestions', {}, ctx),
+      'GRILL_VALIDATION_ERROR',
+    );
+
+    expectErrorCode(
+      () => dispatchGrillCommand('grill.listQuestions', { projectId: 'p' }, ctx),
+      'GRILL_VALIDATION_ERROR',
+    );
+  });
+});

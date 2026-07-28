@@ -162,6 +162,29 @@
 - 原子提交 success/failure
 - prompt hash 而非 prompt 明文
 
+### Grill-me 工作台（M2-A1.5）
+
+**数据流**：
+
+```
+Renderer (React)
+  → window.desktop.grill.* (preload contextBridge)
+    → ipcMain.handle (main process)
+      → forwardToWorker (worker-client RPC)
+        → dispatchGrillCommand (worker)
+          → application use cases
+            → domain rules + database
+```
+
+**约束**：
+
+- Renderer 只调用 `window.desktop.grill.*`，不直接访问 SQLite
+- Preload 编译为自包含 CJS，不运行时导入 workspace ESM 包
+- 所有 mutation 携带 `expectedVersion`（乐观并发控制）
+- 错误码映射为中文消息，不暴露内部 ID、路径或堆栈
+- 版本冲突 → 自动刷新 + 用户提示，不自动重试 mutation
+- 终态 session 禁用内容修改控件，后端为最终约束来源
+
 ## 依赖规则
 
 1. **单向依赖**：上层可以依赖下层，下层不能依赖上层

@@ -201,7 +201,8 @@ export interface ProjectDatabaseManager {
 export type DbTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED' | 'STALE';
 
 /** 任务类型 */
-export type DbTaskType = 'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST';
+export type DbTaskType =
+  'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST' | 'GRILL_QUESTION_PLAN';
 
 /** 任务行 */
 export interface TaskRow {

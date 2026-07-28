@@ -200,6 +200,25 @@ export const IPC_CHANNELS = {
   TASK_GET: 'ipc:task-get',
   TASK_LIST: 'ipc:task-list',
   TASK_GET_STATS: 'ipc:task-get-stats',
+  GRILL_CREATE_SESSION: 'ipc:grill-create-session',
+  GRILL_GET_SESSION: 'ipc:grill-get-session',
+  GRILL_LIST_SESSIONS: 'ipc:grill-list-sessions',
+  GRILL_LIST_QUESTIONS: 'ipc:grill-list-questions',
+  GRILL_START_SESSION: 'ipc:grill-start-session',
+  GRILL_PAUSE_SESSION: 'ipc:grill-pause-session',
+  GRILL_RESUME_SESSION: 'ipc:grill-resume-session',
+  GRILL_COMPLETE_SESSION: 'ipc:grill-complete-session',
+  GRILL_ABANDON_SESSION: 'ipc:grill-abandon-session',
+  GRILL_ADD_QUESTIONS: 'ipc:grill-add-questions',
+  GRILL_MARK_QUESTION_ASKED: 'ipc:grill-mark-question-asked',
+  GRILL_ANSWER_QUESTION: 'ipc:grill-answer-question',
+  GRILL_SKIP_QUESTION: 'ipc:grill-skip-question',
+  GRILL_SUPERSEDE_QUESTION: 'ipc:grill-supersede-question',
+  GRILL_GET_CURRENT_ANSWERS: 'ipc:grill-get-current-answers',
+  GRILL_LIST_ANSWER_HISTORY: 'ipc:grill-list-answer-history',
+  GRILL_CREATE_PROPOSAL: 'ipc:grill-create-proposal',
+  GRILL_REVIEW_PROPOSAL: 'ipc:grill-review-proposal',
+  GRILL_LIST_PROPOSALS: 'ipc:grill-list-proposals',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -227,6 +246,40 @@ export interface ProviderAPI {
   testConnection(): Promise<ConnectionTestResult>;
 }
 
+/** 列出问题输入 */
+export interface GrillListQuestionsInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
+/** Grill-me API */
+export interface GrillAPI {
+  createSession(input: GrillCreateSessionInput): Promise<GrillSessionPublicData>;
+  getSession(projectId: string, sessionId: string): Promise<GrillSessionPublicData>;
+  listSessions(projectId: string): Promise<ReadonlyArray<GrillSessionPublicData>>;
+  listQuestions(input: GrillListQuestionsInput): Promise<ReadonlyArray<GrillQuestionPublicData>>;
+  startSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
+  pauseSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
+  resumeSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
+  completeSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
+  abandonSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData>;
+  addQuestions(input: GrillAddQuestionsInput): Promise<ReadonlyArray<GrillQuestionPublicData>>;
+  markQuestionAsked(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData>;
+  answerQuestion(input: GrillAnswerQuestionInput): Promise<GrillAnswerPublicData>;
+  skipQuestion(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData>;
+  supersedeQuestion(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData>;
+  getCurrentAnswers(
+    projectId: string,
+    sessionId: string,
+  ): Promise<ReadonlyArray<GrillAnswerPublicData>>;
+  listAnswerHistory(
+    input: GrillListAnswerHistoryInput,
+  ): Promise<ReadonlyArray<GrillAnswerPublicData>>;
+  createProposal(input: GrillCreateProposalInput): Promise<GrillProposalPublicData>;
+  reviewProposal(input: GrillReviewProposalInput): Promise<GrillProposalPublicData>;
+  listProposals(input: GrillListProposalsInput): Promise<ReadonlyArray<GrillProposalPublicData>>;
+}
+
 /** 数据服务状态 */
 export type DataServiceStatus = 'starting' | 'ready' | 'failed' | 'disconnected';
 
@@ -243,6 +296,7 @@ export interface DesktopAPI {
   projects: ProjectsAPI;
   provider: ProviderAPI;
   tasks: TasksAPI;
+  grill: GrillAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -660,6 +714,12 @@ export function isValidGrillReviewProposalInput(data: unknown): data is GrillRev
 }
 
 export function isValidGrillListProposalsInput(data: unknown): data is GrillListProposalsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
+}
+
+export function isValidGrillListQuestionsInput(data: unknown): data is GrillListQuestionsInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
