@@ -143,6 +143,19 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * 异步渲染组件并等待所有状态更新完成。
+ * 使用 act() 包裹 render 和 flushMicrotasks 以避免 act warnings。
+ */
+async function renderAsync(ui: React.ReactElement) {
+  let result: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(ui);
+    await flushMicrotasks();
+  });
+  return result!;
+}
+
 // ── Mock DesktopAPI 工厂 ────────────────────────────────────────────
 
 function createMockTasksAPI(
@@ -202,8 +215,7 @@ describe('TaskCenter DOM 交互', () => {
   // 1. 当前项目加载 tasks.list 和 getStats
   it('加载时调用 tasks.list 和 getStats', async () => {
     const api = setupDesktop(createMockTasksAPI());
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledWith(mockProjectId);
     expect(api.getStats).toHaveBeenCalledWith(mockProjectId);
@@ -212,8 +224,7 @@ describe('TaskCenter DOM 交互', () => {
   // 2. 列表 createdAt 降序
   it('列表按 createdAt 降序排列', async () => {
     setupDesktop(createMockTasksAPI());
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     const items = screen.getAllByTestId('task-item');
     expect(items.length).toBeGreaterThanOrEqual(2);
@@ -223,8 +234,7 @@ describe('TaskCenter DOM 交互', () => {
   // 3. 状态筛选
   it('状态筛选只显示匹配的任务', async () => {
     setupDesktop(createMockTasksAPI());
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getAllByTestId('task-item').length).toBe(2);
 
@@ -246,8 +256,7 @@ describe('TaskCenter DOM 交互', () => {
   it('类型筛选只显示匹配的任务', async () => {
     const tasks = [mockTask1, mockTaskUnknownType];
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue(tasks) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getAllByTestId('task-item').length).toBe(2);
 
@@ -266,8 +275,7 @@ describe('TaskCenter DOM 交互', () => {
   // 5. 未知任务类型 fallback
   it('未知任务类型显示安全 fallback', async () => {
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTaskUnknownType]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getAllByText(/未知任务/).length).toBeGreaterThanOrEqual(1);
   });
@@ -275,8 +283,7 @@ describe('TaskCenter DOM 交互', () => {
   // 6. 点击任务显示详情
   it('点击任务显示详情', async () => {
     setupDesktop(createMockTasksAPI());
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getAllByTestId('task-item').length).toBeGreaterThan(0);
     expect(screen.getByTestId('task-detail-empty')).toBeInTheDocument();
@@ -291,8 +298,7 @@ describe('TaskCenter DOM 交互', () => {
   // 7. 不显示完整 task/project ID
   it('不显示完整 task ID 或 project ID', async () => {
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTask1]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();
@@ -309,8 +315,7 @@ describe('TaskCenter DOM 交互', () => {
   // 8. MODEL_INVOCATION_TEST 安全结果
   it('MODEL_INVOCATION_TEST 有效结果正确显示', async () => {
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTask1]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();
@@ -324,8 +329,7 @@ describe('TaskCenter DOM 交互', () => {
   // 9. 未知类型不渲染原始 result
   it('未知类型不渲染原始 result', async () => {
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTaskUnknownType]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();
@@ -342,8 +346,7 @@ describe('TaskCenter DOM 交互', () => {
     setupDesktop(
       createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTaskWithUnsafeResult]) }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();
@@ -358,8 +361,7 @@ describe('TaskCenter DOM 交互', () => {
   // 11. error path/stack 清理
   it('错误消息中的路径和 stack 被清理', async () => {
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([mockTaskWithStackError]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();
@@ -387,8 +389,7 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockRejectedValue(new Error('网络错误')),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getByTestId('task-error')).toBeInTheDocument();
     expect(screen.getByText(/网络错误/)).toBeInTheDocument();
@@ -401,8 +402,7 @@ describe('TaskCenter DOM 交互', () => {
         getStats: vi.fn().mockRejectedValue(new Error('stats 错误')),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getAllByTestId('task-item').length).toBe(2);
     expect(screen.getByText(/统计加载失败/)).toBeInTheDocument();
@@ -415,13 +415,14 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending, mockTask1]),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(2);
   });
@@ -433,13 +434,14 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTask1, mockTask2]),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(6000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
   });
@@ -451,20 +453,26 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending]),
       }),
     );
-    const { rerender } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let rerender: ReturnType<typeof render>['rerender'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      rerender = result.rerender;
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
-    act(() => {
+    await act(async () => {
       rerender(<TaskCenter projectId="proj-00000002" />);
+      await flushMicrotasks();
     });
-    await flushMicrotasks();
 
     expect(api.list).toHaveBeenCalledWith('proj-00000002');
 
-    await vi.advanceTimersByTimeAsync(4000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledWith('proj-00000002');
   });
@@ -483,8 +491,12 @@ describe('TaskCenter DOM 交互', () => {
       }),
     );
 
-    const { rerender } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let rerender: ReturnType<typeof render>['rerender'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      rerender = result.rerender;
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
@@ -512,15 +524,21 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending]),
       }),
     );
-    const { unmount } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let unmount: ReturnType<typeof render>['unmount'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      unmount = result.unmount;
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
     unmount();
 
-    await vi.advanceTimersByTimeAsync(6000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
   });
@@ -532,16 +550,19 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending]),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
-    setDocumentHidden(true);
-    await flushMicrotasks();
+    await act(async () => {
+      setDocumentHidden(true);
+      await flushMicrotasks();
+    });
 
-    await vi.advanceTimersByTimeAsync(6000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
   });
@@ -553,8 +574,7 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending]),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
@@ -562,20 +582,26 @@ describe('TaskCenter DOM 交互', () => {
     setDocumentHidden(true);
     await flushMicrotasks();
 
-    await vi.advanceTimersByTimeAsync(6000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
     // 恢复可见 → 立即刷新
-    setDocumentHidden(false);
-    await flushMicrotasks();
+    await act(async () => {
+      setDocumentHidden(false);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(2);
 
     // 再推进 2 秒 → 继续轮询
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(3);
   });
@@ -587,24 +613,27 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockResolvedValue([mockTaskPending]),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
     // 反复切换 3 次
     for (let i = 0; i < 3; i++) {
-      setDocumentHidden(true);
-      await flushMicrotasks();
-      setDocumentHidden(false);
-      await flushMicrotasks();
+      await act(async () => {
+        setDocumentHidden(true);
+        await flushMicrotasks();
+        setDocumentHidden(false);
+        await flushMicrotasks();
+      });
     }
 
     const countBefore = api.list.mock.calls.length;
 
     // 推进 2 秒 — 应只有一次轮询触发
-    await vi.advanceTimersByTimeAsync(2000);
-    await flushMicrotasks();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+      await flushMicrotasks();
+    });
 
     expect(api.list.mock.calls.length).toBe(countBefore + 1);
   });
@@ -627,22 +656,28 @@ describe('TaskCenter DOM 交互', () => {
       }),
     );
 
-    const { rerender } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let rerender: ReturnType<typeof render>['rerender'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      rerender = result.rerender;
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
     // 切换到项目 B
-    act(() => {
+    await act(async () => {
       rerender(<TaskCenter projectId="proj-00000002" />);
+      await flushMicrotasks();
     });
-    await flushMicrotasks();
 
     expect(api.list).toHaveBeenCalledTimes(2);
 
     // A 请求返回 — 不应解除 B 的 lock
-    deferredA.resolve([mockTaskPending]);
-    await flushMicrotasks();
+    await act(async () => {
+      deferredA.resolve([mockTaskPending]);
+      await flushMicrotasks();
+    });
 
     // B 请求返回
     await act(async () => {
@@ -653,10 +688,10 @@ describe('TaskCenter DOM 交互', () => {
     expect(screen.getAllByTestId('task-item').length).toBe(1);
 
     // 再次刷新应可以正常工作（B 的 lock 已解除）
-    act(() => {
+    await act(async () => {
       screen.getByTestId('task-refresh-btn').click();
+      await flushMicrotasks();
     });
-    await flushMicrotasks();
 
     expect(api.list).toHaveBeenCalledTimes(3);
   });
@@ -676,8 +711,12 @@ describe('TaskCenter DOM 交互', () => {
       }),
     );
 
-    const { rerender } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let rerender: ReturnType<typeof render>['rerender'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      rerender = result.rerender;
+      await flushMicrotasks();
+    });
 
     expect(api.list).toHaveBeenCalledTimes(1);
 
@@ -691,17 +730,20 @@ describe('TaskCenter DOM 交互', () => {
 
     // 重复点击刷新 — B 的请求仍在进行中
     const btn = screen.getByTestId('task-refresh-btn');
-    act(() => {
+    await act(async () => {
       btn.click();
       btn.click();
       btn.click();
+      await flushMicrotasks();
     });
 
     // 仍然只有 2 次调用
     expect(api.list).toHaveBeenCalledTimes(2);
 
-    deferredB.resolve([mockTask1]);
-    await flushMicrotasks();
+    await act(async () => {
+      deferredB.resolve([mockTask1]);
+      await flushMicrotasks();
+    });
   });
 
   // 25. list rejection 含 /Users/... 时 DOM 不泄露
@@ -711,8 +753,7 @@ describe('TaskCenter DOM 交互', () => {
         list: vi.fn().mockRejectedValue(new Error('query failed at /Users/foo/db.sqlite')),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getByTestId('task-error')).toBeInTheDocument();
 
@@ -731,8 +772,7 @@ describe('TaskCenter DOM 交互', () => {
           .mockRejectedValue(new Error('Error\n    at Object.<anonymous> (data.sqlite)')),
       }),
     );
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     expect(screen.getByText(/统计加载失败/)).toBeInTheDocument();
 
@@ -745,8 +785,12 @@ describe('TaskCenter DOM 交互', () => {
   // 27. 切换项目重置 status/type filter
   it('切换项目重置 status/type filter', async () => {
     const api = setupDesktop(createMockTasksAPI());
-    const { rerender } = render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    let rerender: ReturnType<typeof render>['rerender'];
+    await act(async () => {
+      const result = render(<TaskCenter projectId={mockProjectId} />);
+      rerender = result.rerender;
+      await flushMicrotasks();
+    });
 
     expect(screen.getAllByTestId('task-item').length).toBe(2);
 
@@ -764,10 +808,10 @@ describe('TaskCenter DOM 交互', () => {
 
     // 切换项目
     api.list.mockResolvedValue([mockTask1]);
-    act(() => {
+    await act(async () => {
       rerender(<TaskCenter projectId="proj-00000002" />);
+      await flushMicrotasks();
     });
-    await flushMicrotasks();
 
     expect(screen.getByTestId('status-filter')).toHaveValue('ALL');
   });
@@ -781,8 +825,7 @@ describe('TaskCenter DOM 交互', () => {
       finishedAt: '2024-01-03T00:02:00Z',
     };
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue([grillTask]) }));
-    render(<TaskCenter projectId={mockProjectId} />);
-    await flushMicrotasks();
+    await renderAsync(<TaskCenter projectId={mockProjectId} />);
 
     act(() => {
       screen.getAllByTestId('task-item')[0].click();

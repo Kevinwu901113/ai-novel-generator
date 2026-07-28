@@ -10,32 +10,14 @@ import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
 import { GrillWorkbench } from './grill/GrillWorkbench';
 import { TaskCenter } from './task-center/TaskCenter';
-
-// ── 错误码中文映射 ────────────────────────────────────────────────
-
-const ERROR_CODE_MESSAGES: Record<string, string> = {
-  PROVIDER_NOT_CONFIGURED: '模型提供商未配置',
-  API_KEY_REQUIRED: '请先配置 API Key',
-  API_KEY_STORE_FAILED: '无法保存 API Key',
-  API_KEY_READ_FAILED: '无法读取 API Key',
-  API_KEY_DELETE_FAILED: '无法删除 API Key',
-  PROVIDER_CONNECTION_FAILED: '连接失败',
-  PROVIDER_AUTH_FAILED: '认证失败，请检查 API Key',
-  PROVIDER_ACCESS_DENIED: '访问被拒绝',
-  PROVIDER_MODEL_UNAVAILABLE: '模型不可用',
-  PROVIDER_RATE_LIMITED: '请求频率超限，请稍后重试',
-  PROVIDER_TIMEOUT: '连接超时',
-  PROVIDER_RESPONSE_INVALID: '响应格式异常',
-  NETWORK_UNAVAILABLE: '网络不可用',
-  WORKER_UNAVAILABLE: '数据服务不可用',
-};
-
-const MAX_NAME_LENGTH = 100;
-const MAX_IDEA_LENGTH = 20_000;
-
-function unicodeLength(str: string): number {
-  return [...str].length;
-}
+import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
+import { toSafeUserError } from './safety/safe-error';
+import {
+  ProjectListRegion,
+  CreateProjectRegion,
+  ProjectStatusRegion,
+  ProviderRegion,
+} from './regions';
 
 export function App() {
   const [panelState, setPanelState] = useState<PanelState>(INITIAL_PANEL_STATE);
@@ -50,22 +32,11 @@ export function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 表单状态
-  const [formName, setFormName] = useState('');
-  const [formIdea, setFormIdea] = useState('');
-  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
-  const [isCreating, setIsCreating] = useState(false);
-
   // 追踪是否已加载过项目列表
   const hasLoadedProjects = useRef(false);
 
   // 提供商状态
   const [providerState, setProviderState] = useState<ProviderPublicState | null>(null);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [isSavingKey, setIsSavingKey] = useState(false);
-  const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-  const [providerError, setProviderError] = useState<string | null>(null);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setPanelState((prev) => togglePanel(prev, panel));
@@ -102,7 +73,6 @@ export function App() {
         if (cancelled) return;
         setDataServiceStatus(result.status);
 
-        // 如果还在 starting，继续轮询
         if (result.status === 'starting') {
           timer = setTimeout(poll, 500);
         }
@@ -127,9 +97,8 @@ export function App() {
       const list = await window.desktop.projects.list();
       setProjects(list);
       hasLoadedProjects.current = true;
-    } catch (err) {
+    } catch {
       // 列表加载失败不阻塞
-      console.error('Failed to load projects:', err);
     }
   }, []);
 
@@ -138,9 +107,8 @@ export function App() {
     try {
       const state = await window.desktop.provider.getState();
       setProviderState(state);
-    } catch (err) {
+    } catch {
       // 提供商状态加载失败不阻塞
-      console.error('Failed to load provider state:', err);
     }
   }, []);
 
@@ -150,64 +118,30 @@ export function App() {
     }
   }, [dataServiceStatus, loadProjects]);
 
-  // 数据服务就绪后加载提供商状态
   useEffect(() => {
     if (dataServiceStatus === 'ready') {
       void loadProviderState();
     }
   }, [dataServiceStatus, loadProviderState]);
 
-  // 验证表单
-  const validateForm = useCallback((): boolean => {
-    const errors: Record<string, string> = {};
-
-    const nameTrimmed = formName.trim();
-    if (nameTrimmed.length === 0) {
-      errors.name = '项目名称不能为空';
-    } else if (unicodeLength(nameTrimmed) > MAX_NAME_LENGTH) {
-      errors.name = `项目名称不能超过 ${MAX_NAME_LENGTH} 个字符`;
-    }
-
-    const ideaTrimmed = formIdea.trim();
-    if (ideaTrimmed.length === 0) {
-      errors.initialIdea = '初始想法不能为空';
-    } else if (unicodeLength(ideaTrimmed) > MAX_IDEA_LENGTH) {
-      errors.initialIdea = `初始想法不能超过 ${MAX_IDEA_LENGTH} 个字符`;
-    }
-
-    setFormErrors(errors);
-    return Object.keys(errors).length === 0;
-  }, [formName, formIdea]);
-
   // 创建项目
-  const handleCreate = useCallback(async () => {
-    if (isCreating || dataServiceStatus !== 'ready') return;
-    if (!validateForm()) return;
-
-    setIsCreating(true);
-    setError(null);
-
-    try {
-      const result = await window.desktop.projects.create({
-        name: formName.trim(),
-        initialIdea: formIdea.trim(),
-      });
-
-      setFormName('');
-      setFormIdea('');
-      setFormErrors({});
-      await loadProjects();
-
-      const project = await window.desktop.projects.open(result.id);
-      setCurrentProject(project);
-    } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '创建项目失败';
-      setError(code ? `[${code}] ${message}` : message);
-    } finally {
-      setIsCreating(false);
-    }
-  }, [formName, formIdea, isCreating, dataServiceStatus, validateForm, loadProjects]);
+  const handleCreate = useCallback(
+    async (name: string, idea: string): Promise<boolean> => {
+      setError(null);
+      try {
+        const result = await window.desktop.projects.create({ name, initialIdea: idea });
+        await loadProjects();
+        const project = await window.desktop.projects.open(result.id);
+        setCurrentProject(project);
+        return true;
+      } catch (err) {
+        const safe = toSafeUserError(err, '创建项目失败');
+        setError(safe.message);
+        return false;
+      }
+    },
+    [loadProjects],
+  );
 
   // 打开项目
   const handleOpenProject = useCallback(
@@ -221,9 +155,8 @@ export function App() {
         setCurrentProject(project);
         await loadProjects();
       } catch (err) {
-        const code = (err as Error & { code?: string }).code;
-        const message = err instanceof Error ? err.message : '打开项目失败';
-        setError(code ? `[${code}] ${message}` : message);
+        const safe = toSafeUserError(err, '打开项目失败');
+        setError(safe.message);
       } finally {
         setIsLoading(false);
       }
@@ -240,75 +173,30 @@ export function App() {
     }
   }, []);
 
-  // 保存 API Key
-  const handleSaveApiKey = useCallback(async () => {
-    if (isSavingKey || dataServiceStatus !== 'ready') return;
-    const trimmed = apiKeyInput.trim();
-    if (!trimmed) return;
+  // 新建项目按钮
+  const handleNewProject = useCallback(() => {
+    setCurrentProject(null);
+    setError(null);
+  }, []);
 
-    setIsSavingKey(true);
-    setProviderError(null);
+  // Provider 操作
+  const handleSaveApiKey = useCallback(async (apiKey: string) => {
+    const state = await window.desktop.provider.saveApiKey({ apiKey });
+    setProviderState(state);
+  }, []);
 
-    try {
-      const state = await window.desktop.provider.saveApiKey({ apiKey: trimmed });
-      setProviderState(state);
-      setApiKeyInput('');
-    } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '保存失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
-    } finally {
-      setIsSavingKey(false);
-    }
-  }, [apiKeyInput, isSavingKey, dataServiceStatus]);
-
-  // 删除 API Key
   const handleDeleteApiKey = useCallback(async () => {
-    if (dataServiceStatus !== 'ready') return;
+    const state = await window.desktop.provider.deleteApiKey();
+    setProviderState(state);
+  }, []);
 
-    setProviderError(null);
-
-    try {
-      const state = await window.desktop.provider.deleteApiKey();
-      setProviderState(state);
-      setDeleteConfirmVisible(false);
-    } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '删除失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
-    }
-  }, [dataServiceStatus]);
-
-  // 测试连接
   const handleTestConnection = useCallback(async () => {
-    if (isTestingConnection || dataServiceStatus !== 'ready') return;
-
-    setIsTestingConnection(true);
-    setProviderError(null);
-
     try {
       await window.desktop.provider.testConnection();
-      // 重新加载状态以获取更新的测试结果
-      await loadProviderState();
-    } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '测试失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
-      // 重新加载状态以获取错误码
-      await loadProviderState();
     } finally {
-      setIsTestingConnection(false);
+      await loadProviderState();
     }
-  }, [isTestingConnection, dataServiceStatus, loadProviderState]);
-
-  // 格式化短 ID
-  const shortId = (id: string) => id.slice(0, 8);
-
-  // 格式化时间
-  const formatTime = (iso: string | null) => {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-  };
+  }, [loadProviderState]);
 
   const isDataServiceReady = dataServiceStatus === 'ready';
   const isDataServiceStarting = dataServiceStatus === 'starting';
@@ -328,7 +216,6 @@ export function App() {
           <h1 className="app-title">AI 小说创作代理</h1>
         </div>
         <div className="toolbar-right">
-          {/* 数据服务状态指示器 */}
           <span className={`data-service-badge ${dataServiceStatus}`}>
             {isDataServiceStarting && '⟳ 数据服务启动中…'}
             {isDataServiceReady && '● 数据服务就绪'}
@@ -359,136 +246,35 @@ export function App() {
         {/* 左栏：项目列表 */}
         {panelState.left && (
           <aside className="panel panel-left">
-            <div className="panel-header">
-              <h2>项目列表</h2>
-              <button
-                className="btn-new-project"
-                onClick={() => {
-                  setCurrentProject(null);
-                  setError(null);
-                }}
-                title="新建项目"
-                disabled={!isDataServiceReady}
-              >
-                ＋
-              </button>
-            </div>
-            <div className="panel-content">
-              {isDataServiceStarting ? (
-                <div className="empty-state">
-                  <p className="loading-indicator">⟳</p>
-                  <p>数据服务启动中…</p>
-                </div>
-              ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
-                <div className="empty-state">
-                  <p>数据服务不可用</p>
-                  <button className="btn-retry" onClick={handleRetry}>
-                    重试数据服务
-                  </button>
-                </div>
-              ) : projects.length === 0 ? (
-                <div className="empty-state">
-                  <p>尚未创建项目</p>
-                  <p className="empty-hint">在中间栏创建第一个项目</p>
-                </div>
-              ) : (
-                <ul className="project-list">
-                  {projects.map((p) => (
-                    <li
-                      key={p.id}
-                      className={`project-item ${currentProject?.id === p.id ? 'active' : ''} ${p.isMissing ? 'missing' : ''}`}
-                      onClick={() => !p.isMissing && handleOpenProject(p.id)}
-                    >
-                      <span className="project-item-name">{p.name}</span>
-                      {p.isMissing && <span className="project-item-badge">缺失</span>}
-                      <span className="project-item-time">
-                        {formatTime(p.lastOpenedAt ?? p.createdAt)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+            <RendererErrorBoundary label="项目列表">
+              <ProjectListRegion
+                dataServiceStatus={dataServiceStatus}
+                projects={projects}
+                currentProjectId={currentProject?.id ?? null}
+                onRetry={handleRetry}
+                onNewProject={handleNewProject}
+                onOpenProject={handleOpenProject}
+              />
+            </RendererErrorBoundary>
           </aside>
         )}
 
         {/* 中栏：新建项目 / Grill 工作台 */}
         {currentProject ? (
           <section className="panel panel-center" style={{ padding: 0 }}>
-            <GrillWorkbench projectId={currentProject.id} />
+            <RendererErrorBoundary label="Grill 工作台">
+              <GrillWorkbench projectId={currentProject.id} />
+            </RendererErrorBoundary>
           </section>
         ) : (
           <section className="panel panel-center">
-            <div className="panel-header">
-              <h2>新建项目</h2>
-            </div>
-            <div className="panel-content">
-              {isDataServiceStarting ? (
-                <div className="empty-state">
-                  <p className="loading-indicator">⟳</p>
-                  <p>数据服务启动中，请稍候…</p>
-                </div>
-              ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
-                <div className="empty-state">
-                  <p>数据服务不可用</p>
-                  <p className="empty-hint">无法创建项目，请检查数据服务状态</p>
-                  <button className="btn-retry" onClick={handleRetry}>
-                    重试数据服务
-                  </button>
-                </div>
-              ) : (
-                <div className="create-form">
-                  <div className="form-field">
-                    <label htmlFor="project-name">项目名称</label>
-                    <input
-                      id="project-name"
-                      type="text"
-                      value={formName}
-                      onChange={(e) => {
-                        setFormName(e.target.value);
-                        setFormErrors((prev) => ({ ...prev, name: '' }));
-                      }}
-                      placeholder="给你的小说起个名字"
-                      maxLength={200}
-                      disabled={isCreating}
-                    />
-                    <div className="form-field-footer">
-                      {formErrors.name && <span className="form-error">{formErrors.name}</span>}
-                      <span className="char-count">
-                        {unicodeLength(formName.trim())} / {MAX_NAME_LENGTH}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="form-field">
-                    <label htmlFor="project-idea">描述你想写的小说……</label>
-                    <textarea
-                      id="project-idea"
-                      value={formIdea}
-                      onChange={(e) => {
-                        setFormIdea(e.target.value);
-                        setFormErrors((prev) => ({ ...prev, initialIdea: '' }));
-                      }}
-                      placeholder="可以是模糊的想法、灵感片段、想写的题材……"
-                      rows={10}
-                      disabled={isCreating}
-                    />
-                    <div className="form-field-footer">
-                      {formErrors.initialIdea && (
-                        <span className="form-error">{formErrors.initialIdea}</span>
-                      )}
-                      <span className="char-count">
-                        {unicodeLength(formIdea.trim())} / {MAX_IDEA_LENGTH.toLocaleString()}
-                      </span>
-                    </div>
-                  </div>
-
-                  <button className="btn-create" onClick={handleCreate} disabled={isCreating}>
-                    {isCreating ? '创建中…' : '创建项目'}
-                  </button>
-                </div>
-              )}
-            </div>
+            <RendererErrorBoundary label="新建项目">
+              <CreateProjectRegion
+                dataServiceStatus={dataServiceStatus}
+                onRetry={handleRetry}
+                onCreate={handleCreate}
+              />
+            </RendererErrorBoundary>
           </section>
         )}
 
@@ -529,147 +315,30 @@ export function App() {
                 <h3>当前阶段</h3>
                 <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
               </div>
-              {currentProject && (
-                <>
-                  <div className="status-section">
-                    <h3>项目 ID</h3>
-                    <p className="mono">{shortId(currentProject.id)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>创建时间</h3>
-                    <p>{formatTime(currentProject.createdAt)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>最近打开</h3>
-                    <p>{formatTime(currentProject.lastOpenedAt)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>项目状态</h3>
-                    <p>{currentProject.status}</p>
-                  </div>
-                </>
-              )}
+              <RendererErrorBoundary label="项目状态">
+                <ProjectStatusRegion currentProject={currentProject} />
+              </RendererErrorBoundary>
 
               {/* 任务活动 */}
               <div className="status-section task-center-section">
                 <h3>任务活动</h3>
-                <TaskCenter projectId={currentProject?.id ?? null} />
+                <RendererErrorBoundary label="任务中心">
+                  <TaskCenter projectId={currentProject?.id ?? null} />
+                </RendererErrorBoundary>
               </div>
 
               {/* 模型服务 */}
               <div className="status-section provider-section">
                 <h3>模型服务</h3>
-                {providerState && (
-                  <>
-                    <div className="provider-info">
-                      <p>
-                        <strong>提供商：</strong>
-                        {providerState.displayName}
-                      </p>
-                      <p>
-                        <strong>模型：</strong>
-                        {providerState.model}
-                      </p>
-                      <p>
-                        <strong>接口类型：</strong>
-                        {providerState.providerType}
-                      </p>
-                      <p>
-                        <strong>API Key：</strong>
-                        {providerState.hasApiKey ? '已配置' : '未配置'}
-                      </p>
-                      {providerState.lastTestStatus !== 'never' && (
-                        <>
-                          <p>
-                            <strong>最近测试：</strong>
-                            {providerState.lastTestStatus === 'success'
-                              ? '连接正常'
-                              : providerState.lastTestErrorCode
-                                ? `[${providerState.lastTestErrorCode}] ${ERROR_CODE_MESSAGES[providerState.lastTestErrorCode] ?? '测试失败'}`
-                                : '测试失败'}
-                          </p>
-                          <p>
-                            <strong>测试时间：</strong>
-                            {formatTime(providerState.lastTestedAt)}
-                          </p>
-                          {providerState.lastTestLatencyMs !== null && (
-                            <p>
-                              <strong>延迟：</strong>
-                              {providerState.lastTestLatencyMs}ms
-                            </p>
-                          )}
-                        </>
-                      )}
-                    </div>
-
-                    {/* API Key 编辑 */}
-                    <div className="provider-key-section">
-                      {!providerState.hasApiKey ? (
-                        <div className="provider-key-input">
-                          <input
-                            type="password"
-                            value={apiKeyInput}
-                            onChange={(e) => setApiKeyInput(e.target.value)}
-                            placeholder="输入 API Key"
-                            disabled={isSavingKey || dataServiceStatus !== 'ready'}
-                            maxLength={8192}
-                          />
-                          <button
-                            onClick={handleSaveApiKey}
-                            disabled={
-                              isSavingKey || !apiKeyInput.trim() || dataServiceStatus !== 'ready'
-                            }
-                          >
-                            {isSavingKey ? '保存中…' : '保存'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="provider-key-actions">
-                          {!deleteConfirmVisible ? (
-                            <button
-                              className="btn-danger"
-                              onClick={() => setDeleteConfirmVisible(true)}
-                              disabled={dataServiceStatus !== 'ready'}
-                            >
-                              删除密钥
-                            </button>
-                          ) : (
-                            <div className="delete-confirm">
-                              <span>确认删除？</span>
-                              <button className="btn-danger" onClick={handleDeleteApiKey}>
-                                确认
-                              </button>
-                              <button onClick={() => setDeleteConfirmVisible(false)}>取消</button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 连接测试 */}
-                    <div className="provider-test-section">
-                      <button
-                        onClick={handleTestConnection}
-                        disabled={
-                          isTestingConnection ||
-                          !providerState.hasApiKey ||
-                          dataServiceStatus !== 'ready'
-                        }
-                        title={!providerState.hasApiKey ? '请先配置 API Key' : undefined}
-                      >
-                        {isTestingConnection ? '正在连接…' : '测试连接'}
-                      </button>
-                    </div>
-
-                    {/* 错误信息 */}
-                    {providerError && (
-                      <div className="provider-error">
-                        <span>{providerError}</span>
-                        <button onClick={() => setProviderError(null)}>✕</button>
-                      </div>
-                    )}
-                  </>
-                )}
+                <RendererErrorBoundary label="模型服务">
+                  <ProviderRegion
+                    providerState={providerState}
+                    dataServiceStatus={dataServiceStatus}
+                    onSaveApiKey={handleSaveApiKey}
+                    onDeleteApiKey={handleDeleteApiKey}
+                    onTestConnection={handleTestConnection}
+                  />
+                </RendererErrorBoundary>
               </div>
             </div>
           </aside>
