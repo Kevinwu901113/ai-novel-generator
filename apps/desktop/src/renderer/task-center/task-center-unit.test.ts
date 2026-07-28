@@ -18,7 +18,7 @@ import {
   formatTime,
 } from './task-formatters';
 import { presentTaskResult } from './task-result-presenter';
-import { taskErrorMessage, sanitizeErrorMessage } from './task-error-message';
+import { taskErrorMessage, sanitizeErrorMessage, sanitizeLoadError } from './task-error-message';
 
 // ── task-labels ──────────────────────────────────────────────────────
 
@@ -182,6 +182,57 @@ describe('presentTaskResult', () => {
     expect(presentTaskResult('MODEL_INVOCATION_TEST', null)).toBeNull();
   });
 
+  it('textLength = 1.5 被拒绝（非整数）', () => {
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', { accepted: true, textLength: 1.5 }),
+    ).toBeNull();
+  });
+
+  it('textLength = NaN 被拒绝', () => {
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', { accepted: true, textLength: NaN }),
+    ).toBeNull();
+  });
+
+  it('textLength = Infinity 被拒绝', () => {
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', { accepted: true, textLength: Infinity }),
+    ).toBeNull();
+  });
+
+  it('textLength = "42" 被拒绝（字符串）', () => {
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', {
+        accepted: true,
+        textLength: '42' as unknown as number,
+      }),
+    ).toBeNull();
+  });
+
+  it('result 带 prompt/path/response 等额外字段被拒绝', () => {
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', {
+        accepted: true,
+        textLength: 100,
+        prompt: 'secret',
+      }),
+    ).toBeNull();
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', {
+        accepted: true,
+        textLength: 100,
+        path: '/Users/foo',
+      }),
+    ).toBeNull();
+    expect(
+      presentTaskResult('MODEL_INVOCATION_TEST', {
+        accepted: true,
+        textLength: 100,
+        response: 'full text',
+      }),
+    ).toBeNull();
+  });
+
   it('GRILL_QUESTION_PLAN 固定文本', () => {
     expect(presentTaskResult('GRILL_QUESTION_PLAN', { anything: true })).toBe('规划任务结果已保存');
     expect(presentTaskResult('GRILL_QUESTION_PLAN', null)).toBe('规划任务结果已保存');
@@ -251,5 +302,31 @@ describe('sanitizeErrorMessage', () => {
 
   it('安全消息原样返回', () => {
     expect(sanitizeErrorMessage('连接超时')).toBe('连接超时');
+  });
+});
+
+describe('sanitizeLoadError', () => {
+  it('Error 含路径时使用默认提示', () => {
+    expect(sanitizeLoadError(new Error('fail at /Users/foo'), '默认提示')).toBe('默认提示');
+  });
+
+  it('Error 含 stack 时使用默认提示', () => {
+    expect(sanitizeLoadError(new Error('Error\n    at foo (bar.js:1:1)'), '默认提示')).toBe(
+      '默认提示',
+    );
+  });
+
+  it('Error 含 .sqlite 时使用默认提示', () => {
+    expect(sanitizeLoadError(new Error('open data.sqlite failed'), '默认提示')).toBe('默认提示');
+  });
+
+  it('安全 Error 消息原样返回', () => {
+    expect(sanitizeLoadError(new Error('网络错误'), '默认提示')).toBe('网络错误');
+  });
+
+  it('非 Error 使用默认提示', () => {
+    expect(sanitizeLoadError('string error', '默认提示')).toBe('默认提示');
+    expect(sanitizeLoadError(null, '默认提示')).toBe('默认提示');
+    expect(sanitizeLoadError(undefined, '默认提示')).toBe('默认提示');
   });
 });

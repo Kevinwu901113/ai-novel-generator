@@ -12,6 +12,11 @@ interface ModelInvocationResult {
 
 /**
  * 验证 MODEL_INVOCATION_TEST 的 result 是否符合白名单。
+ *
+ * 规则：
+ * - accepted 必须 boolean
+ * - textLength 必须 Number.isInteger 且 >= 0
+ * - 不允许额外字段
  */
 function isValidModelInvocationResult(r: unknown): r is ModelInvocationResult {
   if (r === null || typeof r !== 'object') return false;
@@ -19,7 +24,7 @@ function isValidModelInvocationResult(r: unknown): r is ModelInvocationResult {
   if (typeof obj.accepted !== 'boolean') return false;
   if (
     typeof obj.textLength !== 'number' ||
-    !Number.isFinite(obj.textLength) ||
+    !Number.isInteger(obj.textLength) ||
     obj.textLength < 0
   ) {
     return false;

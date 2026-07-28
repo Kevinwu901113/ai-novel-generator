@@ -59,3 +59,18 @@ export function taskErrorMessage(errorCode: string | null, rawMessage: string | 
   }
   return '未知错误';
 }
+
+/**
+ * 清理 list/stats 加载错误。
+ * - Error.message 先经过 sanitizeErrorMessage
+ * - 非 Error 使用传入的默认提示
+ * - 原始错误不进入 state 或 DOM
+ */
+export function sanitizeLoadError(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    return sanitizeErrorMessage(err.message) === '任务执行出现错误'
+      ? fallback
+      : sanitizeErrorMessage(err.message);
+  }
+  return fallback;
+}

@@ -5,13 +5,14 @@
  *
  * 关键设计：
  * - generationRef：每次 projectId 切换递增，过期响应丢弃
- * - refreshLockRef：防止并发刷新
- * - visibility-aware 轮询：页面 hidden 时暂停，visible 时立即刷新
+ * - inFlightGenerationRef：generation-scoped 锁，旧 generation 请求不能解除新 generation 的锁
+ * - isDocumentVisible：显式可见状态驱动轮询
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { TaskPublicData, TaskStatsPublicData } from '@ai-novel/contracts';
 import { isTaskActive } from './task-labels';
+import { sanitizeLoadError } from './task-error-message';
 
 const POLL_INTERVAL_MS = 2000;
 
@@ -40,29 +41,28 @@ export function useTaskCenter(projectId: string | null): UseTaskCenterReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [statsError, setStatsError] = useState<string | null>(null);
+  const [isDocumentVisible, setIsDocumentVisible] = useState(() => !document.hidden);
 
   // 竞态防护：每次 projectId 变化递增
   const generationRef = useRef(0);
-  // 防止并发刷新
-  const refreshLockRef = useRef(false);
+  // generation-scoped 锁：记录当前持有锁的 generation
+  const inFlightGenerationRef = useRef<number | null>(null);
   // 轮询 timer
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // 当前 AbortController
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   /**
    * 核心刷新函数。
-   * 手动刷新与轮询共用此函数和 refreshLockRef。
+   * 手动刷新与轮询共用此函数。
+   * 使用 generation-scoped 锁：只有当前 generation 可以解除锁。
    */
   const refresh = useCallback(async () => {
     if (!projectId) return;
-    if (refreshLockRef.current) return;
-    refreshLockRef.current = true;
 
-    const gen = generationRef.current;
-    const controller = new AbortController();
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = controller;
+    const currentGen = generationRef.current;
+
+    // 同一 generation 内禁止并发刷新
+    if (inFlightGenerationRef.current === currentGen) return;
+    inFlightGenerationRef.current = currentGen;
 
     try {
       setIsLoading(true);
@@ -73,33 +73,29 @@ export function useTaskCenter(projectId: string | null): UseTaskCenterReturn {
         window.desktop.tasks.getStats(projectId),
       ]);
 
-      // 检查 generation 是否过期
-      if (generationRef.current !== gen) return;
-      if (controller.signal.aborted) return;
+      // generation 过期：丢弃响应，不更新状态
+      if (generationRef.current !== currentGen) return;
 
       if (listResult.status === 'fulfilled') {
         setTasks(listResult.value);
         setError(null);
       } else {
-        const err = listResult.reason;
-        const msg = err instanceof Error ? err.message : '加载任务列表失败';
-        setError(msg);
+        setError(sanitizeLoadError(listResult.reason, '加载任务列表失败'));
       }
 
       if (statsResult.status === 'fulfilled') {
         setStats(statsResult.value);
         setStatsError(null);
       } else {
-        const err = statsResult.reason;
-        const msg = err instanceof Error ? err.message : '加载统计失败';
-        setStatsError(msg);
+        setStatsError(sanitizeLoadError(statsResult.reason, '加载任务统计失败'));
         // stats 失败不清空已有 stats
       }
     } finally {
-      if (generationRef.current === gen) {
+      // 只有当 generation 仍匹配时才清除锁
+      if (generationRef.current === currentGen) {
         setIsLoading(false);
+        inFlightGenerationRef.current = null;
       }
-      refreshLockRef.current = false;
     }
   }, [projectId]);
 
@@ -109,19 +105,46 @@ export function useTaskCenter(projectId: string | null): UseTaskCenterReturn {
   const hasActiveTasks = useMemo(() => tasks.some((t) => isTaskActive(t.status)), [tasks]);
 
   /**
-   * 启动/停止轮询。
+   * visibilitychange 处理。
+   * hidden → setIsDocumentVisible(false) → effect 清理 interval
+   * visible → setIsDocumentVisible(true) + 立即 refresh → effect 重建 interval
    */
   useEffect(() => {
-    // 清除旧轮询
+    function handleVisibilityChange() {
+      if (document.hidden) {
+        setIsDocumentVisible(false);
+      } else {
+        setIsDocumentVisible(true);
+        if (projectId) {
+          void refresh();
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [projectId, refresh]);
+
+  /**
+   * 轮询 effect。
+   * 依赖：projectId, hasActiveTasks, isDocumentVisible, refresh
+   * 规则：
+   * - visible + active task → interval 存在
+   * - hidden → interval 不存在
+   * - terminal tasks → interval 清理
+   * - unmount → interval 清理
+   * - 同一时刻只有一个 interval
+   */
+  useEffect(() => {
+    // 清除旧 interval
     if (pollTimerRef.current) {
       clearInterval(pollTimerRef.current);
       pollTimerRef.current = null;
     }
 
-    if (!projectId || !hasActiveTasks) return;
-
-    // 页面不可见时不启动高频轮询
-    if (document.hidden) return;
+    if (!projectId || !hasActiveTasks || !isDocumentVisible) return;
 
     pollTimerRef.current = setInterval(() => {
       void refresh();
@@ -133,46 +156,20 @@ export function useTaskCenter(projectId: string | null): UseTaskCenterReturn {
         pollTimerRef.current = null;
       }
     };
-  }, [projectId, hasActiveTasks, refresh]);
+  }, [projectId, hasActiveTasks, isDocumentVisible, refresh]);
 
   /**
-   * visibilitychange 处理。
-   * hidden → 暂停轮询
-   * visible → 立即刷新 + 恢复轮询
-   */
-  useEffect(() => {
-    function handleVisibilityChange() {
-      if (document.hidden) {
-        if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-        }
-      } else {
-        // 页面恢复可见时立即刷新
-        if (projectId) {
-          void refresh();
-        }
-        // 轮询将由上面的 effect 根据 hasActiveTasks 自动恢复
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [projectId, refresh]);
-
-  /**
-   * projectId 切换时：清空旧数据，停止旧轮询，递增 generation。
+   * projectId 切换时：清空旧数据（含筛选），停止旧轮询，递增 generation。
    */
   useEffect(() => {
     generationRef.current += 1;
-    abortControllerRef.current?.abort();
-    refreshLockRef.current = false;
+    inFlightGenerationRef.current = null;
 
     setTasks([]);
     setStats(null);
     setSelectedTaskId(null);
+    setStatusFilter('ALL');
+    setTypeFilter('ALL');
     setError(null);
     setStatsError(null);
     setIsLoading(false);
@@ -183,7 +180,6 @@ export function useTaskCenter(projectId: string | null): UseTaskCenterReturn {
 
     return () => {
       generationRef.current += 1;
-      abortControllerRef.current?.abort();
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
