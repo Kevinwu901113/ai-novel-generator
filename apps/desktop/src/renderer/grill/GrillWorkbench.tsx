@@ -6,7 +6,7 @@
  * 问题列表通过 grill.listQuestions API 从服务端获取。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GrillAnswerPublicData } from '@ai-novel/contracts';
 import { useGrillSessions } from './useGrillSessions';
 import { useGrillSession } from './useGrillSession';
@@ -15,6 +15,7 @@ import { useGrillProposals } from './useGrillProposals';
 import { GrillSessionList } from './GrillSessionList';
 import { GrillSessionPanel } from './GrillSessionPanel';
 import { GrillQuestionDetail } from './GrillQuestionDetail';
+import { GrillDiagnostics } from './GrillDiagnostics';
 
 interface GrillWorkbenchProps {
   projectId: string;
@@ -39,7 +40,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     sessionHook.refresh,
   );
 
-  // Proposals
+  // Proposals — uses onSuccess callback to refresh session after conflict resolution
   const proposalsHook = useGrillProposals(
     projectId,
     selectedSessionId,
@@ -47,27 +48,31 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     sessionHook.refresh,
   );
 
+  // 使用 ref 保持 getCurrentAnswers 的稳定引用，避免 loadAnswers 因 questionsHook 整体变化而重建
+  const getCurrentAnswersRef = useRef(questionsHook.getCurrentAnswers);
+  getCurrentAnswersRef.current = questionsHook.getCurrentAnswers;
+
   /**
    * 并行加载当前答案。
    * 问题列表由 useGrillQuestions 内部管理。
    */
   const loadAnswers = useCallback(async () => {
     if (!projectId || !selectedSessionId) {
-      setCurrentAnswers([]);
+      setCurrentAnswers((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     try {
-      const answers = await questionsHook.getCurrentAnswers();
+      const answers = await getCurrentAnswersRef.current();
       setCurrentAnswers(answers);
     } catch {
       // Non-critical
     }
-  }, [projectId, selectedSessionId, questionsHook]);
+  }, [projectId, selectedSessionId]);
 
   // Session 切换时并行加载所有数据
   useEffect(() => {
     if (!selectedSessionId) {
-      setCurrentAnswers([]);
+      setCurrentAnswers((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     // questionsHook.listQuestions() is called automatically by useGrillQuestions on session change
@@ -78,70 +83,88 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   // 清除陈旧状态：session 切换
   useEffect(() => {
     setSelectedQuestionId(null);
-    setCurrentAnswers([]);
+    setCurrentAnswers((prev) => (prev.length === 0 ? prev : []));
   }, [selectedSessionId]);
 
   // 清除陈旧状态：project 切换
   useEffect(() => {
     setSelectedSessionId(null);
     setSelectedQuestionId(null);
-    setCurrentAnswers([]);
+    setCurrentAnswers((prev) => (prev.length === 0 ? prev : []));
   }, [projectId]);
+
+  // 使用 ref 保持 hook 方法的稳定引用
+  const sessionRefreshRef = useRef(sessionHook.refresh);
+  sessionRefreshRef.current = sessionHook.refresh;
+  const listQuestionsRef = useRef(questionsHook.listQuestions);
+  listQuestionsRef.current = questionsHook.listQuestions;
+  const proposalsRefreshRef = useRef(proposalsHook.refresh);
+  proposalsRefreshRef.current = proposalsHook.refresh;
+  const addQuestionsRef = useRef(questionsHook.addQuestions);
+  addQuestionsRef.current = questionsHook.addQuestions;
+  const answerQuestionRef = useRef(questionsHook.answerQuestion);
+  answerQuestionRef.current = questionsHook.answerQuestion;
+  const markQuestionAskedRef = useRef(questionsHook.markQuestionAsked);
+  markQuestionAskedRef.current = questionsHook.markQuestionAsked;
+  const skipQuestionRef = useRef(questionsHook.skipQuestion);
+  skipQuestionRef.current = questionsHook.skipQuestion;
+  const supersedeQuestionRef = useRef(questionsHook.supersedeQuestion);
+  supersedeQuestionRef.current = questionsHook.supersedeQuestion;
 
   /** mutation 成功后刷新所有数据 */
   const refreshAll = useCallback(async () => {
-    await sessionHook.refresh();
-    await questionsHook.listQuestions();
+    await sessionRefreshRef.current();
+    await listQuestionsRef.current();
     await loadAnswers();
-    await proposalsHook.refresh();
-  }, [sessionHook, questionsHook, loadAnswers, proposalsHook]);
+    await proposalsRefreshRef.current();
+  }, [loadAnswers]);
 
   const handleAddQuestions = useCallback(
     async (
       questionInputs: ReadonlyArray<{ topic: string; text: string; rationale: string }>,
     ): Promise<boolean> => {
-      const ok = await questionsHook.addQuestions(questionInputs);
+      const ok = await addQuestionsRef.current(questionInputs);
       if (ok) {
         await refreshAll();
       }
       return ok;
     },
-    [questionsHook, refreshAll],
+    [refreshAll],
   );
 
   const handleAnswer = useCallback(
     async (questionId: string, text: string): Promise<boolean> => {
-      const ok = await questionsHook.answerQuestion(questionId, text);
+      const ok = await answerQuestionRef.current(questionId, text);
       if (ok) {
         await refreshAll();
       }
       return ok;
     },
-    [questionsHook, refreshAll],
+    [refreshAll],
   );
 
   const handleMarkAsked = useCallback(
     async (questionId: string) => {
-      await questionsHook.markQuestionAsked(questionId);
+      await markQuestionAskedRef.current(questionId);
       await refreshAll();
     },
-    [questionsHook, refreshAll],
+    [refreshAll],
   );
 
   const handleSkip = useCallback(
     async (questionId: string) => {
-      await questionsHook.skipQuestion(questionId);
+      await skipQuestionRef.current(questionId);
       await refreshAll();
     },
-    [questionsHook, refreshAll],
+    [refreshAll],
   );
 
   const handleSupersede = useCallback(
     async (questionId: string) => {
-      await questionsHook.supersedeQuestion(questionId);
+      await supersedeQuestionRef.current(questionId);
       await refreshAll();
     },
-    [questionsHook, refreshAll],
+    [refreshAll],
   );
 
   const handleSelectSession = useCallback((sessionId: string) => {
@@ -154,8 +177,9 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
 
   // 合并所有错误源
   const combinedError = sessionHook.error || questionsHook.error || proposalsHook.error;
-  // 版本冲突来自 session hook 或 questions hook
-  const hasVersionConflict = sessionHook.versionConflict || questionsHook.conflictNotice;
+  // 版本冲突来自 session hook、questions hook 或 proposals hook
+  const hasVersionConflict =
+    sessionHook.versionConflict || questionsHook.conflictNotice || proposalsHook.conflictNotice;
   const isAnyLoading =
     sessionsHook.isLoading ||
     sessionHook.isLoading ||
@@ -169,6 +193,13 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
 
   return (
     <div className="grill-workbench">
+      {/* 开发态诊断 */}
+      <GrillDiagnostics
+        projectId={projectId}
+        sessionId={selectedSessionId}
+        sessionVersion={sessionHook.session?.version ?? null}
+      />
+
       {/* 全局错误 */}
       {combinedError && (
         <div className="grill-error-banner">
@@ -193,6 +224,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
             onClick={() => {
               sessionHook.clearError();
               questionsHook.clearConflictNotice();
+              proposalsHook.clearConflictNotice();
             }}
           >
             ✕
