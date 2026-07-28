@@ -195,6 +195,7 @@ export interface TaskData {
   readonly resultJson: string | null;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
+  readonly dedupeKey: string | null;
   readonly attemptCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -211,6 +212,7 @@ export interface CreateTaskInput {
   readonly taskType: TaskType;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
+  readonly dedupeKey?: string;
 }
 
 /** 任务仓库端口 */

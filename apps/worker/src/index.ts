@@ -24,12 +24,14 @@ import {
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
   isValidCreateModelInvocationTestInput,
+  isValidGrillRequestQuestionPlanInput,
   type AppError as AppErrorType,
   type ErrorCode,
   type ProviderPublicState,
   type ConnectionTestResult,
   type TaskPublicData,
   type TaskStatsPublicData,
+  type GrillRequestQuestionPlanResult,
 } from '@ai-novel/contracts';
 import {
   createProject,
@@ -39,7 +41,9 @@ import {
   saveProviderApiKey,
   deleteProviderApiKey,
   testProviderConnection,
+  requestGrillQuestionPlan,
   AppError,
+  TaskDedupeConflictError,
   type CreateProjectDeps,
   type ListProjectsDeps,
   type OpenProjectDeps,
@@ -79,9 +83,20 @@ import type {
   ModelInvocationRow,
 } from '@ai-novel/database';
 import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
-import { executeModelInvocationTest, sha256Hex } from '@ai-novel/task-engine';
+import {
+  executeModelInvocationTest,
+  executeGrillQuestionPlan,
+  sha256Hex,
+} from '@ai-novel/task-engine';
 import { createMacOSKeychainSecretStore } from './secret-store.js';
-import { dispatchGrillCommand, type GrillHandlerContext } from './grill-handlers.js';
+import {
+  dispatchGrillCommand,
+  type GrillHandlerContext,
+  GrillSessionRepositoryAdapter,
+  GrillQuestionRepositoryAdapter,
+  GrillAnswerRepositoryAdapter,
+  GrillQuestionPlanProposalRepositoryAdapter,
+} from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -334,16 +349,25 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
 
   create(data: CreateTaskInput): void {
     const now = createClock().now();
-    this.projDb.getTaskRepository().create({
-      id: data.id,
-      projectId: data.projectId,
-      taskType: data.taskType,
-      status: 'PENDING',
-      inputVersionJson: data.inputVersionJson,
-      payloadJson: data.payloadJson,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      this.projDb.getTaskRepository().create({
+        id: data.id,
+        projectId: data.projectId,
+        taskType: data.taskType,
+        status: 'PENDING',
+        inputVersionJson: data.inputVersionJson,
+        payloadJson: data.payloadJson,
+        dedupeKey: data.dedupeKey ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === 'SQLITE_CONSTRAINT_UNIQUE' && data.dedupeKey !== undefined) {
+        throw new TaskDedupeConflictError('已存在相同 dedupe key 的活跃任务');
+      }
+      throw err;
+    }
   }
 
   getById(id: string): TaskData | null {
@@ -400,6 +424,7 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
       resultJson: row.resultJson,
       errorCode: row.errorCode,
       errorMessage: row.errorMessage,
+      dedupeKey: row.dedupeKey,
       attemptCount: row.attemptCount,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
@@ -1007,6 +1032,86 @@ async function handleCreateModelInvocationTest(payload: unknown): Promise<TaskPu
   }
 }
 
+async function handleRequestQuestionPlan(
+  payload: unknown,
+): Promise<GrillRequestQuestionPlanResult> {
+  if (!isValidGrillRequestQuestionPlanInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的请求问题规划输入');
+  }
+
+  if (!appDb || !secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+  }
+
+  const projDb = getProjectDb(payload.projectId);
+  try {
+    const taskRepo = new TaskRepositoryAdapter(projDb);
+    const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
+    const providerRepo = new ProviderProfileRepositoryAdapter(appDb);
+    const sessionRepo = new GrillSessionRepositoryAdapter(projDb, createClock());
+    const questionRepo = new GrillQuestionRepositoryAdapter(projDb, createClock());
+    const answerRepo = new GrillAnswerRepositoryAdapter(projDb, createClock());
+    const planProposalRepo = new GrillQuestionPlanProposalRepositoryAdapter(projDb, createClock());
+    const idGen = createIdGenerator();
+    const clock = createClock();
+
+    // 创建去重的规划任务（不含模型结果）
+    const requested = requestGrillQuestionPlan(
+      {
+        idGenerator: idGen,
+        clock,
+        sessionRepo,
+        questionRepo,
+        planProposalRepo,
+        taskRepo,
+        transaction: <T>(fn: () => T) => projDb.transaction(fn),
+      },
+      {
+        projectId: payload.projectId,
+        sessionId: payload.sessionId,
+        expectedSessionVersion: payload.expectedSessionVersion,
+      },
+    );
+
+    // 同步执行规划任务（claim → stale 校验 → 调用模型 → 验证 → 持久化提案）
+    await executeGrillQuestionPlan(
+      {
+        taskRepo,
+        invocationRepo,
+        secretStore,
+        providerRepo,
+        idGenerator: idGen,
+        clock,
+        sessionRepo,
+        questionRepo,
+        answerRepo,
+        planProposalRepo,
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+          systemPrompt?: string;
+          maxTokens?: number;
+          temperature?: number;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transaction(fn),
+      },
+      requested.taskId,
+    );
+
+    return {
+      taskId: requested.taskId,
+      sessionId: requested.sessionId,
+      baseSessionVersion: requested.baseSessionVersion,
+    };
+  } finally {
+    projDb.close();
+  }
+}
+
 function handleGetTask(payload: unknown): TaskPublicData {
   if (typeof payload !== 'object' || payload === null) {
     throw new AppError('VALIDATION_ERROR', '无效的任务查询输入');
@@ -1105,6 +1210,9 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'task.getStats':
         data = handleGetTaskStats(request.payload);
         break;
+      case 'grill.requestQuestionPlan':
+        data = await handleRequestQuestionPlan(request.payload);
+        break;
       case 'grill.createSession':
       case 'grill.getSession':
       case 'grill.listSessions':
@@ -1121,7 +1229,10 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'grill.listAnswerHistory':
       case 'grill.createProposal':
       case 'grill.reviewProposal':
-      case 'grill.listProposals': {
+      case 'grill.listProposals':
+      case 'grill.acceptQuestionPlanProposal':
+      case 'grill.listQuestionPlanProposals':
+      case 'grill.getQuestionPlanProposal': {
         const grillCtx: GrillHandlerContext = {
           getProjectDb,
           idGenerator: createIdGenerator(),

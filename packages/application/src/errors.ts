@@ -179,3 +179,74 @@ export class GrillValidationError extends AppError {
     this.name = 'GrillValidationError';
   }
 }
+
+// ── Grill-me 问题规划器错误 ───────────────────────────────────────
+
+/** 同一会话/版本已存在活跃的规划任务 */
+export class GrillPlanAlreadyRunningError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_ALREADY_RUNNING', message);
+    this.name = 'GrillPlanAlreadyRunningError';
+  }
+}
+
+/** 规划任务因会话版本变化而过期 */
+export class GrillPlanStaleError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_STALE', message);
+    this.name = 'GrillPlanStaleError';
+  }
+}
+
+/** 模型输出不符合问题计划 schema */
+export class GrillPlanSchemaInvalidError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_SCHEMA_INVALID', message);
+    this.name = 'GrillPlanSchemaInvalidError';
+  }
+}
+
+/** 问题计划引用了非法或不属于当前会话的实体 */
+export class GrillPlanReferenceInvalidError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_REFERENCE_INVALID', message);
+    this.name = 'GrillPlanReferenceInvalidError';
+  }
+}
+
+/** 问题计划依赖图存在循环 */
+export class GrillPlanCycleDetectedError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_CYCLE_DETECTED', message);
+    this.name = 'GrillPlanCycleDetectedError';
+  }
+}
+
+/** 问题规划提案未找到 */
+export class GrillPlanProposalNotFoundError extends AppError {
+  constructor(proposalId: string) {
+    super('GRILL_PLAN_PROPOSAL_NOT_FOUND', `问题规划提案 ${proposalId} 不存在`);
+    this.name = 'GrillPlanProposalNotFoundError';
+  }
+}
+
+/** 问题规划提案不可接受（状态非法或已过期） */
+export class GrillPlanProposalNotAcceptableError extends AppError {
+  constructor(message: string) {
+    super('GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE', message);
+    this.name = 'GrillPlanProposalNotAcceptableError';
+  }
+}
+
+/**
+ * 任务去重冲突（数据库级唯一约束触发）。
+ *
+ * 内部错误，由任务仓库适配器在 dedupe_key 唯一约束冲突时抛出，
+ * 请求用例将其映射为 GrillPlanAlreadyRunningError。
+ */
+export class TaskDedupeConflictError extends AppError {
+  constructor(message: string) {
+    super('TASK_STATE_CONFLICT', message);
+    this.name = 'TaskDedupeConflictError';
+  }
+}

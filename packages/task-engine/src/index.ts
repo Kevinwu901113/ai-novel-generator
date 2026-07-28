@@ -269,3 +269,9 @@ export class TaskExecutionError extends Error {
     this.name = 'TaskExecutionError';
   }
 }
+
+export {
+  executeGrillQuestionPlan,
+  type GrillQuestionPlanEngineDeps,
+  type GrillQuestionPlanExecutionResult,
+} from './grill-question-plan.js';
