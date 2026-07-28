@@ -7,6 +7,12 @@
 
 import { DatabaseSync } from 'node:sqlite';
 import { SQLiteMigrator } from './migrator.js';
+import {
+  GrillSessionRepositoryImpl,
+  GrillQuestionRepositoryImpl,
+  GrillAnswerRepositoryImpl,
+  GrillProposalRepositoryImpl,
+} from './grill-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -22,6 +28,10 @@ import type {
   CreateInvocationData,
   DbInvocationStatus,
   InvocationStats,
+  GrillSessionRepository,
+  GrillQuestionRepository,
+  GrillAnswerRepository,
+  GrillProposalRepository,
   Migration,
 } from './types.js';
 
@@ -122,6 +132,93 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
 
       CREATE UNIQUE INDEX IF NOT EXISTS idx_invocations_task_attempt_unique
         ON model_invocations(task_id, attempt_number);
+    `,
+  },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE grill_sessions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'DRAFT',
+        version INTEGER NOT NULL DEFAULT 1,
+        goal TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        abandoned_at TEXT,
+        CHECK (status IN ('DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETED', 'ABANDONED')),
+        CHECK (version >= 1)
+      ) STRICT;
+
+      CREATE TABLE grill_questions (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        topic TEXT NOT NULL,
+        text TEXT NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'PLANNED',
+        depends_on_question_ids TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        asked_at TEXT,
+        answered_at TEXT,
+        skipped_at TEXT,
+        superseded_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES grill_sessions(id),
+        CHECK (status IN ('PLANNED', 'ASKED', 'ANSWERED', 'SKIPPED', 'SUPERSEDED')),
+        CHECK (sequence >= 1),
+        CHECK (json_valid(depends_on_question_ids))
+      ) STRICT;
+
+      CREATE UNIQUE INDEX idx_grill_questions_session_sequence
+        ON grill_questions(session_id, sequence);
+
+      CREATE TABLE grill_answers (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        question_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        source TEXT NOT NULL DEFAULT 'USER',
+        text TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        superseded_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES grill_sessions(id),
+        FOREIGN KEY (question_id) REFERENCES grill_questions(id),
+        CHECK (source IN ('USER', 'IMPORTED')),
+        CHECK (revision >= 1)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX idx_grill_answers_question_revision
+        ON grill_answers(question_id, revision);
+
+      CREATE UNIQUE INDEX idx_grill_answers_one_current
+        ON grill_answers(question_id)
+        WHERE superseded_at IS NULL;
+
+      CREATE TABLE grill_inference_proposals (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        based_on_answer_ids TEXT NOT NULL DEFAULT '[]',
+        key TEXT NOT NULL,
+        proposed_value_json TEXT NOT NULL,
+        confidence REAL NOT NULL,
+        rationale TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'PROPOSED',
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES grill_sessions(id),
+        CHECK (status IN ('PROPOSED', 'ACCEPTED', 'REJECTED', 'SUPERSEDED')),
+        CHECK (confidence >= 0 AND confidence <= 1),
+        CHECK (json_valid(based_on_answer_ids)),
+        CHECK (json_valid(proposed_value_json))
+      ) STRICT;
+
+      CREATE INDEX idx_grill_sessions_project ON grill_sessions(project_id);
+      CREATE INDEX idx_grill_questions_session ON grill_questions(session_id);
+      CREATE INDEX idx_grill_answers_session ON grill_answers(session_id);
+      CREATE INDEX idx_grill_proposals_session ON grill_inference_proposals(session_id);
     `,
   },
 ];
@@ -576,6 +673,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly metadataRepo: ProjectMetadataRepositoryImpl;
   private readonly taskRepo: TaskRepositoryImpl;
   private readonly invocationRepo: ModelInvocationRepositoryImpl;
+  private readonly grillSessionRepo: GrillSessionRepositoryImpl;
+  private readonly grillQuestionRepo: GrillQuestionRepositoryImpl;
+  private readonly grillAnswerRepo: GrillAnswerRepositoryImpl;
+  private readonly grillProposalRepo: GrillProposalRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -592,6 +693,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.metadataRepo = new ProjectMetadataRepositoryImpl(this.db);
     this.taskRepo = new TaskRepositoryImpl(this.db);
     this.invocationRepo = new ModelInvocationRepositoryImpl(this.db);
+    this.grillSessionRepo = new GrillSessionRepositoryImpl(this.db);
+    this.grillQuestionRepo = new GrillQuestionRepositoryImpl(this.db);
+    this.grillAnswerRepo = new GrillAnswerRepositoryImpl(this.db);
+    this.grillProposalRepo = new GrillProposalRepositoryImpl(this.db);
   }
 
   getProjectMetadataRepository(): ProjectMetadataRepository {
@@ -604,6 +709,22 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getModelInvocationRepository(): ModelInvocationRepository {
     return this.invocationRepo;
+  }
+
+  getGrillSessionRepository(): GrillSessionRepository {
+    return this.grillSessionRepo;
+  }
+
+  getGrillQuestionRepository(): GrillQuestionRepository {
+    return this.grillQuestionRepo;
+  }
+
+  getGrillAnswerRepository(): GrillAnswerRepository {
+    return this.grillAnswerRepo;
+  }
+
+  getGrillProposalRepository(): GrillProposalRepository {
+    return this.grillProposalRepo;
   }
 
   transaction<T>(fn: () => T): T {

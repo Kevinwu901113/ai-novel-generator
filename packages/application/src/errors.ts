@@ -113,3 +113,69 @@ export class ApiKeyDeleteFailedError extends AppError {
     this.name = 'ApiKeyDeleteFailedError';
   }
 }
+
+// ── Grill-me 错误 ─────────────────────────────────────────────────
+
+/** 烧烤会话未找到 */
+export class GrillSessionNotFoundError extends AppError {
+  constructor(sessionId: string) {
+    super('GRILL_SESSION_NOT_FOUND', `烧烤会话 ${sessionId} 不存在`);
+    this.name = 'GrillSessionNotFoundError';
+  }
+}
+
+/** 烧烤问题未找到 */
+export class GrillQuestionNotFoundError extends AppError {
+  constructor(questionId: string) {
+    super('GRILL_QUESTION_NOT_FOUND', `烧烤问题 ${questionId} 不存在`);
+    this.name = 'GrillQuestionNotFoundError';
+  }
+}
+
+/** 烧烤回答未找到 */
+export class GrillAnswerNotFoundError extends AppError {
+  constructor(answerId: string) {
+    super('GRILL_ANSWER_NOT_FOUND', `烧烤回答 ${answerId} 不存在`);
+    this.name = 'GrillAnswerNotFoundError';
+  }
+}
+
+/** 推理提案未找到 */
+export class GrillProposalNotFoundError extends AppError {
+  constructor(proposalId: string) {
+    super('GRILL_PROPOSAL_NOT_FOUND', `推理提案 ${proposalId} 不存在`);
+    this.name = 'GrillProposalNotFoundError';
+  }
+}
+
+/** 烧烤状态冲突 */
+export class GrillStateConflictError extends AppError {
+  constructor(message: string) {
+    super('GRILL_STATE_CONFLICT', message);
+    this.name = 'GrillStateConflictError';
+  }
+}
+
+/** 烧烤版本冲突 */
+export class GrillVersionConflictError extends AppError {
+  constructor(message: string) {
+    super('GRILL_VERSION_CONFLICT', message);
+    this.name = 'GrillVersionConflictError';
+  }
+}
+
+/** 烧烤归属冲突 —— 子实体不属于指定会话 */
+export class GrillOwnershipConflictError extends AppError {
+  constructor(message: string) {
+    super('GRILL_OWNERSHIP_CONFLICT', message);
+    this.name = 'GrillOwnershipConflictError';
+  }
+}
+
+/** 烧烤验证错误 */
+export class GrillValidationError extends AppError {
+  constructor(message: string) {
+    super('GRILL_VALIDATION_ERROR', message);
+    this.name = 'GrillValidationError';
+  }
+}

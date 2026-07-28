@@ -256,3 +256,7 @@ export function createChangeSet(
   }
   return { id, scope, targetId, changes, createdAt, reason };
 }
+
+// ── Grill-me 领域模型 ─────────────────────────────────────────────
+
+export * from './grill.js';

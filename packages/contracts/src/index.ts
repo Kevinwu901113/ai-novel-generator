@@ -40,6 +40,14 @@ export type ErrorCode =
   | 'TASK_EXECUTION_FAILED'
   | 'INVOCATION_INTERRUPTED'
   | 'MODEL_RESPONSE_INVALID'
+  | 'GRILL_SESSION_NOT_FOUND'
+  | 'GRILL_QUESTION_NOT_FOUND'
+  | 'GRILL_ANSWER_NOT_FOUND'
+  | 'GRILL_PROPOSAL_NOT_FOUND'
+  | 'GRILL_STATE_CONFLICT'
+  | 'GRILL_VERSION_CONFLICT'
+  | 'GRILL_OWNERSHIP_CONFLICT'
+  | 'GRILL_VALIDATION_ERROR'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -295,6 +303,14 @@ export function isAppError(data: unknown): data is AppError {
     'TASK_EXECUTION_FAILED',
     'INVOCATION_INTERRUPTED',
     'MODEL_RESPONSE_INVALID',
+    'GRILL_SESSION_NOT_FOUND',
+    'GRILL_QUESTION_NOT_FOUND',
+    'GRILL_ANSWER_NOT_FOUND',
+    'GRILL_PROPOSAL_NOT_FOUND',
+    'GRILL_STATE_CONFLICT',
+    'GRILL_VERSION_CONFLICT',
+    'GRILL_OWNERSHIP_CONFLICT',
+    'GRILL_VALIDATION_ERROR',
     'INTERNAL_ERROR',
   ]);
   return (
@@ -393,5 +409,270 @@ export function isValidTaskStatsPublicData(data: unknown): data is TaskStatsPubl
     typeof obj.totalOutputTokens === 'number' &&
     typeof obj.totalTokens === 'number' &&
     typeof obj.totalLatencyMs === 'number'
+  );
+}
+
+// ── Grill-me 类型 ─────────────────────────────────────────────────
+
+/** 创建烧烤会话输入 */
+export interface GrillCreateSessionInput {
+  readonly projectId: string;
+  readonly goal: string;
+}
+
+/** 烧烤会话 ID 输入 */
+export interface GrillSessionIdInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
+/** 烧烤会话版本输入 */
+export interface GrillSessionVersionInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+}
+
+/** 添加问题输入 */
+export interface GrillAddQuestionsInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+  readonly questions: ReadonlyArray<{
+    id?: string;
+    topic: string;
+    text: string;
+    rationale: string;
+    dependsOnQuestionIds: ReadonlyArray<string>;
+  }>;
+}
+
+/** 回答问题输入 */
+export interface GrillAnswerQuestionInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+  readonly questionId: string;
+  readonly text: string;
+  readonly source: 'USER' | 'IMPORTED';
+}
+
+/** 问题操作输入 */
+export interface GrillQuestionActionInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+  readonly questionId: string;
+}
+
+/** 创建提案输入 */
+export interface GrillCreateProposalInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+  readonly basedOnAnswerIds: ReadonlyArray<string>;
+  readonly key: string;
+  readonly proposedValueJson: string;
+  readonly confidence: number;
+  readonly rationale: string;
+}
+
+/** 审核提案输入 */
+export interface GrillReviewProposalInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedVersion: number;
+  readonly proposalId: string;
+  readonly decision: 'ACCEPTED' | 'REJECTED';
+}
+
+/** 列出提案输入 */
+export interface GrillListProposalsInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
+/** 列出答案历史输入 */
+export interface GrillListAnswerHistoryInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly questionId: string;
+}
+
+/** 烧烤会话公开数据 */
+export interface GrillSessionPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly status: string;
+  readonly version: number;
+  readonly goal: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly abandonedAt: string | null;
+}
+
+/** 烧烤问题公开数据 */
+export interface GrillQuestionPublicData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly sequence: number;
+  readonly topic: string;
+  readonly text: string;
+  readonly rationale: string;
+  readonly status: string;
+  readonly dependsOnQuestionIds: ReadonlyArray<string>;
+  readonly createdAt: string;
+  readonly askedAt: string | null;
+  readonly answeredAt: string | null;
+  readonly skippedAt: string | null;
+  readonly supersededAt: string | null;
+}
+
+/** 烧烤回答公开数据 */
+export interface GrillAnswerPublicData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly questionId: string;
+  readonly revision: number;
+  readonly source: string;
+  readonly text: string;
+  readonly createdAt: string;
+  readonly supersededAt: string | null;
+}
+
+/** 推理提案公开数据 */
+export interface GrillProposalPublicData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly basedOnAnswerIds: ReadonlyArray<string>;
+  readonly key: string;
+  readonly proposedValue: unknown;
+  readonly confidence: number;
+  readonly rationale: string;
+  readonly status: string;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+// ── Grill-me 运行时验证 ───────────────────────────────────────────
+
+export function isValidGrillCreateSessionInput(data: unknown): data is GrillCreateSessionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.goal === 'string';
+}
+
+export function isValidGrillSessionIdInput(data: unknown): data is GrillSessionIdInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
+}
+
+export function isValidGrillSessionVersionInput(data: unknown): data is GrillSessionVersionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number'
+  );
+}
+
+export function isValidGrillAddQuestionsInput(data: unknown): data is GrillAddQuestionsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    typeof obj.projectId !== 'string' ||
+    typeof obj.sessionId !== 'string' ||
+    typeof obj.expectedVersion !== 'number' ||
+    !Array.isArray(obj.questions)
+  ) {
+    return false;
+  }
+  return obj.questions.every(
+    (q: unknown) =>
+      typeof q === 'object' &&
+      q !== null &&
+      ((q as Record<string, unknown>).id === undefined ||
+        typeof (q as Record<string, unknown>).id === 'string') &&
+      typeof (q as Record<string, unknown>).topic === 'string' &&
+      typeof (q as Record<string, unknown>).text === 'string' &&
+      typeof (q as Record<string, unknown>).rationale === 'string' &&
+      Array.isArray((q as Record<string, unknown>).dependsOnQuestionIds),
+  );
+}
+
+export function isValidGrillAnswerQuestionInput(data: unknown): data is GrillAnswerQuestionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  const validSources: ReadonlySet<string> = new Set(['USER', 'IMPORTED']);
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number' &&
+    typeof obj.questionId === 'string' &&
+    typeof obj.text === 'string' &&
+    typeof obj.source === 'string' &&
+    validSources.has(obj.source)
+  );
+}
+
+export function isValidGrillQuestionActionInput(data: unknown): data is GrillQuestionActionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number' &&
+    typeof obj.questionId === 'string'
+  );
+}
+
+export function isValidGrillCreateProposalInput(data: unknown): data is GrillCreateProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number' &&
+    Array.isArray(obj.basedOnAnswerIds) &&
+    typeof obj.key === 'string' &&
+    typeof obj.proposedValueJson === 'string' &&
+    typeof obj.confidence === 'number' &&
+    typeof obj.rationale === 'string'
+  );
+}
+
+export function isValidGrillReviewProposalInput(data: unknown): data is GrillReviewProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  const validDecisions: ReadonlySet<string> = new Set(['ACCEPTED', 'REJECTED']);
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.expectedVersion === 'number' &&
+    typeof obj.proposalId === 'string' &&
+    typeof obj.decision === 'string' &&
+    validDecisions.has(obj.decision)
+  );
+}
+
+export function isValidGrillListProposalsInput(data: unknown): data is GrillListProposalsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
+}
+
+export function isValidGrillListAnswerHistoryInput(
+  data: unknown,
+): data is GrillListAnswerHistoryInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.sessionId === 'string' &&
+    typeof obj.questionId === 'string'
   );
 }

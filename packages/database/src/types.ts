@@ -181,6 +181,14 @@ export interface ProjectDatabaseManager {
   getTaskRepository(): TaskRepository;
   /** 获取模型调用仓库 */
   getModelInvocationRepository(): ModelInvocationRepository;
+  /** 获取烧烤会话仓库 */
+  getGrillSessionRepository(): GrillSessionRepository;
+  /** 获取烧烤问题仓库 */
+  getGrillQuestionRepository(): GrillQuestionRepository;
+  /** 获取烧烤回答仓库 */
+  getGrillAnswerRepository(): GrillAnswerRepository;
+  /** 获取推理提案仓库 */
+  getGrillProposalRepository(): GrillProposalRepository;
   /** 执行事务 */
   transaction<T>(fn: () => T): T;
   /** 关闭数据库连接 */
@@ -342,4 +350,178 @@ export interface ModelInvocationRepository {
   getStatsByProject(projectId: string): InvocationStats;
   /** 获取所有 RUNNING 调用（用于恢复） */
   listRunning(): ReadonlyArray<ModelInvocationRow>;
+}
+
+// ── 烧烤会话（project.sqlite）────────────────────────────────────
+
+/** 烧烤会话状态 */
+export type DbGrillSessionStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'ABANDONED';
+
+/** 烧烤问题状态 */
+export type DbGrillQuestionStatus = 'PLANNED' | 'ASKED' | 'ANSWERED' | 'SKIPPED' | 'SUPERSEDED';
+
+/** 烧烤回答来源 */
+export type DbGrillAnswerSource = 'USER' | 'IMPORTED';
+
+/** 推理提案状态 */
+export type DbGrillProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'SUPERSEDED';
+
+/** 烧烤会话行 */
+export interface GrillSessionRow {
+  readonly id: string;
+  readonly projectId: string;
+  readonly status: DbGrillSessionStatus;
+  readonly version: number;
+  readonly goal: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+  readonly abandonedAt: string | null;
+}
+
+/** 创建烧烤会话数据 */
+export interface CreateGrillSessionData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly goal: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 烧烤会话仓库 */
+export interface GrillSessionRepository {
+  create(data: CreateGrillSessionData): void;
+  getById(id: string): GrillSessionRow | null;
+  listByProject(projectId: string): ReadonlyArray<GrillSessionRow>;
+  /** CAS 状态转换：version+1 WHERE id=? AND version=? */
+  transitionStatus(
+    id: string,
+    expectedVersion: number,
+    newStatus: DbGrillSessionStatus,
+    now: string,
+  ): boolean;
+  /** CAS 版本递增（子实体变更时） */
+  bumpVersion(id: string, expectedVersion: number, now: string): boolean;
+}
+
+/** 烧烤问题行 */
+export interface GrillQuestionRow {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly sequence: number;
+  readonly topic: string;
+  readonly text: string;
+  readonly rationale: string;
+  readonly status: DbGrillQuestionStatus;
+  readonly dependsOnQuestionIds: string;
+  readonly createdAt: string;
+  readonly askedAt: string | null;
+  readonly answeredAt: string | null;
+  readonly skippedAt: string | null;
+  readonly supersededAt: string | null;
+}
+
+/** 创建烧烤问题数据 */
+export interface CreateGrillQuestionData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly sequence: number;
+  readonly topic: string;
+  readonly text: string;
+  readonly rationale: string;
+  readonly dependsOnQuestionIds: string;
+  readonly createdAt: string;
+}
+
+/** 烧烤问题仓库 */
+export interface GrillQuestionRepository {
+  create(data: CreateGrillQuestionData): void;
+  getById(id: string): GrillQuestionRow | null;
+  listBySession(sessionId: string): ReadonlyArray<GrillQuestionRow>;
+  /** CAS 状态转换并设置对应时间戳 */
+  transitionStatus(
+    id: string,
+    expectedStatus: DbGrillQuestionStatus,
+    newStatus: DbGrillQuestionStatus,
+    now: string,
+  ): boolean;
+  getMaxSequence(sessionId: string): number;
+}
+
+/** 烧烤回答行 */
+export interface GrillAnswerRow {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly questionId: string;
+  readonly revision: number;
+  readonly source: DbGrillAnswerSource;
+  readonly text: string;
+  readonly createdAt: string;
+  readonly supersededAt: string | null;
+}
+
+/** 创建烧烤回答数据 */
+export interface CreateGrillAnswerData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly questionId: string;
+  readonly revision: number;
+  readonly source: DbGrillAnswerSource;
+  readonly text: string;
+  readonly createdAt: string;
+}
+
+/** 烧烤回答仓库 */
+export interface GrillAnswerRepository {
+  create(data: CreateGrillAnswerData): void;
+  getById(id: string): GrillAnswerRow | null;
+  /** 获取当前有效答案（superseded_at IS NULL） */
+  getCurrentByQuestion(questionId: string): GrillAnswerRow | null;
+  /** 获取问题的所有答案历史（按 revision 排序） */
+  listByQuestion(questionId: string): ReadonlyArray<GrillAnswerRow>;
+  /** 获取会话的所有当前答案 */
+  listCurrentBySession(sessionId: string): ReadonlyArray<GrillAnswerRow>;
+  /** 废弃当前答案 */
+  supersedeCurrent(questionId: string, now: string): boolean;
+}
+
+/** 推理提案行 */
+export interface GrillProposalRow {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly basedOnAnswerIds: string;
+  readonly key: string;
+  readonly proposedValueJson: string;
+  readonly confidence: number;
+  readonly rationale: string;
+  readonly status: DbGrillProposalStatus;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+/** 创建推理提案数据 */
+export interface CreateGrillProposalData {
+  readonly id: string;
+  readonly sessionId: string;
+  readonly basedOnAnswerIds: string;
+  readonly key: string;
+  readonly proposedValueJson: string;
+  readonly confidence: number;
+  readonly rationale: string;
+  readonly createdAt: string;
+}
+
+/** 推理提案仓库 */
+export interface GrillProposalRepository {
+  create(data: CreateGrillProposalData): void;
+  getById(id: string): GrillProposalRow | null;
+  listBySession(sessionId: string): ReadonlyArray<GrillProposalRow>;
+  /** CAS 状态转换 */
+  transitionStatus(
+    id: string,
+    expectedStatus: DbGrillProposalStatus,
+    newStatus: DbGrillProposalStatus,
+    now: string,
+  ): boolean;
 }
