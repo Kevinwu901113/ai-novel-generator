@@ -1,8 +1,14 @@
 /**
- * 模型服务商配置区域（只读安全）。
+ * 模型服务区域组件。
  *
- * 只允许：保存 API Key、删除 API Key、测试连接。
- * 不允许：修改 providerType / model、写 projects/*、读取项目数据。
+ * 独立渲染右栏模型服务信息，包含：
+ * - 提供商状态
+ * - API Key 管理
+ * - 连接测试
+ * - 错误显示
+ *
+ * 此组件被 RendererErrorBoundary 包裹，
+ * 崩溃时不影响 TaskCenter。
  *
  * 无障碍特性：
  * - API Key 输入有 sr-only label
@@ -18,6 +24,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DataServiceStatus, ProviderPublicState } from '@ai-novel/contracts';
+import { ERROR_CODE_LABELS } from '../safety/error-code-labels';
+import { toSafeUserError } from '../safety/safe-error';
+
+/** 格式化时间 */
+function formatTime(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+}
 
 interface ProviderRegionProps {
   providerState: ProviderPublicState | null;
@@ -35,12 +49,11 @@ export function ProviderRegion({
   onTestConnection,
 }: ProviderRegionProps) {
   const [apiKeyInput, setApiKeyInput] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [isTesting, setIsTesting] = useState(false);
+  const [isSavingKey, setIsSavingKey] = useState(false);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteConfirmVisible, setDeleteConfirmVisible] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [providerError, setProviderError] = useState<string | null>(null);
 
   // 焦点管理 refs
   const deleteBtnRef = useRef<HTMLButtonElement>(null);
@@ -84,60 +97,69 @@ export function ProviderRegion({
     }
   }, [hasApiKey]);
 
-  const handleSave = useCallback(async () => {
-    if (!apiKeyInput.trim()) {
-      setError('请输入 API Key');
-      return;
-    }
-    setIsSaving(true);
-    setError(null);
-    setTestResult(null);
+  const handleSaveApiKey = useCallback(async () => {
+    if (isSavingKey || !isReady) return;
+    const trimmed = apiKeyInput.trim();
+    if (!trimmed) return;
+
+    setIsSavingKey(true);
+    setProviderError(null);
+
     try {
-      await onSaveApiKey(apiKeyInput.trim());
+      await onSaveApiKey(trimmed);
       setApiKeyInput('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '保存失败');
+      const safe = toSafeUserError(err, '保存失败');
+      setProviderError(safe.message);
     } finally {
-      setIsSaving(false);
+      setIsSavingKey(false);
     }
-  }, [apiKeyInput, onSaveApiKey]);
-
-  const handleTest = useCallback(async () => {
-    setIsTesting(true);
-    setError(null);
-    setTestResult(null);
-    try {
-      await onTestConnection();
-      setTestResult('连接成功');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '测试失败');
-    } finally {
-      setIsTesting(false);
-    }
-  }, [onTestConnection]);
+  }, [apiKeyInput, isSavingKey, isReady, onSaveApiKey]);
 
   const handleDeleteClick = useCallback(() => {
     setDeleteConfirmVisible(true);
   }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
+    if (!isReady) return;
+
     setIsDeleting(true);
-    setError(null);
+    setProviderError(null);
+
     try {
       shouldFocusApiKeyRef.current = true;
       await onDeleteApiKey();
       setDeleteConfirmVisible(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '删除失败');
+      // 删除失败时清理 shouldFocusApiKeyRef
+      shouldFocusApiKeyRef.current = false;
+      const safe = toSafeUserError(err, '删除失败');
+      setProviderError(safe.message);
     } finally {
       setIsDeleting(false);
     }
-  }, [onDeleteApiKey]);
+  }, [isReady, onDeleteApiKey]);
 
   const handleDeleteCancel = useCallback(() => {
     shouldRestoreFocusRef.current = true;
     setDeleteConfirmVisible(false);
   }, []);
+
+  const handleTestConnection = useCallback(async () => {
+    if (isTestingConnection || !isReady) return;
+
+    setIsTestingConnection(true);
+    setProviderError(null);
+
+    try {
+      await onTestConnection();
+    } catch (err) {
+      const safe = toSafeUserError(err, '测试失败');
+      setProviderError(safe.message);
+    } finally {
+      setIsTestingConnection(false);
+    }
+  }, [isTestingConnection, isReady, onTestConnection]);
 
   /** 确认区域的键盘事件处理 */
   const handleConfirmKeyDown = useCallback(
@@ -150,126 +172,141 @@ export function ProviderRegion({
     [handleDeleteCancel],
   );
 
+  if (!providerState) {
+    return null;
+  }
+
   return (
-    <div className="provider-region">
-      {/* 状态显示 */}
+    <>
       <div className="provider-info">
-        <div className="provider-info-row">
-          <span className="provider-label">状态</span>
-          <span className="provider-value" role="status" aria-live="polite">
-            {hasApiKey ? '已配置' : '未配置'}
+        <p>
+          <strong>提供商：</strong>
+          {providerState.displayName}
+        </p>
+        <p>
+          <strong>模型：</strong>
+          {providerState.model}
+        </p>
+        <p>
+          <strong>接口类型：</strong>
+          {providerState.providerType}
+        </p>
+        <p>
+          <strong>API Key：</strong>
+          <span role="status" aria-live="polite">
+            {providerState.hasApiKey ? '已配置' : '未配置'}
           </span>
-        </div>
-        {providerState?.displayName && (
-          <div className="provider-info-row">
-            <span className="provider-label">服务商</span>
-            <span className="provider-value">{providerState.displayName}</span>
-          </div>
+        </p>
+        {providerState.lastTestStatus !== 'never' && (
+          <>
+            <p>
+              <strong>最近测试：</strong>
+              {providerState.lastTestStatus === 'success'
+                ? '连接正常'
+                : providerState.lastTestErrorCode
+                  ? `[${providerState.lastTestErrorCode}] ${ERROR_CODE_LABELS[providerState.lastTestErrorCode] ?? '测试失败'}`
+                  : '测试失败'}
+            </p>
+            <p>
+              <strong>测试时间：</strong>
+              {formatTime(providerState.lastTestedAt)}
+            </p>
+            {providerState.lastTestLatencyMs !== null && (
+              <p>
+                <strong>延迟：</strong>
+                {providerState.lastTestLatencyMs}ms
+              </p>
+            )}
+          </>
         )}
-        {providerState?.model && (
-          <div className="provider-info-row">
-            <span className="provider-label">模型</span>
-            <span className="provider-value">{providerState.model}</span>
+      </div>
+
+      {/* API Key 编辑 */}
+      <div className="provider-key-section">
+        {!providerState.hasApiKey ? (
+          <div className="provider-key-input">
+            <label htmlFor="provider-api-key" className="sr-only">
+              API Key
+            </label>
+            <input
+              ref={apiKeyInputRef}
+              id="provider-api-key"
+              type="password"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="输入 API Key"
+              disabled={isSavingKey || !isReady}
+              maxLength={8192}
+            />
+            <button
+              onClick={handleSaveApiKey}
+              disabled={isSavingKey || !apiKeyInput.trim() || !isReady}
+              aria-busy={isSavingKey}
+              aria-label={isSavingKey ? '保存中' : '保存 API Key'}
+            >
+              {isSavingKey ? '保存中…' : '保存'}
+            </button>
+          </div>
+        ) : (
+          <div className="provider-key-actions">
+            {!deleteConfirmVisible ? (
+              <button
+                ref={deleteBtnRef}
+                className="btn-danger"
+                onClick={handleDeleteClick}
+                disabled={!isReady}
+                aria-label="删除 API Key"
+              >
+                删除密钥
+              </button>
+            ) : (
+              <div
+                className="delete-confirm"
+                role="group"
+                aria-label="确认删除 API Key"
+                onKeyDown={handleConfirmKeyDown}
+              >
+                <span>确认删除？</span>
+                <button
+                  ref={confirmBtnRef}
+                  className="btn-danger"
+                  onClick={handleDeleteConfirm}
+                  disabled={isDeleting}
+                  aria-label="确认删除 API Key"
+                >
+                  {isDeleting ? '删除中…' : '确认'}
+                </button>
+                <button onClick={handleDeleteCancel} disabled={isDeleting} aria-label="取消删除">
+                  取消
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* API Key 输入 */}
-      {!hasApiKey && (
-        <div className="provider-input-row">
-          <label htmlFor="provider-api-key" className="sr-only">
-            API Key
-          </label>
-          <input
-            ref={apiKeyInputRef}
-            id="provider-api-key"
-            type="password"
-            className="provider-input"
-            placeholder="输入 API Key"
-            value={apiKeyInput}
-            onChange={(e) => setApiKeyInput(e.target.value)}
-            disabled={!isReady || isSaving}
-          />
-          <button
-            className="btn-save"
-            onClick={handleSave}
-            disabled={!isReady || isSaving}
-            aria-busy={isSaving}
-            aria-label={isSaving ? '保存中' : '保存 API Key'}
-          >
-            {isSaving ? '保存中...' : '保存'}
-          </button>
-        </div>
-      )}
-
-      {/* 操作按钮 */}
-      {hasApiKey && (
-        <div className="provider-actions">
-          <button
-            className="btn-test"
-            onClick={handleTest}
-            disabled={!isReady || isTesting}
-            aria-busy={isTesting}
-            aria-label={isTesting ? '测试中' : '测试连接'}
-          >
-            {isTesting ? '测试中...' : '测试连接'}
-          </button>
-          <button
-            ref={deleteBtnRef}
-            className="btn-delete"
-            onClick={handleDeleteClick}
-            disabled={!isReady}
-            aria-label="删除 API Key"
-          >
-            删除密钥
-          </button>
-        </div>
-      )}
-
-      {/* 删除确认 */}
-      {deleteConfirmVisible && (
-        <div
-          className="provider-delete-confirm"
-          role="group"
-          aria-label="确认删除 API Key"
-          onKeyDown={handleConfirmKeyDown}
+      {/* 连接测试 */}
+      <div className="provider-test-section">
+        <button
+          onClick={handleTestConnection}
+          disabled={isTestingConnection || !providerState.hasApiKey || !isReady}
+          aria-busy={isTestingConnection}
+          aria-label={isTestingConnection ? '测试中' : '测试连接'}
+          title={!providerState.hasApiKey ? '请先配置 API Key' : undefined}
         >
-          <p className="delete-confirm-text">确认删除 API Key？此操作不可撤销。</p>
-          <div className="delete-confirm-actions">
-            <button
-              ref={confirmBtnRef}
-              className="btn-confirm-delete"
-              onClick={handleDeleteConfirm}
-              disabled={isDeleting}
-              aria-label="确认删除 API Key"
-            >
-              {isDeleting ? '删除中...' : '确认删除'}
-            </button>
-            <button
-              className="btn-cancel-delete"
-              onClick={handleDeleteCancel}
-              disabled={isDeleting}
-              aria-label="取消删除"
-            >
-              取消
-            </button>
-          </div>
-        </div>
-      )}
+          {isTestingConnection ? '正在连接…' : '测试连接'}
+        </button>
+      </div>
 
-      {/* 错误提示 */}
-      {error && (
+      {/* 错误信息 */}
+      {providerError && (
         <div className="provider-error" role="alert" aria-live="assertive">
-          {error}
+          <span>{providerError}</span>
+          <button onClick={() => setProviderError(null)} aria-label="关闭错误提示">
+            ✕
+          </button>
         </div>
       )}
-
-      {/* 测试结果 */}
-      {testResult && (
-        <div className="provider-test-result" role="status" aria-live="polite">
-          {testResult}
-        </div>
-      )}
-    </div>
+    </>
   );
 }

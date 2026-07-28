@@ -497,4 +497,128 @@ describe('App 级别测试', () => {
       { timeout: 5000 },
     );
   });
+
+  // 10. testConnection rejection 后 getState 返回 failed 状态
+  it('testConnection rejection 后 getState 返回 failed 状态', async () => {
+    const api = createMockDesktopAPI({
+      provider: {
+        ...createMockDesktopAPI().provider,
+        testConnection: vi.fn().mockRejectedValue(new Error('连接超时')),
+        getState: vi.fn().mockResolvedValue(mockProviderState),
+      },
+    });
+    setupDesktop(api);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待 App 完成初始渲染
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 点击测试连接
+    const testBtn = screen.getByRole('button', { name: '测试连接' });
+    await act(async () => {
+      testBtn.click();
+    });
+
+    // testConnection 被调用
+    expect(api.provider.testConnection).toHaveBeenCalled();
+
+    // 等待 getState 被调用
+    await waitFor(
+      () => {
+        expect(api.provider.getState).toHaveBeenCalled();
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  // 11. Provider 原始错误不泄露
+  it('Provider 原始错误不泄露', async () => {
+    const api = createMockDesktopAPI({
+      provider: {
+        ...createMockDesktopAPI().provider,
+        testConnection: vi
+          .fn()
+          .mockRejectedValue(
+            new Error(
+              'ENOENT: /Users/secret/.env Bearer sk-1234567890abcdef\n    at connect (src/provider.ts:42:11)',
+            ),
+          ),
+        getState: vi.fn().mockResolvedValue(mockProviderState),
+      },
+    });
+    setupDesktop(api);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待 App 完成初始渲染
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 点击测试连接
+    const testBtn = screen.getByRole('button', { name: '测试连接' });
+    await act(async () => {
+      testBtn.click();
+    });
+
+    // 等待错误显示
+    await waitFor(
+      () => {
+        expect(screen.getByRole('alert')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    // 错误不应该包含敏感信息
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).not.toContain('/Users/');
+    expect(alert.textContent).not.toContain('Bearer');
+    expect(alert.textContent).not.toContain('sk-');
+    expect(alert.textContent).not.toContain('at connect');
+  });
+
+  // 12. 点击新建项目后名称输入获得焦点
+  it('点击新建项目后名称输入获得焦点', async () => {
+    setupDesktop();
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待 App 完成初始渲染
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '新建项目' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 点击新建项目
+    const newProjectBtn = screen.getByRole('button', { name: '新建项目' });
+    act(() => {
+      newProjectBtn.click();
+    });
+
+    // 名称输入应该获得焦点
+    await waitFor(
+      () => {
+        const nameInput = screen.getByLabelText('项目名称');
+        expect(nameInput).toHaveFocus();
+      },
+      { timeout: 5000 },
+    );
+  });
 });

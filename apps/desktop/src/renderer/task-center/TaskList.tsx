@@ -1,7 +1,10 @@
 /**
- * 任务列表。
+ * 任务列表组件。
  *
- * 无障碍：
+ * 显示任务短 ID、类型、状态、尝试次数、创建/完成时间。
+ * 选中项清晰标记。
+ *
+ * 无障碍特性：
  * - role="listbox" + role="option" 列表模式
  * - roving tabindex: 只有活跃项 tabIndex=0，其余 -1
  * - activeTaskId（焦点）与 selectedTaskId（选中）分离
@@ -28,24 +31,21 @@ import {
   TASK_STATUS_OPTIONS,
   buildTaskTypeOptions,
 } from './task-labels';
-import { formatTaskShortId } from './task-formatters';
+import { formatTaskShortId, formatTime } from './task-formatters';
 
 interface TaskListProps {
-  /** 当前筛选后的任务列表 */
   tasks: ReadonlyArray<TaskPublicData>;
-  /** 全量任务列表（用于类型筛选计数） */
   allTasks: ReadonlyArray<TaskPublicData>;
-  /** 当前选中的任务 ID */
   selectedTaskId: string | null;
   statusFilter: string;
   typeFilter: string;
-  onStatusFilterChange: (v: string) => void;
-  onTypeFilterChange: (v: string) => void;
+  onStatusFilterChange: (s: string) => void;
+  onTypeFilterChange: (t: string) => void;
   onSelect: (taskId: string) => void;
 }
 
 /**
- * 获取任务的可访问名称。
+ * 构建任务项的可访问名称。
  */
 function buildTaskAriaLabel(task: TaskPublicData): string {
   const parts: string[] = [
@@ -73,6 +73,8 @@ export function TaskList({
   const listRef = useRef<HTMLUListElement>(null);
   // 活跃项（焦点所在）与选中项（用户确认选择）分离
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  // 记录焦点是否在列表内，通过 focus/blur 事件实时跟踪
+  const listHasFocusRef = useRef(false);
 
   // ── 工具函数 ──────────────────────────────────────────────────────
 
@@ -148,7 +150,7 @@ export function TaskList({
   useEffect(() => {
     if (!selectedTaskId) return;
     // 如果焦点不在列表内，不干预
-    if (!listRef.current?.contains(document.activeElement)) return;
+    if (!listHasFocusRef.current) return;
     // 如果当前 active 仍在列表中，保持不变
     if (activeTaskId && tasks.some((t) => t.id === activeTaskId)) return;
     // 同步到选中项
@@ -156,13 +158,13 @@ export function TaskList({
   }, [selectedTaskId, activeTaskId, tasks, focusTask]);
 
   // ── 焦点任务消失时的处理 ──────────────────────────────────────────
-  // 只有当焦点原本在列表内时才移动
+  // 任务列表变化后，检查焦点任务是否消失
   useEffect(() => {
     if (!activeTaskId) return;
     if (tasks.some((t) => t.id === activeTaskId)) return;
     // active 已不在列表中
-    // 检查焦点是否在列表内
-    if (!listRef.current?.contains(document.activeElement)) return;
+    // 只有当焦点原本在列表内时才移动
+    if (!listHasFocusRef.current) return;
     // 移动到第一项
     if (tasks.length > 0) {
       focusTask(tasks[0].id);
@@ -284,7 +286,7 @@ export function TaskList({
 
       {/* 列表 */}
       {tasks.length === 0 ? (
-        <div className="task-empty" data-testid="task-empty">
+        <div className="task-list-empty" data-testid="task-empty">
           暂无任务
         </div>
       ) : (
@@ -294,9 +296,21 @@ export function TaskList({
           role="listbox"
           aria-label="任务列表"
           onKeyDown={handleKeyDown}
+          onFocusCapture={() => {
+            listHasFocusRef.current = true;
+          }}
+          onBlurCapture={(e) => {
+            // 只有当焦点完全离开列表时才标记为 false
+            // relatedTarget 是获得焦点的元素
+            if (!listRef.current?.contains(e.relatedTarget as Node)) {
+              listHasFocusRef.current = false;
+            }
+          }}
+          data-testid="task-list"
         >
           {tasks.map((task) => {
             const isFocused = task.id === activeTaskId;
+            const isActive = task.id === selectedTaskId;
             return (
               <li
                 key={task.id}
@@ -304,16 +318,26 @@ export function TaskList({
                 data-task-id={task.id}
                 data-testid="task-item"
                 tabIndex={isFocused ? 0 : -1}
-                aria-selected={task.id === selectedTaskId ? 'true' : 'false'}
+                aria-selected={isActive ? 'true' : 'false'}
                 aria-label={buildTaskAriaLabel(task)}
-                className={`task-item ${task.id === selectedTaskId ? 'selected' : ''}`}
+                className={`task-item ${isActive ? 'active' : ''}`}
                 onClick={() => handleOptionClick(task.id)}
                 onFocus={() => handleOptionFocus(task.id)}
               >
-                <span className="task-type-label">{taskTypeLabel(task.taskType)}</span>
-                <span className={`task-status-badge status-${task.status.toLowerCase()}`}>
-                  {taskStatusLabel(task.status)}
-                </span>
+                <div className="task-item-header">
+                  <span className="task-item-id">{formatTaskShortId(task.id)}</span>
+                  <span className={`task-status-badge status-${task.status.toLowerCase()}`}>
+                    {taskStatusLabel(task.status)}
+                  </span>
+                </div>
+                <div className="task-item-meta">
+                  <span className="task-item-type">{taskTypeLabel(task.taskType)}</span>
+                  <span className="task-item-attempts">尝试 {task.attemptCount}</span>
+                </div>
+                <div className="task-item-times">
+                  <span>{formatTime(task.createdAt)}</span>
+                  {task.finishedAt && <span>→ {formatTime(task.finishedAt)}</span>}
+                </div>
               </li>
             );
           })}
