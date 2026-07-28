@@ -7,6 +7,10 @@ import {
   isValidSaveApiKeyInput,
   isValidProviderPublicState,
   isValidConnectionTestResult,
+  isValidGrillRequestQuestionPlanInput,
+  isValidGrillAcceptQuestionPlanProposalInput,
+  isValidGrillListQuestionPlanProposalsInput,
+  isValidGrillQuestionPlanProposalIdInput,
   type HealthCheckResponse,
   type ProviderPublicState,
   type ConnectionTestResult,
@@ -320,5 +324,83 @@ describe('isValidConnectionTestResult', () => {
 
   it('应该拒绝 latencyMs 类型错误', () => {
     expect(isValidConnectionTestResult({ ...validResult, latencyMs: 'fast' })).toBe(false);
+  });
+});
+
+describe('Grill 问题规划输入验证', () => {
+  it('55. request 有效输入通过', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        expectedSessionVersion: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it('56. request 缺少 expectedVersion 失败', () => {
+    expect(isValidGrillRequestQuestionPlanInput({ projectId: 'proj-1', sessionId: 'sess-1' })).toBe(
+      false,
+    );
+  });
+
+  it('57. request 畸形 id 失败', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 123,
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+    expect(isValidGrillRequestQuestionPlanInput(null)).toBe(false);
+    expect(isValidGrillRequestQuestionPlanInput('str')).toBe(false);
+  });
+
+  it('accept 有效输入通过', () => {
+    expect(
+      isValidGrillAcceptQuestionPlanProposalInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+        expectedSessionVersion: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it('accept 缺少 proposalId 失败', () => {
+    expect(
+      isValidGrillAcceptQuestionPlanProposalInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        expectedSessionVersion: 3,
+      }),
+    ).toBe(false);
+  });
+
+  it('list 有效输入通过', () => {
+    expect(
+      isValidGrillListQuestionPlanProposalsInput({ projectId: 'proj-1', sessionId: 'sess-1' }),
+    ).toBe(true);
+  });
+
+  it('list 缺少 sessionId 失败', () => {
+    expect(isValidGrillListQuestionPlanProposalsInput({ projectId: 'proj-1' })).toBe(false);
+  });
+
+  it('get 有效输入通过', () => {
+    expect(
+      isValidGrillQuestionPlanProposalIdInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+      }),
+    ).toBe(true);
+  });
+
+  it('58. get 畸形 proposalId 失败', () => {
+    expect(
+      isValidGrillQuestionPlanProposalIdInput({ projectId: 'proj-1', sessionId: 'sess-1' }),
+    ).toBe(false);
+    expect(isValidGrillQuestionPlanProposalIdInput(null)).toBe(false);
   });
 });

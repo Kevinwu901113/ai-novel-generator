@@ -39,6 +39,7 @@ describe('Grill 迁移', () => {
       expect(names).toEqual([
         'grill_answers',
         'grill_inference_proposals',
+        'grill_question_plan_proposals',
         'grill_questions',
         'grill_sessions',
       ]);
@@ -47,14 +48,14 @@ describe('Grill 迁移', () => {
     }
   });
 
-  it('新数据库版本应该是 3', () => {
+  it('新数据库版本应该是 4', () => {
     const dbPath = join(tempDir, 'project.sqlite');
     const db = new ProjectDatabase(dbPath);
     db.close();
 
     const raw = new DatabaseSync(dbPath);
     const migrator = new SQLiteMigrator(raw);
-    expect(migrator.getCurrentVersion()).toBe(3);
+    expect(migrator.getCurrentVersion()).toBe(4);
     raw.close();
   });
 
