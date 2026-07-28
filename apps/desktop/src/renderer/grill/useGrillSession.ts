@@ -5,7 +5,7 @@
  * version conflict 横幅在刷新后保持可见，直到用户关闭或下次成功 mutation。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GrillSessionPublicData } from '@ai-novel/contracts';
 import { grillErrorMessage } from './status-labels';
 
@@ -22,6 +22,7 @@ interface UseGrillSessionResult {
   abandonSession: () => Promise<void>;
   refresh: () => Promise<void>;
   clearError: () => void;
+  clearConflictNotice: () => void;
 }
 
 export function useGrillSession(
@@ -32,6 +33,7 @@ export function useGrillSession(
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [versionConflict, setVersionConflict] = useState(false);
+  const mutationLockRef = useRef(false);
 
   /** 刷新 session 数据 —— 不清除 conflict/error 状态 */
   const refresh = useCallback(async () => {
@@ -65,6 +67,8 @@ export function useGrillSession(
       actionName: string,
     ) => {
       if (!projectId || !sessionId || !session || isLoading) return;
+      if (mutationLockRef.current) return;
+      mutationLockRef.current = true;
       setIsLoading(true);
       setError(null);
       try {
@@ -79,8 +83,8 @@ export function useGrillSession(
       } catch (err) {
         const code = (err as Error & { code?: string }).code;
         if (code === 'GRILL_VERSION_CONFLICT') {
+          setError(null);
           setVersionConflict(true);
-          setError('会话已在其他操作中更新');
           // 刷新数据但保留冲突提示
           await refresh();
         } else if (code === 'GRILL_OWNERSHIP_CONFLICT') {
@@ -89,6 +93,7 @@ export function useGrillSession(
           setError(grillErrorMessage(code, `${actionName}失败`));
         }
       } finally {
+        mutationLockRef.current = false;
         setIsLoading(false);
       }
     },
@@ -122,6 +127,9 @@ export function useGrillSession(
 
   const clearError = useCallback(() => {
     setError(null);
+  }, []);
+
+  const clearConflictNotice = useCallback(() => {
     setVersionConflict(false);
   }, []);
 
@@ -137,5 +145,6 @@ export function useGrillSession(
     abandonSession,
     refresh,
     clearError,
+    clearConflictNotice,
   };
 }
