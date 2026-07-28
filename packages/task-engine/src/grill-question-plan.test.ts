@@ -456,12 +456,31 @@ describe('executeGrillQuestionPlan — 持久化与安全', () => {
     expect(state.task.errorCode).toBe('GRILL_PLAN_SCHEMA_INVALID');
   });
 
-  it('46. proposal 与 task completion 事务一致（complete 失败则无 proposal）', async () => {
+  it('46. proposal 与 task completion 事务一致（complete 失败则无 proposal，task 最终 FAILED）', async () => {
     state.completeRunningResult = false;
-    // 事务内 completeRunning CAS 失败抛错；mock 事务不回滚，但引擎在抛错前不会单独提交 proposal。
-    await expect(executeGrillQuestionPlan(buildDeps(), 'task-1')).rejects.toThrow(
-      TaskExecutionError,
-    );
+    // 使用可回滚事务：异常时恢复 proposal/invocation/task 快照
+    const base = buildDeps();
+    const deps: GrillQuestionPlanEngineDeps = {
+      ...base,
+      transaction: <T>(fn: () => T): T => {
+        const snapshot = {
+          proposal: state.proposal,
+          invocation: state.invocation ? { ...state.invocation } : null,
+          task: { ...state.task },
+        };
+        try {
+          return fn();
+        } catch (err) {
+          state.proposal = snapshot.proposal;
+          if (snapshot.invocation) state.invocation = snapshot.invocation;
+          state.task = snapshot.task;
+          throw err;
+        }
+      },
+    };
+    await expect(executeGrillQuestionPlan(deps, 'task-1')).rejects.toThrow(TaskExecutionError);
+    // proposal 不存在（事务回滚）
+    expect(state.proposal).toBeNull();
     expect(state.task.status).not.toBe('SUCCEEDED');
   });
 

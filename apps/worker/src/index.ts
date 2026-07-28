@@ -83,11 +83,7 @@ import type {
   ModelInvocationRow,
 } from '@ai-novel/database';
 import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
-import {
-  executeModelInvocationTest,
-  executeGrillQuestionPlan,
-  sha256Hex,
-} from '@ai-novel/task-engine';
+import { executeModelInvocationTest, sha256Hex } from '@ai-novel/task-engine';
 import { createMacOSKeychainSecretStore } from './secret-store.js';
 import {
   dispatchGrillCommand,
@@ -97,6 +93,11 @@ import {
   GrillAnswerRepositoryAdapter,
   GrillQuestionPlanProposalRepositoryAdapter,
 } from './grill-handlers.js';
+import {
+  scheduleGrillPlanRun,
+  recoverPendingGrillPlans as recoverPendingGrillPlansModule,
+  type GrillPlanRunnerDeps,
+} from './grill-plan-runner.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -1041,96 +1042,79 @@ async function handleCreateModelInvocationTest(payload: unknown): Promise<TaskPu
 }
 
 /**
- * 后台执行 Grill 问题规划任务。
- *
- * 每次调用打开独立的 ProjectDatabase（不复用请求处理器的即将关闭的 DB），
- * 执行完毕后关闭。所有异常均被捕获，不产生 unhandled rejection。
+ * 构建 Grill planner runner 依赖。
+ */
+function buildGrillPlanRunnerDeps(): GrillPlanRunnerDeps {
+  return {
+    openDb: (projectId: string) => getProjectDb(projectId),
+    buildEngineDeps: (projDb: ProjectDatabase) => {
+      const clock = createClock();
+      return {
+        taskRepo: new TaskRepositoryAdapter(projDb),
+        invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
+        secretStore: secretStore!,
+        providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+        idGenerator: createIdGenerator(),
+        clock,
+        sessionRepo: new GrillSessionRepositoryAdapter(projDb, clock),
+        questionRepo: new GrillQuestionRepositoryAdapter(projDb, clock),
+        answerRepo: new GrillAnswerRepositoryAdapter(projDb, clock),
+        planProposalRepo: new GrillQuestionPlanProposalRepositoryAdapter(projDb, clock),
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+          systemPrompt?: string;
+          maxTokens?: number;
+          temperature?: number;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transaction(fn),
+      };
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+  };
+}
+
+/**
+ * 后台执行 Grill 问题规划任务（委托给 grill-plan-runner 模块）。
  */
 function runGrillQuestionPlan(projectId: string, taskId: string): void {
   if (!appDb || !secretStore) return;
-
-  let projDb: ProjectDatabase;
-  try {
-    projDb = getProjectDb(projectId);
-  } catch {
-    return;
-  }
-
-  const clock = createClock();
-  const taskRepo = new TaskRepositoryAdapter(projDb);
-  const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
-  const providerRepo = new ProviderProfileRepositoryAdapter(appDb);
-  const sessionRepo = new GrillSessionRepositoryAdapter(projDb, clock);
-  const questionRepo = new GrillQuestionRepositoryAdapter(projDb, clock);
-  const answerRepo = new GrillAnswerRepositoryAdapter(projDb, clock);
-  const planProposalRepo = new GrillQuestionPlanProposalRepositoryAdapter(projDb, clock);
-
-  void executeGrillQuestionPlan(
-    {
-      taskRepo,
-      invocationRepo,
-      secretStore,
-      providerRepo,
-      idGenerator: createIdGenerator(),
-      clock,
-      sessionRepo,
-      questionRepo,
-      answerRepo,
-      planProposalRepo,
-      invokeModel: async (input: {
-        baseUrl: string;
-        model: string;
-        apiKey: string;
-        prompt: string;
-        systemPrompt?: string;
-        maxTokens?: number;
-        temperature?: number;
-      }) => {
-        return invokeModel({ fetch: globalThis.fetch, clock }, input);
-      },
-      transaction: <T>(fn: () => T) => projDb.transaction(fn),
-    },
-    taskId,
-  )
-    .catch(() => {
-      // 后台执行错误已持久化为 FAILED/STALE，不产生 unhandled rejection
-    })
-    .finally(() => {
-      projDb.close();
-    });
+  scheduleGrillPlanRun(buildGrillPlanRunnerDeps(), projectId, taskId);
 }
 
 /**
  * 启动时恢复：扫描所有项目中 PENDING 的 GRILL_QUESTION_PLAN 任务并调度执行。
- *
- * claimPending CAS 保证同一任务只被一个 runner 执行。
  */
 function recoverPendingGrillPlans(dataRoot: string): void {
   const projectsPath = join(dataRoot, 'projects');
   if (!existsSync(projectsPath)) return;
 
-  for (const entry of readdirSync(projectsPath)) {
-    const projectDir = join(projectsPath, entry);
-    const dbPath = join(projectDir, 'project.sqlite');
-    if (!existsSync(dbPath)) continue;
-
-    try {
-      const projDb = new ProjectDatabase(dbPath);
-      try {
-        const pendingTasks = projDb
-          .getTaskRepository()
-          .listByStatus('PENDING')
-          .filter((t) => t.taskType === 'GRILL_QUESTION_PLAN');
-        for (const task of pendingTasks) {
-          runGrillQuestionPlan(task.projectId, task.id);
+  recoverPendingGrillPlansModule({
+    listProjectDbs: () => {
+      const result: Array<{ projectId: string; projDb: ProjectDatabase }> = [];
+      for (const entry of readdirSync(projectsPath)) {
+        const projectDir = join(projectsPath, entry);
+        const dbPath = join(projectDir, 'project.sqlite');
+        if (!existsSync(dbPath)) continue;
+        try {
+          const projDb = new ProjectDatabase(dbPath);
+          // 从 DB 元数据获取 projectId 不可靠，使用目录名作为 hint
+          // 实际 projectId 由 task.projectId 字段决定
+          result.push({ projectId: entry, projDb });
+        } catch {
+          // 无法打开的数据库留待下次恢复
         }
-      } finally {
-        projDb.close();
       }
-    } catch {
-      // 忽略无法打开的项目数据库
-    }
-  }
+      return result;
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    schedule: (projectId: string, taskId: string) => runGrillQuestionPlan(projectId, taskId),
+  });
 }
 
 async function handleRequestQuestionPlan(
