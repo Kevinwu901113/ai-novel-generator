@@ -10,9 +10,18 @@
  * - boundary 自身异常不递归崩溃
  * - 不持久化错误到 localStorage、数据库或日志
  * - 不调用 toSafeUserError
+ *
+ * 无障碍特性：
+ * - fallback 出现后将焦点移动到 fallback 容器
+ * - fallback 容器使用 tabIndex={-1}
+ * - 保留固定静态错误消息
+ * - 不显示原始异常
+ * - "重新加载此区域"按钮保持可键盘操作
+ * - reset 后焦点进入重新挂载区域
+ * - 不在普通 rerender 时重复抢焦点
  */
 
-import { Component, type ReactNode } from 'react';
+import { Component, createRef, type ReactNode } from 'react';
 
 interface RendererErrorBoundaryProps {
   children: ReactNode;
@@ -24,36 +33,84 @@ interface RendererErrorBoundaryState {
   hasError: boolean;
   /** 重置计数器，用于强制重新挂载子树 */
   resetCount: number;
+  /** 标记是否需要在下次渲染后设置焦点 */
+  shouldFocusFallback: boolean;
+  /** 标记是否需要在 reset 后设置焦点到恢复内容 */
+  shouldFocusRestored: boolean;
 }
 
 export class RendererErrorBoundary extends Component<
   RendererErrorBoundaryProps,
   RendererErrorBoundaryState
 > {
+  private fallbackRef = createRef<HTMLDivElement>();
+  private restoredRef = createRef<HTMLDivElement>();
+
   constructor(props: RendererErrorBoundaryProps) {
     super(props);
     this.state = {
       hasError: false,
       resetCount: 0,
+      shouldFocusFallback: false,
+      shouldFocusRestored: false,
     };
   }
 
   static getDerivedStateFromError(): Partial<RendererErrorBoundaryState> {
     // 不保存任何原始异常信息
-    return { hasError: true };
+    return { hasError: true, shouldFocusFallback: true };
+  }
+
+  override componentDidUpdate(
+    _prevProps: RendererErrorBoundaryProps,
+    prevState: RendererErrorBoundaryState,
+  ): void {
+    // fallback 出现后将焦点移动到 fallback 容器
+    // 使用 setTimeout 确保在 React DOM 更新后设置焦点
+    if (this.state.shouldFocusFallback && this.fallbackRef.current) {
+      const ref = this.fallbackRef.current;
+      setTimeout(() => {
+        ref.focus();
+      }, 0);
+      this.setState({ shouldFocusFallback: false });
+    }
+
+    // reset 后焦点进入重新挂载区域
+    if (this.state.shouldFocusRestored && this.restoredRef.current) {
+      const container = this.restoredRef.current;
+      setTimeout(() => {
+        // 尝试找到首个可聚焦元素，找不到则聚焦容器本身
+        const firstFocusable = container.querySelector<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"]), h2, h3',
+        );
+        if (firstFocusable) {
+          firstFocusable.focus();
+        } else {
+          container.focus();
+        }
+      }, 0);
+      this.setState({ shouldFocusRestored: false });
+    }
   }
 
   private handleReset = (): void => {
     this.setState((prev) => ({
       hasError: false,
       resetCount: prev.resetCount + 1,
+      shouldFocusRestored: true,
     }));
   };
 
-  render(): ReactNode {
+  override render(): ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="error-boundary-fallback" role="alert">
+        <div
+          ref={this.fallbackRef}
+          className="error-boundary-fallback"
+          role="alert"
+          tabIndex={-1}
+          aria-label={`${this.props.label}加载异常`}
+        >
           <div className="error-boundary-content">
             <p className="error-boundary-title">{this.props.label}加载异常</p>
             <p className="error-boundary-message">该区域暂时无法显示，请重新加载。</p>
@@ -66,9 +123,11 @@ export class RendererErrorBoundary extends Component<
     }
 
     return (
-      <RendererErrorBoundaryInner key={this.state.resetCount}>
-        {this.props.children}
-      </RendererErrorBoundaryInner>
+      <div ref={this.restoredRef} tabIndex={-1} style={{ outline: 'none' }}>
+        <RendererErrorBoundaryInner key={this.state.resetCount}>
+          {this.props.children}
+        </RendererErrorBoundaryInner>
+      </div>
     );
   }
 }
