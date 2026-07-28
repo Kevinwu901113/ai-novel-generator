@@ -9,6 +9,7 @@ import type {
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
 import { GrillWorkbench } from './grill/GrillWorkbench';
+import { TaskCenter } from './task-center/TaskCenter';
 
 // ── 错误码中文映射 ────────────────────────────────────────────────
 
@@ -548,6 +549,12 @@ export function App() {
                   </div>
                 </>
               )}
+
+              {/* 任务活动 */}
+              <div className="status-section task-center-section">
+                <h3>任务活动</h3>
+                <TaskCenter projectId={currentProject?.id ?? null} />
+              </div>
 
               {/* 模型服务 */}
               <div className="status-section provider-section">
