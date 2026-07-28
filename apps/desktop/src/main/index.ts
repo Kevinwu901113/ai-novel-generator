@@ -18,6 +18,16 @@ import {
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
   isValidCreateModelInvocationTestInput,
+  isValidGrillCreateSessionInput,
+  isValidGrillSessionIdInput,
+  isValidGrillSessionVersionInput,
+  isValidGrillAddQuestionsInput,
+  isValidGrillAnswerQuestionInput,
+  isValidGrillQuestionActionInput,
+  isValidGrillCreateProposalInput,
+  isValidGrillReviewProposalInput,
+  isValidGrillListProposalsInput,
+  isValidGrillListAnswerHistoryInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -26,6 +36,10 @@ import {
   type ConnectionTestResult,
   type TaskPublicData,
   type TaskStatsPublicData,
+  type GrillSessionPublicData,
+  type GrillQuestionPublicData,
+  type GrillAnswerPublicData,
+  type GrillProposalPublicData,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -237,6 +251,275 @@ ipcMain.handle(
     });
 
     return result as TaskStatsPublicData;
+  },
+);
+
+// ── Grill-me IPC 处理器 ──────────────────────────────────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_CREATE_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillCreateSessionInput(input)) {
+      throw Object.assign(new Error('无效的创建会话输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.createSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_GET_SESSION,
+  async (_event, payload: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionIdInput(payload)) {
+      throw Object.assign(new Error('无效的会话查询输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.getSession',
+      payload,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_LIST_SESSIONS,
+  async (_event, payload: unknown): Promise<ReadonlyArray<GrillSessionPublicData>> => {
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.listSessions',
+      payload,
+    })) as ReadonlyArray<GrillSessionPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_START_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionVersionInput(input)) {
+      throw Object.assign(new Error('无效的会话操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.startSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_PAUSE_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionVersionInput(input)) {
+      throw Object.assign(new Error('无效的会话操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.pauseSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_RESUME_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionVersionInput(input)) {
+      throw Object.assign(new Error('无效的会话操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.resumeSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_COMPLETE_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionVersionInput(input)) {
+      throw Object.assign(new Error('无效的会话操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.completeSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_ABANDON_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData> => {
+    if (!isValidGrillSessionVersionInput(input)) {
+      throw Object.assign(new Error('无效的会话操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.abandonSession',
+      payload: input,
+    })) as GrillSessionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_ADD_QUESTIONS,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillQuestionPublicData>> => {
+    if (!isValidGrillAddQuestionsInput(input)) {
+      throw Object.assign(new Error('无效的添加问题输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.addQuestions',
+      payload: input,
+    })) as ReadonlyArray<GrillQuestionPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_MARK_QUESTION_ASKED,
+  async (_event, input: unknown): Promise<GrillQuestionPublicData> => {
+    if (!isValidGrillQuestionActionInput(input)) {
+      throw Object.assign(new Error('无效的问题操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.markQuestionAsked',
+      payload: input,
+    })) as GrillQuestionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_ANSWER_QUESTION,
+  async (_event, input: unknown): Promise<GrillAnswerPublicData> => {
+    if (!isValidGrillAnswerQuestionInput(input)) {
+      throw Object.assign(new Error('无效的回答问题输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.answerQuestion',
+      payload: input,
+    })) as GrillAnswerPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_SKIP_QUESTION,
+  async (_event, input: unknown): Promise<GrillQuestionPublicData> => {
+    if (!isValidGrillQuestionActionInput(input)) {
+      throw Object.assign(new Error('无效的问题操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.skipQuestion',
+      payload: input,
+    })) as GrillQuestionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_SUPERSEDE_QUESTION,
+  async (_event, input: unknown): Promise<GrillQuestionPublicData> => {
+    if (!isValidGrillQuestionActionInput(input)) {
+      throw Object.assign(new Error('无效的问题操作输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.supersedeQuestion',
+      payload: input,
+    })) as GrillQuestionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_GET_CURRENT_ANSWERS,
+  async (_event, payload: unknown): Promise<ReadonlyArray<GrillAnswerPublicData>> => {
+    if (!isValidGrillSessionIdInput(payload)) {
+      throw Object.assign(new Error('无效的答案查询输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.getCurrentAnswers',
+      payload,
+    })) as ReadonlyArray<GrillAnswerPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_LIST_ANSWER_HISTORY,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillAnswerPublicData>> => {
+    if (!isValidGrillListAnswerHistoryInput(input)) {
+      throw Object.assign(new Error('无效的答案历史输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.listAnswerHistory',
+      payload: input,
+    })) as ReadonlyArray<GrillAnswerPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_CREATE_PROPOSAL,
+  async (_event, input: unknown): Promise<GrillProposalPublicData> => {
+    if (!isValidGrillCreateProposalInput(input)) {
+      throw Object.assign(new Error('无效的创建提案输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.createProposal',
+      payload: input,
+    })) as GrillProposalPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_REVIEW_PROPOSAL,
+  async (_event, input: unknown): Promise<GrillProposalPublicData> => {
+    if (!isValidGrillReviewProposalInput(input)) {
+      throw Object.assign(new Error('无效的审核提案输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.reviewProposal',
+      payload: input,
+    })) as GrillProposalPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_LIST_PROPOSALS,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillProposalPublicData>> => {
+    if (!isValidGrillListProposalsInput(input)) {
+      throw Object.assign(new Error('无效的提案列表输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.listProposals',
+      payload: input,
+    })) as ReadonlyArray<GrillProposalPublicData>;
   },
 );
 

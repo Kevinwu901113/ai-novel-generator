@@ -17,6 +17,24 @@ const IPC_CHANNELS = {
   TASK_GET: 'ipc:task-get',
   TASK_LIST: 'ipc:task-list',
   TASK_GET_STATS: 'ipc:task-get-stats',
+  GRILL_CREATE_SESSION: 'ipc:grill-create-session',
+  GRILL_GET_SESSION: 'ipc:grill-get-session',
+  GRILL_LIST_SESSIONS: 'ipc:grill-list-sessions',
+  GRILL_START_SESSION: 'ipc:grill-start-session',
+  GRILL_PAUSE_SESSION: 'ipc:grill-pause-session',
+  GRILL_RESUME_SESSION: 'ipc:grill-resume-session',
+  GRILL_COMPLETE_SESSION: 'ipc:grill-complete-session',
+  GRILL_ABANDON_SESSION: 'ipc:grill-abandon-session',
+  GRILL_ADD_QUESTIONS: 'ipc:grill-add-questions',
+  GRILL_MARK_QUESTION_ASKED: 'ipc:grill-mark-question-asked',
+  GRILL_ANSWER_QUESTION: 'ipc:grill-answer-question',
+  GRILL_SKIP_QUESTION: 'ipc:grill-skip-question',
+  GRILL_SUPERSEDE_QUESTION: 'ipc:grill-supersede-question',
+  GRILL_GET_CURRENT_ANSWERS: 'ipc:grill-get-current-answers',
+  GRILL_LIST_ANSWER_HISTORY: 'ipc:grill-list-answer-history',
+  GRILL_CREATE_PROPOSAL: 'ipc:grill-create-proposal',
+  GRILL_REVIEW_PROPOSAL: 'ipc:grill-review-proposal',
+  GRILL_LIST_PROPOSALS: 'ipc:grill-list-proposals',
 } as const;
 
 /**
@@ -37,6 +55,19 @@ import type {
   CreateModelInvocationTestInput,
   TaskPublicData,
   TaskStatsPublicData,
+  GrillCreateSessionInput,
+  GrillSessionVersionInput,
+  GrillAddQuestionsInput,
+  GrillAnswerQuestionInput,
+  GrillQuestionActionInput,
+  GrillCreateProposalInput,
+  GrillReviewProposalInput,
+  GrillListProposalsInput,
+  GrillListAnswerHistoryInput,
+  GrillSessionPublicData,
+  GrillQuestionPublicData,
+  GrillAnswerPublicData,
+  GrillProposalPublicData,
 } from '@ai-novel/contracts';
 
 /**
@@ -105,6 +136,89 @@ const desktopAPI: DesktopAPI = {
 
     async getStats(projectId: string): Promise<TaskStatsPublicData> {
       return ipcRenderer.invoke(IPC_CHANNELS.TASK_GET_STATS, { projectId });
+    },
+  },
+
+  grill: {
+    async createSession(input: GrillCreateSessionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_CREATE_SESSION, input);
+    },
+
+    async getSession(projectId: string, sessionId: string): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_GET_SESSION, { projectId, sessionId });
+    },
+
+    async listSessions(projectId: string): Promise<ReadonlyArray<GrillSessionPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_SESSIONS, { projectId });
+    },
+
+    async startSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_START_SESSION, input);
+    },
+
+    async pauseSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_PAUSE_SESSION, input);
+    },
+
+    async resumeSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_RESUME_SESSION, input);
+    },
+
+    async completeSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_COMPLETE_SESSION, input);
+    },
+
+    async abandonSession(input: GrillSessionVersionInput): Promise<GrillSessionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_ABANDON_SESSION, input);
+    },
+
+    async addQuestions(
+      input: GrillAddQuestionsInput,
+    ): Promise<ReadonlyArray<GrillQuestionPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_ADD_QUESTIONS, input);
+    },
+
+    async markQuestionAsked(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_MARK_QUESTION_ASKED, input);
+    },
+
+    async answerQuestion(input: GrillAnswerQuestionInput): Promise<GrillAnswerPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_ANSWER_QUESTION, input);
+    },
+
+    async skipQuestion(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_SKIP_QUESTION, input);
+    },
+
+    async supersedeQuestion(input: GrillQuestionActionInput): Promise<GrillQuestionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_SUPERSEDE_QUESTION, input);
+    },
+
+    async getCurrentAnswers(
+      projectId: string,
+      sessionId: string,
+    ): Promise<ReadonlyArray<GrillAnswerPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_GET_CURRENT_ANSWERS, { projectId, sessionId });
+    },
+
+    async listAnswerHistory(
+      input: GrillListAnswerHistoryInput,
+    ): Promise<ReadonlyArray<GrillAnswerPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_ANSWER_HISTORY, input);
+    },
+
+    async createProposal(input: GrillCreateProposalInput): Promise<GrillProposalPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_CREATE_PROPOSAL, input);
+    },
+
+    async reviewProposal(input: GrillReviewProposalInput): Promise<GrillProposalPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_REVIEW_PROPOSAL, input);
+    },
+
+    async listProposals(
+      input: GrillListProposalsInput,
+    ): Promise<ReadonlyArray<GrillProposalPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_PROPOSALS, input);
     },
   },
 };
