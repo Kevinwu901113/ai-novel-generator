@@ -3,6 +3,12 @@
  *
  * 使用 tasks.getStats 作为统计来源。
  * 平均延迟的除数为 invocationCount。
+ *
+ * 安全行为：
+ * - stats refresh 失败时保留并继续显示上一次成功统计
+ * - 同时显示独立错误提示
+ * - 明确标记"统计可能已过期"
+ * - stats 为 null 且失败时只显示错误
  */
 
 import type { TaskStatsPublicData } from '@ai-novel/contracts';
@@ -14,19 +20,50 @@ interface TaskStatsProps {
 }
 
 export function TaskStats({ stats, error }: TaskStatsProps) {
-  if (error) {
-    return <div className="task-stats-error">统计加载失败：{error}</div>;
+  // 有错误且没有上次成功数据时，只显示错误
+  if (error && !stats) {
+    return (
+      <div className="task-stats-error" data-testid="task-stats-error">
+        统计加载失败：{error}
+      </div>
+    );
   }
 
+  // 有错误但有上次成功数据时，显示数据和过期提示
+  if (error && stats) {
+    return (
+      <div className="task-stats" data-testid="task-stats">
+        <div className="task-stats-stale-notice" data-testid="task-stats-stale">
+          ⚠ 统计可能已过期
+        </div>
+        <TaskStatsContent stats={stats} />
+      </div>
+    );
+  }
+
+  // 无数据且无错误时，显示加载中
   if (!stats) {
     return <div className="task-stats-loading">加载统计中…</div>;
   }
 
+  // 正常显示
+  return (
+    <div className="task-stats" data-testid="task-stats">
+      <TaskStatsContent stats={stats} />
+    </div>
+  );
+}
+
+/**
+ * 统计内容展示组件。
+ * 提取出来以便复用。
+ */
+function TaskStatsContent({ stats }: { stats: TaskStatsPublicData }) {
   const avgLatency =
     stats.invocationCount > 0 ? safeNumber(stats.totalLatencyMs / stats.invocationCount) : null;
 
   return (
-    <div className="task-stats" data-testid="task-stats">
+    <>
       <div className="task-stats-item">
         <span className="task-stats-label">模型调用</span>
         <span className="task-stats-value">{formatNumber(stats.invocationCount)}</span>
@@ -65,6 +102,6 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
           {avgLatency !== null ? formatLatency(avgLatency) : '—'}
         </span>
       </div>
-    </div>
+    </>
   );
 }

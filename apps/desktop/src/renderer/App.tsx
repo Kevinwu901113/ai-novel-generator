@@ -10,25 +10,9 @@ import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
 import { GrillWorkbench } from './grill/GrillWorkbench';
 import { TaskCenter } from './task-center/TaskCenter';
-
-// ── 错误码中文映射 ────────────────────────────────────────────────
-
-const ERROR_CODE_MESSAGES: Record<string, string> = {
-  PROVIDER_NOT_CONFIGURED: '模型提供商未配置',
-  API_KEY_REQUIRED: '请先配置 API Key',
-  API_KEY_STORE_FAILED: '无法保存 API Key',
-  API_KEY_READ_FAILED: '无法读取 API Key',
-  API_KEY_DELETE_FAILED: '无法删除 API Key',
-  PROVIDER_CONNECTION_FAILED: '连接失败',
-  PROVIDER_AUTH_FAILED: '认证失败，请检查 API Key',
-  PROVIDER_ACCESS_DENIED: '访问被拒绝',
-  PROVIDER_MODEL_UNAVAILABLE: '模型不可用',
-  PROVIDER_RATE_LIMITED: '请求频率超限，请稍后重试',
-  PROVIDER_TIMEOUT: '连接超时',
-  PROVIDER_RESPONSE_INVALID: '响应格式异常',
-  NETWORK_UNAVAILABLE: '网络不可用',
-  WORKER_UNAVAILABLE: '数据服务不可用',
-};
+import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
+import { toSafeUserError } from './safety/safe-error';
+import { ERROR_CODE_LABELS } from './safety/error-code-labels';
 
 const MAX_NAME_LENGTH = 100;
 const MAX_IDEA_LENGTH = 20_000;
@@ -127,9 +111,8 @@ export function App() {
       const list = await window.desktop.projects.list();
       setProjects(list);
       hasLoadedProjects.current = true;
-    } catch (err) {
-      // 列表加载失败不阻塞
-      console.error('Failed to load projects:', err);
+    } catch {
+      // 列表加载失败不阻塞，不输出原始错误
     }
   }, []);
 
@@ -138,9 +121,8 @@ export function App() {
     try {
       const state = await window.desktop.provider.getState();
       setProviderState(state);
-    } catch (err) {
-      // 提供商状态加载失败不阻塞
-      console.error('Failed to load provider state:', err);
+    } catch {
+      // 提供商状态加载失败不阻塞，不输出原始错误
     }
   }, []);
 
@@ -201,9 +183,8 @@ export function App() {
       const project = await window.desktop.projects.open(result.id);
       setCurrentProject(project);
     } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '创建项目失败';
-      setError(code ? `[${code}] ${message}` : message);
+      const safe = toSafeUserError(err, '创建项目失败');
+      setError(safe.message);
     } finally {
       setIsCreating(false);
     }
@@ -221,9 +202,8 @@ export function App() {
         setCurrentProject(project);
         await loadProjects();
       } catch (err) {
-        const code = (err as Error & { code?: string }).code;
-        const message = err instanceof Error ? err.message : '打开项目失败';
-        setError(code ? `[${code}] ${message}` : message);
+        const safe = toSafeUserError(err, '打开项目失败');
+        setError(safe.message);
       } finally {
         setIsLoading(false);
       }
@@ -254,9 +234,8 @@ export function App() {
       setProviderState(state);
       setApiKeyInput('');
     } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '保存失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
+      const safe = toSafeUserError(err, '保存失败');
+      setProviderError(safe.message);
     } finally {
       setIsSavingKey(false);
     }
@@ -273,9 +252,8 @@ export function App() {
       setProviderState(state);
       setDeleteConfirmVisible(false);
     } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '删除失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
+      const safe = toSafeUserError(err, '删除失败');
+      setProviderError(safe.message);
     }
   }, [dataServiceStatus]);
 
@@ -291,9 +269,8 @@ export function App() {
       // 重新加载状态以获取更新的测试结果
       await loadProviderState();
     } catch (err) {
-      const code = (err as Error & { code?: string }).code;
-      const message = err instanceof Error ? err.message : '测试失败';
-      setProviderError(code ? `[${code}] ${message}` : message);
+      const safe = toSafeUserError(err, '测试失败');
+      setProviderError(safe.message);
       // 重新加载状态以获取错误码
       await loadProviderState();
     } finally {
@@ -415,7 +392,9 @@ export function App() {
         {/* 中栏：新建项目 / Grill 工作台 */}
         {currentProject ? (
           <section className="panel panel-center" style={{ padding: 0 }}>
-            <GrillWorkbench projectId={currentProject.id} />
+            <RendererErrorBoundary label="Grill 工作台">
+              <GrillWorkbench projectId={currentProject.id} />
+            </RendererErrorBoundary>
           </section>
         ) : (
           <section className="panel panel-center">
@@ -529,147 +508,153 @@ export function App() {
                 <h3>当前阶段</h3>
                 <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
               </div>
-              {currentProject && (
-                <>
-                  <div className="status-section">
-                    <h3>项目 ID</h3>
-                    <p className="mono">{shortId(currentProject.id)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>创建时间</h3>
-                    <p>{formatTime(currentProject.createdAt)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>最近打开</h3>
-                    <p>{formatTime(currentProject.lastOpenedAt)}</p>
-                  </div>
-                  <div className="status-section">
-                    <h3>项目状态</h3>
-                    <p>{currentProject.status}</p>
-                  </div>
-                </>
-              )}
+              <RendererErrorBoundary label="项目状态">
+                {currentProject && (
+                  <>
+                    <div className="status-section">
+                      <h3>项目 ID</h3>
+                      <p className="mono">{shortId(currentProject.id)}</p>
+                    </div>
+                    <div className="status-section">
+                      <h3>创建时间</h3>
+                      <p>{formatTime(currentProject.createdAt)}</p>
+                    </div>
+                    <div className="status-section">
+                      <h3>最近打开</h3>
+                      <p>{formatTime(currentProject.lastOpenedAt)}</p>
+                    </div>
+                    <div className="status-section">
+                      <h3>项目状态</h3>
+                      <p>{currentProject.status}</p>
+                    </div>
+                  </>
+                )}
+              </RendererErrorBoundary>
 
               {/* 任务活动 */}
               <div className="status-section task-center-section">
                 <h3>任务活动</h3>
-                <TaskCenter projectId={currentProject?.id ?? null} />
+                <RendererErrorBoundary label="任务中心">
+                  <TaskCenter projectId={currentProject?.id ?? null} />
+                </RendererErrorBoundary>
               </div>
 
               {/* 模型服务 */}
               <div className="status-section provider-section">
                 <h3>模型服务</h3>
-                {providerState && (
-                  <>
-                    <div className="provider-info">
-                      <p>
-                        <strong>提供商：</strong>
-                        {providerState.displayName}
-                      </p>
-                      <p>
-                        <strong>模型：</strong>
-                        {providerState.model}
-                      </p>
-                      <p>
-                        <strong>接口类型：</strong>
-                        {providerState.providerType}
-                      </p>
-                      <p>
-                        <strong>API Key：</strong>
-                        {providerState.hasApiKey ? '已配置' : '未配置'}
-                      </p>
-                      {providerState.lastTestStatus !== 'never' && (
-                        <>
-                          <p>
-                            <strong>最近测试：</strong>
-                            {providerState.lastTestStatus === 'success'
-                              ? '连接正常'
-                              : providerState.lastTestErrorCode
-                                ? `[${providerState.lastTestErrorCode}] ${ERROR_CODE_MESSAGES[providerState.lastTestErrorCode] ?? '测试失败'}`
-                                : '测试失败'}
-                          </p>
-                          <p>
-                            <strong>测试时间：</strong>
-                            {formatTime(providerState.lastTestedAt)}
-                          </p>
-                          {providerState.lastTestLatencyMs !== null && (
+                <RendererErrorBoundary label="模型服务">
+                  {providerState && (
+                    <>
+                      <div className="provider-info">
+                        <p>
+                          <strong>提供商：</strong>
+                          {providerState.displayName}
+                        </p>
+                        <p>
+                          <strong>模型：</strong>
+                          {providerState.model}
+                        </p>
+                        <p>
+                          <strong>接口类型：</strong>
+                          {providerState.providerType}
+                        </p>
+                        <p>
+                          <strong>API Key：</strong>
+                          {providerState.hasApiKey ? '已配置' : '未配置'}
+                        </p>
+                        {providerState.lastTestStatus !== 'never' && (
+                          <>
                             <p>
-                              <strong>延迟：</strong>
-                              {providerState.lastTestLatencyMs}ms
+                              <strong>最近测试：</strong>
+                              {providerState.lastTestStatus === 'success'
+                                ? '连接正常'
+                                : providerState.lastTestErrorCode
+                                  ? `[${providerState.lastTestErrorCode}] ${ERROR_CODE_LABELS[providerState.lastTestErrorCode] ?? '测试失败'}`
+                                  : '测试失败'}
                             </p>
-                          )}
-                        </>
-                      )}
-                    </div>
-
-                    {/* API Key 编辑 */}
-                    <div className="provider-key-section">
-                      {!providerState.hasApiKey ? (
-                        <div className="provider-key-input">
-                          <input
-                            type="password"
-                            value={apiKeyInput}
-                            onChange={(e) => setApiKeyInput(e.target.value)}
-                            placeholder="输入 API Key"
-                            disabled={isSavingKey || dataServiceStatus !== 'ready'}
-                            maxLength={8192}
-                          />
-                          <button
-                            onClick={handleSaveApiKey}
-                            disabled={
-                              isSavingKey || !apiKeyInput.trim() || dataServiceStatus !== 'ready'
-                            }
-                          >
-                            {isSavingKey ? '保存中…' : '保存'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="provider-key-actions">
-                          {!deleteConfirmVisible ? (
-                            <button
-                              className="btn-danger"
-                              onClick={() => setDeleteConfirmVisible(true)}
-                              disabled={dataServiceStatus !== 'ready'}
-                            >
-                              删除密钥
-                            </button>
-                          ) : (
-                            <div className="delete-confirm">
-                              <span>确认删除？</span>
-                              <button className="btn-danger" onClick={handleDeleteApiKey}>
-                                确认
-                              </button>
-                              <button onClick={() => setDeleteConfirmVisible(false)}>取消</button>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 连接测试 */}
-                    <div className="provider-test-section">
-                      <button
-                        onClick={handleTestConnection}
-                        disabled={
-                          isTestingConnection ||
-                          !providerState.hasApiKey ||
-                          dataServiceStatus !== 'ready'
-                        }
-                        title={!providerState.hasApiKey ? '请先配置 API Key' : undefined}
-                      >
-                        {isTestingConnection ? '正在连接…' : '测试连接'}
-                      </button>
-                    </div>
-
-                    {/* 错误信息 */}
-                    {providerError && (
-                      <div className="provider-error">
-                        <span>{providerError}</span>
-                        <button onClick={() => setProviderError(null)}>✕</button>
+                            <p>
+                              <strong>测试时间：</strong>
+                              {formatTime(providerState.lastTestedAt)}
+                            </p>
+                            {providerState.lastTestLatencyMs !== null && (
+                              <p>
+                                <strong>延迟：</strong>
+                                {providerState.lastTestLatencyMs}ms
+                              </p>
+                            )}
+                          </>
+                        )}
                       </div>
-                    )}
-                  </>
-                )}
+
+                      {/* API Key 编辑 */}
+                      <div className="provider-key-section">
+                        {!providerState.hasApiKey ? (
+                          <div className="provider-key-input">
+                            <input
+                              type="password"
+                              value={apiKeyInput}
+                              onChange={(e) => setApiKeyInput(e.target.value)}
+                              placeholder="输入 API Key"
+                              disabled={isSavingKey || dataServiceStatus !== 'ready'}
+                              maxLength={8192}
+                            />
+                            <button
+                              onClick={handleSaveApiKey}
+                              disabled={
+                                isSavingKey || !apiKeyInput.trim() || dataServiceStatus !== 'ready'
+                              }
+                            >
+                              {isSavingKey ? '保存中…' : '保存'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="provider-key-actions">
+                            {!deleteConfirmVisible ? (
+                              <button
+                                className="btn-danger"
+                                onClick={() => setDeleteConfirmVisible(true)}
+                                disabled={dataServiceStatus !== 'ready'}
+                              >
+                                删除密钥
+                              </button>
+                            ) : (
+                              <div className="delete-confirm">
+                                <span>确认删除？</span>
+                                <button className="btn-danger" onClick={handleDeleteApiKey}>
+                                  确认
+                                </button>
+                                <button onClick={() => setDeleteConfirmVisible(false)}>取消</button>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 连接测试 */}
+                      <div className="provider-test-section">
+                        <button
+                          onClick={handleTestConnection}
+                          disabled={
+                            isTestingConnection ||
+                            !providerState.hasApiKey ||
+                            dataServiceStatus !== 'ready'
+                          }
+                          title={!providerState.hasApiKey ? '请先配置 API Key' : undefined}
+                        >
+                          {isTestingConnection ? '正在连接…' : '测试连接'}
+                        </button>
+                      </div>
+
+                      {/* 错误信息 */}
+                      {providerError && (
+                        <div className="provider-error">
+                          <span>{providerError}</span>
+                          <button onClick={() => setProviderError(null)}>✕</button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </RendererErrorBoundary>
               </div>
             </div>
           </aside>
