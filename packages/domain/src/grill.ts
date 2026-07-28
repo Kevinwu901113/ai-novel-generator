@@ -84,13 +84,14 @@ export interface GrillInferenceProposal {
 
 export interface GrillQuestionPlanProposal {
   readonly id: GrillQuestionPlanProposalId;
+  readonly projectId: string;
   readonly sessionId: GrillSessionId;
-  readonly basedOnSessionVersion: number;
-  readonly status: GrillQuestionPlanProposalStatus;
-  readonly questionsJson: string;
-  readonly stopRecommendationJson: string;
   readonly taskId: string;
   readonly invocationId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly questionsJson: string;
+  readonly status: GrillQuestionPlanProposalStatus;
   readonly createdAt: string;
   readonly reviewedAt: string | null;
 }
