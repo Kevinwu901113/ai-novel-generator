@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, within, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, within, cleanup, act } from '@testing-library/react';
 import { GrillWorkbench } from './GrillWorkbench';
 import type {
   GrillQuestionPublicData,
@@ -165,7 +165,9 @@ async function selectFirstSession() {
   await waitFor(() => {
     expect(screen.getByText(mockSession.goal)).toBeInTheDocument();
   });
-  screen.getByText(mockSession.goal).closest('.grill-session-item')!.click();
+  await act(async () => {
+    screen.getByText(mockSession.goal).closest('.grill-session-item')!.click();
+  });
 }
 
 // ── 测试 ─────────────────────────────────────────────────────────
@@ -180,7 +182,9 @@ describe('GrillWorkbench DOM 交互', () => {
   // 1. 选择 session 后问题列表渲染
   it('选择 session 后问题列表渲染', async () => {
     setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => {
@@ -212,18 +216,26 @@ describe('GrillWorkbench DOM 交互', () => {
         listQuestions: vi.fn().mockResolvedValue([...mockQuestions, newQ]),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('添加问题')).toBeInTheDocument());
-    screen.getByText('添加问题').click();
+    await act(async () => {
+      screen.getByText('添加问题').click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('问题主题')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('问题主题'), '新问题主题');
-    setInputValue(screen.getByPlaceholderText('问题详细内容'), '新问题内容');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('问题主题'), '新问题主题');
+      setInputValue(screen.getByPlaceholderText('问题详细内容'), '新问题内容');
+    });
 
     await waitFor(() => expect(screen.getByText('确认添加')).not.toBeDisabled());
-    screen.getByText('确认添加').click();
+    await act(async () => {
+      screen.getByText('确认添加').click();
+    });
 
     await waitFor(() => expect(screen.getByText('新问题主题')).toBeInTheDocument());
   });
@@ -231,34 +243,50 @@ describe('GrillWorkbench DOM 交互', () => {
   // 3. 点击问题后右栏显示详情
   it('点击问题后右栏显示详情', async () => {
     setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    act(() => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
   });
 
   // 4. 回答后显示 current answer
   it('回答后显示 current answer', async () => {
+    const getCurrentAnswersMock = vi
+      .fn()
+      .mockResolvedValueOnce(STABLE_EMPTY)
+      .mockResolvedValue([mockAnswer]);
     setupDesktop(
       createMockAPI({
-        getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
+        getCurrentAnswers: getCurrentAnswersMock,
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    act(() => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '主角在小镇长大');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '主角在小镇长大');
+    });
 
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => expect(screen.getByText('主角在小镇长大')).toBeInTheDocument());
   });
@@ -284,26 +312,40 @@ describe('GrillWorkbench DOM 交互', () => {
         listAnswerHistory: vi.fn().mockResolvedValue([mockAnswer, rev2]),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    act(() => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '主角在小镇长大');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '主角在小镇长大');
+    });
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => expect(screen.getByText('主角在小镇长大')).toBeInTheDocument());
 
-    setInputValue(screen.getByPlaceholderText('输入新的回答内容…'), '修订后的回答');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入新的回答内容…'), '修订后的回答');
+    });
     await waitFor(() => expect(screen.getByText('修订')).not.toBeDisabled());
-    screen.getByText('修订').click();
+    await act(async () => {
+      screen.getByText('修订').click();
+    });
 
     await waitFor(() => expect(screen.getByText('修订后的回答')).toBeInTheDocument());
 
-    screen.getByText('查看历史').click();
+    act(() => {
+      screen.getByText('查看历史').click();
+    });
     await waitFor(() => {
       expect(screen.getByText('revision 1')).toBeInTheDocument();
       expect(screen.getAllByText('revision 2').length).toBeGreaterThanOrEqual(1);
@@ -313,14 +355,18 @@ describe('GrillWorkbench DOM 交互', () => {
   // 6. skip 后 IPC 被调用
   it('skip 后 IPC 被调用', async () => {
     const api = setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
     const questionItems = document.querySelectorAll('.grill-question-item');
-    within(questionItems[0] as HTMLElement)
-      .getByText('跳过')
-      .click();
+    await act(async () => {
+      within(questionItems[0] as HTMLElement)
+        .getByText('跳过')
+        .click();
+    });
 
     await waitFor(() => expect(api.grill.skipQuestion).toHaveBeenCalled());
   });
@@ -328,14 +374,18 @@ describe('GrillWorkbench DOM 交互', () => {
   // 7. supersede 后 IPC 被调用
   it('supersede 后 IPC 被调用', async () => {
     const api = setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
     const questionItems = document.querySelectorAll('.grill-question-item');
-    within(questionItems[0] as HTMLElement)
-      .getByText('废弃')
-      .click();
+    await act(async () => {
+      within(questionItems[0] as HTMLElement)
+        .getByText('废弃')
+        .click();
+    });
 
     await waitFor(() => expect(api.grill.supersedeQuestion).toHaveBeenCalled());
   });
@@ -347,7 +397,9 @@ describe('GrillWorkbench DOM 交互', () => {
         getSession: vi.fn().mockResolvedValue({ ...mockSession, status: 'PAUSED' }),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('已暂停')).toBeInTheDocument());
@@ -361,7 +413,9 @@ describe('GrillWorkbench DOM 交互', () => {
         getSession: vi.fn().mockResolvedValue({ ...mockSession, status: 'COMPLETED' }),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('已完成')).toBeInTheDocument());
@@ -380,18 +434,26 @@ describe('GrillWorkbench DOM 交互', () => {
         getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    });
 
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => {
       expect(screen.getByText('会话已在其他操作中更新，数据已自动刷新。')).toBeInTheDocument();
@@ -409,18 +471,26 @@ describe('GrillWorkbench DOM 交互', () => {
         getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    });
 
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => {
       expect(screen.getByText('会话已在其他操作中更新，数据已自动刷新。')).toBeInTheDocument();
@@ -429,7 +499,9 @@ describe('GrillWorkbench DOM 交互', () => {
     const banner = screen
       .getByText('会话已在其他操作中更新，数据已自动刷新。')
       .closest('.grill-conflict-banner')!;
-    banner.querySelector('button')!.click();
+    act(() => {
+      banner.querySelector('button')!.click();
+    });
 
     await waitFor(() => {
       expect(
@@ -450,26 +522,36 @@ describe('GrillWorkbench DOM 交互', () => {
         addQuestions: vi.fn().mockReturnValue(addDeferred),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('添加问题')).toBeInTheDocument());
-    screen.getByText('添加问题').click();
+    await act(async () => {
+      screen.getByText('添加问题').click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('问题主题')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('问题主题'), '测试');
-    setInputValue(screen.getByPlaceholderText('问题详细内容'), '内容');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('问题主题'), '测试');
+      setInputValue(screen.getByPlaceholderText('问题详细内容'), '内容');
+    });
 
     await waitFor(() => expect(screen.getByText('确认添加')).not.toBeDisabled());
     const btn = screen.getByText('确认添加');
     // 同步双击：两次 click 在同一微任务中
-    btn.click();
-    btn.click();
+    act(() => {
+      btn.click();
+      btn.click();
+    });
 
     expect(api.grill.addQuestions).toHaveBeenCalledTimes(1);
 
     // 解锁 deferred 以避免 afterEach 中的 cleanup 挂起
-    resolveAdd(mockQuestions);
+    await act(async () => {
+      resolveAdd(mockQuestions);
+    });
   });
 
   // 13. session 切换清除旧详情
@@ -480,18 +562,24 @@ describe('GrillWorkbench DOM 交互', () => {
         listSessions: vi.fn().mockResolvedValue([mockSession, session2]),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
 
     api.grill.getSession.mockResolvedValue(session2);
     api.grill.listQuestions.mockResolvedValue(STABLE_EMPTY);
     api.grill.getCurrentAnswers.mockResolvedValue(STABLE_EMPTY);
-    screen.getByText('第二个会话').closest('.grill-session-item')!.click();
+    await act(async () => {
+      screen.getByText('第二个会话').closest('.grill-session-item')!.click();
+    });
 
     await waitFor(() => {
       expect(screen.queryByText(mockQuestions[0].text)).not.toBeInTheDocument();
@@ -509,7 +597,9 @@ describe('GrillWorkbench DOM 交互', () => {
         listSessions: vi.fn().mockRejectedValue(err),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
 
     await waitFor(() => {
       const banner = document.querySelector('.grill-error-banner');
@@ -535,7 +625,9 @@ describe('GrillDiagnostics 安全', () => {
 
   it('DOM 中不包含完整 project/session ID', async () => {
     setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     // 等待渲染完成
@@ -579,7 +671,9 @@ describe('GrillDiagnostics 安全', () => {
 
   it('初次加载时刷新时间显示 —', async () => {
     setupDesktop(createMockAPI());
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     // 初次加载完成前应显示 —
     const diagnosticsEl = document.querySelector('.grill-diagnostics');
     if (diagnosticsEl) {
@@ -607,11 +701,15 @@ describe('版本冲突横幅排他性', () => {
         getSession: vi.fn().mockResolvedValue({ ...mockSession, status: 'DRAFT' }),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('启动')).toBeInTheDocument());
-    screen.getByText('启动').click();
+    await act(async () => {
+      screen.getByText('启动').click();
+    });
 
     await waitFor(() => {
       expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
@@ -629,17 +727,25 @@ describe('版本冲突横幅排他性', () => {
         getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    });
 
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => {
       expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
@@ -656,21 +762,31 @@ describe('版本冲突横幅排他性', () => {
         createProposal: vi.fn().mockRejectedValue(conflictErr),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByText('创建提案')).toBeInTheDocument());
-    screen.getByText('创建提案').click();
+    await act(async () => {
+      screen.getByText('创建提案').click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('推理结论的 key')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('推理结论的 key'), 'test.key');
-    setInputValue(screen.getByPlaceholderText('{"key": "value"}'), '{"v":1}');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('推理结论的 key'), 'test.key');
+      setInputValue(screen.getByPlaceholderText('{"key": "value"}'), '{"v":1}');
+    });
 
     await waitFor(() => expect(screen.getByText('确认创建')).not.toBeDisabled());
-    screen.getByText('确认创建').click();
+    await act(async () => {
+      screen.getByText('确认创建').click();
+    });
 
     await waitFor(() => {
       expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
@@ -689,17 +805,25 @@ describe('版本冲突横幅排他性', () => {
         getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
       }),
     );
-    render(<GrillWorkbench projectId="proj-00000001" />);
+    await act(async () => {
+      render(<GrillWorkbench projectId="proj-00000001" />);
+    });
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
-    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    await act(async () => {
+      screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+    });
 
     await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
-    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    act(() => {
+      setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+    });
 
     await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
-    screen.getByText('提交回答').click();
+    await act(async () => {
+      screen.getByText('提交回答').click();
+    });
 
     await waitFor(() => {
       expect(document.querySelector('.grill-error-banner')).not.toBeNull();
