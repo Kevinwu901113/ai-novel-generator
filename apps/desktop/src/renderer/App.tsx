@@ -18,6 +18,7 @@ import {
   ProjectStatusRegion,
   ProviderRegion,
 } from './regions';
+import { LiveRegion } from './accessibility';
 
 export function App() {
   const [panelState, setPanelState] = useState<PanelState>(INITIAL_PANEL_STATE);
@@ -37,6 +38,12 @@ export function App() {
 
   // 提供商状态
   const [providerState, setProviderState] = useState<ProviderPublicState | null>(null);
+
+  // Grill 工作区焦点管理
+  const grillSectionRef = useRef<HTMLElement | null>(null);
+  const createSectionRef = useRef<HTMLElement | null>(null);
+  const [shouldFocusGrill, setShouldFocusGrill] = useState(false);
+  const [shouldFocusCreate, setShouldFocusCreate] = useState(false);
 
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setPanelState((prev) => togglePanel(prev, panel));
@@ -133,6 +140,8 @@ export function App() {
         await loadProjects();
         const project = await window.desktop.projects.open(result.id);
         setCurrentProject(project);
+        // 创建成功后焦点进入 Grill 工作区
+        setShouldFocusGrill(true);
         return true;
       } catch (err) {
         const safe = toSafeUserError(err, '创建项目失败');
@@ -177,7 +186,32 @@ export function App() {
   const handleNewProject = useCallback(() => {
     setCurrentProject(null);
     setError(null);
+    // 切换到新建项目时焦点进入名称输入框
+    setShouldFocusCreate(true);
   }, []);
+
+  // 创建成功后焦点进入 Grill 工作区
+  useEffect(() => {
+    if (shouldFocusGrill && currentProject && grillSectionRef.current) {
+      const heading = grillSectionRef.current.querySelector('h2');
+      if (heading) {
+        (heading as HTMLElement).setAttribute('tabindex', '-1');
+        (heading as HTMLElement).focus();
+      }
+      setShouldFocusGrill(false);
+    }
+  }, [shouldFocusGrill, currentProject]);
+
+  // 切换到新建项目时焦点进入名称输入框
+  useEffect(() => {
+    if (shouldFocusCreate && !currentProject && createSectionRef.current) {
+      const nameInput = createSectionRef.current.querySelector<HTMLInputElement>('#project-name');
+      if (nameInput) {
+        nameInput.focus();
+      }
+      setShouldFocusCreate(false);
+    }
+  }, [shouldFocusCreate, currentProject]);
 
   // Provider 操作
   const handleSaveApiKey = useCallback(async (apiKey: string) => {
@@ -203,30 +237,43 @@ export function App() {
 
   return (
     <div className="app">
+      {/* 全局状态公告 */}
+      <LiveRegion message={error} politeness="assertive" label="全局错误" />
+
       {/* 顶部工具栏 */}
-      <header className="toolbar">
-        <div className="toolbar-left">
+      <header className="toolbar" role="banner">
+        <nav className="toolbar-left" aria-label="面板控制">
           <button
             className="toolbar-btn"
             onClick={() => handleTogglePanel('left')}
-            title={panelState.left ? '收起项目列表' : '展开项目列表'}
+            aria-label={panelState.left ? '收起项目列表' : '展开项目列表'}
+            aria-expanded={panelState.left}
+            aria-controls="panel-left"
           >
             ☰
           </button>
           <h1 className="app-title">AI 小说创作代理</h1>
-        </div>
+        </nav>
         <div className="toolbar-right">
-          <span className={`data-service-badge ${dataServiceStatus}`}>
+          <span
+            className={`data-service-badge ${dataServiceStatus}`}
+            role="status"
+            aria-live="polite"
+          >
             {isDataServiceStarting && '⟳ 数据服务启动中…'}
             {isDataServiceReady && '● 数据服务就绪'}
             {dataServiceStatus === 'failed' && '✕ 数据服务不可用'}
             {dataServiceStatus === 'disconnected' && '✕ 数据服务已断开'}
           </span>
-          <span className="dev-badge">开发模式</span>
+          <span className="dev-badge" aria-hidden="true">
+            开发模式
+          </span>
           <button
             className="toolbar-btn"
             onClick={() => handleTogglePanel('right')}
-            title={panelState.right ? '收起状态面板' : '展开状态面板'}
+            aria-label={panelState.right ? '收起状态面板' : '展开状态面板'}
+            aria-expanded={panelState.right}
+            aria-controls="panel-right"
           >
             ☰
           </button>
@@ -235,17 +282,19 @@ export function App() {
 
       {/* 错误提示 */}
       {error && (
-        <div className="global-error">
+        <div className="global-error" role="alert" aria-live="assertive">
           <span>{error}</span>
-          <button onClick={() => setError(null)}>✕</button>
+          <button onClick={() => setError(null)} aria-label="关闭错误提示">
+            ✕
+          </button>
         </div>
       )}
 
       {/* 主内容区 */}
-      <main className="workspace">
+      <div className="workspace">
         {/* 左栏：项目列表 */}
         {panelState.left && (
-          <aside className="panel panel-left">
+          <aside id="panel-left" className="panel panel-left" aria-label="项目列表">
             <RendererErrorBoundary label="项目列表">
               <ProjectListRegion
                 dataServiceStatus={dataServiceStatus}
@@ -261,13 +310,18 @@ export function App() {
 
         {/* 中栏：新建项目 / Grill 工作台 */}
         {currentProject ? (
-          <section className="panel panel-center" style={{ padding: 0 }}>
+          <section
+            ref={grillSectionRef}
+            className="panel panel-center"
+            style={{ padding: 0 }}
+            aria-label="Grill 工作台"
+          >
             <RendererErrorBoundary label="Grill 工作台">
               <GrillWorkbench projectId={currentProject.id} />
             </RendererErrorBoundary>
           </section>
         ) : (
-          <section className="panel panel-center">
+          <section ref={createSectionRef} className="panel panel-center" aria-label="新建项目">
             <RendererErrorBoundary label="新建项目">
               <CreateProjectRegion
                 dataServiceStatus={dataServiceStatus}
@@ -280,13 +334,13 @@ export function App() {
 
         {/* 右栏：状态 */}
         {panelState.right && (
-          <aside className="panel panel-right">
+          <aside id="panel-right" className="panel panel-right" aria-label="状态面板">
             <div className="panel-header">
-              <h2>状态</h2>
+              <h2 id="status-heading">状态</h2>
             </div>
             <div className="panel-content">
-              <div className="status-section">
-                <h3>本地存储</h3>
+              <section className="status-section" aria-labelledby="status-local-heading">
+                <h3 id="status-local-heading">本地存储</h3>
                 <p>
                   {isDataServiceReady
                     ? 'SQLite 已就绪'
@@ -294,42 +348,52 @@ export function App() {
                       ? '启动中…'
                       : '不可用'}
                 </p>
-              </div>
-              <div className="status-section">
-                <h3>数据服务</h3>
+              </section>
+              <section className="status-section" aria-labelledby="status-service-heading">
+                <h3 id="status-service-heading">数据服务</h3>
                 <p>
                   {isDataServiceStarting && '启动中…'}
                   {isDataServiceReady && '正常运行'}
                   {dataServiceStatus === 'failed' && (
                     <>
                       不可用
-                      <button className="btn-retry-inline" onClick={handleRetry}>
+                      <button
+                        className="btn-retry-inline"
+                        onClick={handleRetry}
+                        aria-label="重试数据服务"
+                      >
                         重试
                       </button>
                     </>
                   )}
                   {dataServiceStatus === 'disconnected' && '已断开'}
                 </p>
-              </div>
-              <div className="status-section">
-                <h3>当前阶段</h3>
+              </section>
+              <section className="status-section" aria-labelledby="status-stage-heading">
+                <h3 id="status-stage-heading">当前阶段</h3>
                 <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
-              </div>
+              </section>
               <RendererErrorBoundary label="项目状态">
                 <ProjectStatusRegion currentProject={currentProject} />
               </RendererErrorBoundary>
 
               {/* 任务活动 */}
-              <div className="status-section task-center-section">
-                <h3>任务活动</h3>
+              <section
+                className="status-section task-center-section"
+                aria-labelledby="task-center-heading"
+              >
+                <h3 id="task-center-heading">任务活动</h3>
                 <RendererErrorBoundary label="任务中心">
                   <TaskCenter projectId={currentProject?.id ?? null} />
                 </RendererErrorBoundary>
-              </div>
+              </section>
 
               {/* 模型服务 */}
-              <div className="status-section provider-section">
-                <h3>模型服务</h3>
+              <section
+                className="status-section provider-section"
+                aria-labelledby="provider-heading"
+              >
+                <h3 id="provider-heading">模型服务</h3>
                 <RendererErrorBoundary label="模型服务">
                   <ProviderRegion
                     providerState={providerState}
@@ -339,14 +403,14 @@ export function App() {
                     onTestConnection={handleTestConnection}
                   />
                 </RendererErrorBoundary>
-              </div>
+              </section>
             </div>
           </aside>
         )}
-      </main>
+      </div>
 
       {/* 状态栏 */}
-      <footer className="status-bar">
+      <footer className="status-bar" role="contentinfo">
         <div className="status-left">
           <span className="status-item">桌面服务：{health?.ok ? '正常' : '检查中...'}</span>
           {health && <span className="status-item">版本：{health.version}</span>}
