@@ -30,6 +30,7 @@ import {
   GrillStateConflictError,
   GrillOwnershipConflictError,
   GrillPlanAlreadyRunningError,
+  GrillPlanStaleError,
   GrillPlanProposalNotFoundError,
   GrillPlanProposalNotAcceptableError,
   TaskDedupeConflictError,
@@ -268,6 +269,12 @@ function taskRepo(db: MockDb): TaskRepositoryPort {
       db.tasks.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
       return true;
     },
+    failPending(id, errorCode, errorMessage) {
+      const t = db.tasks.get(id);
+      if (!t || t.status !== 'PENDING') return false;
+      db.tasks.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
+    },
     markStale(id, expectedStatuses) {
       const t = db.tasks.get(id);
       if (!t || !expectedStatuses.includes(t.status)) return false;
@@ -337,6 +344,7 @@ describe('requestGrillQuestionPlan', () => {
         projectId: 'proj-1',
         sessionId: 'sess-1',
         expectedSessionVersion: 99,
+        providerProfileId: 'provider-1',
       }),
     ).toThrow(GrillVersionConflictError);
   });
@@ -347,6 +355,7 @@ describe('requestGrillQuestionPlan', () => {
         projectId: 'proj-1',
         sessionId: 'ghost',
         expectedSessionVersion: 1,
+        providerProfileId: 'provider-1',
       }),
     ).toThrow(GrillSessionNotFoundError);
   });
@@ -358,6 +367,7 @@ describe('requestGrillQuestionPlan', () => {
         projectId: 'proj-1',
         sessionId: 'sess-1',
         expectedSessionVersion: 1,
+        providerProfileId: 'provider-1',
       }),
     ).toThrow(GrillStateConflictError);
   });
@@ -368,6 +378,7 @@ describe('requestGrillQuestionPlan', () => {
         projectId: 'other-proj',
         sessionId: 'sess-1',
         expectedSessionVersion: 1,
+        providerProfileId: 'provider-1',
       }),
     ).toThrow(GrillOwnershipConflictError);
   });
@@ -377,6 +388,7 @@ describe('requestGrillQuestionPlan', () => {
       projectId: 'proj-1',
       sessionId: 'sess-1',
       expectedSessionVersion: 1,
+      providerProfileId: 'provider-1',
     });
     expect(result.sessionId).toBe('sess-1');
     expect(result.baseSessionVersion).toBe(1);
@@ -391,12 +403,14 @@ describe('requestGrillQuestionPlan', () => {
       projectId: 'proj-1',
       sessionId: 'sess-1',
       expectedSessionVersion: 1,
+      providerProfileId: 'provider-1',
     });
     expect(() =>
       requestGrillQuestionPlan(buildDeps(db), {
         projectId: 'proj-1',
         sessionId: 'sess-1',
         expectedSessionVersion: 1,
+        providerProfileId: 'provider-1',
       }),
     ).toThrow(GrillPlanAlreadyRunningError);
     const active = [...db.tasks.values()].filter(
@@ -411,11 +425,13 @@ describe('requestGrillQuestionPlan', () => {
       projectId: 'proj-1',
       sessionId: 'sess-1',
       expectedSessionVersion: 1,
+      providerProfileId: 'provider-1',
     });
     requestGrillQuestionPlan(buildDeps(db), {
       projectId: 'proj-1',
       sessionId: 'sess-2',
       expectedSessionVersion: 1,
+      providerProfileId: 'provider-1',
     });
     expect(db.tasks.size).toBe(2);
   });
@@ -566,7 +582,7 @@ describe('acceptGrillQuestionPlanProposal', () => {
     ).toThrow(GrillOwnershipConflictError);
   });
 
-  it('30. proposal stale 后拒绝接受（base 版本不匹配）', () => {
+  it('30. session 版本已前进 → 提案标记 STALE 并抛 GrillPlanStaleError', () => {
     seedProposal({ baseSessionVersion: 1 });
     // 会话已前进到版本 2
     db.sessions.set('sess-1', makeSession({ version: 2 }));
@@ -577,22 +593,23 @@ describe('acceptGrillQuestionPlanProposal', () => {
         proposalId: 'prop-1',
         expectedSessionVersion: 2,
       }),
-    ).toThrow(GrillPlanProposalNotAcceptableError);
+    ).toThrow(GrillPlanStaleError);
     expect(db.questions.size).toBe(0);
+    expect(db.proposals.get('prop-1')?.status).toBe('STALE');
   });
 
-  it('31. acceptance CAS 冲突（会话版本不匹配）', () => {
+  it('31. 调用方版本错误但会话仍等于 base → GrillVersionConflictError，不标记 STALE', () => {
     seedProposal({ baseSessionVersion: 1 });
-    // 会话已前进到版本 2，但调用方仍以期望版本 1 接受
-    db.sessions.set('sess-1', makeSession({ version: 2 }));
+    // 会话版本仍为 1（等于 proposal base），但调用方传错误版本 99
     expect(() =>
       acceptGrillQuestionPlanProposal(planDeps(db), {
         projectId: 'proj-1',
         sessionId: 'sess-1',
         proposalId: 'prop-1',
-        expectedSessionVersion: 1,
+        expectedSessionVersion: 99,
       }),
     ).toThrow(GrillVersionConflictError);
+    expect(db.proposals.get('prop-1')?.status).toBe('PROPOSED');
   });
 
   it('32. 两个并发接受只有一个成功', () => {
@@ -616,6 +633,33 @@ describe('acceptGrillQuestionPlanProposal', () => {
     expect(db.proposals.get('prop-1')?.status).toBe('ACCEPTED');
     // 仅创建一批问题（2 个）
     expect(db.questions.size).toBe(2);
+  });
+
+  it('stale 标记与 accept 互斥：已 STALE 的提案不可接受', () => {
+    seedProposal({ baseSessionVersion: 1 });
+    // 会话前进 → 触发 stale
+    db.sessions.set('sess-1', makeSession({ version: 2 }));
+    expect(() =>
+      acceptGrillQuestionPlanProposal(planDeps(db), {
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+        expectedSessionVersion: 2,
+      }),
+    ).toThrow(GrillPlanStaleError);
+    expect(db.proposals.get('prop-1')?.status).toBe('STALE');
+
+    // 即使会话版本回退（不可能，但模拟），已 STALE 的提案仍不可接受
+    db.sessions.set('sess-1', makeSession({ version: 1 }));
+    expect(() =>
+      acceptGrillQuestionPlanProposal(planDeps(db), {
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toThrow();
+    expect(db.questions.size).toBe(0);
   });
 
   it('提案不存在拒绝', () => {

@@ -13,6 +13,7 @@ import {
   GRILL_QUESTION_PLAN_SCHEMA_VERSION,
   parseQuestionPlanV1,
   validatePlanReferences,
+  validateExistingGraphIntegrity,
   topologicalPlanOrder,
   type NormalizedQuestionPlan,
   type PlanParseResult,
@@ -28,11 +29,13 @@ import type {
 } from './grill-types.js';
 import {
   AppError,
+  GrillValidationError,
   GrillSessionNotFoundError,
   GrillStateConflictError,
   GrillVersionConflictError,
   GrillOwnershipConflictError,
   GrillPlanAlreadyRunningError,
+  GrillPlanStaleError,
   GrillPlanSchemaInvalidError,
   GrillPlanReferenceInvalidError,
   GrillPlanCycleDetectedError,
@@ -117,7 +120,13 @@ export function validateStoredPlan(
     throw mapPlanError(refs);
   }
 
-  const order = topologicalPlanOrder(parsed.plan, existingDepsFromQuestions(existingQuestions));
+  const existingDeps = existingDepsFromQuestions(existingQuestions);
+  const integrity = validateExistingGraphIntegrity(existingDeps);
+  if (!integrity.ok) {
+    throw mapPlanError(integrity);
+  }
+
+  const order = topologicalPlanOrder(parsed.plan, existingDeps);
   if (!order.ok) {
     throw new GrillPlanCycleDetectedError(order.message);
   }
@@ -131,6 +140,7 @@ export interface RequestGrillQuestionPlanInput {
   readonly projectId: string;
   readonly sessionId: string;
   readonly expectedSessionVersion: number;
+  readonly providerProfileId: string;
 }
 
 export interface RequestGrillQuestionPlanResult {
@@ -170,6 +180,10 @@ export function requestGrillQuestionPlan(
     );
   }
 
+  if (typeof input.providerProfileId !== 'string' || input.providerProfileId.trim().length === 0) {
+    throw new GrillValidationError('缺少启用的模型提供商配置');
+  }
+
   const baseSessionVersion = session.version;
   const taskId = deps.idGenerator.generate();
   const dedupeKey = `grill_question_plan:${input.sessionId}:${baseSessionVersion}`;
@@ -177,6 +191,7 @@ export function requestGrillQuestionPlan(
     sessionId: input.sessionId,
     baseSessionVersion,
     schemaVersion: GRILL_QUESTION_PLAN_SCHEMA_VERSION,
+    providerProfileId: input.providerProfileId,
   });
 
   try {
@@ -236,105 +251,145 @@ export function acceptGrillQuestionPlanProposal(
   deps: GrillQuestionPlanDeps,
   input: AcceptGrillQuestionPlanProposalInput,
 ): AcceptGrillQuestionPlanProposalResult {
-  // 事务前快速失败
+  // Phase 1：事务前快速失败（存在性 / 归属 / 状态）
   const preSession = deps.sessionRepo.getById(input.sessionId);
   if (!preSession) {
     throw new GrillSessionNotFoundError(input.sessionId);
   }
   assertSessionOwnership(preSession, input.projectId);
 
+  const preProposal = deps.planProposalRepo.getById(input.proposalId);
+  if (!preProposal) {
+    throw new GrillPlanProposalNotFoundError(input.proposalId);
+  }
+  if (preProposal.sessionId !== input.sessionId || preProposal.projectId !== input.projectId) {
+    throw new GrillOwnershipConflictError(`提案 ${input.proposalId} 不属于会话 ${input.sessionId}`);
+  }
+  if (preProposal.status !== 'PROPOSED') {
+    throw new GrillPlanProposalNotAcceptableError(
+      `提案 ${input.proposalId} 当前状态为 ${preProposal.status}，不能接受`,
+    );
+  }
+
+  // Phase 2：会话已越过提案基础版本 → 标记 STALE（独立事务提交），不插入、不 bump
+  if (preSession.version !== preProposal.baseSessionVersion) {
+    const staled = deps.transaction(() => deps.planProposalRepo.markStale(input.proposalId));
+    if (staled) {
+      throw new GrillPlanStaleError(`提案 ${input.proposalId} 已过期：会话版本已变化`);
+    }
+    // CAS 失败：并发状态变更（如已被接受）
+    throw new GrillPlanProposalNotAcceptableError(`提案 ${input.proposalId} 状态已变更，不能接受`);
+  }
+
+  // Phase 3：仅调用者期望版本错误（会话仍等于 base）→ 版本冲突，不标记 stale
+  if (input.expectedSessionVersion !== preSession.version) {
+    throw new GrillVersionConflictError(
+      `会话 ${input.sessionId} 版本冲突（期望 ${input.expectedSessionVersion}，实际 ${preSession.version}）`,
+    );
+  }
+
+  // Phase 4：主事务 —— 重新验证 + 插入 + 接受 + bump
   const createdIds: string[] = [];
-
-  deps.transaction(() => {
-    // 1. 事务内重新读取会话，验证 ownership 与状态
-    const session = deps.sessionRepo.getById(input.sessionId);
-    if (!session) {
-      throw new GrillSessionNotFoundError(input.sessionId);
-    }
-    assertSessionOwnership(session, input.projectId);
-    if (session.status !== 'ACTIVE') {
-      throw new GrillStateConflictError(
-        `会话 ${input.sessionId} 当前状态为 ${session.status}，需要 ACTIVE 才能接受规划`,
-      );
-    }
-
-    // 2. 提案存在性与归属
-    const proposal = deps.planProposalRepo.getById(input.proposalId);
-    if (!proposal) {
-      throw new GrillPlanProposalNotFoundError(input.proposalId);
-    }
-    if (proposal.sessionId !== input.sessionId || proposal.projectId !== input.projectId) {
-      throw new GrillOwnershipConflictError(
-        `提案 ${input.proposalId} 不属于会话 ${input.sessionId}`,
-      );
-    }
-
-    // 3. 提案状态
-    if (proposal.status !== 'PROPOSED') {
-      throw new GrillPlanProposalNotAcceptableError(
-        `提案 ${input.proposalId} 当前状态为 ${proposal.status}，不能接受`,
-      );
-    }
-
-    // 4. 版本匹配：expectedSessionVersion 同时匹配提案基础版本与会话当前版本
-    if (proposal.baseSessionVersion !== input.expectedSessionVersion) {
-      throw new GrillPlanProposalNotAcceptableError(
-        `提案基础版本 ${proposal.baseSessionVersion} 与期望版本 ${input.expectedSessionVersion} 不一致，提案已过期`,
-      );
-    }
-    if (session.version !== input.expectedSessionVersion) {
-      throw new GrillVersionConflictError(
-        `会话 ${input.sessionId} 版本冲突（期望 ${input.expectedSessionVersion}，实际 ${session.version}）`,
-      );
-    }
-
-    // 5. 基于当前会话状态重新执行完整验证
-    const existingQuestions = deps.questionRepo.listBySession(input.sessionId);
-    const { plan, plannedOrder } = validateStoredPlan(proposal.questionsJson, existingQuestions);
-
-    // 6. 生成正式 ID 映射
-    const keyToId = new Map<string, string>();
-    for (const q of plan.questions) {
-      keyToId.set(q.key, deps.idGenerator.generate());
-    }
-
-    // 7. 按拓扑顺序插入（依赖在前）
-    const maxSeq = deps.questionRepo.getMaxSequence(input.sessionId);
-    let offset = 1;
-    for (const key of plannedOrder) {
-      const planned = plan.questions.find((q) => q.key === key);
-      if (!planned) {
-        throw new GrillPlanSchemaInvalidError(`拓扑顺序引用了不存在的计划 key: ${key}`);
+  let staleDuringTx = false;
+  try {
+    deps.transaction(() => {
+      const session = deps.sessionRepo.getById(input.sessionId);
+      if (!session) {
+        throw new GrillSessionNotFoundError(input.sessionId);
       }
-      const formalId = keyToId.get(key)!;
-      const dependsOnQuestionIds = planned.dependencies.map((d) =>
-        d.kind === 'existing' ? d.questionId : keyToId.get(d.questionKey)!,
+      assertSessionOwnership(session, input.projectId);
+      if (session.status !== 'ACTIVE') {
+        throw new GrillStateConflictError(
+          `会话 ${input.sessionId} 当前状态为 ${session.status}，需要 ACTIVE 才能接受规划`,
+        );
+      }
+
+      const proposal = deps.planProposalRepo.getById(input.proposalId);
+      if (!proposal) {
+        throw new GrillPlanProposalNotFoundError(input.proposalId);
+      }
+      if (proposal.sessionId !== input.sessionId || proposal.projectId !== input.projectId) {
+        throw new GrillOwnershipConflictError(
+          `提案 ${input.proposalId} 不属于会话 ${input.sessionId}`,
+        );
+      }
+      if (proposal.status !== 'PROPOSED') {
+        throw new GrillPlanProposalNotAcceptableError(
+          `提案 ${input.proposalId} 当前状态为 ${proposal.status}，不能接受`,
+        );
+      }
+
+      // 事务内再次确认版本关系（并发可能已改变）
+      if (session.version !== proposal.baseSessionVersion) {
+        staleDuringTx = true;
+        throw new GrillPlanStaleError(`提案 ${input.proposalId} 已过期：会话版本已变化`);
+      }
+      if (session.version !== input.expectedSessionVersion) {
+        throw new GrillVersionConflictError(
+          `会话 ${input.sessionId} 版本冲突（期望 ${input.expectedSessionVersion}）`,
+        );
+      }
+
+      // 基于当前会话状态重新执行完整验证
+      const existingQuestions = deps.questionRepo.listBySession(input.sessionId);
+      const { plan, plannedOrder } = validateStoredPlan(proposal.questionsJson, existingQuestions);
+
+      // 生成正式 ID 映射
+      const keyToId = new Map<string, string>();
+      for (const q of plan.questions) {
+        keyToId.set(q.key, deps.idGenerator.generate());
+      }
+
+      // 按拓扑顺序插入（依赖在前）
+      const maxSeq = deps.questionRepo.getMaxSequence(input.sessionId);
+      let offset = 1;
+      for (const key of plannedOrder) {
+        const planned = plan.questions.find((q) => q.key === key);
+        if (!planned) {
+          throw new GrillPlanSchemaInvalidError(`拓扑顺序引用了不存在的计划 key: ${key}`);
+        }
+        const formalId = keyToId.get(key)!;
+        const dependsOnQuestionIds = planned.dependencies.map((d) =>
+          d.kind === 'existing' ? d.questionId : keyToId.get(d.questionKey)!,
+        );
+        deps.questionRepo.create({
+          id: formalId,
+          sessionId: input.sessionId,
+          sequence: maxSeq + offset,
+          topic: planned.topic,
+          text: planned.text,
+          rationale: planned.rationale,
+          dependsOnQuestionIds,
+        });
+        createdIds.push(formalId);
+        offset++;
+      }
+
+      // 标记提案 ACCEPTED（CAS：PROPOSED → ACCEPTED）
+      requireCas(
+        deps.planProposalRepo.markAccepted(input.proposalId),
+        `提案 ${input.proposalId} 状态冲突，可能已被并发接受`,
       );
-      deps.questionRepo.create({
-        id: formalId,
-        sessionId: input.sessionId,
-        sequence: maxSeq + offset,
-        topic: planned.topic,
-        text: planned.text,
-        rationale: planned.rationale,
-        dependsOnQuestionIds,
-      });
-      createdIds.push(formalId);
-      offset++;
+
+      // 会话版本 CAS 递增
+      requireCas(
+        deps.sessionRepo.bumpVersion(input.sessionId, input.expectedSessionVersion),
+        `会话 ${input.sessionId} 版本冲突（期望 ${input.expectedSessionVersion}）`,
+      );
+    });
+  } catch (err) {
+    if (staleDuringTx) {
+      // 主事务已回滚（未插入、未 bump）；以独立事务提交 STALE 标记
+      const staled = deps.transaction(() => deps.planProposalRepo.markStale(input.proposalId));
+      if (staled) {
+        throw new GrillPlanStaleError(`提案 ${input.proposalId} 已过期：会话版本已变化`);
+      }
+      throw new GrillPlanProposalNotAcceptableError(
+        `提案 ${input.proposalId} 状态已变更，不能接受`,
+      );
     }
-
-    // 8. 标记提案 ACCEPTED（CAS：PROPOSED → ACCEPTED）
-    requireCas(
-      deps.planProposalRepo.markAccepted(input.proposalId),
-      `提案 ${input.proposalId} 状态冲突，可能已被并发接受`,
-    );
-
-    // 9. 会话版本 CAS 递增
-    requireCas(
-      deps.sessionRepo.bumpVersion(input.sessionId, input.expectedSessionVersion),
-      `会话 ${input.sessionId} 版本冲突（期望 ${input.expectedSessionVersion}）`,
-    );
-  });
+    throw err;
+  }
 
   const session = deps.sessionRepo.getById(input.sessionId);
   if (!session) throw new GrillSessionNotFoundError(input.sessionId);

@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseQuestionPlanV1,
   validatePlanReferences,
+  validateExistingGraphIntegrity,
   topologicalPlanOrder,
   GRILL_QUESTION_PLAN_SCHEMA_VERSION,
   type NormalizedQuestionPlan,
@@ -316,6 +317,56 @@ describe('topologicalPlanOrder — 完整环检测', () => {
     if (result.ok) {
       expect(result.plannedOrder.indexOf('a')).toBeLessThan(result.plannedOrder.indexOf('c'));
       expect(result.plannedOrder.indexOf('b')).toBeLessThan(result.plannedOrder.indexOf('c'));
+    }
+  });
+});
+
+// ── 已有问题图完整性验证 ──────────────────────────────────────────
+
+describe('validateExistingGraphIntegrity', () => {
+  it('合法图通过', () => {
+    const deps = new Map<string, ReadonlyArray<string>>([
+      ['q1', []],
+      ['q2', ['q1']],
+      ['q3', ['q1', 'q2']],
+    ]);
+    expect(validateExistingGraphIntegrity(deps)).toEqual({ ok: true });
+  });
+
+  it('空图通过', () => {
+    expect(validateExistingGraphIntegrity(new Map())).toEqual({ ok: true });
+  });
+
+  it('自依赖拒绝', () => {
+    const deps = new Map<string, ReadonlyArray<string>>([['q1', ['q1']]]);
+    const result = validateExistingGraphIntegrity(deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('GRILL_PLAN_REFERENCE_INVALID');
+      expect(result.message).toContain('依赖自己');
+    }
+  });
+
+  it('重复依赖拒绝', () => {
+    const deps = new Map<string, ReadonlyArray<string>>([
+      ['q1', []],
+      ['q2', ['q1', 'q1']],
+    ]);
+    const result = validateExistingGraphIntegrity(deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('GRILL_PLAN_REFERENCE_INVALID');
+      expect(result.message).toContain('重复依赖');
+    }
+  });
+
+  it('悬空引用拒绝（依赖不存在的问题）', () => {
+    const deps = new Map<string, ReadonlyArray<string>>([['q1', ['ghost']]]);
+    const result = validateExistingGraphIntegrity(deps);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe('GRILL_PLAN_REFERENCE_INVALID');
+      expect(result.message).toContain('不属于当前会话');
     }
   });
 });

@@ -337,6 +337,56 @@ export function validatePlanReferences(
   return { ok: true, plan };
 }
 
+// ── 已有问题图引用完整性 ──────────────────────────────────────────
+
+export type ExistingGraphIntegrityResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly code: 'GRILL_PLAN_REFERENCE_INVALID'; readonly message: string };
+
+/**
+ * 验证已有问题图的引用完整性（在保存模型结果前与接受提案前都执行）。
+ *
+ * 检查：
+ * - 已有问题的所有依赖都属于当前会话（dep 必须是 existingDeps 的键，
+ *   悬空 ID、跨 session、跨 project 的 ID 都不会出现在该集合中）；
+ * - 不存在重复边；
+ * - 不存在 self-edge。
+ *
+ * @param existingDeps 已有问题 ID → 其依赖的已有问题 ID 列表
+ */
+export function validateExistingGraphIntegrity(
+  existingDeps: ReadonlyMap<string, ReadonlyArray<string>>,
+): ExistingGraphIntegrityResult {
+  for (const [questionId, deps] of existingDeps) {
+    const seen = new Set<string>();
+    for (const dep of deps) {
+      if (dep === questionId) {
+        return {
+          ok: false,
+          code: 'GRILL_PLAN_REFERENCE_INVALID',
+          message: `已有问题 ${questionId} 依赖自己`,
+        };
+      }
+      if (seen.has(dep)) {
+        return {
+          ok: false,
+          code: 'GRILL_PLAN_REFERENCE_INVALID',
+          message: `已有问题 ${questionId} 存在重复依赖: ${dep}`,
+        };
+      }
+      seen.add(dep);
+      if (!existingDeps.has(dep)) {
+        return {
+          ok: false,
+          code: 'GRILL_PLAN_REFERENCE_INVALID',
+          message: `已有问题 ${questionId} 依赖了不属于当前会话的问题: ${dep}`,
+        };
+      }
+    }
+  }
+  return { ok: true };
+}
+
 // ── 完整依赖图环检测 ──────────────────────────────────────────────
 
 export type TopoOrderResult =
