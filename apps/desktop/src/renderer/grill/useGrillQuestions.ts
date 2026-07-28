@@ -5,7 +5,7 @@
  * 问题列表通过 grill.listQuestions API 从服务端获取。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GrillQuestionPublicData, GrillAnswerPublicData } from '@ai-novel/contracts';
 import { grillErrorMessage } from './status-labels';
 
@@ -39,6 +39,7 @@ export function useGrillQuestions(
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflictNotice, setConflictNotice] = useState(false);
+  const mutationLockRef = useRef(false);
 
   const listQuestions = useCallback(async () => {
     if (!projectId || !sessionId) {
@@ -63,6 +64,8 @@ export function useGrillQuestions(
   const handleMutation = useCallback(
     async (fn: () => Promise<unknown>, actionName: string): Promise<boolean> => {
       if (!projectId || !sessionId || isLoading) return false;
+      if (mutationLockRef.current) return false;
+      mutationLockRef.current = true;
       setIsLoading(true);
       // Do NOT clear conflictNotice here — only clear on successful mutation
       setError(null);
@@ -77,7 +80,7 @@ export function useGrillQuestions(
       } catch (err) {
         const code = (err as Error & { code?: string }).code;
         if (code === 'GRILL_VERSION_CONFLICT') {
-          setError('会话已在其他操作中更新');
+          setError(null);
           setConflictNotice(true);
           // Refresh data but keep conflict notice
           await listQuestions();
@@ -89,6 +92,7 @@ export function useGrillQuestions(
         }
         return false;
       } finally {
+        mutationLockRef.current = false;
         setIsLoading(false);
       }
     },
@@ -196,15 +200,11 @@ export function useGrillQuestions(
 
   const clearError = useCallback(() => {
     setError(null);
-    setConflictNotice(false);
   }, []);
 
   const clearConflictNotice = useCallback(() => {
     setConflictNotice(false);
-    if (error === '会话已在其他操作中更新') {
-      setError(null);
-    }
-  }, [error]);
+  }, []);
 
   return {
     questions,

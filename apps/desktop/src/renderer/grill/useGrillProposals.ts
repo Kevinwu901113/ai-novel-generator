@@ -4,7 +4,7 @@
  * version conflict 横幅在刷新后保持可见，直到用户关闭或下次成功 mutation。
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GrillProposalPublicData } from '@ai-novel/contracts';
 import { grillErrorMessage } from './status-labels';
 
@@ -37,6 +37,7 @@ export function useGrillProposals(
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [conflictNotice, setConflictNotice] = useState(false);
+  const mutationLockRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!projectId || !sessionId) {
@@ -61,6 +62,8 @@ export function useGrillProposals(
   const handleMutation = useCallback(
     async (fn: () => Promise<unknown>, actionName: string): Promise<boolean> => {
       if (!projectId || !sessionId || isLoading) return false;
+      if (mutationLockRef.current) return false;
+      mutationLockRef.current = true;
       setIsLoading(true);
       // Do NOT clear conflictNotice here — only clear on successful mutation
       setError(null);
@@ -75,7 +78,7 @@ export function useGrillProposals(
       } catch (err) {
         const code = (err as Error & { code?: string }).code;
         if (code === 'GRILL_VERSION_CONFLICT') {
-          setError('会话已在其他操作中更新');
+          setError(null);
           setConflictNotice(true);
           // Refresh data but keep conflict notice
           await refresh();
@@ -85,6 +88,7 @@ export function useGrillProposals(
         }
         return false;
       } finally {
+        mutationLockRef.current = false;
         setIsLoading(false);
       }
     },
@@ -130,15 +134,11 @@ export function useGrillProposals(
 
   const clearError = useCallback(() => {
     setError(null);
-    setConflictNotice(false);
   }, []);
 
   const clearConflictNotice = useCallback(() => {
     setConflictNotice(false);
-    if (error === '会话已在其他操作中更新') {
-      setError(null);
-    }
-  }, [error]);
+  }, []);
 
   return {
     proposals,

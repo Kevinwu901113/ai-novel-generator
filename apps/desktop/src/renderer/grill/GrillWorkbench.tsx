@@ -25,6 +25,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
   const [currentAnswers, setCurrentAnswers] = useState<ReadonlyArray<GrillAnswerPublicData>>([]);
+  const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null);
 
   // Session list
   const sessionsHook = useGrillSessions(projectId);
@@ -117,6 +118,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     await listQuestionsRef.current();
     await loadAnswers();
     await proposalsRefreshRef.current();
+    setLastRefreshAt(new Date().toLocaleTimeString('zh-CN'));
   }, [loadAnswers]);
 
   const handleAddQuestions = useCallback(
@@ -175,11 +177,13 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     setSelectedQuestionId(questionId);
   }, []);
 
-  // 合并所有错误源
-  const combinedError = sessionHook.error || questionsHook.error || proposalsHook.error;
   // 版本冲突来自 session hook、questions hook 或 proposals hook
   const hasVersionConflict =
     sessionHook.versionConflict || questionsHook.conflictNotice || proposalsHook.conflictNotice;
+  // 普通错误：仅在没有版本冲突时显示
+  const combinedError = hasVersionConflict
+    ? null
+    : sessionHook.error || questionsHook.error || proposalsHook.error;
   const isAnyLoading =
     sessionsHook.isLoading ||
     sessionHook.isLoading ||
@@ -198,6 +202,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
         projectId={projectId}
         sessionId={selectedSessionId}
         sessionVersion={sessionHook.session?.version ?? null}
+        lastRefreshAt={lastRefreshAt}
       />
 
       {/* 全局错误 */}
@@ -222,7 +227,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
           <span>会话已在其他操作中更新，数据已自动刷新。</span>
           <button
             onClick={() => {
-              sessionHook.clearError();
+              sessionHook.clearConflictNotice();
               questionsHook.clearConflictNotice();
               proposalsHook.clearConflictNotice();
             }}

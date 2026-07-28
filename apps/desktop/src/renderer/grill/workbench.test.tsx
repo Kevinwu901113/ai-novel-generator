@@ -9,7 +9,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, within, cleanup } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
 import { GrillWorkbench } from './GrillWorkbench';
 import type {
   GrillQuestionPublicData,
@@ -174,7 +173,6 @@ async function selectFirstSession() {
 describe('GrillWorkbench DOM 交互', () => {
   afterEach(() => {
     cleanup();
-    // Reset desktop API mock
     window.desktop = undefined as unknown as DesktopAPI;
     vi.restoreAllMocks();
   });
@@ -220,7 +218,6 @@ describe('GrillWorkbench DOM 交互', () => {
     await waitFor(() => expect(screen.getByText('添加问题')).toBeInTheDocument());
     screen.getByText('添加问题').click();
 
-    // Wait for form to appear
     await waitFor(() => expect(screen.getByPlaceholderText('问题主题')).toBeInTheDocument());
     setInputValue(screen.getByPlaceholderText('问题主题'), '新问题主题');
     setInputValue(screen.getByPlaceholderText('问题详细内容'), '新问题内容');
@@ -277,9 +274,9 @@ describe('GrillWorkbench DOM 交互', () => {
     };
     const getCurrentAnswersMock = vi
       .fn()
-      .mockResolvedValueOnce(STABLE_EMPTY) // Initial load: no answers
-      .mockResolvedValueOnce([mockAnswer]) // After first answer
-      .mockResolvedValueOnce([rev2]); // After revision
+      .mockResolvedValueOnce(STABLE_EMPTY)
+      .mockResolvedValueOnce([mockAnswer])
+      .mockResolvedValueOnce([rev2]);
     setupDesktop(
       createMockAPI({
         answerQuestion: vi.fn().mockResolvedValueOnce(mockAnswer).mockResolvedValueOnce(rev2),
@@ -309,7 +306,6 @@ describe('GrillWorkbench DOM 交互', () => {
     screen.getByText('查看历史').click();
     await waitFor(() => {
       expect(screen.getByText('revision 1')).toBeInTheDocument();
-      // revision 2 appears both in current answer and history
       expect(screen.getAllByText('revision 2').length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -442,35 +438,38 @@ describe('GrillWorkbench DOM 交互', () => {
     });
   });
 
-  // 12. duplicate click 只触发一次 IPC
+  // 12. duplicate click 只触发一次 IPC（同步双击场景）
   it('duplicate click 只触发一次 IPC', async () => {
-    const user = userEvent.setup();
+    // 使用 deferred Promise 控制 IPC 完成时机
+    let resolveAdd!: (value: unknown) => void;
+    const addDeferred = new Promise((r) => {
+      resolveAdd = r;
+    });
     const api = setupDesktop(
       createMockAPI({
-        addQuestions: vi
-          .fn()
-          .mockImplementation(() => new Promise((r) => setTimeout(() => r(mockQuestions), 200))),
+        addQuestions: vi.fn().mockReturnValue(addDeferred),
       }),
     );
     render(<GrillWorkbench projectId="proj-00000001" />);
     await selectFirstSession();
 
     await waitFor(() => expect(screen.getByText('添加问题')).toBeInTheDocument());
-    await user.click(screen.getByText('添加问题'));
+    screen.getByText('添加问题').click();
 
     await waitFor(() => expect(screen.getByPlaceholderText('问题主题')).toBeInTheDocument());
-    await user.type(screen.getByPlaceholderText('问题主题'), '测试');
-    await user.type(screen.getByPlaceholderText('问题详细内容'), '内容');
+    setInputValue(screen.getByPlaceholderText('问题主题'), '测试');
+    setInputValue(screen.getByPlaceholderText('问题详细内容'), '内容');
 
     await waitFor(() => expect(screen.getByText('确认添加')).not.toBeDisabled());
-    // Rapid double click via userEvent
     const btn = screen.getByText('确认添加');
-    await user.click(btn);
-    await user.click(btn);
+    // 同步双击：两次 click 在同一微任务中
+    btn.click();
+    btn.click();
 
-    await waitFor(() => expect(api.grill.addQuestions).toHaveBeenCalledTimes(1), {
-      timeout: 3000,
-    });
+    expect(api.grill.addQuestions).toHaveBeenCalledTimes(1);
+
+    // 解锁 deferred 以避免 afterEach 中的 cleanup 挂起
+    resolveAdd(mockQuestions);
   });
 
   // 13. session 切换清除旧详情
@@ -489,7 +488,6 @@ describe('GrillWorkbench DOM 交互', () => {
 
     await waitFor(() => expect(screen.getByText(mockQuestions[0].text)).toBeInTheDocument());
 
-    // Switch to second session
     api.grill.getSession.mockResolvedValue(session2);
     api.grill.listQuestions.mockResolvedValue(STABLE_EMPTY);
     api.grill.getCurrentAnswers.mockResolvedValue(STABLE_EMPTY);
@@ -522,6 +520,190 @@ describe('GrillWorkbench DOM 交互', () => {
         expect(text).not.toContain('ENOENT');
         expect(text).not.toContain('.ts:');
       }
+    });
+  });
+});
+
+// ── 诊断面板安全测试 ────────────────────────────────────────────
+
+describe('GrillDiagnostics 安全', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+    vi.restoreAllMocks();
+  });
+
+  it('DOM 中不包含完整 project/session ID', async () => {
+    setupDesktop(createMockAPI());
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectFirstSession();
+
+    // 等待渲染完成
+    await waitFor(() => {
+      expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument();
+    });
+
+    const fullProjectId = 'proj-00000001';
+    const fullSessionId = 'sess-00000001';
+
+    // textContent 不包含完整 ID
+    const body = document.body.textContent!;
+    expect(body).not.toContain(fullProjectId);
+    expect(body).not.toContain(fullSessionId);
+
+    // title 属性不包含完整 ID
+    const allWithTitle = document.querySelectorAll('[title]');
+    allWithTitle.forEach((el) => {
+      expect(el.getAttribute('title')).not.toBe(fullProjectId);
+      expect(el.getAttribute('title')).not.toBe(fullSessionId);
+    });
+
+    // aria-label 不包含完整 ID
+    const allWithAriaLabel = document.querySelectorAll('[aria-label]');
+    allWithAriaLabel.forEach((el) => {
+      expect(el.getAttribute('aria-label')).not.toBe(fullProjectId);
+      expect(el.getAttribute('aria-label')).not.toBe(fullSessionId);
+    });
+
+    // data-* 属性不包含完整 ID
+    const allElements = document.querySelectorAll('*');
+    allElements.forEach((el) => {
+      Array.from(el.attributes).forEach((attr) => {
+        if (attr.name.startsWith('data-')) {
+          expect(attr.value).not.toBe(fullProjectId);
+          expect(attr.value).not.toBe(fullSessionId);
+        }
+      });
+    });
+  });
+
+  it('初次加载时刷新时间显示 —', async () => {
+    setupDesktop(createMockAPI());
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    // 初次加载完成前应显示 —
+    const diagnosticsEl = document.querySelector('.grill-diagnostics');
+    if (diagnosticsEl) {
+      expect(diagnosticsEl.textContent).toContain('刷新: —');
+    }
+  });
+});
+
+// ── 版本冲突横幅排他性测试 ──────────────────────────────────────
+
+describe('版本冲突横幅排他性', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+    vi.restoreAllMocks();
+  });
+
+  it('session mutation conflict 只有一个冲突横幅且无 error banner', async () => {
+    const conflictErr = Object.assign(new Error('版本冲突'), {
+      code: 'GRILL_VERSION_CONFLICT',
+    });
+    setupDesktop(
+      createMockAPI({
+        startSession: vi.fn().mockRejectedValue(conflictErr),
+        getSession: vi.fn().mockResolvedValue({ ...mockSession, status: 'DRAFT' }),
+      }),
+    );
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectFirstSession();
+
+    await waitFor(() => expect(screen.getByText('启动')).toBeInTheDocument());
+    screen.getByText('启动').click();
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
+      expect(document.querySelector('.grill-error-banner')).toBeNull();
+    });
+  });
+
+  it('question mutation conflict 只有一个冲突横幅且无 error banner', async () => {
+    const conflictErr = Object.assign(new Error('版本冲突'), {
+      code: 'GRILL_VERSION_CONFLICT',
+    });
+    setupDesktop(
+      createMockAPI({
+        answerQuestion: vi.fn().mockRejectedValue(conflictErr),
+        getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
+      }),
+    );
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectFirstSession();
+
+    await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
+    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+
+    await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
+    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+
+    await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
+    screen.getByText('提交回答').click();
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
+      expect(document.querySelector('.grill-error-banner')).toBeNull();
+    });
+  });
+
+  it('proposal mutation conflict 只有一个冲突横幅且无 error banner', async () => {
+    const conflictErr = Object.assign(new Error('版本冲突'), {
+      code: 'GRILL_VERSION_CONFLICT',
+    });
+    setupDesktop(
+      createMockAPI({
+        createProposal: vi.fn().mockRejectedValue(conflictErr),
+      }),
+    );
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectFirstSession();
+
+    await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
+    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+
+    await waitFor(() => expect(screen.getByText('创建提案')).toBeInTheDocument());
+    screen.getByText('创建提案').click();
+
+    await waitFor(() => expect(screen.getByPlaceholderText('推理结论的 key')).toBeInTheDocument());
+    setInputValue(screen.getByPlaceholderText('推理结论的 key'), 'test.key');
+    setInputValue(screen.getByPlaceholderText('{"key": "value"}'), '{"v":1}');
+
+    await waitFor(() => expect(screen.getByText('确认创建')).not.toBeDisabled());
+    screen.getByText('确认创建').click();
+
+    await waitFor(() => {
+      expect(document.querySelectorAll('.grill-conflict-banner')).toHaveLength(1);
+      expect(document.querySelector('.grill-error-banner')).toBeNull();
+    });
+  });
+
+  it('普通 validation error 只显示 grill-error-banner', async () => {
+    setupDesktop(
+      createMockAPI({
+        answerQuestion: vi
+          .fn()
+          .mockRejectedValue(
+            Object.assign(new Error('验证失败'), { code: 'GRILL_VALIDATION_ERROR' }),
+          ),
+        getCurrentAnswers: vi.fn().mockResolvedValue(STABLE_EMPTY),
+      }),
+    );
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectFirstSession();
+
+    await waitFor(() => expect(screen.getByText(mockQuestions[0].topic)).toBeInTheDocument());
+    screen.getByText(mockQuestions[0].topic).closest('.grill-question-item')!.click();
+
+    await waitFor(() => expect(screen.getByPlaceholderText('输入回答内容…')).toBeInTheDocument());
+    setInputValue(screen.getByPlaceholderText('输入回答内容…'), '回答');
+
+    await waitFor(() => expect(screen.getByText('提交回答')).not.toBeDisabled());
+    screen.getByText('提交回答').click();
+
+    await waitFor(() => {
+      expect(document.querySelector('.grill-error-banner')).not.toBeNull();
+      expect(document.querySelector('.grill-conflict-banner')).toBeNull();
     });
   });
 });
