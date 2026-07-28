@@ -164,11 +164,7 @@ export class PlotPilotAdapter {
   }
 
   async hostedWrite(input: HostedWriteInput, handlers: StreamHandlers = {}): Promise<void> {
-    if (
-      !input.novelId.trim() ||
-      input.fromChapter < 1 ||
-      input.toChapter < input.fromChapter
-    ) {
+    if (!input.novelId.trim() || input.fromChapter < 1 || input.toChapter < input.fromChapter) {
       throw new PlotPilotAdapterError('PLOTPILOT_RESPONSE_INVALID', '托管写作参数无效');
     }
 
@@ -189,12 +185,16 @@ export class PlotPilotAdapter {
     body: Readonly<Record<string, unknown>>,
     handlers: StreamHandlers,
   ): Promise<void> {
-    const response = await this.request(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: handlers.signal,
-    }, false);
+    const response = await this.request(
+      path,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: handlers.signal,
+      },
+      false,
+    );
 
     if (!response.body) {
       throw new PlotPilotAdapterError('PLOTPILOT_RESPONSE_INVALID', 'PlotPilot 未返回流式响应');
@@ -228,11 +228,7 @@ export class PlotPilotAdapter {
     }
   }
 
-  private async request(
-    path: string,
-    init: RequestInit,
-    useTimeout = true,
-  ): Promise<Response> {
+  private async request(path: string, init: RequestInit, useTimeout = true): Promise<Response> {
     const timeoutController = new AbortController();
     const timeout = useTimeout
       ? setTimeout(() => timeoutController.abort(), this.requestTimeoutMs)
@@ -266,3 +262,5 @@ export class PlotPilotAdapter {
     }
   }
 }
+
+export * from './lifecycle.js';
