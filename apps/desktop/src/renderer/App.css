@@ -1533,3 +1533,331 @@ body {
   display: flex;
   gap: 8px;
 }
+
+/* ── 任务活动中心 ─────────────────────────────────────── */
+
+.task-center-section {
+  border-top: 1px solid var(--color-border);
+  padding-top: 16px;
+  margin-top: 8px;
+}
+
+.task-center {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.task-center-empty {
+  padding: 16px 0;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.task-center-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* 统计摘要 */
+.task-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.task-stats-item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  background: var(--color-bg);
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+}
+
+.task-stats-label {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-bottom: 2px;
+}
+
+.task-stats-value {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+.task-stats-success {
+  color: #16a34a;
+}
+
+.task-stats-failed {
+  color: #b91c1c;
+}
+
+.task-stats-loading,
+.task-stats-error {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  text-align: center;
+}
+
+.task-stats-error {
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-stats-success {
+    color: #22c55e;
+  }
+  .task-stats-failed {
+    color: #fca5a5;
+  }
+  .task-stats-error {
+    color: #fca5a5;
+  }
+}
+
+/* 筛选栏 */
+.task-filters {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.task-filter-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.task-filter-select {
+  padding: 2px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+/* 任务列表 */
+.task-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.task-list-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.task-item {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  border: 1px solid transparent;
+}
+
+.task-item:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.task-item.active {
+  background-color: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.task-item.active .task-item-meta,
+.task-item.active .task-item-times {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.task-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.task-item-id {
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.task-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+.task-item-type {
+  font-size: 12px;
+}
+
+.task-item-attempts {
+  font-size: 11px;
+}
+
+.task-item-times {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  margin-top: 2px;
+}
+
+/* 任务状态标签 */
+.task-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 8px;
+  align-self: flex-start;
+}
+
+.task-status-badge.status-pending {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+.task-status-badge.status-running {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.task-status-badge.status-succeeded {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.task-status-badge.status-failed {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+.task-status-badge.status-cancelled {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+.task-status-badge.status-stale {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-status-badge.status-pending {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+  .task-status-badge.status-running {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+  .task-status-badge.status-succeeded {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+  .task-status-badge.status-failed {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+  .task-status-badge.status-cancelled {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+  .task-status-badge.status-stale {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+}
+
+/* 任务详情 */
+.task-detail-empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.task-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.task-detail-field {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.task-detail-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  min-width: 60px;
+  flex-shrink: 0;
+}
+
+.task-detail-value {
+  font-size: 12px;
+  color: var(--color-text);
+  word-break: break-all;
+}
+
+.task-detail-error {
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-detail-error {
+    color: #fca5a5;
+  }
+}
+
+/* 任务错误 */
+.task-error {
+  padding: 6px 10px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+}
+
+@media (prefers-color-scheme: dark) {
+  .task-error {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-bottom-color: #7f1d1d;
+  }
+}
