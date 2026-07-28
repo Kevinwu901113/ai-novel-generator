@@ -19,6 +19,7 @@
  * - "重新加载此区域"按钮保持可键盘操作
  * - reset 后焦点进入重新挂载区域
  * - 不在普通 rerender 时重复抢焦点
+ * - 焦点样式通过 CSS .restored-focus-container 提供可见替代
  */
 
 import { Component, createRef, type ReactNode } from 'react';
@@ -39,12 +40,17 @@ interface RendererErrorBoundaryState {
   shouldFocusRestored: boolean;
 }
 
+/** 真正可聚焦的元素选择器 */
+const FOCUSABLE_SELECTOR =
+  'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 export class RendererErrorBoundary extends Component<
   RendererErrorBoundaryProps,
   RendererErrorBoundaryState
 > {
   private fallbackRef = createRef<HTMLDivElement>();
   private restoredRef = createRef<HTMLDivElement>();
+  private focusTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(props: RendererErrorBoundaryProps) {
     super(props);
@@ -63,14 +69,16 @@ export class RendererErrorBoundary extends Component<
 
   override componentDidUpdate(
     _prevProps: RendererErrorBoundaryProps,
-    prevState: RendererErrorBoundaryState,
+    _prevState: RendererErrorBoundaryState,
   ): void {
     // fallback 出现后将焦点移动到 fallback 容器
-    // 使用 setTimeout 确保在 React DOM 更新后设置焦点
     if (this.state.shouldFocusFallback && this.fallbackRef.current) {
       const ref = this.fallbackRef.current;
-      setTimeout(() => {
+      this.clearFocusTimer();
+      // 使用 setTimeout 确保在 React DOM 更新后设置焦点
+      this.focusTimer = setTimeout(() => {
         ref.focus();
+        this.focusTimer = null;
       }, 0);
       this.setState({ shouldFocusFallback: false });
     }
@@ -78,18 +86,30 @@ export class RendererErrorBoundary extends Component<
     // reset 后焦点进入重新挂载区域
     if (this.state.shouldFocusRestored && this.restoredRef.current) {
       const container = this.restoredRef.current;
-      setTimeout(() => {
-        // 尝试找到首个可聚焦元素，找不到则聚焦容器本身
-        const firstFocusable = container.querySelector<HTMLElement>(
-          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"]), h2, h3',
-        );
+      this.clearFocusTimer();
+      this.focusTimer = setTimeout(() => {
+        // 尝试找到首个真正可聚焦元素
+        const firstFocusable = container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);
         if (firstFocusable) {
           firstFocusable.focus();
         } else {
+          // 没有真实可聚焦元素时聚焦恢复容器
           container.focus();
         }
+        this.focusTimer = null;
       }, 0);
       this.setState({ shouldFocusRestored: false });
+    }
+  }
+
+  override componentWillUnmount(): void {
+    this.clearFocusTimer();
+  }
+
+  private clearFocusTimer(): void {
+    if (this.focusTimer !== null) {
+      clearTimeout(this.focusTimer);
+      this.focusTimer = null;
     }
   }
 
@@ -123,7 +143,7 @@ export class RendererErrorBoundary extends Component<
     }
 
     return (
-      <div ref={this.restoredRef} tabIndex={-1} style={{ outline: 'none' }}>
+      <div ref={this.restoredRef} tabIndex={-1} className="restored-focus-container">
         <RendererErrorBoundaryInner key={this.state.resetCount}>
           {this.props.children}
         </RendererErrorBoundaryInner>

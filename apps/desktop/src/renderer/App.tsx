@@ -18,7 +18,6 @@ import {
   ProjectStatusRegion,
   ProviderRegion,
 } from './regions';
-import { LiveRegion } from './accessibility';
 
 export function App() {
   const [panelState, setPanelState] = useState<PanelState>(INITIAL_PANEL_STATE);
@@ -237,9 +236,6 @@ export function App() {
 
   return (
     <div className="app">
-      {/* 全局状态公告 */}
-      <LiveRegion message={error} politeness="assertive" label="全局错误" />
-
       {/* 顶部工具栏 */}
       <header className="toolbar" role="banner">
         <nav className="toolbar-left" aria-label="面板控制">
@@ -291,7 +287,7 @@ export function App() {
       )}
 
       {/* 主内容区 */}
-      <div className="workspace">
+      <main className="workspace">
         {/* 左栏：项目列表 */}
         {panelState.left && (
           <aside id="panel-left" className="panel panel-left" aria-label="项目列表">
@@ -407,7 +403,7 @@ export function App() {
             </div>
           </aside>
         )}
-      </div>
+      </main>
 
       {/* 状态栏 */}
       <footer className="status-bar" role="contentinfo">

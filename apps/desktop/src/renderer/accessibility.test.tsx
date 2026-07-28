@@ -194,9 +194,11 @@ function setInputValue(el: HTMLElement, value: string) {
   const proto =
     el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
-  setter.call(el, value);
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  el.dispatchEvent(new Event('change', { bubbles: true }));
+  act(() => {
+    setter.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 }
 
 function setupTaskDesktop(tasks = [mockTask1, mockTask2, mockTask3]) {
@@ -465,7 +467,10 @@ describe('三、TaskCenter 键盘导航', () => {
     });
     const list = screen.getByRole('listbox');
     const items = screen.getAllByTestId('task-item');
-    items[0].focus();
+    act(() => {
+      items[0].focus();
+      fireEvent.focus(items[0]);
+    });
     expect(items[0]).toHaveFocus();
     fireEvent.keyDown(list, { key: 'ArrowDown', code: 'ArrowDown' });
     expect(items[1]).toHaveFocus();
@@ -480,7 +485,11 @@ describe('三、TaskCenter 键盘导航', () => {
     });
     const list = screen.getByRole('listbox');
     const items = screen.getAllByTestId('task-item');
-    items[1].focus();
+    // focus() 在 jsdom 中不触发 onFocus，需要手动触发
+    act(() => {
+      items[1].focus();
+      fireEvent.focus(items[1]);
+    });
     fireEvent.keyDown(list, { key: 'ArrowUp', code: 'ArrowUp' });
     expect(items[0]).toHaveFocus();
   });
@@ -494,7 +503,10 @@ describe('三、TaskCenter 键盘导航', () => {
     });
     const list = screen.getByRole('listbox');
     const items = screen.getAllByTestId('task-item');
-    items[items.length - 1].focus();
+    act(() => {
+      items[items.length - 1].focus();
+      fireEvent.focus(items[items.length - 1]);
+    });
     fireEvent.keyDown(list, { key: 'Home', code: 'Home' });
     expect(items[0]).toHaveFocus();
   });
@@ -508,7 +520,10 @@ describe('三、TaskCenter 键盘导航', () => {
     });
     const list = screen.getByRole('listbox');
     const items = screen.getAllByTestId('task-item');
-    items[0].focus();
+    act(() => {
+      items[0].focus();
+      fireEvent.focus(items[0]);
+    });
     fireEvent.keyDown(list, { key: 'End', code: 'End' });
     expect(items[items.length - 1]).toHaveFocus();
   });
@@ -585,7 +600,10 @@ describe('三、TaskCenter 键盘导航', () => {
     });
 
     const items = screen.getAllByTestId('task-item');
-    items[0].focus();
+    act(() => {
+      items[0].focus();
+      fireEvent.focus(items[0]);
+    });
     expect(items[0]).toHaveFocus();
 
     // 触发 polling
@@ -860,7 +878,9 @@ describe('五、Provider 焦点与键盘行为', () => {
       expect(screen.getByRole('button', { name: '确认删除 API Key' })).toBeInTheDocument();
     });
 
-    fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
+    // Escape 现在在确认区域的 onKeyDown 上处理
+    const confirmGroup = screen.getByRole('group', { name: '确认删除 API Key' });
+    fireEvent.keyDown(confirmGroup, { key: 'Escape', code: 'Escape' });
 
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: '确认删除 API Key' })).not.toBeInTheDocument();

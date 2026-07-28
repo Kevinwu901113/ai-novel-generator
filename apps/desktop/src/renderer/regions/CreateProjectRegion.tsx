@@ -165,7 +165,7 @@ export function CreateProjectRegion({
                     {formErrors.name}
                   </span>
                 )}
-                <span className="char-count" id="project-name-count" aria-live="polite">
+                <span className="char-count" id="project-name-count">
                   {unicodeLength(formName.trim())} / {MAX_NAME_LENGTH}
                 </span>
               </div>
@@ -194,7 +194,7 @@ export function CreateProjectRegion({
                     {formErrors.initialIdea}
                   </span>
                 )}
-                <span className="char-count" id="project-idea-count" aria-live="polite">
+                <span className="char-count" id="project-idea-count">
                   {unicodeLength(formIdea.trim())} / {MAX_IDEA_LENGTH.toLocaleString()}
                 </span>
               </div>

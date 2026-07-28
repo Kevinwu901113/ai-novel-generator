@@ -248,6 +248,13 @@ select:focus-visible,
   background-color: var(--color-primary-hover);
 }
 
+/* 错误边界恢复后的焦点容器 */
+.restored-focus-container:focus {
+  /* 提供可见的焦点指示，替代 inline outline:none */
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 body {
   font-family:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
