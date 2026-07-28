@@ -1642,3 +1642,146 @@ describe('grill_answers current-answer 唯一索引', () => {
     }
   });
 });
+
+// ── grill_question_plan_proposals FK/UNIQUE 约束 ──────────────────
+
+describe('grill_question_plan_proposals 约束', () => {
+  function setupBase(db: ProjectDatabase): void {
+    db.getGrillSessionRepository().create({
+      id: 's1',
+      projectId: 'p1',
+      goal: 'g',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    db.getModelInvocationRepository().create({
+      id: 'inv-1',
+      projectId: 'p1',
+      taskId: 'task-1',
+      providerProfileId: 'provider-1',
+      model: 'test-model',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'grill_question_plan',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: NOW,
+    });
+  }
+
+  function validProposal(id: string, taskId = 'task-1', invocationId = 'inv-1') {
+    return {
+      id,
+      projectId: 'p1',
+      sessionId: 's1',
+      taskId,
+      invocationId,
+      baseSessionVersion: 1,
+      schemaVersion: 1,
+      questionsJson: '{"schemaVersion":1,"questions":[]}',
+      createdAt: NOW,
+    };
+  }
+
+  it('FK: 拒绝不存在的 task_id', () => {
+    const db = createDb();
+    try {
+      setupBase(db);
+      expect(() =>
+        db.getGrillQuestionPlanProposalRepository().create(validProposal('pp1', 'ghost-task')),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('FK: 拒绝不存在的 invocation_id', () => {
+    const db = createDb();
+    try {
+      setupBase(db);
+      expect(() =>
+        db
+          .getGrillQuestionPlanProposalRepository()
+          .create(validProposal('pp1', 'task-1', 'ghost-inv')),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('UNIQUE: 拒绝重复 task_id', () => {
+    const db = createDb();
+    try {
+      setupBase(db);
+      // 需要第二个 invocation
+      db.getModelInvocationRepository().create({
+        id: 'inv-2',
+        projectId: 'p1',
+        taskId: 'task-1',
+        providerProfileId: 'provider-1',
+        model: 'test-model',
+        status: 'SUCCEEDED',
+        attemptNumber: 2,
+        requestKind: 'grill_question_plan',
+        promptHash: 'b'.repeat(64),
+        requestMetadataJson: '{}',
+        createdAt: NOW,
+      });
+      db.getGrillQuestionPlanProposalRepository().create(validProposal('pp1'));
+      expect(() =>
+        db.getGrillQuestionPlanProposalRepository().create(validProposal('pp2', 'task-1', 'inv-2')),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('UNIQUE: 拒绝重复 invocation_id', () => {
+    const db = createDb();
+    try {
+      setupBase(db);
+      // 需要第二个 task
+      db.getTaskRepository().create({
+        id: 'task-2',
+        projectId: 'p1',
+        taskType: 'GRILL_QUESTION_PLAN',
+        status: 'SUCCEEDED',
+        inputVersionJson: '{}',
+        payloadJson: '{}',
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      db.getGrillQuestionPlanProposalRepository().create(validProposal('pp1'));
+      expect(() =>
+        db.getGrillQuestionPlanProposalRepository().create(validProposal('pp2', 'task-2', 'inv-1')),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('合法插入成功', () => {
+    const db = createDb();
+    try {
+      setupBase(db);
+      db.getGrillQuestionPlanProposalRepository().create(validProposal('pp1'));
+      const row = db.getGrillQuestionPlanProposalRepository().getById('pp1');
+      expect(row).not.toBeNull();
+      expect(row!.taskId).toBe('task-1');
+      expect(row!.invocationId).toBe('inv-1');
+      expect(row!.status).toBe('PROPOSED');
+    } finally {
+      db.close();
+    }
+  });
+});

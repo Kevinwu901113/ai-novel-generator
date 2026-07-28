@@ -399,6 +399,11 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
     return this.projDb.getTaskRepository().failRunning(id, errorCode, errorMessage, now);
   }
 
+  failPending(id: string, errorCode: string, errorMessage: string): boolean {
+    const now = createClock().now();
+    return this.projDb.getTaskRepository().failPending(id, errorCode, errorMessage, now);
+  }
+
   markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean {
     const now = createClock().now();
     return this.projDb.getTaskRepository().markStale(id, expectedStatuses, now);
@@ -706,6 +711,9 @@ function initialize(): void {
 
   // 恢复中断的任务
   reconcileTasks(dataRoot);
+
+  // 恢复 PENDING 的 Grill 规划任务（异步调度）
+  recoverPendingGrillPlans(dataRoot);
 }
 
 /**
@@ -1032,6 +1040,99 @@ async function handleCreateModelInvocationTest(payload: unknown): Promise<TaskPu
   }
 }
 
+/**
+ * 后台执行 Grill 问题规划任务。
+ *
+ * 每次调用打开独立的 ProjectDatabase（不复用请求处理器的即将关闭的 DB），
+ * 执行完毕后关闭。所有异常均被捕获，不产生 unhandled rejection。
+ */
+function runGrillQuestionPlan(projectId: string, taskId: string): void {
+  if (!appDb || !secretStore) return;
+
+  let projDb: ProjectDatabase;
+  try {
+    projDb = getProjectDb(projectId);
+  } catch {
+    return;
+  }
+
+  const clock = createClock();
+  const taskRepo = new TaskRepositoryAdapter(projDb);
+  const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
+  const providerRepo = new ProviderProfileRepositoryAdapter(appDb);
+  const sessionRepo = new GrillSessionRepositoryAdapter(projDb, clock);
+  const questionRepo = new GrillQuestionRepositoryAdapter(projDb, clock);
+  const answerRepo = new GrillAnswerRepositoryAdapter(projDb, clock);
+  const planProposalRepo = new GrillQuestionPlanProposalRepositoryAdapter(projDb, clock);
+
+  void executeGrillQuestionPlan(
+    {
+      taskRepo,
+      invocationRepo,
+      secretStore,
+      providerRepo,
+      idGenerator: createIdGenerator(),
+      clock,
+      sessionRepo,
+      questionRepo,
+      answerRepo,
+      planProposalRepo,
+      invokeModel: async (input: {
+        baseUrl: string;
+        model: string;
+        apiKey: string;
+        prompt: string;
+        systemPrompt?: string;
+        maxTokens?: number;
+        temperature?: number;
+      }) => {
+        return invokeModel({ fetch: globalThis.fetch, clock }, input);
+      },
+      transaction: <T>(fn: () => T) => projDb.transaction(fn),
+    },
+    taskId,
+  )
+    .catch(() => {
+      // 后台执行错误已持久化为 FAILED/STALE，不产生 unhandled rejection
+    })
+    .finally(() => {
+      projDb.close();
+    });
+}
+
+/**
+ * 启动时恢复：扫描所有项目中 PENDING 的 GRILL_QUESTION_PLAN 任务并调度执行。
+ *
+ * claimPending CAS 保证同一任务只被一个 runner 执行。
+ */
+function recoverPendingGrillPlans(dataRoot: string): void {
+  const projectsPath = join(dataRoot, 'projects');
+  if (!existsSync(projectsPath)) return;
+
+  for (const entry of readdirSync(projectsPath)) {
+    const projectDir = join(projectsPath, entry);
+    const dbPath = join(projectDir, 'project.sqlite');
+    if (!existsSync(dbPath)) continue;
+
+    try {
+      const projDb = new ProjectDatabase(dbPath);
+      try {
+        const pendingTasks = projDb
+          .getTaskRepository()
+          .listByStatus('PENDING')
+          .filter((t) => t.taskType === 'GRILL_QUESTION_PLAN');
+        for (const task of pendingTasks) {
+          runGrillQuestionPlan(task.projectId, task.id);
+        }
+      } finally {
+        projDb.close();
+      }
+    } catch {
+      // 忽略无法打开的项目数据库
+    }
+  }
+}
+
 async function handleRequestQuestionPlan(
   payload: unknown,
 ): Promise<GrillRequestQuestionPlanResult> {
@@ -1043,19 +1144,25 @@ async function handleRequestQuestionPlan(
     throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
   }
 
+  // 从当前启用的产品提供商配置解析 providerProfileId（Renderer 不传递）
+  const enabledProfile = appDb
+    .getProviderProfileRepository()
+    .list()
+    .find((p) => p.enabled);
+  if (!enabledProfile) {
+    throw new AppError('PROVIDER_NOT_CONFIGURED', '请先配置模型提供商');
+  }
+
   const projDb = getProjectDb(payload.projectId);
   try {
     const taskRepo = new TaskRepositoryAdapter(projDb);
-    const invocationRepo = new ModelInvocationRepositoryAdapter(projDb);
-    const providerRepo = new ProviderProfileRepositoryAdapter(appDb);
     const sessionRepo = new GrillSessionRepositoryAdapter(projDb, createClock());
     const questionRepo = new GrillQuestionRepositoryAdapter(projDb, createClock());
-    const answerRepo = new GrillAnswerRepositoryAdapter(projDb, createClock());
     const planProposalRepo = new GrillQuestionPlanProposalRepositoryAdapter(projDb, createClock());
     const idGen = createIdGenerator();
     const clock = createClock();
 
-    // 创建去重的规划任务（不含模型结果）
+    // 仅验证 + 原子创建任务 + 返回 taskId（不等待模型调用）
     const requested = requestGrillQuestionPlan(
       {
         idGenerator: idGen,
@@ -1070,37 +1177,12 @@ async function handleRequestQuestionPlan(
         projectId: payload.projectId,
         sessionId: payload.sessionId,
         expectedSessionVersion: payload.expectedSessionVersion,
+        providerProfileId: enabledProfile.id,
       },
     );
 
-    // 同步执行规划任务（claim → stale 校验 → 调用模型 → 验证 → 持久化提案）
-    await executeGrillQuestionPlan(
-      {
-        taskRepo,
-        invocationRepo,
-        secretStore,
-        providerRepo,
-        idGenerator: idGen,
-        clock,
-        sessionRepo,
-        questionRepo,
-        answerRepo,
-        planProposalRepo,
-        invokeModel: async (input: {
-          baseUrl: string;
-          model: string;
-          apiKey: string;
-          prompt: string;
-          systemPrompt?: string;
-          maxTokens?: number;
-          temperature?: number;
-        }) => {
-          return invokeModel({ fetch: globalThis.fetch, clock }, input);
-        },
-        transaction: <T>(fn: () => T) => projDb.transaction(fn),
-      },
-      requested.taskId,
-    );
+    // 异步调度后台执行（独立 DB，不阻塞 IPC 响应）
+    runGrillQuestionPlan(payload.projectId, requested.taskId);
 
     return {
       taskId: requested.taskId,

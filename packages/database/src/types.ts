@@ -252,6 +252,8 @@ export interface TaskRepository {
   completeRunning(id: string, resultJson: string, now: string): boolean;
   /** CAS 失败：RUNNING → FAILED，返回是否成功 */
   failRunning(id: string, errorCode: string, errorMessage: string, now: string): boolean;
+  /** CAS 失败：PENDING → FAILED（claim 前终结，不递增 attempt_count），返回是否成功 */
+  failPending(id: string, errorCode: string, errorMessage: string, now: string): boolean;
   /** CAS 标记 STALE，expectedStatuses 限制当前状态 */
   markStale(id: string, expectedStatuses: ReadonlyArray<DbTaskStatus>, now: string): boolean;
   /** CAS 重置为 PENDING，expectedStatus 限制当前状态 */

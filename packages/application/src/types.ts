@@ -227,6 +227,8 @@ export interface TaskRepositoryPort {
   completeRunning(id: string, resultJson: string): boolean;
   /** CAS 失败：RUNNING → FAILED */
   failRunning(id: string, errorCode: string, errorMessage: string): boolean;
+  /** CAS 失败：PENDING → FAILED（claim 前终结，不递增 attempt_count） */
+  failPending(id: string, errorCode: string, errorMessage: string): boolean;
   /** CAS 标记 STALE */
   markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean;
   /** CAS 重置为 PENDING */

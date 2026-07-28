@@ -293,6 +293,9 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         reviewed_at TEXT,
         FOREIGN KEY (session_id) REFERENCES grill_sessions(id),
         FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (invocation_id) REFERENCES model_invocations(id),
+        CONSTRAINT uq_grill_plan_proposals_task UNIQUE (task_id),
+        CONSTRAINT uq_grill_plan_proposals_invocation UNIQUE (invocation_id),
         CHECK (status IN ('PROPOSED', 'ACCEPTED', 'REJECTED', 'STALE')),
         CHECK (base_session_version >= 1),
         CHECK (schema_version = 1),
@@ -474,6 +477,16 @@ class TaskRepositoryImpl implements TaskRepository {
       .prepare(
         `UPDATE tasks SET status = 'FAILED', error_code = ?, error_message = ?, updated_at = ?, finished_at = ?
          WHERE id = ? AND status = 'RUNNING'`,
+      )
+      .run(errorCode, errorMessage, now, now, id);
+    return result.changes === 1;
+  }
+
+  failPending(id: string, errorCode: string, errorMessage: string, now: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE tasks SET status = 'FAILED', error_code = ?, error_message = ?, updated_at = ?, finished_at = ?
+         WHERE id = ? AND status = 'PENDING'`,
       )
       .run(errorCode, errorMessage, now, now, id);
     return result.changes === 1;

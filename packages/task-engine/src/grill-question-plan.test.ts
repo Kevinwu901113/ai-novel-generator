@@ -62,6 +62,7 @@ function makeTask(): TaskData {
       sessionId: 'sess-1',
       baseSessionVersion: 3,
       schemaVersion: 1,
+      providerProfileId: 'provider-1',
     }),
     payloadJson: '{}',
     resultJson: null,
@@ -100,11 +101,11 @@ let state: State;
 
 function makeProviderProfile(): ProviderProfileData {
   return {
-    id: 'mimo-token-plan-cn',
+    id: 'provider-1',
     providerType: 'anthropic-compatible',
-    displayName: 'MiMo',
+    displayName: 'Test Provider',
     baseUrl: 'https://example.test/anthropic',
-    model: 'mimo-v2.5-pro',
+    model: 'test-model',
     keychainService: 'svc',
     keychainAccount: 'acct',
     enabled: true,
@@ -134,6 +135,11 @@ function buildDeps(): GrillQuestionPlanEngineDeps {
       return true;
     },
     failRunning(_id, errorCode, errorMessage) {
+      state.task = { ...state.task, status: 'FAILED', errorCode, errorMessage };
+      return true;
+    },
+    failPending(_id, errorCode, errorMessage) {
+      if (state.task.status !== 'PENDING') return false;
       state.task = { ...state.task, status: 'FAILED', errorCode, errorMessage };
       return true;
     },
@@ -420,8 +426,8 @@ describe('executeGrillQuestionPlan — 持久化与安全', () => {
 
   it('44. model invocation audit 记录 provider/model/token/latency', async () => {
     await executeGrillQuestionPlan(buildDeps(), 'task-1');
-    expect(state.invocation?.providerProfileId).toBe('mimo-token-plan-cn');
-    expect(state.invocation?.model).toBe('mimo-v2.5-pro');
+    expect(state.invocation?.providerProfileId).toBe('provider-1');
+    expect(state.invocation?.model).toBe('test-model');
     expect(state.invocation?.inputTokens).toBe(100);
     expect(state.invocation?.outputTokens).toBe(50);
     expect(state.invocation?.totalTokens).toBe(150);
@@ -459,17 +465,25 @@ describe('executeGrillQuestionPlan — 持久化与安全', () => {
     expect(state.task.status).not.toBe('SUCCEEDED');
   });
 
-  it('provider 未配置抛 PROVIDER_NOT_CONFIGURED', async () => {
+  it('provider 未配置 → 任务 FAILED（PROVIDER_NOT_CONFIGURED，attemptCount 不递增）', async () => {
     const deps = buildDeps();
     deps.providerRepo.getById = () => null;
-    await expect(executeGrillQuestionPlan(deps, 'task-1')).rejects.toThrow('未配置');
+    const result = await executeGrillQuestionPlan(deps, 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_NOT_CONFIGURED');
+    expect(result.task.attemptCount).toBe(0);
+    expect(result.invocation).toBeNull();
     expect(state.invokeCalls).toHaveLength(0);
   });
 
-  it('缺少 API Key 抛 API_KEY_REQUIRED', async () => {
+  it('缺少 API Key → 任务 FAILED（API_KEY_REQUIRED，attemptCount 不递增）', async () => {
     const deps = buildDeps();
     deps.secretStore.getSecret = async () => null;
-    await expect(executeGrillQuestionPlan(deps, 'task-1')).rejects.toThrow('API Key');
+    const result = await executeGrillQuestionPlan(deps, 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('API_KEY_REQUIRED');
+    expect(result.task.attemptCount).toBe(0);
+    expect(result.invocation).toBeNull();
     expect(state.invokeCalls).toHaveLength(0);
   });
 });

@@ -186,6 +186,12 @@ function createMockDeps(
       taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
       return true;
     }),
+    failPending: vi.fn((id: string, errorCode: string, errorMessage: string) => {
+      const t = taskStore.get(id);
+      if (!t || t.status !== 'PENDING') return false;
+      taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
+    }),
     markStale: vi.fn(() => true),
     resetToPending: vi.fn(() => true),
     listRunning: vi.fn(() => []),

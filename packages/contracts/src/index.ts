@@ -833,15 +833,44 @@ export function isValidGrillListAnswerHistoryInput(
   );
 }
 
+// ── Grill 问题规划器严格验证 ──────────────────────────────────────
+
+/** 规划器 ID 字段长度上限（Unicode code points） */
+const PLANNER_MAX_ID_LENGTH = 128;
+
+function plannerCodePointLength(str: string): number {
+  return [...str].length;
+}
+
+/** 严格 ID：非空、trim 后非空、长度不超过上限 */
+function isPlannerId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return plannerCodePointLength(trimmed) <= PLANNER_MAX_ID_LENGTH;
+}
+
+/** 严格版本：安全整数且 >= 1（拒绝 NaN/Infinity/0/负数/小数） */
+function isPlannerVersion(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** 拒绝额外字段 */
+function hasOnlyKeys(obj: Record<string, unknown>, allowed: ReadonlyArray<string>): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(obj).every((key) => allowedSet.has(key));
+}
+
 export function isValidGrillRequestQuestionPlanInput(
   data: unknown,
 ): data is GrillRequestQuestionPlanInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'expectedSessionVersion'])) return false;
   return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.sessionId === 'string' &&
-    typeof obj.expectedSessionVersion === 'number'
+    isPlannerId(obj.projectId) &&
+    isPlannerId(obj.sessionId) &&
+    isPlannerVersion(obj.expectedSessionVersion)
   );
 }
 
@@ -850,11 +879,14 @@ export function isValidGrillAcceptQuestionPlanProposalInput(
 ): data is GrillAcceptQuestionPlanProposalInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'proposalId', 'expectedSessionVersion'])) {
+    return false;
+  }
   return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.sessionId === 'string' &&
-    typeof obj.proposalId === 'string' &&
-    typeof obj.expectedSessionVersion === 'number'
+    isPlannerId(obj.projectId) &&
+    isPlannerId(obj.sessionId) &&
+    isPlannerId(obj.proposalId) &&
+    isPlannerVersion(obj.expectedSessionVersion)
   );
 }
 
@@ -863,7 +895,8 @@ export function isValidGrillListQuestionPlanProposalsInput(
 ): data is GrillListQuestionPlanProposalsInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return typeof obj.projectId === 'string' && typeof obj.sessionId === 'string';
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId'])) return false;
+  return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId);
 }
 
 export function isValidGrillQuestionPlanProposalIdInput(
@@ -871,9 +904,6 @@ export function isValidGrillQuestionPlanProposalIdInput(
 ): data is GrillQuestionPlanProposalIdInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.sessionId === 'string' &&
-    typeof obj.proposalId === 'string'
-  );
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'proposalId'])) return false;
+  return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId) && isPlannerId(obj.proposalId);
 }

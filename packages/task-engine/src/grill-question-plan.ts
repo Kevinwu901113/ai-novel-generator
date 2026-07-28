@@ -36,6 +36,7 @@ import {
   GRILL_QUESTION_PLAN_SCHEMA_VERSION,
   parseQuestionPlanV1,
   validatePlanReferences,
+  validateExistingGraphIntegrity,
   topologicalPlanOrder,
   type NormalizedQuestionPlan,
 } from '@ai-novel/domain';
@@ -75,7 +76,6 @@ export interface GrillQuestionPlanExecutionResult {
 
 // ── 常量 ──────────────────────────────────────────────────────────
 
-const FIXED_PROVIDER_ID = 'mimo-token-plan-cn';
 const PLAN_MAX_TOKENS = 4096;
 const PLAN_TEMPERATURE = 0.3;
 
@@ -91,6 +91,7 @@ interface PlanTaskInput {
   readonly sessionId: string;
   readonly baseSessionVersion: number;
   readonly schemaVersion: number;
+  readonly providerProfileId: string;
 }
 
 function parseTaskInput(inputVersionJson: string): PlanTaskInput {
@@ -98,7 +99,9 @@ function parseTaskInput(inputVersionJson: string): PlanTaskInput {
   if (
     typeof parsed.sessionId !== 'string' ||
     typeof parsed.baseSessionVersion !== 'number' ||
-    typeof parsed.schemaVersion !== 'number'
+    typeof parsed.schemaVersion !== 'number' ||
+    typeof parsed.providerProfileId !== 'string' ||
+    parsed.providerProfileId.trim().length === 0
   ) {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务输入版本数据无效');
   }
@@ -106,6 +109,7 @@ function parseTaskInput(inputVersionJson: string): PlanTaskInput {
     sessionId: parsed.sessionId,
     baseSessionVersion: parsed.baseSessionVersion,
     schemaVersion: parsed.schemaVersion,
+    providerProfileId: parsed.providerProfileId,
   };
 }
 
@@ -183,26 +187,41 @@ export async function executeGrillQuestionPlan(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
   }
 
-  const input = parseTaskInput(task.inputVersionJson);
+  // claim 前终结：将任务置为 FAILED（CAS，不递增 attempt_count），不留下 PENDING
+  const failBeforeClaim = (code: ErrorCode, message: string): GrillQuestionPlanExecutionResult => {
+    const failed = taskRepo.failPending(taskId, code, message);
+    if (!failed) {
+      throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务状态冲突，无法终结为 FAILED');
+    }
+    return { task: taskRepo.getById(taskId)!, invocation: null, proposalId: null };
+  };
 
-  // 2. claim 前验证 provider profile（不增加 attempt_count）
-  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
-  if (!profile) {
-    throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+  // 2. 解析任务输入（含 providerProfileId 稳定引用）
+  let input: PlanTaskInput;
+  try {
+    input = parseTaskInput(task.inputVersionJson);
+  } catch {
+    return failBeforeClaim('TASK_EXECUTION_FAILED', '任务输入版本数据无效');
   }
 
-  // 3. claim 前读取 API Key（不增加 attempt_count）
+  // 3. claim 前按任务输入解析 provider profile（不增加 attempt_count）
+  const profile = providerRepo.getById(input.providerProfileId);
+  if (!profile || !profile.enabled) {
+    return failBeforeClaim('PROVIDER_NOT_CONFIGURED', '模型提供商未配置或已禁用');
+  }
+
+  // 4. claim 前读取 API Key（不增加 attempt_count）
   let apiKey: string | null;
   try {
     apiKey = await secretStore.getSecret(profile.keychainService, profile.keychainAccount);
   } catch {
-    throw new TaskExecutionError('API_KEY_READ_FAILED', '无法读取 API Key');
+    return failBeforeClaim('API_KEY_READ_FAILED', '无法读取 API Key');
   }
   if (!apiKey) {
-    throw new TaskExecutionError('API_KEY_REQUIRED', '请先配置 API Key');
+    return failBeforeClaim('API_KEY_REQUIRED', '请先配置 API Key');
   }
 
-  // 4. CAS claim：PENDING → RUNNING + attempt_count++
+  // 5. CAS claim：PENDING → RUNNING + attempt_count++
   const claimed = taskRepo.claimPending(taskId);
   if (!claimed) {
     throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
@@ -234,7 +253,7 @@ export async function executeGrillQuestionPlan(
     id: invocationId,
     projectId: task.projectId,
     taskId: task.id,
-    providerProfileId: FIXED_PROVIDER_ID,
+    providerProfileId: input.providerProfileId,
     model: profile.model,
     attemptNumber: updatedTask.attemptCount,
     requestKind: 'grill_question_plan',
@@ -392,7 +411,31 @@ export async function executeGrillQuestionPlan(
     };
   }
 
-  const order = topologicalPlanOrder(parsed.plan, existingDepsFromQuestions(questionsNow));
+  const existingDeps = existingDepsFromQuestions(questionsNow);
+  const integrity = validateExistingGraphIntegrity(existingDeps);
+  if (!integrity.ok) {
+    const errorMessage = '已有问题依赖图完整性校验失败';
+    transaction(() => {
+      requireCas(
+        invocationRepo.markFailed(
+          invocationId,
+          ['RUNNING'],
+          integrity.code,
+          errorMessage,
+          result.latencyMs,
+        ),
+        '无法标记调用失败',
+      );
+      requireCas(taskRepo.failRunning(taskId, integrity.code, errorMessage), '无法标记任务失败');
+    });
+    return {
+      task: taskRepo.getById(taskId)!,
+      invocation: invocationRepo.getById(invocationId),
+      proposalId: null,
+    };
+  }
+
+  const order = topologicalPlanOrder(parsed.plan, existingDeps);
   if (!order.ok) {
     const errorCode: ErrorCode = 'GRILL_PLAN_CYCLE_DETECTED';
     const errorMessage = '模型返回的问题计划存在循环依赖';

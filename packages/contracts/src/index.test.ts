@@ -403,4 +403,132 @@ describe('Grill 问题规划输入验证', () => {
     ).toBe(false);
     expect(isValidGrillQuestionPlanProposalIdInput(null)).toBe(false);
   });
+
+  it('空字符串 ID 拒绝', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: '',
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: '',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('纯空白 ID 拒绝', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: '   ',
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: '\t\n',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('超长 ID 拒绝（>128 码点）', () => {
+    const longId = 'x'.repeat(129);
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: longId,
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillAcceptQuestionPlanProposalInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: longId,
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('128 码点 ID 通过', () => {
+    const maxId = 'x'.repeat(128);
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: maxId,
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('NaN/Infinity 版本拒绝', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        expectedSessionVersion: NaN,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        expectedSessionVersion: Infinity,
+      }),
+    ).toBe(false);
+  });
+
+  it('版本 0/负数/小数拒绝', () => {
+    for (const v of [0, -1, 1.5]) {
+      expect(
+        isValidGrillRequestQuestionPlanInput({
+          projectId: 'proj-1',
+          sessionId: 'sess-1',
+          expectedSessionVersion: v,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it('额外字段拒绝', () => {
+    expect(
+      isValidGrillRequestQuestionPlanInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        expectedSessionVersion: 1,
+        extra: 'hack',
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillAcceptQuestionPlanProposalInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+        expectedSessionVersion: 1,
+        admin: true,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillListQuestionPlanProposalsInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        limit: 10,
+      }),
+    ).toBe(false);
+    expect(
+      isValidGrillQuestionPlanProposalIdInput({
+        projectId: 'proj-1',
+        sessionId: 'sess-1',
+        proposalId: 'prop-1',
+        force: true,
+      }),
+    ).toBe(false);
+  });
 });
