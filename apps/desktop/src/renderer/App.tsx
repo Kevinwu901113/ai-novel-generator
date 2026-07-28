@@ -126,15 +126,18 @@ export function App() {
 
   // 创建项目
   const handleCreate = useCallback(
-    async (name: string, idea: string) => {
+    async (name: string, idea: string): Promise<boolean> => {
+      setError(null);
       try {
         const result = await window.desktop.projects.create({ name, initialIdea: idea });
         await loadProjects();
         const project = await window.desktop.projects.open(result.id);
         setCurrentProject(project);
+        return true;
       } catch (err) {
         const safe = toSafeUserError(err, '创建项目失败');
         setError(safe.message);
+        return false;
       }
     },
     [loadProjects],
@@ -188,8 +191,11 @@ export function App() {
   }, []);
 
   const handleTestConnection = useCallback(async () => {
-    await window.desktop.provider.testConnection();
-    await loadProviderState();
+    try {
+      await window.desktop.provider.testConnection();
+    } finally {
+      await loadProviderState();
+    }
   }, [loadProviderState]);
 
   const isDataServiceReady = dataServiceStatus === 'ready';

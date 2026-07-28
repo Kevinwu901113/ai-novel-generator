@@ -23,7 +23,7 @@ function unicodeLength(str: string): number {
 interface CreateProjectRegionProps {
   dataServiceStatus: DataServiceStatus;
   onRetry: () => void;
-  onCreate: (name: string, idea: string) => Promise<void>;
+  onCreate: (name: string, idea: string) => Promise<boolean>;
 }
 
 export function CreateProjectRegion({
@@ -65,10 +65,12 @@ export function CreateProjectRegion({
 
     setIsCreating(true);
     try {
-      await onCreate(formName.trim(), formIdea.trim());
-      setFormName('');
-      setFormIdea('');
-      setFormErrors({});
+      const succeeded = await onCreate(formName.trim(), formIdea.trim());
+      if (succeeded) {
+        setFormName('');
+        setFormIdea('');
+        setFormErrors({});
+      }
     } finally {
       setIsCreating(false);
     }
