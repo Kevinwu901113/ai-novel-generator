@@ -2,6 +2,8 @@
  * Grill-me 状态中文标签。
  */
 
+import { ERROR_CODE_LABELS } from '../safety/error-code-labels';
+
 const SESSION_STATUS_LABELS: Record<string, string> = {
   DRAFT: '草稿',
   ACTIVE: '进行中',
@@ -82,4 +84,18 @@ const GRILL_ERROR_MESSAGES: Record<string, string> = {
 export function grillErrorMessage(code: string | undefined, fallback: string): string {
   if (code && GRILL_ERROR_MESSAGES[code]) return GRILL_ERROR_MESSAGES[code];
   return fallback;
+}
+
+/**
+ * FAILED 任务的安全标签。
+ *
+ * 只输出稳定中文标签和 error code，绝不输出 errorMessage 原文。
+ * - 已知 code：`任务执行失败（TASK_EXECUTION_FAILED）`（按映射取标签）
+ * - 未知 code：`任务执行失败（UNKNOWN_CODE）`
+ * - null code：`任务执行失败`
+ */
+export function formatFailedTaskLabel(errorCode: string | null): string {
+  if (!errorCode) return '任务执行失败';
+  const label = ERROR_CODE_LABELS[errorCode] ?? '任务执行失败';
+  return `${label}（${errorCode}）`;
 }
