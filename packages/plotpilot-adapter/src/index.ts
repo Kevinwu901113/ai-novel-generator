@@ -80,6 +80,9 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_EVENT_BYTES = 1_048_576;
 const DEFAULT_MAX_TOTAL_BYTES = 67_108_864;
 
+const ABORT_REASON_CALLER = Symbol('caller');
+const ABORT_REASON_TIMEOUT = Symbol('timeout');
+
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '');
 }
@@ -177,6 +180,8 @@ function frameToStreamEvent(frame: SseParsedFrame): PlotPilotStreamEvent | null 
   }
 }
 
+const byteLength = (s: string): number => new TextEncoder().encode(s).byteLength;
+
 export async function* parseSseStream(
   body: ReadableStream<Uint8Array>,
   options: { signal?: AbortSignal; maxEventBytes?: number; maxTotalBytes?: number } = {},
@@ -187,10 +192,19 @@ export async function* parseSseStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let totalBytes = 0;
+  let cancelled = false;
+  let cancelPromise: Promise<void> | null = null;
+
+  const doCancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    cancelPromise = reader.cancel().catch(() => {});
+  };
 
   const onAbort = () => {
-    reader.cancel().catch(() => {});
+    doCancel();
   };
+
   if (options.signal) {
     if (options.signal.aborted) {
       reader.releaseLock();
@@ -201,10 +215,22 @@ export async function* parseSseStream(
 
   try {
     while (true) {
+      if (options.signal?.aborted) {
+        doCancel();
+        throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
+      }
+
       const { done, value } = await reader.read();
+
+      if (options.signal?.aborted) {
+        doCancel();
+        throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
+      }
+
       if (value) {
         totalBytes += value.byteLength;
         if (totalBytes > maxTotal) {
+          doCancel();
           throw new PlotPilotAdapterError(
             'PLOTPILOT_BUFFER_OVERFLOW',
             'PlotPilot SSE 流超出总大小限制',
@@ -219,7 +245,8 @@ export async function* parseSseStream(
         const sepLen = buffer[sepIndex] === '\r' ? 4 : 2;
         buffer = buffer.slice(sepIndex + sepLen);
 
-        if (block.length > maxEvent) {
+        if (byteLength(block) > maxEvent) {
+          doCancel();
           throw new PlotPilotAdapterError(
             'PLOTPILOT_BUFFER_OVERFLOW',
             'PlotPilot SSE 单事件超出大小限制',
@@ -233,7 +260,8 @@ export async function* parseSseStream(
         }
       }
 
-      if (buffer.length > maxEvent) {
+      if (byteLength(buffer) > maxEvent) {
+        doCancel();
         throw new PlotPilotAdapterError(
           'PLOTPILOT_BUFFER_OVERFLOW',
           'PlotPilot SSE 单事件超出大小限制',
@@ -254,6 +282,9 @@ export async function* parseSseStream(
   } finally {
     if (options.signal) {
       options.signal.removeEventListener('abort', onAbort);
+    }
+    if (cancelPromise) {
+      await cancelPromise;
     }
     reader.releaseLock();
   }
@@ -366,21 +397,36 @@ export class PlotPilotAdapter {
     callerSignal: AbortSignal | undefined,
     useTimeout: boolean,
   ): Promise<Response> {
+    let firstReason: typeof ABORT_REASON_CALLER | typeof ABORT_REASON_TIMEOUT | null = null;
+
     const timeoutController = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | null = null;
 
     if (useTimeout) {
-      timeout = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
+      timeout = setTimeout(() => {
+        if (firstReason === null) firstReason = ABORT_REASON_TIMEOUT;
+        timeoutController.abort();
+      }, this.requestTimeoutMs);
     }
 
-    const signals: AbortSignal[] = [timeoutController.signal];
-    if (callerSignal) signals.push(callerSignal);
-    const combinedSignal = AbortSignal.any(signals);
+    let onCallerAbort: (() => void) | null = null;
+    if (callerSignal) {
+      onCallerAbort = () => {
+        if (firstReason === null) firstReason = ABORT_REASON_CALLER;
+        timeoutController.abort();
+      };
+      if (callerSignal.aborted) {
+        firstReason = ABORT_REASON_CALLER;
+        if (timeout !== null) clearTimeout(timeout);
+        throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 请求已取消');
+      }
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
 
     try {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         ...init,
-        signal: combinedSignal,
+        signal: timeoutController.signal,
       });
       if (!response.ok) {
         throw new PlotPilotAdapterError(
@@ -393,7 +439,7 @@ export class PlotPilotAdapter {
     } catch (error: unknown) {
       if (error instanceof PlotPilotAdapterError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        if (callerSignal?.aborted) {
+        if (firstReason === ABORT_REASON_CALLER) {
           throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 请求已取消');
         }
         throw new PlotPilotAdapterError('PLOTPILOT_TIMEOUT', 'PlotPilot 请求超时');
@@ -401,6 +447,9 @@ export class PlotPilotAdapter {
       throw new PlotPilotAdapterError('PLOTPILOT_UNAVAILABLE', '无法连接 PlotPilot sidecar');
     } finally {
       if (timeout !== null) clearTimeout(timeout);
+      if (callerSignal && onCallerAbort) {
+        callerSignal.removeEventListener('abort', onCallerAbort);
+      }
     }
   }
 }

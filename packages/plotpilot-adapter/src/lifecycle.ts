@@ -35,6 +35,66 @@ const realClock: SidecarClock = {
   delay: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
 };
 
+const ENV_ALLOWLIST = [
+  'PATH',
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TMPDIR',
+  'TZ',
+  'PYTHONUNBUFFERED',
+  'PYTHONPATH',
+  'PYTHONHOME',
+  'VIRTUAL_ENV',
+  'SYSTEMROOT',
+  'COMSPEC',
+  'PATHEXT',
+  'APPDATA',
+  'LOCALAPPDATA',
+];
+
+const SENSITIVE_KEY_PATTERN =
+  /key|token|secret|bearer|password|credential|auth|api.?key|sk-|openai|anthropic|claude|mimo|github|npm/i;
+
+export function sanitizeLogText(text: string): string {
+  let result = text.slice(0, 2048);
+  result = result.replace(/\/Users\/[^\s"']+/g, '<home>');
+  result = result.replace(/\/home\/[^\s"']+/g, '<home>');
+  result = result.replace(/C:\\Users\\[^\s"']+/g, '<home>');
+  result = result.replace(/Traceback \(most recent call last\):[\s\S]*$/g, '<traceback omitted>');
+  result = result.replace(/Bearer\s+[^\s"']+/gi, 'Bearer <redacted>');
+  result = result.replace(/sk-[A-Za-z0-9_-]{10,}/g, '<redacted>');
+  result = result.replace(/(?:key|token|secret|password)\s*[=:]\s*[^\s"']+/gi, '<redacted>');
+  return result;
+}
+
+export function buildSidecarEnv(
+  extra: Readonly<Record<string, string>> | undefined,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  if (extra) {
+    for (const [key, value] of Object.entries(extra)) {
+      if (SENSITIVE_KEY_PATTERN.test(key)) continue;
+      env[key] = value;
+    }
+  }
+  env.PYTHONUNBUFFERED = '1';
+  return env;
+}
+
+export function resolvePythonExecutable(options: PlotPilotSidecarOptions): string {
+  const explicit = options.pythonExecutable?.trim();
+  if (explicit) return explicit;
+  const fromEnv = process.env.PLOTPILOT_PYTHON?.trim();
+  if (fromEnv) return fromEnv;
+  throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', '未配置 Python 可执行文件路径');
+}
+
 export function validateSidecarConfig(options: PlotPilotSidecarOptions): void {
   const root = resolve(options.plotPilotRoot);
   if (!existsSync(root)) {
@@ -44,9 +104,7 @@ export function validateSidecarConfig(options: PlotPilotSidecarOptions): void {
   if (!existsSync(entry)) {
     throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', 'PlotPilot 入口文件不存在');
   }
-  if (!options.pythonExecutable && !process.env.PLOTPILOT_PYTHON) {
-    throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', '未配置 Python 可执行文件路径');
-  }
+  resolvePythonExecutable(options);
   const port = options.port ?? 8005;
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', '端口号无效');
@@ -64,7 +122,7 @@ export class PlotPilotSidecarManager {
   private readonly opts: Required<
     Pick<
       PlotPilotSidecarOptions,
-      'pythonExecutable' | 'host' | 'port' | 'startupTimeoutMs' | 'pollIntervalMs' | 'stopTimeoutMs'
+      'host' | 'port' | 'startupTimeoutMs' | 'pollIntervalMs' | 'stopTimeoutMs'
     >
   > &
     PlotPilotSidecarOptions;
@@ -74,12 +132,12 @@ export class PlotPilotSidecarManager {
   private lastError: string | null = null;
   private healthSnapshot: PlotPilotHealth | null = null;
   private startPromise: Promise<PlotPilotSidecarStatus> | null = null;
-  private settled = false;
+  private stopPromise: Promise<PlotPilotSidecarStatus> | null = null;
+  private generation = 0;
 
   constructor(options: PlotPilotSidecarOptions, clock: SidecarClock = realClock) {
     this.opts = {
       ...options,
-      pythonExecutable: options.pythonExecutable ?? process.env.PLOTPILOT_PYTHON ?? 'python',
       host: options.host ?? '127.0.0.1',
       port: options.port ?? 8005,
       startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
@@ -107,11 +165,12 @@ export class PlotPilotSidecarManager {
     if (this.state === 'READY_OWNED' || this.state === 'READY_EXTERNAL') {
       return this.status();
     }
-    if (this.state === 'STOPPING') {
+    if (this.state === 'STOPPING' || this.stopPromise) {
       throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 正在停止中，无法启动');
     }
 
-    this.startPromise = this.doStart();
+    this.state = 'STARTING';
+    this.startPromise = this.doStart(++this.generation);
     this.startPromise.catch(() => {});
     try {
       return await this.startPromise;
@@ -121,16 +180,34 @@ export class PlotPilotSidecarManager {
   }
 
   async stop(): Promise<PlotPilotSidecarStatus> {
-    if (this.state === 'STOPPED' || this.state === 'FAILED') {
+    if (this.stopPromise) return this.stopPromise;
+
+    this.stopPromise = this.doStop(++this.generation);
+    this.stopPromise.catch(() => {});
+    try {
+      return await this.stopPromise;
+    } finally {
+      this.stopPromise = null;
+    }
+  }
+
+  private async doStop(gen: number): Promise<PlotPilotSidecarStatus> {
+    if (this.startPromise) {
+      await this.startPromise.catch(() => {});
+    }
+
+    if (this.generation !== gen) return this.status();
+
+    if (this.state === 'READY_EXTERNAL') {
       this.state = 'STOPPED';
-      this.child = null;
       this.healthSnapshot = null;
       this.lastError = null;
       return this.status();
     }
 
-    if (this.state === 'READY_EXTERNAL') {
+    if (this.state === 'STOPPED' || this.state === 'FAILED') {
       this.state = 'STOPPED';
+      this.child = null;
       this.healthSnapshot = null;
       this.lastError = null;
       return this.status();
@@ -143,7 +220,7 @@ export class PlotPilotSidecarManager {
       try {
         await this.adapter.shutdown();
       } catch {
-        // graceful shutdown failed, fall through to kill
+        // graceful shutdown failed
       }
 
       if (
@@ -177,10 +254,22 @@ export class PlotPilotSidecarManager {
     return this.status();
   }
 
-  private async doStart(): Promise<PlotPilotSidecarStatus> {
+  private async doStart(gen: number): Promise<PlotPilotSidecarStatus> {
     validateSidecarConfig(this.opts);
+    const pythonExe = resolvePythonExecutable(this.opts);
+
+    if (this.generation !== gen) {
+      this.state = 'STOPPED';
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
+    }
 
     const existing = await this.tryHealth();
+
+    if (this.generation !== gen) {
+      this.state = 'STOPPED';
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
+    }
+
     if (existing) {
       this.state = 'READY_EXTERNAL';
       this.healthSnapshot = existing;
@@ -188,14 +277,12 @@ export class PlotPilotSidecarManager {
       return this.status();
     }
 
-    this.state = 'STARTING';
     this.lastError = null;
-    this.settled = false;
 
     let child: ChildProcess;
     try {
       child = spawn(
-        this.opts.pythonExecutable,
+        pythonExe,
         [
           '-m',
           'uvicorn',
@@ -207,7 +294,7 @@ export class PlotPilotSidecarManager {
         ],
         {
           cwd: resolve(this.opts.plotPilotRoot),
-          env: { ...process.env, ...this.opts.environment, PYTHONUNBUFFERED: '1' },
+          env: buildSidecarEnv(this.opts.environment),
           stdio: ['ignore', 'pipe', 'pipe'],
           shell: false,
           windowsHide: true,
@@ -219,11 +306,18 @@ export class PlotPilotSidecarManager {
       throw new PlotPilotAdapterError('PLOTPILOT_UNAVAILABLE', this.lastError);
     }
 
+    if (this.generation !== gen) {
+      child.kill('SIGKILL');
+      this.state = 'STOPPED';
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
+    }
+
     this.child = child;
+    let settled = false;
 
     const settleOnce = (fn: () => void) => {
-      if (this.settled) return;
-      this.settled = true;
+      if (settled) return;
+      settled = true;
       fn();
     };
 
@@ -257,24 +351,47 @@ export class PlotPilotSidecarManager {
 
     if (child.stdout) {
       child.stdout.setEncoding('utf8');
-      child.stdout.on('data', (text: string) => this.opts.onLog?.({ stream: 'stdout', text }));
+      child.stdout.on('data', (text: string) =>
+        this.opts.onLog?.({ stream: 'stdout', text: sanitizeLogText(text) }),
+      );
     }
     if (child.stderr) {
       child.stderr.setEncoding('utf8');
-      child.stderr.on('data', (text: string) => this.opts.onLog?.({ stream: 'stderr', text }));
+      child.stderr.on('data', (text: string) =>
+        this.opts.onLog?.({ stream: 'stderr', text: sanitizeLogText(text) }),
+      );
     }
 
     const deadline = this.clock.now() + this.opts.startupTimeoutMs;
     while (this.clock.now() < deadline) {
+      if (this.generation !== gen) {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        this.child = null;
+        this.state = 'STOPPED';
+        throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
+      }
       if (this.child !== child) break;
       if (child.exitCode !== null || child.signalCode !== null) break;
       const health = await this.tryHealth();
+      if (this.generation !== gen) {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        this.child = null;
+        this.state = 'STOPPED';
+        throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
+      }
       if (health) {
         this.state = 'READY_OWNED';
         this.healthSnapshot = health;
         return this.status();
       }
       await this.clock.delay(this.opts.pollIntervalMs);
+    }
+
+    if (this.generation !== gen) {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      this.child = null;
+      this.state = 'STOPPED';
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 启动已取消');
     }
 
     if ((this.state as string) === 'FAILED') {
