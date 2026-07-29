@@ -57,6 +57,14 @@ export {
   GrillVersionConflictError,
   GrillOwnershipConflictError,
   GrillValidationError,
+  GrillPlanAlreadyRunningError,
+  GrillPlanStaleError,
+  GrillPlanSchemaInvalidError,
+  GrillPlanReferenceInvalidError,
+  GrillPlanCycleDetectedError,
+  GrillPlanProposalNotFoundError,
+  GrillPlanProposalNotAcceptableError,
+  TaskDedupeConflictError,
 } from './errors.js';
 
 // ── 用例 ──────────────────────────────────────────────────────────
@@ -97,6 +105,9 @@ export type {
   GrillQuestionRepositoryPort,
   GrillAnswerRepositoryPort,
   GrillProposalRepositoryPort,
+  GrillQuestionPlanProposalData,
+  CreateGrillQuestionPlanProposalInput,
+  GrillQuestionPlanProposalRepositoryPort,
 } from './grill-types.js';
 
 export {
@@ -126,3 +137,20 @@ export type {
   CreateGrillProposalInput2,
   ReviewGrillProposalInput,
 } from './grill-session.js';
+
+export {
+  requestGrillQuestionPlan,
+  acceptGrillQuestionPlanProposal,
+  getGrillQuestionPlanProposal,
+  listGrillQuestionPlanProposals,
+  validateStoredPlan,
+  existingDepsFromQuestions,
+} from './grill-question-plan.js';
+export type {
+  GrillQuestionPlanDeps,
+  GrillQuestionPlanRequestDeps,
+  RequestGrillQuestionPlanInput,
+  RequestGrillQuestionPlanResult,
+  AcceptGrillQuestionPlanProposalInput,
+  AcceptGrillQuestionPlanProposalResult,
+} from './grill-question-plan.js';

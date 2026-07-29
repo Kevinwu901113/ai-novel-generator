@@ -16,10 +16,16 @@ import {
   isValidGrillListProposalsInput,
   isValidGrillListAnswerHistoryInput,
   isValidGrillListQuestionsInput,
+  isValidGrillAcceptQuestionPlanProposalInput,
+  isValidGrillListQuestionPlanProposalsInput,
+  isValidGrillQuestionPlanProposalIdInput,
   type GrillSessionPublicData,
   type GrillQuestionPublicData,
   type GrillAnswerPublicData,
   type GrillProposalPublicData,
+  type GrillQuestionPlanProposalPublicData,
+  type GrillPlannedQuestionPublicData,
+  type GrillPlannedDependencyPublicData,
 } from '@ai-novel/contracts';
 import {
   AppError,
@@ -40,6 +46,9 @@ import {
   createGrillProposal,
   reviewGrillProposal,
   listGrillProposals,
+  acceptGrillQuestionPlanProposal,
+  getGrillQuestionPlanProposal,
+  listGrillQuestionPlanProposals,
   type GrillSessionDeps,
   type GrillSessionData,
   type GrillQuestionData,
@@ -49,6 +58,10 @@ import {
   type GrillQuestionRepositoryPort,
   type GrillAnswerRepositoryPort,
   type GrillProposalRepositoryPort,
+  type GrillQuestionPlanDeps,
+  type GrillQuestionPlanProposalData,
+  type GrillQuestionPlanProposalRepositoryPort,
+  type CreateGrillQuestionPlanProposalInput,
   type IdGenerator,
   type Clock,
 } from '@ai-novel/application';
@@ -65,7 +78,7 @@ export interface GrillHandlerContext {
 
 // ── 适配器 ────────────────────────────────────────────────────────
 
-class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
+export class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
   constructor(
     private readonly projDb: ProjectDatabase,
     private readonly clock: Clock,
@@ -130,7 +143,7 @@ class GrillSessionRepositoryAdapter implements GrillSessionRepositoryPort {
   }
 }
 
-class GrillQuestionRepositoryAdapter implements GrillQuestionRepositoryPort {
+export class GrillQuestionRepositoryAdapter implements GrillQuestionRepositoryPort {
   constructor(
     private readonly projDb: ProjectDatabase,
     private readonly clock: Clock,
@@ -234,7 +247,7 @@ class GrillQuestionRepositoryAdapter implements GrillQuestionRepositoryPort {
   }
 }
 
-class GrillAnswerRepositoryAdapter implements GrillAnswerRepositoryPort {
+export class GrillAnswerRepositoryAdapter implements GrillAnswerRepositoryPort {
   constructor(
     private readonly projDb: ProjectDatabase,
     private readonly clock: Clock,
@@ -394,6 +407,90 @@ class GrillProposalRepositoryAdapter implements GrillProposalRepositoryPort {
   }
 }
 
+export class GrillQuestionPlanProposalRepositoryAdapter implements GrillQuestionPlanProposalRepositoryPort {
+  constructor(
+    private readonly projDb: ProjectDatabase,
+    private readonly clock: Clock,
+  ) {}
+
+  create(data: CreateGrillQuestionPlanProposalInput): void {
+    const now = this.clock.now();
+    this.projDb.getGrillQuestionPlanProposalRepository().create({
+      id: data.id,
+      projectId: data.projectId,
+      sessionId: data.sessionId,
+      taskId: data.taskId,
+      invocationId: data.invocationId,
+      baseSessionVersion: data.baseSessionVersion,
+      schemaVersion: data.schemaVersion,
+      questionsJson: data.questionsJson,
+      createdAt: now,
+    });
+  }
+
+  getById(id: string): GrillQuestionPlanProposalData | null {
+    const row = this.projDb.getGrillQuestionPlanProposalRepository().getById(id);
+    if (!row) return null;
+    return this.toData(row);
+  }
+
+  listBySession(sessionId: string): ReadonlyArray<GrillQuestionPlanProposalData> {
+    return this.projDb
+      .getGrillQuestionPlanProposalRepository()
+      .listBySession(sessionId)
+      .map(this.toData);
+  }
+
+  markAccepted(id: string): boolean {
+    const now = this.clock.now();
+    return this.projDb
+      .getGrillQuestionPlanProposalRepository()
+      .transitionStatus(id, 'PROPOSED', 'ACCEPTED', now);
+  }
+
+  markRejected(id: string): boolean {
+    const now = this.clock.now();
+    return this.projDb
+      .getGrillQuestionPlanProposalRepository()
+      .transitionStatus(id, 'PROPOSED', 'REJECTED', now);
+  }
+
+  markStale(id: string): boolean {
+    const now = this.clock.now();
+    return this.projDb
+      .getGrillQuestionPlanProposalRepository()
+      .transitionStatus(id, 'PROPOSED', 'STALE', now);
+  }
+
+  private toData(row: {
+    id: string;
+    projectId: string;
+    sessionId: string;
+    taskId: string;
+    invocationId: string;
+    baseSessionVersion: number;
+    schemaVersion: number;
+    questionsJson: string;
+    status: string;
+    createdAt: string;
+    reviewedAt: string | null;
+  }): GrillQuestionPlanProposalData {
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      sessionId: row.sessionId,
+      taskId: row.taskId,
+      invocationId: row.invocationId,
+      baseSessionVersion: row.baseSessionVersion,
+      schemaVersion: row.schemaVersion,
+      questionsJson: row.questionsJson,
+      status: row.status as GrillQuestionPlanProposalData['status'],
+      createdAt: row.createdAt,
+      reviewedAt: row.reviewedAt,
+    };
+  }
+}
+
 // ── DTO 映射 ──────────────────────────────────────────────────────
 
 function toSessionPublicData(s: GrillSessionData): GrillSessionPublicData {
@@ -457,6 +554,51 @@ function toProposalPublicData(p: GrillProposalData): GrillProposalPublicData {
   };
 }
 
+function toQuestionPlanProposalPublicData(
+  p: GrillQuestionPlanProposalData,
+): GrillQuestionPlanProposalPublicData {
+  const parsed = JSON.parse(p.questionsJson) as {
+    questions: ReadonlyArray<{
+      key: string;
+      topic: string;
+      text: string;
+      rationale: string;
+      dependencies: ReadonlyArray<{
+        kind: 'existing' | 'planned';
+        questionId?: string;
+        questionKey?: string;
+      }>;
+    }>;
+  };
+
+  const questions: GrillPlannedQuestionPublicData[] = parsed.questions.map((q) => ({
+    key: q.key,
+    topic: q.topic,
+    text: q.text,
+    rationale: q.rationale,
+    dependencies: q.dependencies.map((d): GrillPlannedDependencyPublicData => {
+      if (d.kind === 'existing') {
+        return { kind: 'existing', questionId: d.questionId };
+      }
+      return { kind: 'planned', questionKey: d.questionKey };
+    }),
+  }));
+
+  return {
+    id: p.id,
+    projectId: p.projectId,
+    sessionId: p.sessionId,
+    taskId: p.taskId,
+    baseSessionVersion: p.baseSessionVersion,
+    schemaVersion: p.schemaVersion,
+    status: p.status,
+    questions,
+    questionCount: questions.length,
+    createdAt: p.createdAt,
+    reviewedAt: p.reviewedAt,
+  };
+}
+
 // ── Deps 构建 ─────────────────────────────────────────────────────
 
 function buildDeps(projDb: ProjectDatabase, ctx: GrillHandlerContext): GrillSessionDeps {
@@ -467,6 +609,17 @@ function buildDeps(projDb: ProjectDatabase, ctx: GrillHandlerContext): GrillSess
     questionRepo: new GrillQuestionRepositoryAdapter(projDb, ctx.clock),
     answerRepo: new GrillAnswerRepositoryAdapter(projDb, ctx.clock),
     proposalRepo: new GrillProposalRepositoryAdapter(projDb, ctx.clock),
+    transaction: <T>(fn: () => T) => projDb.transaction(fn),
+  };
+}
+
+function buildPlanDeps(projDb: ProjectDatabase, ctx: GrillHandlerContext): GrillQuestionPlanDeps {
+  return {
+    idGenerator: ctx.idGenerator,
+    clock: ctx.clock,
+    sessionRepo: new GrillSessionRepositoryAdapter(projDb, ctx.clock),
+    questionRepo: new GrillQuestionRepositoryAdapter(projDb, ctx.clock),
+    planProposalRepo: new GrillQuestionPlanProposalRepositoryAdapter(projDb, ctx.clock),
     transaction: <T>(fn: () => T) => projDb.transaction(fn),
   };
 }
@@ -719,6 +872,60 @@ function handleListProposals(payload: unknown, ctx: GrillHandlerContext): unknow
   }
 }
 
+function handleAcceptQuestionPlanProposal(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillAcceptQuestionPlanProposalInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的接受问题规划提案输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildPlanDeps(projDb, ctx);
+    const result = acceptGrillQuestionPlanProposal(deps, {
+      projectId: payload.projectId,
+      sessionId: payload.sessionId,
+      proposalId: payload.proposalId,
+      expectedSessionVersion: payload.expectedSessionVersion,
+    });
+    return result.questions.map(toQuestionPublicData);
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleListQuestionPlanProposals(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillListQuestionPlanProposalsInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的问题规划提案列表输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildPlanDeps(projDb, ctx);
+    return listGrillQuestionPlanProposals(deps, {
+      projectId: payload.projectId,
+      sessionId: payload.sessionId,
+    }).map(toQuestionPlanProposalPublicData);
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleGetQuestionPlanProposal(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillQuestionPlanProposalIdInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的问题规划提案查询输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildPlanDeps(projDb, ctx);
+    return toQuestionPlanProposalPublicData(
+      getGrillQuestionPlanProposal(deps, {
+        projectId: payload.projectId,
+        sessionId: payload.sessionId,
+        proposalId: payload.proposalId,
+      }),
+    );
+  } finally {
+    projDb.close();
+  }
+}
+
 // ── 分发 ──────────────────────────────────────────────────────────
 
 export function dispatchGrillCommand(
@@ -763,6 +970,12 @@ export function dispatchGrillCommand(
       return handleReviewProposal(payload, ctx);
     case 'grill.listProposals':
       return handleListProposals(payload, ctx);
+    case 'grill.acceptQuestionPlanProposal':
+      return handleAcceptQuestionPlanProposal(payload, ctx);
+    case 'grill.listQuestionPlanProposals':
+      return handleListQuestionPlanProposals(payload, ctx);
+    case 'grill.getQuestionPlanProposal':
+      return handleGetQuestionPlanProposal(payload, ctx);
     default:
       throw new AppError('VALIDATION_ERROR', `未知命令: ${command}`);
   }

@@ -48,6 +48,13 @@ export type ErrorCode =
   | 'GRILL_VERSION_CONFLICT'
   | 'GRILL_OWNERSHIP_CONFLICT'
   | 'GRILL_VALIDATION_ERROR'
+  | 'GRILL_PLAN_ALREADY_RUNNING'
+  | 'GRILL_PLAN_STALE'
+  | 'GRILL_PLAN_SCHEMA_INVALID'
+  | 'GRILL_PLAN_REFERENCE_INVALID'
+  | 'GRILL_PLAN_CYCLE_DETECTED'
+  | 'GRILL_PLAN_PROPOSAL_NOT_FOUND'
+  | 'GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -219,6 +226,10 @@ export const IPC_CHANNELS = {
   GRILL_CREATE_PROPOSAL: 'ipc:grill-create-proposal',
   GRILL_REVIEW_PROPOSAL: 'ipc:grill-review-proposal',
   GRILL_LIST_PROPOSALS: 'ipc:grill-list-proposals',
+  GRILL_REQUEST_QUESTION_PLAN: 'ipc:grill-request-question-plan',
+  GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'ipc:grill-accept-question-plan-proposal',
+  GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'ipc:grill-list-question-plan-proposals',
+  GRILL_GET_QUESTION_PLAN_PROPOSAL: 'ipc:grill-get-question-plan-proposal',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -278,6 +289,18 @@ export interface GrillAPI {
   createProposal(input: GrillCreateProposalInput): Promise<GrillProposalPublicData>;
   reviewProposal(input: GrillReviewProposalInput): Promise<GrillProposalPublicData>;
   listProposals(input: GrillListProposalsInput): Promise<ReadonlyArray<GrillProposalPublicData>>;
+  requestQuestionPlan(
+    input: GrillRequestQuestionPlanInput,
+  ): Promise<GrillRequestQuestionPlanResult>;
+  acceptQuestionPlanProposal(
+    input: GrillAcceptQuestionPlanProposalInput,
+  ): Promise<ReadonlyArray<GrillQuestionPublicData>>;
+  listQuestionPlanProposals(
+    input: GrillListQuestionPlanProposalsInput,
+  ): Promise<ReadonlyArray<GrillQuestionPlanProposalPublicData>>;
+  getQuestionPlanProposal(
+    input: GrillQuestionPlanProposalIdInput,
+  ): Promise<GrillQuestionPlanProposalPublicData>;
 }
 
 /** 数据服务状态 */
@@ -365,6 +388,13 @@ export function isAppError(data: unknown): data is AppError {
     'GRILL_VERSION_CONFLICT',
     'GRILL_OWNERSHIP_CONFLICT',
     'GRILL_VALIDATION_ERROR',
+    'GRILL_PLAN_ALREADY_RUNNING',
+    'GRILL_PLAN_STALE',
+    'GRILL_PLAN_SCHEMA_INVALID',
+    'GRILL_PLAN_REFERENCE_INVALID',
+    'GRILL_PLAN_CYCLE_DETECTED',
+    'GRILL_PLAN_PROPOSAL_NOT_FOUND',
+    'GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE',
     'INTERNAL_ERROR',
   ]);
   return (
@@ -553,6 +583,34 @@ export interface GrillListAnswerHistoryInput {
   readonly questionId: string;
 }
 
+/** 请求问题规划输入 */
+export interface GrillRequestQuestionPlanInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly expectedSessionVersion: number;
+}
+
+/** 接受问题规划提案输入 */
+export interface GrillAcceptQuestionPlanProposalInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly proposalId: string;
+  readonly expectedSessionVersion: number;
+}
+
+/** 列出问题规划提案输入 */
+export interface GrillListQuestionPlanProposalsInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+}
+
+/** 问题规划提案 ID 输入 */
+export interface GrillQuestionPlanProposalIdInput {
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly proposalId: string;
+}
+
 /** 烧烤会话公开数据 */
 export interface GrillSessionPublicData {
   readonly id: string;
@@ -606,6 +664,44 @@ export interface GrillProposalPublicData {
   readonly confidence: number;
   readonly rationale: string;
   readonly status: string;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+/** 请求问题规划结果 —— 仅含任务引用，不含任何模型结果 */
+export interface GrillRequestQuestionPlanResult {
+  readonly taskId: string;
+  readonly sessionId: string;
+  readonly baseSessionVersion: number;
+}
+
+/** 规划问题依赖公开数据 */
+export interface GrillPlannedDependencyPublicData {
+  readonly kind: 'existing' | 'planned';
+  readonly questionId?: string;
+  readonly questionKey?: string;
+}
+
+/** 规划问题公开数据（经验证的规范化计划项） */
+export interface GrillPlannedQuestionPublicData {
+  readonly key: string;
+  readonly topic: string;
+  readonly text: string;
+  readonly rationale: string;
+  readonly dependencies: ReadonlyArray<GrillPlannedDependencyPublicData>;
+}
+
+/** 问题规划提案公开数据 —— 仅含经验证的规范化计划，不含原始模型输出 */
+export interface GrillQuestionPlanProposalPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly status: string;
+  readonly questions: ReadonlyArray<GrillPlannedQuestionPublicData>;
+  readonly questionCount: number;
   readonly createdAt: string;
   readonly reviewedAt: string | null;
 }
@@ -735,4 +831,79 @@ export function isValidGrillListAnswerHistoryInput(
     typeof obj.sessionId === 'string' &&
     typeof obj.questionId === 'string'
   );
+}
+
+// ── Grill 问题规划器严格验证 ──────────────────────────────────────
+
+/** 规划器 ID 字段长度上限（Unicode code points） */
+const PLANNER_MAX_ID_LENGTH = 128;
+
+function plannerCodePointLength(str: string): number {
+  return [...str].length;
+}
+
+/** 严格 ID：非空、trim 后非空、长度不超过上限 */
+function isPlannerId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return plannerCodePointLength(trimmed) <= PLANNER_MAX_ID_LENGTH;
+}
+
+/** 严格版本：安全整数且 >= 1（拒绝 NaN/Infinity/0/负数/小数） */
+function isPlannerVersion(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** 拒绝额外字段 */
+function hasOnlyKeys(obj: Record<string, unknown>, allowed: ReadonlyArray<string>): boolean {
+  const allowedSet = new Set(allowed);
+  return Object.keys(obj).every((key) => allowedSet.has(key));
+}
+
+export function isValidGrillRequestQuestionPlanInput(
+  data: unknown,
+): data is GrillRequestQuestionPlanInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'expectedSessionVersion'])) return false;
+  return (
+    isPlannerId(obj.projectId) &&
+    isPlannerId(obj.sessionId) &&
+    isPlannerVersion(obj.expectedSessionVersion)
+  );
+}
+
+export function isValidGrillAcceptQuestionPlanProposalInput(
+  data: unknown,
+): data is GrillAcceptQuestionPlanProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'proposalId', 'expectedSessionVersion'])) {
+    return false;
+  }
+  return (
+    isPlannerId(obj.projectId) &&
+    isPlannerId(obj.sessionId) &&
+    isPlannerId(obj.proposalId) &&
+    isPlannerVersion(obj.expectedSessionVersion)
+  );
+}
+
+export function isValidGrillListQuestionPlanProposalsInput(
+  data: unknown,
+): data is GrillListQuestionPlanProposalsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId'])) return false;
+  return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId);
+}
+
+export function isValidGrillQuestionPlanProposalIdInput(
+  data: unknown,
+): data is GrillQuestionPlanProposalIdInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'proposalId'])) return false;
+  return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId) && isPlannerId(obj.proposalId);
 }

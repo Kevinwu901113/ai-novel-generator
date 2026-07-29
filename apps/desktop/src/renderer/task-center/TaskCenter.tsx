@@ -50,6 +50,8 @@ export function TaskCenter({ projectId }: TaskCenterProps) {
           className="btn-retry-inline"
           onClick={() => refresh()}
           disabled={isLoading}
+          aria-busy={isLoading}
+          aria-label={isLoading ? '刷新中' : '刷新任务列表'}
           data-testid="task-refresh-btn"
         >
           {isLoading ? '刷新中…' : '刷新'}
@@ -58,7 +60,7 @@ export function TaskCenter({ projectId }: TaskCenterProps) {
 
       {/* 任务列表错误 */}
       {error && (
-        <div className="task-error" data-testid="task-error">
+        <div className="task-error" data-testid="task-error" role="alert" aria-live="assertive">
           {error}
         </div>
       )}

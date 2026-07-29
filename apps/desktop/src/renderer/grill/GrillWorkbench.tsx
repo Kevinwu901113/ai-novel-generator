@@ -197,6 +197,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
 
   return (
     <div className="grill-workbench">
+      <h2 className="grill-heading">Grill-me 需求澄清</h2>
       {/* 开发态诊断 */}
       <GrillDiagnostics
         projectId={projectId}
