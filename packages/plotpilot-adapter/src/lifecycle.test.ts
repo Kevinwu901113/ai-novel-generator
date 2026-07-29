@@ -678,3 +678,105 @@ describe('environment and log safety', () => {
     ).toBe('/usr/bin/python3');
   });
 });
+
+describe('config failure state', () => {
+  let clock: ReturnType<typeof createFakeClock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clock = createFakeClock();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('29. missing python → CONFIG_INVALID, state FAILED, stop recovers', async () => {
+    mockFetchUnhealthy();
+    const mgr = new PlotPilotSidecarManager(
+      { plotPilotRoot: '/fake/plotpilot', port: 8005 },
+      clock,
+    );
+    let caught: unknown;
+    await mgr.start().catch((e) => {
+      caught = e;
+    });
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_CONFIG_INVALID' });
+    expect(mgr.status().state).toBe('FAILED');
+    expect(mgr.status().pid).toBeNull();
+
+    const s = await mgr.stop();
+    expect(s.state).toBe('STOPPED');
+  });
+
+  it('30. checkout dir missing → CONFIG_INVALID', async () => {
+    const { existsSync } = await import('node:fs');
+    (existsSync as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+    mockFetchUnhealthy();
+    const mgr = new PlotPilotSidecarManager(BASE_OPTS, clock);
+    await expect(mgr.start()).rejects.toMatchObject({ code: 'PLOTPILOT_CONFIG_INVALID' });
+    expect(mgr.status().state).toBe('FAILED');
+  });
+
+  it('31. entrypoint missing → CONFIG_INVALID', async () => {
+    const { existsSync } = await import('node:fs');
+    (existsSync as ReturnType<typeof vi.fn>).mockReturnValueOnce(true).mockReturnValueOnce(false);
+    mockFetchUnhealthy();
+    const mgr = new PlotPilotSidecarManager(BASE_OPTS, clock);
+    await expect(mgr.start()).rejects.toMatchObject({ code: 'PLOTPILOT_CONFIG_INVALID' });
+    expect(mgr.status().state).toBe('FAILED');
+  });
+
+  it('32. invalid port → CONFIG_INVALID', async () => {
+    mockFetchUnhealthy();
+    const mgr = new PlotPilotSidecarManager({ ...BASE_OPTS, port: 99999 }, clock);
+    await expect(mgr.start()).rejects.toMatchObject({ code: 'PLOTPILOT_CONFIG_INVALID' });
+    expect(mgr.status().state).toBe('FAILED');
+  });
+
+  it('33. non-loopback host → CONFIG_INVALID', async () => {
+    mockFetchUnhealthy();
+    const mgr = new PlotPilotSidecarManager({ ...BASE_OPTS, host: '0.0.0.0' }, clock);
+    await expect(mgr.start()).rejects.toMatchObject({ code: 'PLOTPILOT_CONFIG_INVALID' });
+    expect(mgr.status().state).toBe('FAILED');
+  });
+});
+
+describe('stop-during-start semantics', () => {
+  let clock: ReturnType<typeof createFakeClock>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clock = createFakeClock();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('34. start pending → stop → new start rejects LIFECYCLE, no new spawn', async () => {
+    mockFetchUnhealthy();
+    const child = createFakeChild();
+    mockSpawn.mockReturnValue(child);
+
+    const mgr = new PlotPilotSidecarManager(BASE_OPTS, clock);
+    const start1 = mgr.start().catch(() => {});
+    await microtask();
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    const stopP = mgr.stop();
+
+    let caught: unknown;
+    await mgr.start().catch((e) => {
+      caught = e;
+    });
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_LIFECYCLE' });
+    expect(mockSpawn).toHaveBeenCalledTimes(1);
+
+    await microtask();
+    clock.tick();
+    await microtask();
+    await Promise.allSettled([start1, stopP]);
+    expect(mgr.status().state).toBe('STOPPED');
+  });
+});

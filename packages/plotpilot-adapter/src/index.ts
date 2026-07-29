@@ -194,6 +194,7 @@ export async function* parseSseStream(
   let totalBytes = 0;
   let cancelled = false;
   let cancelPromise: Promise<void> | null = null;
+  let completedNaturally = false;
 
   const doCancel = () => {
     if (cancelled) return;
@@ -207,6 +208,8 @@ export async function* parseSseStream(
 
   if (options.signal) {
     if (options.signal.aborted) {
+      doCancel();
+      if (cancelPromise) await cancelPromise;
       reader.releaseLock();
       throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
     }
@@ -220,7 +223,17 @@ export async function* parseSseStream(
         throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
       }
 
-      const { done, value } = await reader.read();
+      let done: boolean;
+      let value: Uint8Array | undefined;
+      try {
+        ({ done, value } = await reader.read());
+      } catch (readError: unknown) {
+        if (options.signal?.aborted) {
+          doCancel();
+          throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
+        }
+        throw readError;
+      }
 
       if (options.signal?.aborted) {
         doCancel();
@@ -279,9 +292,13 @@ export async function* parseSseStream(
         if (event) yield event;
       }
     }
+    completedNaturally = true;
   } finally {
     if (options.signal) {
       options.signal.removeEventListener('abort', onAbort);
+    }
+    if (!completedNaturally) {
+      doCancel();
     }
     if (cancelPromise) {
       await cancelPromise;

@@ -26,6 +26,26 @@ function spyStream(chunks: string[]): {
     pull(controller) {
       if (index < chunks.length) {
         controller.enqueue(encoder.encode(chunks[index++]));
+      }
+    },
+    cancel() {
+      cancelCount++;
+    },
+  });
+  return { stream, cancelSpy: () => cancelCount };
+}
+
+function spyStreamAutoClose(chunks: string[]): {
+  stream: ReadableStream<Uint8Array>;
+  cancelSpy: () => number;
+} {
+  const encoder = new TextEncoder();
+  let index = 0;
+  let cancelCount = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (index < chunks.length) {
+        controller.enqueue(encoder.encode(chunks[index++]));
       } else {
         controller.close();
       }
@@ -295,30 +315,34 @@ describe('SSE stream abort', () => {
 });
 
 describe('SSE reader cancel/release', () => {
-  it('49. iterator.return() calls cancel once and releases', async () => {
-    const { stream } = spyStream([
+  it('49. iterator.return() → cancel 1, release', async () => {
+    const { stream, cancelSpy } = spyStream([
       'data: {"type":"a"}\n\ndata: {"type":"b"}\n\ndata: {"type":"c"}\n\n',
     ]);
     const iter = parseSseStream(stream);
     const first = await iter.next();
     expect(first.value?.type).toBe('a');
     await iter.return(undefined);
+    await Promise.resolve();
+    expect(cancelSpy()).toBe(1);
     expect(stream.locked).toBe(false);
   });
 
-  it('50. for-await break calls cancel once and releases', async () => {
-    const { stream } = spyStream([
+  it('50. for-await break → cancel 1, release', async () => {
+    const { stream, cancelSpy } = spyStream([
       'data: {"type":"a"}\n\ndata: {"type":"b"}\n\ndata: {"type":"c"}\n\n',
     ]);
     for await (const event of parseSseStream(stream)) {
       expect(event.type).toBe('a');
       break;
     }
+    await Promise.resolve();
+    expect(cancelSpy()).toBe(1);
     expect(stream.locked).toBe(false);
   });
 
-  it('51. onEvent throw preserves original error and releases', async () => {
-    const { stream } = spyStream(['data: {"type":"a"}\n\ndata: {"type":"b"}\n\n']);
+  it('51. consumer throw → cancel 1, original error preserved, release', async () => {
+    const { stream, cancelSpy } = spyStream(['data: {"type":"a"}\n\ndata: {"type":"b"}\n\n']);
     let caught: unknown;
     try {
       for await (const event of parseSseStream(stream)) {
@@ -329,17 +353,19 @@ describe('SSE reader cancel/release', () => {
     }
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe('consumer error');
+    await Promise.resolve();
+    expect(cancelSpy()).toBe(1);
     expect(stream.locked).toBe(false);
   });
 
-  it('52. normal completion releases without cancel', async () => {
-    const { stream, cancelSpy } = spyStream(['data: {"type":"a"}\n\n']);
+  it('52. normal completion → cancel 0, release', async () => {
+    const { stream, cancelSpy } = spyStreamAutoClose(['data: {"type":"a"}\n\n']);
     await collectEvents(stream);
     expect(stream.locked).toBe(false);
     expect(cancelSpy()).toBe(0);
   });
 
-  it('53. abort calls cancel exactly once', async () => {
+  it('53. abort → cancel 1, PLOTPILOT_ABORTED, release', async () => {
     const controller = new AbortController();
     let cancelCount = 0;
     let pullCount = 0;
@@ -359,26 +385,111 @@ describe('SSE reader cancel/release', () => {
       },
     });
 
+    let caught: unknown;
     try {
       for await (const _ of parseSseStream(abortStream, { signal: controller.signal })) {
         void _;
       }
-    } catch {
-      // expected PLOTPILOT_ABORTED
+    } catch (e) {
+      caught = e;
     }
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_ABORTED' });
+    expect(cancelCount).toBe(1);
     await Promise.resolve();
     expect(abortStream.locked).toBe(false);
+  });
+
+  it('54. malformed JSON → cancel 1, release', async () => {
+    const { stream, cancelSpy } = spyStream(['data: {bad}\n\n']);
+    let caught: unknown;
+    try {
+      await collectEvents(stream);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_RESPONSE_INVALID' });
+    expect(cancelSpy()).toBe(1);
+    expect(stream.locked).toBe(false);
+  });
+
+  it('55. buffer overflow → cancel 1, release', async () => {
+    const big = 'x'.repeat(2000);
+    const { stream, cancelSpy } = spyStream([`data: {"type":"${big}"}\n\n`]);
+    let caught: unknown;
+    try {
+      await collectEvents(stream, { maxEventBytes: 100 });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_BUFFER_OVERFLOW' });
+    expect(cancelSpy()).toBe(1);
+    expect(stream.locked).toBe(false);
+  });
+
+  it('56. pre-aborted → cancel 1, release', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { stream, cancelSpy } = spyStream(['data: {"type":"a"}\n\n']);
+    await expect(collectEvents(stream, { signal: controller.signal })).rejects.toMatchObject({
+      code: 'PLOTPILOT_ABORTED',
+    });
+    expect(cancelSpy()).toBe(1);
+    expect(stream.locked).toBe(false);
+  });
+
+  it('57. reader.read reject after abort → PLOTPILOT_ABORTED, cancel ≤1', async () => {
+    const controller = new AbortController();
+    let cancelCount = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        controller.abort();
+        ctrl.error(new DOMException('Aborted', 'AbortError'));
+      },
+      cancel() {
+        cancelCount++;
+      },
+    });
+
+    let caught: unknown;
+    try {
+      for await (const _ of parseSseStream(stream, { signal: controller.signal })) {
+        void _;
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_ABORTED' });
     expect(cancelCount).toBeLessThanOrEqual(1);
+  });
+
+  it('58. cancel self-reject does not override main error', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      pull(ctrl) {
+        ctrl.enqueue(new TextEncoder().encode('data: {bad}\n\n'));
+      },
+      cancel() {
+        return Promise.reject(new Error('cancel failed'));
+      },
+    });
+
+    let caught: unknown;
+    try {
+      await collectEvents(stream);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: 'PLOTPILOT_RESPONSE_INVALID' });
+    expect(stream.locked).toBe(false);
   });
 });
 
 describe('SSE byte-based limits', () => {
-  it('54. ASCII event within byte limit passes', async () => {
+  it('59. ASCII event within byte limit passes', async () => {
     const stream = streamFrom(['data: {"type":"hello"}\n\n']);
     expect(await collectEvents(stream, { maxEventBytes: 100 })).toEqual(['hello']);
   });
 
-  it('55. Chinese text byte limit (3 bytes per char)', async () => {
+  it('60. Chinese text byte limit (3 bytes per char)', async () => {
     const chinese = '中'.repeat(100);
     const stream = streamFrom([`data: {"type":"${chinese}"}\n\n`]);
     await expect(collectEvents(stream, { maxEventBytes: 200 })).rejects.toMatchObject({
@@ -386,7 +497,7 @@ describe('SSE byte-based limits', () => {
     });
   });
 
-  it('56. emoji byte limit (4 bytes per char)', async () => {
+  it('61. emoji byte limit (4 bytes per char)', async () => {
     const emoji = '😀'.repeat(50);
     const stream = streamFrom([`data: {"type":"${emoji}"}\n\n`]);
     await expect(collectEvents(stream, { maxEventBytes: 150 })).rejects.toMatchObject({
@@ -394,7 +505,7 @@ describe('SSE byte-based limits', () => {
     });
   });
 
-  it('57. UTF-8 split across chunks still counts bytes correctly', async () => {
+  it('62. UTF-8 split across chunks still counts bytes correctly', async () => {
     const encoder = new TextEncoder();
     const chinese = '中'.repeat(100);
     const full = `data: {"type":"${chinese}"}\n\n`;
@@ -414,7 +525,7 @@ describe('SSE byte-based limits', () => {
     });
   });
 
-  it('58. continuous input without separator hits buffer limit', async () => {
+  it('63. continuous input without separator hits buffer limit', async () => {
     const chunk = 'data: ' + 'x'.repeat(500);
     const stream = streamFrom([chunk, chunk, chunk]);
     await expect(collectEvents(stream, { maxEventBytes: 1000 })).rejects.toMatchObject({
@@ -422,12 +533,12 @@ describe('SSE byte-based limits', () => {
     });
   });
 
-  it('59. consumed frames reset pending buffer count', async () => {
+  it('64. consumed frames reset pending buffer count', async () => {
     const stream = streamFrom(['data: {"type":"a"}\n\ndata: {"type":"b"}\n\n']);
     expect(await collectEvents(stream, { maxEventBytes: 50 })).toEqual(['a', 'b']);
   });
 
-  it('60. total stream limit enforced', async () => {
+  it('65. total stream limit enforced', async () => {
     const chunks = Array.from({ length: 10 }, (_, i) => `data: {"type":"e${i}"}\n\n`);
     const stream = streamFrom(chunks);
     await expect(collectEvents(stream, { maxTotalBytes: 100 })).rejects.toMatchObject({

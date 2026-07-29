@@ -161,12 +161,12 @@ export class PlotPilotSidecarManager {
   }
 
   async start(): Promise<PlotPilotSidecarStatus> {
+    if (this.state === 'STOPPING' || this.stopPromise) {
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 正在停止中，无法启动');
+    }
     if (this.startPromise) return this.startPromise;
     if (this.state === 'READY_OWNED' || this.state === 'READY_EXTERNAL') {
       return this.status();
-    }
-    if (this.state === 'STOPPING' || this.stopPromise) {
-      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 正在停止中，无法启动');
     }
 
     this.state = 'STARTING';
@@ -174,6 +174,12 @@ export class PlotPilotSidecarManager {
     this.startPromise.catch(() => {});
     try {
       return await this.startPromise;
+    } catch (err) {
+      if ((this.state as string) === 'STARTING') {
+        this.state = 'FAILED';
+        this.lastError = err instanceof Error ? err.message : 'PlotPilot 启动失败';
+      }
+      throw err;
     } finally {
       this.startPromise = null;
     }
