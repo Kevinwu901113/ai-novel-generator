@@ -334,17 +334,88 @@ lockedFieldPaths 是集合，不是有序业务列表。在 contractSnapshotHash
 - 相同 sections/schema/lock set 必须产生相同 hash
 - 不受 lock 操作历史顺序影响
 - 重复 lock path 是验证错误（不是静默去重）
-- Parent path 已锁时，拒绝冗余 descendant lock（V1 不允许）
-- Unlock parent 后不存在 child lock（因为上述禁止规则，V1 不会出现此组合）
+- 任何两个 lock path 不得 overlap（见下）
+- Unlock parent 后不存在 child lock（因为 overlap 禁止规则，V1 不会出现此组合）
+
+### Symmetric Path Overlap
+
+```typescript
+function pathsOverlap(a: string, b: string): boolean {
+  // true 当且仅当：
+  // - a === b（相同路径）
+  // - a 是 b 的 ancestor（a + '/' 是 b 的前缀）
+  // - b 是 a 的 ancestor（b + '/' 是 a 的前缀）
+}
+```
+
+**规则**：
+
+- LockCreationContractField：新路径与任一现有 lock path overlap 时拒绝
+- 不允许 parent/child 重叠锁（双向）
+- 重复路径仍拒绝（overlap 的特例）
+- 不进行静默合并或替换
+- Operation lock validation：operation 的 write-set 与任意 locked path overlap 时返回 CONTRACT_LOCK_CONFLICT
+
+**Write-set overlap 覆盖场景**：
+
+- 修改 locked path 本身
+- 修改 locked path 的 descendant
+- 修改 locked path 的 ancestor（如 set 整个 structured parent）
+- remove optional parent（包含 locked descendant）
+- remove/upsert character entity（包含 locked child field）
+- remove/upsert relationship entity（包含 locked child field）
+- list 整体替换（包含 locked 成员）
+
+**示例**：
+
+锁定 `/protagonist/name` 后：
+
+- `set-scalar /protagonist/name` → 冲突
+- `set-structured /protagonist` → 冲突（ancestor write）
+- `remove-field /protagonist`（假设 optional）→ 冲突（ancestor write）
+- `set-scalar /protagonist/role` → 不冲突
+
+锁定 `/supportingCharacters/alice/name` 后：
+
+- `remove-character alice` → 冲突（entity 包含 locked child）
+- `upsert-character alice`（完整替换）→ 冲突（entity 包含 locked child）
+- `upsert-character bob` → 不冲突
+- `set-scalar /supportingCharacters/alice/role` → 不冲突
+
+### Absent Optional Field Lock
+
+V1 允许锁定合法但当前缺失的 optional field。
+
+**语义**："该字段锁定为缺失"：
+
+- AI proposal 不得新增该字段
+- Review operation 不得新增该字段（set/upsert 该路径 → CONTRACT_LOCK_CONFLICT）
+- UpdateCreationContractByUser 不得新增该字段
+- Unlock 后才允许新增
+
+**Lock validator 必须区分**：
+
+- 路径是否合法（grammar + schema 中存在该 section/field 定义）
+- 当前值存在或缺失（不影响 lock 合法性）
+- 缺失不等于非法路径
+
+**示例**：
+
+当前 sections 无 `/themes`（缺失），用户 lock `/themes`：
+
+- Lock 成功（路径合法，缺失不影响）
+- AI proposal 输出包含 themes → CONTRACT_MODEL_LOCK_VIOLATION
+- Review operation `set-string-list /themes [...]` → CONTRACT_LOCK_CONFLICT
+- Unlock `/themes` 后可新增
 
 ### Lock/Unlock 操作
 
 **LockCreationContractField**：
 
 1. 读取当前 version（CAS expectedContractVersion）
-2. 验证 fieldPath 符合 path grammar
-3. 验证 fieldPath 不在当前 lockedFieldPaths 中（重复 → 错误）
-4. 验证 fieldPath 不是已锁 path 的 descendant（冗余 → 错误）
+2. 验证 fieldPath 符合 path grammar 且是 V1 schema 中合法路径
+3. 验证 fieldPath 不与任何现有 lockedFieldPaths overlap（`pathsOverlap` → 错误）
+4. 允许锁定当前缺失的 optional field（路径合法即可，不要求值存在）
 5. 构造新 lockedFieldPaths = sorted unique(当前 + fieldPath)
 6. sections 保持不变
 7. 计算新 contractSnapshotHash
@@ -631,14 +702,15 @@ AcceptCreationContractProposal 的原子事务步骤：
 2. CAS 验证 current pointer（见第 7 节 CAS predicate）
 3. CAS 更新 proposal status（`WHERE status = 'PROPOSED' AND sections_hash = ?`）
 4. 加载原始 proposal sections
-5. 应用 typed review operations
-6. 验证 schema（strict）
-7. 验证 locks（operations 不违反当前 lockedFieldPaths）
-8. 生成 provenance
-9. 计算 contractSnapshotHash
-10. 插入 creation_contract_versions
-11. 更新 creation_contract_current
-12. 同一事务提交，任一步失败全部回滚
+5. 验证 operations ChangeSet（冲突检测、write-set overlap、stable key 不可变）
+6. 应用 typed review operations（无序集合）
+7. 验证 schema（strict）+ reference integrity
+8. 验证 locks（operations write-set 不与当前 lockedFieldPaths overlap）
+9. 生成 provenance
+10. 计算 contractSnapshotHash
+11. 插入 creation_contract_versions
+12. 更新 creation_contract_current
+13. 同一事务提交，任一步失败全部回滚
 
 ### 约束和事务
 
@@ -691,7 +763,7 @@ V1 使用 JSON Pointer 风格路径语法：
 
 ### Typed Review Operations
 
-最终 contracts 类型是闭合、可穷举的 operation union。Renderer/DesktopAPI 使用解析后的 typed DTO，不使用任意 `string + unknown`。
+最终 contracts 类型是闭合、可穷举的 operation union。Renderer/DesktopAPI 使用解析后的 typed DTO，不使用任意 `string + unknown`。每种 operation 的 path 和 value 保持类型关联（discriminated union per path）。
 
 ```typescript
 type ContractPatchOperation =
@@ -705,32 +777,205 @@ type ContractPatchOperation =
   | RemoveRelationshipOperation;
 ```
 
-**Operation 定义**：
+#### SetScalarFieldOperation
 
-| Operation                    | kind                  | 目标                                       | 值类型                    |
-| ---------------------------- | --------------------- | ------------------------------------------ | ------------------------- |
-| SetScalarFieldOperation      | 'set-scalar'          | 固定 scalar 路径                           | typed scalar value        |
-| SetStringListFieldOperation  | 'set-string-list'     | 固定 string[] 路径                         | string[]                  |
-| SetStructuredFieldOperation  | 'set-structured'      | 固定 structured 路径（targetLength 等）    | typed structured value    |
-| RemoveOptionalFieldOperation | 'remove-field'        | 固定 optional 路径                         | —                         |
-| UpsertCharacterOperation     | 'upsert-character'    | protagonist 或 /supportingCharacters/{key} | typed character object    |
-| RemoveCharacterOperation     | 'remove-character'    | /supportingCharacters/{characterKey}       | —                         |
-| UpsertRelationshipOperation  | 'upsert-relationship' | /relationships/{relationshipKey}           | typed relationship object |
-| RemoveRelationshipOperation  | 'remove-relationship' | /relationships/{relationshipKey}           | —                         |
+```typescript
+type SetScalarFieldOperation =
+  | { kind: 'set-scalar'; path: '/premise'; value: string }
+  | { kind: 'set-scalar'; path: '/targetAudience'; value: string }
+  | { kind: 'set-scalar'; path: '/narrativePov'; value: NarrativePov }
+  | { kind: 'set-scalar'; path: '/tense'; value: Tense }
+  | { kind: 'set-scalar'; path: '/structure'; value: string }
+  | { kind: 'set-scalar'; path: '/protagonist/name'; value: string }
+  | { kind: 'set-scalar'; path: '/protagonist/role'; value: string }
+  | { kind: 'set-scalar'; path: '/protagonist/motivation'; value: string }
+  | { kind: 'set-scalar'; path: '/protagonist/arc'; value: string }
+  | { kind: 'set-scalar'; path: '/targetLength/unit'; value: 'words' | 'chapters' }
+  | { kind: 'set-scalar'; path: '/targetLength/value'; value: number }
+  | { kind: 'set-scalar'; path: '/contentBoundaries/rating'; value: string }
+  | { kind: 'set-scalar'; path: '/contentBoundaries/notes'; value: string }
+  | { kind: 'set-scalar'; path: `/supportingCharacters/${CharacterKey}/name`; value: string }
+  | { kind: 'set-scalar'; path: `/supportingCharacters/${CharacterKey}/role`; value: string }
+  | {
+      kind: 'set-scalar';
+      path: `/supportingCharacters/${CharacterKey}/relationship`;
+      value: string;
+    }
+  | { kind: 'set-scalar'; path: `/relationships/${RelationshipKey}/type`; value: string }
+  | { kind: 'set-scalar'; path: `/relationships/${RelationshipKey}/dynamic`; value: string };
+```
 
-每个 operation 使用稳定 `kind` 判别器和受限字段路径/实体 key。
+**Write-set**：精确目标路径（单个 scalar 字段）。
 
-**Patch Validation 规则**：
+#### SetStringListFieldOperation
 
-- 禁止重复 operation target（同一路径出现两次 → 验证错误）
-- 禁止同一 target 同时 set 和 remove
-- 禁止 parent/child 冲突（如同时 set `/protagonist` 和 set `/protagonist/name`）
-- 禁止修改 required field 为缺失（remove required → 验证错误）
-- 禁止未知 path（不在 V1 grammar 中 → 验证错误）
-- 禁止修改 locked path 或其后代（→ CONTRACT_LOCK_CONFLICT）
-- 禁止操作不存在的 characterKey/relationshipKey（除非 operation 是 upsert）
-- Operation 应用顺序固定且 deterministic（按 kind 优先级 + path 字典序）
-- 任一 operation 无效则整个 accept 失败，不允许部分应用
+```typescript
+type SetStringListFieldOperation =
+  | { kind: 'set-string-list'; path: '/genre'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/tone'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/themes'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/worldRules'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/mustInclude'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/mustAvoid'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/unresolvedQuestions'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/protagonist/traits'; value: readonly string[] }
+  | { kind: 'set-string-list'; path: '/contentBoundaries/allowedContent'; value: readonly string[] }
+  | {
+      kind: 'set-string-list';
+      path: '/contentBoundaries/prohibitedContent';
+      value: readonly string[];
+    }
+  | {
+      kind: 'set-string-list';
+      path: `/supportingCharacters/${CharacterKey}/traits`;
+      value: readonly string[];
+    };
+```
+
+**Write-set**：精确目标路径（整个 list 替换）。每个 path 使用其 schema 定义的数量和长度约束。
+
+#### SetStructuredFieldOperation
+
+```typescript
+type SetStructuredFieldOperation =
+  | { kind: 'set-structured'; path: '/targetLength'; value: TargetLength }
+  | { kind: 'set-structured'; path: '/contentBoundaries'; value: ContentBoundaries };
+```
+
+**Write-set**：目标 structured section 及其所有 descendant paths。
+
+注意：protagonist 使用 UpsertCharacterOperation（`target: 'protagonist'`），不使用 set-structured。
+
+#### RemoveOptionalFieldOperation
+
+```typescript
+type RemoveOptionalFieldOperation = {
+  kind: 'remove-field';
+  path:
+    | '/themes'
+    | '/targetLength'
+    | '/structure'
+    | '/supportingCharacters'
+    | '/relationships'
+    | '/worldRules'
+    | '/mustInclude'
+    | '/mustAvoid'
+    | '/contentBoundaries'
+    | '/unresolvedQuestions'
+    | '/protagonist/role'
+    | '/protagonist/motivation'
+    | '/protagonist/arc'
+    | '/protagonist/traits'
+    | '/targetLength/unit'
+    | '/targetLength/value'
+    | '/contentBoundaries/rating'
+    | '/contentBoundaries/allowedContent'
+    | '/contentBoundaries/prohibitedContent'
+    | '/contentBoundaries/notes';
+};
+```
+
+**Write-set**：目标路径及其所有 descendant paths（如 remove `/contentBoundaries` 覆盖 `/contentBoundaries/rating` 等）。
+
+**约束**：
+
+- 只允许明确列出的 optional section/field
+- Required field 不得 remove（`/premise`、`/genre`、`/tone`、`/targetAudience`、`/narrativePov`、`/tense`、`/protagonist` 不出现在此 union 中）
+- Entity remove 必须使用 RemoveCharacterOperation / RemoveRelationshipOperation
+
+#### UpsertCharacterOperation
+
+```typescript
+type UpsertCharacterOperation = {
+  kind: 'upsert-character';
+  target: 'protagonist' | CharacterKey;
+  value: ProtagonistCharacter | SupportingCharacter;
+};
+```
+
+**规则**：
+
+- `target: 'protagonist'`：value 必须是 ProtagonistCharacter（含 motivation/arc）
+- `target: CharacterKey`：value 必须是 SupportingCharacter（含 relationship）
+- `value.characterKey` 必须等于 target key（protagonist 时使用 value 中的 characterKey）
+- Value 是**完整 replacement object**，不是 partial patch
+- 已存在 entity 的 characterKey 不可就地修改（stable identity）
+- 若 target 不存在则创建新 entity（insert）；若存在则整体替换（replace）
+
+**Write-set**：
+
+- protagonist：`/protagonist` 及所有 descendant paths
+- supporting character：`/supportingCharacters/{target}` 及所有 descendant paths
+
+#### RemoveCharacterOperation
+
+```typescript
+type RemoveCharacterOperation = {
+  kind: 'remove-character';
+  target: CharacterKey;
+};
+```
+
+**规则**：
+
+- 只允许 supportingCharacters（protagonist 不可 remove）
+- 删除后若任何 relationship 仍引用该 characterKey，整个 patch 失败
+- 可在同一 patch 中同时 remove 相关 relationship（验证基于最终 snapshot）
+
+**Write-set**：`/supportingCharacters/{target}` 及所有 descendant paths。
+
+#### UpsertRelationshipOperation
+
+```typescript
+type UpsertRelationshipOperation = {
+  kind: 'upsert-relationship';
+  target: RelationshipKey;
+  value: RelationshipEntry;
+};
+```
+
+**规则**：
+
+- `value.relationshipKey` 必须等于 target
+- `value.fromCharacterKey` 和 `value.toCharacterKey` 必须在**最终 snapshot** 中存在
+- Value 是完整 replacement object
+- Stable relationshipKey 不可就地修改
+- 若 target 不存在则创建；若存在则整体替换
+
+**Write-set**：`/relationships/{target}` 及所有 descendant paths。
+
+#### RemoveRelationshipOperation
+
+```typescript
+type RemoveRelationshipOperation = {
+  kind: 'remove-relationship';
+  target: RelationshipKey;
+};
+```
+
+**Write-set**：`/relationships/{target}` 及所有 descendant paths。
+
+#### Atomic ChangeSet 语义
+
+Operations 是经验证的**无序原子 ChangeSet**（选项 B）：
+
+- 冲突验证保证结果与输入顺序无关
+- Operations 被视为无序集合，不定义 kind priority
+- 任一 operation 无效，整个 ChangeSet 失败
+- 所有 operation 应用后执行一次完整 schema/reference validation
+
+**ChangeSet 验证规则**：
+
+1. 禁止重复 target（同一 canonical path 出现两次 → 验证错误）
+2. 禁止同 target set + remove
+3. 禁止 parent/child write-set overlap（如同时 `set-structured /targetLength` 和 `set-scalar /targetLength/value`）
+4. 禁止 entity upsert 与其 child path operation 同时存在（如 `upsert-character alice` + `set-scalar /supportingCharacters/alice/name`）
+5. 禁止 entity remove 与其 child path operation 同时存在
+6. 禁止 stable key 就地变更（upsert value.characterKey ≠ 已存在 entity 的 key → 验证错误）
+7. RemoveCharacter 后 relationship 引用验证（基于应用全部 operations 后的最终 snapshot）
+8. 所有 operation 应用后执行一次完整 V1 schema validation + reference integrity check
+
+**Provenance 确定性**：持久化 provenance 时按 `kind + canonical target path` 排序，得到确定性序列。
 
 **解析流程**：
 
@@ -792,12 +1037,13 @@ interface RejectCreationContractProposalInput {
 
 1. 加载原始 proposal（验证 sectionsHash 匹配 expectedProposalSectionsHash）
 2. 验证 proposal status = PROPOSED（CAS）
-3. 应用 typed operations 到 proposal sections（deterministic order）
-4. 验证合并后 sections 的 schema（strict mode）
-5. 验证 locks（operations 不违反当前 lockedFieldPaths 或其后代）
-6. 生成 provenance（USER_EDIT 字段标记来源）
-7. 构造并持久化 ContractVersion
-8. 返回完整 ContractVersionPublicData
+3. 验证 operations ChangeSet（冲突检测、write-set overlap、stable key 不可变）
+4. 应用 typed operations 到 proposal sections（无序集合，结果与顺序无关）
+5. 验证合并后 sections 的 schema（strict mode）+ reference integrity
+6. 验证 locks（operations write-set 不与当前 lockedFieldPaths overlap）
+7. 生成 provenance（USER_EDIT 字段标记来源，按 kind + target path 排序）
+8. 构造并持久化 ContractVersion
+9. 返回完整 ContractVersionPublicData
 
 ## 10. Task 与模型调用
 
@@ -978,9 +1224,19 @@ GenerateChapterRequest {
 - 首次 baseline 全 null 验证
 - 部分 null baseline 拒绝
 - 重复 lock path 拒绝
-- Descendant lock 拒绝
+- Child lock 后尝试 parent lock → 拒绝（symmetric overlap）
+- Parent lock 后尝试 child lock → 拒绝（symmetric overlap）
+- Locked child + structured parent replacement → CONTRACT_LOCK_CONFLICT
+- Locked entity child + remove entity → CONTRACT_LOCK_CONFLICT
+- Locked absent optional field + add field → CONTRACT_LOCK_CONFLICT
+- Path/value 类型不匹配 → validation error
+- Stable characterKey 就地修改 → validation error
+- Stable relationshipKey 就地修改 → validation error
+- Upsert character + child path operation 冲突 → validation error
+- Remove character + remaining relationship 引用 → validation error
+- Operations 不同输入顺序产生相同最终 snapshot/hash（order-independence）
 - 重复 operation target 拒绝
-- Parent/child operation 冲突拒绝
+- Parent/child write-set overlap 拒绝
 
 ### M1-C2：AI task and process bridge
 
@@ -1102,9 +1358,13 @@ GenerateChapterRequest {
 | schemaVersion 格式               | 单调整数                                                    |
 | expectedContractVersion 首次语义 | null（表示"当前无版本"）                                    |
 | lockedFieldPaths 语义            | canonical sorted unique set                                 |
-| Parent/child lock                | V1 拒绝冗余 descendant lock                                 |
+| Lock path overlap                | symmetric（ancestor/descendant/equal 均拒绝）               |
+| Absent optional field lock       | 允许（锁定为缺失，新增该字段需先 unlock）                   |
 | Field path 语法                  | JSON Pointer 风格，collection 用 stable key                 |
 | Review patch 模型                | closed typed operation union                                |
+| ChangeSet 语义                   | 无序原子集合（选项 B），结果与输入顺序无关                  |
+| Stable identity 不可变           | characterKey/relationshipKey 不可就地修改                   |
+| Upsert value 模型                | 完整 replacement object，不是 partial patch                 |
 | Hash 验证层                      | SQLite 长度检查 + domain/repository 层 hex 格式验证         |
 | Lock event 审计                  | append-only，不冗余存储 version_number                      |
 | Current pointer CAS              | UPDATE WHERE current_version_id = expected（首次用 INSERT） |
