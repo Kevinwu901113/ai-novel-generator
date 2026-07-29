@@ -246,7 +246,7 @@
 
 - 触发 AI 问题规划任务
 - 显示规划任务状态
-- Proposal 审核（接受/拒绝）
+- Proposal 查看与显式接受
 - 接受后批量创建正式问题
 
 ### PlotPilot Sidecar Foundation ✅

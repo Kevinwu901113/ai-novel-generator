@@ -253,7 +253,10 @@
 
 **边界**：
 
-- Ownership：Main/Worker 拥有 adapter 实例，Renderer 永远不直接调用
+- Ownership（当前）：尚未实例化或接入 Main/Worker，仅有 package foundation
+- Ownership（未来集成时）：adapter 实例必须由受信任的 Main/Worker side 持有
+- Renderer 永远不直接调用 PlotPilot adapter
+- 当前无 Worker RPC、IPC 或产品 UI
 - SSE：事件通过 adapter 回调传递，不暴露原始 Response
 - Cancellation：通过 AbortSignal，adapter 负责清理
 
