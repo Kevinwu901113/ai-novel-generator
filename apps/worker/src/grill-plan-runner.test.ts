@@ -453,9 +453,9 @@ describe('scheduleGrillPlanRun', () => {
       makeInvocation({ id: 'inv-2', status: 'PENDING' }),
       makeInvocation({ id: 'inv-3', status: 'SUCCEEDED' }),
     ];
-    const taskRepo = createMockTaskRepo(state);
-    const invocationRepo = createMockInvocationRepo(state);
-    settleGrillPlanRunnerFailure(taskRepo, invocationRepo, (fn) => fn(), 'task-1');
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    settleGrillPlanRunnerFailure(deps, projDb, 'task-1');
     expect(state.task.status).toBe('FAILED');
     expect(state.invocations[0].status).toBe('FAILED');
     expect(state.invocations[1].status).toBe('FAILED');
@@ -464,9 +464,9 @@ describe('scheduleGrillPlanRun', () => {
 
   it('9. 已 SUCCEEDED 的任务不被 catch 覆盖', () => {
     state.task = makeTask({ status: 'SUCCEEDED', resultJson: '{"proposalId":"p1"}' });
-    const taskRepo = createMockTaskRepo(state);
-    const invocationRepo = createMockInvocationRepo(state);
-    settleGrillPlanRunnerFailure(taskRepo, invocationRepo, (fn) => fn(), 'task-1');
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    settleGrillPlanRunnerFailure(deps, projDb, 'task-1');
     expect(state.task.status).toBe('SUCCEEDED');
     expect(state.task.resultJson).toBe('{"proposalId":"p1"}');
   });
@@ -474,9 +474,9 @@ describe('scheduleGrillPlanRun', () => {
   it('10. 已 STALE/CANCELLED 的任务不被覆盖', () => {
     for (const status of ['STALE', 'CANCELLED'] as const) {
       state.task = makeTask({ status });
-      const taskRepo = createMockTaskRepo(state);
-      const invocationRepo = createMockInvocationRepo(state);
-      settleGrillPlanRunnerFailure(taskRepo, invocationRepo, (fn) => fn(), 'task-1');
+      const deps = createRunnerDeps(state);
+      const projDb = createMockProjDb(state);
+      settleGrillPlanRunnerFailure(deps, projDb, 'task-1');
       expect(state.task.status).toBe(status);
     }
   });
@@ -520,7 +520,7 @@ describe('scheduleGrillPlanRun', () => {
 });
 
 describe('scheduleGrillPlanRun — DB 打开失败', () => {
-  it('DB 无法打开时不产生 unhandled rejection', async () => {
+  it('DB 无法打开时返回 scheduled:false，不产生 unhandled rejection', async () => {
     const state = createMockState();
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
@@ -529,10 +529,231 @@ describe('scheduleGrillPlanRun — DB 打开失败', () => {
         throw new Error('SQLITE_CANTOPEN');
       },
     });
-    scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    const result = scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    expect(result).toEqual({ scheduled: false, reason: 'OPEN_FAILED' });
     await flushPromises();
     expect(unhandled).not.toHaveBeenCalled();
     expect(state.dbCloseCount).toBe(0);
+    process.removeListener('unhandledRejection', unhandled);
+  });
+});
+
+describe('scheduleGrillPlanRun — 同步初始化失败', () => {
+  let state: MockState;
+
+  beforeEach(() => {
+    state = createMockState();
+  });
+
+  it('N1. buildEngineDeps 同步抛错：不同步抛给调用方，DB close 一次，无 unhandled rejection，task 非 PENDING/RUNNING', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const deps = createRunnerDeps(state, {
+      buildEngineDeps: () => {
+        throw new Error('init crash');
+      },
+    });
+    // 不得同步抛错
+    const result = scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    expect(result).toEqual({ scheduled: false, reason: 'SETUP_FAILED' });
+    expect(state.dbCloseCount).toBe(1);
+    expect(state.task.status).toBe('FAILED');
+    await flushPromises();
+    expect(unhandled).not.toHaveBeenCalled();
+    process.removeListener('unhandledRejection', unhandled);
+  });
+
+  it('N2. getTaskRepo 抛错（settlement 内）：无 unhandled rejection，DB close 一次', async () => {
+    state.executeShouldThrow = new Error('crash');
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const deps = createRunnerDeps(state, {
+      getTaskRepo: () => {
+        throw new Error('repo broken');
+      },
+    });
+    scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(state.dbCloseCount).toBe(1);
+    process.removeListener('unhandledRejection', unhandled);
+  });
+
+  it('N3. getInvocationRepo 抛错（settlement 内）：无 unhandled rejection，DB close 一次', async () => {
+    state.executeShouldThrow = new Error('crash');
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const deps = createRunnerDeps(state, {
+      getInvocationRepo: () => {
+        throw new Error('repo broken');
+      },
+    });
+    scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(state.dbCloseCount).toBe(1);
+    process.removeListener('unhandledRejection', unhandled);
+  });
+
+  it('N4. openDb 失败返回 scheduled:false', () => {
+    const deps = createRunnerDeps(state, {
+      openDb: () => {
+        throw new Error('CANTOPEN');
+      },
+    });
+    const result = scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    expect(result.scheduled).toBe(false);
+    if (!result.scheduled) {
+      expect(result.reason).toBe('OPEN_FAILED');
+    }
+  });
+
+  it('N5. request 创建任务后 schedule=false：task 立即 FAILED，attemptCount=0，dedupe 释放', () => {
+    // 模拟请求路径：task 已创建为 PENDING，schedule 失败后用请求 DB failPending
+    const taskRepo = createMockTaskRepo(state);
+    expect(state.task.status).toBe('PENDING');
+
+    // schedule 失败
+    const deps = createRunnerDeps(state, {
+      openDb: () => {
+        throw new Error('CANTOPEN');
+      },
+    });
+    const result = scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    expect(result.scheduled).toBe(false);
+
+    // 请求路径 fallback：使用请求 DB 的 taskRepo.failPending
+    const ok = taskRepo.failPending('task-1', 'TASK_EXECUTION_FAILED', '问题规划任务调度失败');
+    expect(ok).toBe(true);
+    expect(state.task.status).toBe('FAILED');
+    expect(state.task.attemptCount).toBe(0);
+    expect(state.task.errorCode).toBe('TASK_EXECUTION_FAILED');
+
+    // dedupe 释放：FAILED 不在 partial unique index 范围内，可重新创建同 key 任务
+    expect(() =>
+      taskRepo.create({
+        id: 'task-2',
+        projectId: 'proj-1',
+        taskType: 'GRILL_QUESTION_PLAN',
+        inputVersionJson: state.task.inputVersionJson,
+        payloadJson: '{}',
+        dedupeKey: state.task.dedupeKey!,
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe('settleGrillPlanRunnerFailure — 严格 CAS', () => {
+  let state: MockState;
+
+  beforeEach(() => {
+    state = createMockState();
+  });
+
+  it('N6. invocation markFailed CAS=false 且已终态：不覆盖终态', () => {
+    state.task = makeTask({ status: 'RUNNING', attemptCount: 1 });
+    state.invocations = [makeInvocation({ id: 'inv-1', status: 'SUCCEEDED' })];
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    settleGrillPlanRunnerFailure(deps, projDb, 'task-1');
+    // invocation 保持 SUCCEEDED，task 被 failRunning
+    expect(state.invocations[0].status).toBe('SUCCEEDED');
+    expect(state.task.status).toBe('FAILED');
+  });
+
+  it('N7. invocation markFailed CAS=false 且仍非终态：settlement 不提交半成品', () => {
+    state.task = makeTask({ status: 'RUNNING', attemptCount: 1 });
+    state.invocations = [makeInvocation({ id: 'inv-1', status: 'RUNNING' })];
+    // markFailed 总是返回 false，getById 返回仍为 RUNNING
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    const origGetInvRepo = deps.getInvocationRepo;
+    const brokenDeps: GrillPlanRunnerDeps = {
+      ...deps,
+      getInvocationRepo: (db) => {
+        const repo = origGetInvRepo(db);
+        return {
+          ...repo,
+          markFailed: () => false,
+          getById: () => state.invocations[0],
+        };
+      },
+    };
+    // settlement 事务应回滚（throw），task 不被标记 FAILED
+    settleGrillPlanRunnerFailure(brokenDeps, projDb, 'task-1');
+    // 事务回滚：task 仍为 RUNNING（settlement 失败被外层 catch 吞掉）
+    expect(state.task.status).toBe('RUNNING');
+  });
+
+  it('N8. failRunning CAS=false 且 task 已终态：不覆盖终态', () => {
+    state.task = makeTask({ status: 'RUNNING', attemptCount: 1 });
+    state.invocations = [];
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    const origGetTaskRepo = deps.getTaskRepo;
+    let failRunningCalled = false;
+    const patchedDeps: GrillPlanRunnerDeps = {
+      ...deps,
+      getTaskRepo: (db) => {
+        const repo = origGetTaskRepo(db);
+        return {
+          ...repo,
+          failRunning: () => {
+            failRunningCalled = true;
+            // 模拟并发：另一个进程已将 task 标记 SUCCEEDED
+            state.task = makeTask({ status: 'SUCCEEDED' });
+            return false;
+          },
+        };
+      },
+    };
+    settleGrillPlanRunnerFailure(patchedDeps, projDb, 'task-1');
+    expect(failRunningCalled).toBe(true);
+    // 重新读取后已终态，接受并发结果
+    expect(state.task.status).toBe('SUCCEEDED');
+  });
+
+  it('N9. failRunning CAS=false 且仍 RUNNING：明确处理，不静默声称成功', () => {
+    state.task = makeTask({ status: 'RUNNING', attemptCount: 1 });
+    state.invocations = [];
+    const deps = createRunnerDeps(state);
+    const projDb = createMockProjDb(state);
+    const origGetTaskRepo = deps.getTaskRepo;
+    const patchedDeps: GrillPlanRunnerDeps = {
+      ...deps,
+      getTaskRepo: (db) => {
+        const repo = origGetTaskRepo(db);
+        return {
+          ...repo,
+          failRunning: () => false,
+          // getById 仍返回 RUNNING
+        };
+      },
+    };
+    // settlement 事务应回滚（throw），被外层 catch 吞掉
+    settleGrillPlanRunnerFailure(patchedDeps, projDb, 'task-1');
+    // task 仍为 RUNNING（settlement 失败，不静默声称成功）
+    expect(state.task.status).toBe('RUNNING');
+  });
+
+  it('N10. settlement getter 抛错时，process unhandledRejection 为 0 次', async () => {
+    state.executeShouldThrow = new Error('crash');
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const deps = createRunnerDeps(state, {
+      getTaskRepo: () => {
+        throw new Error('getter explosion');
+      },
+      getInvocationRepo: () => {
+        throw new Error('getter explosion');
+      },
+    });
+    scheduleGrillPlanRun(deps, 'proj-1', 'task-1');
+    await flushPromises();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(unhandled).toHaveBeenCalledTimes(0);
     process.removeListener('unhandledRejection', unhandled);
   });
 });

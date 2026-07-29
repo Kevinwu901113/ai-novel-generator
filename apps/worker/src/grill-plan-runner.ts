@@ -3,6 +3,7 @@
  *
  * 职责：
  * - 异步执行规划任务（独立 DB 连接）；
+ * - 单一异常边界：所有同步初始化 + 异步执行 + settlement + close 均不抛给调用方；
  * - 任何异常都通过 settlement 收口，不留永久 PENDING/RUNNING；
  * - DB 始终关闭且只关闭一次；
  * - 不产生 unhandled rejection；
@@ -22,72 +23,92 @@ export interface GrillPlanRunnerDeps {
   getInvocationRepo(projDb: ProjectDatabase): ModelInvocationRepositoryPort;
 }
 
+// ── 调度结果 ──────────────────────────────────────────────────────
+
+export type GrillPlanScheduleResult =
+  | { readonly scheduled: true }
+  | { readonly scheduled: false; readonly reason: 'OPEN_FAILED' | 'SETUP_FAILED' };
+
 // ── Settlement ────────────────────────────────────────────────────
 
 const SETTLE_ERROR_CODE = 'TASK_EXECUTION_FAILED';
 const SETTLE_ERROR_MESSAGE = '问题规划任务执行失败';
 const SETTLE_INVOCATION_ERROR = '模型调用因任务异常而未完成';
 
+function isTerminalStatus(status: string): boolean {
+  return (
+    status === 'SUCCEEDED' || status === 'FAILED' || status === 'STALE' || status === 'CANCELLED'
+  );
+}
+
 /**
- * 安全终结失败的 runner。
+ * 安全终结失败的 runner（严格 CAS 版本）。
  *
- * - 已终态（SUCCEEDED/FAILED/STALE/CANCELLED）：no-op，不覆盖。
+ * - 已终态：no-op，不覆盖。
  * - PENDING：failPending（attemptCount 保持 0）。
- * - RUNNING：事务内将非终态 invocation 标记 FAILED + failRunning task。
- * - CAS 失败时重新读取：若已终态则视为并发正常完成。
- * - 自身被 try/catch 包裹，不产生 unhandled rejection。
+ * - RUNNING：事务内严格 CAS 将非终态 invocation 标记 FAILED + failRunning task。
+ *   - markFailed 返回 false 时重新读取：已终态接受，仍非终态则回滚事务。
+ *   - failRunning 返回 false 时重新读取：已终态接受，仍非终态则回滚事务。
+ * - 所有依赖 getter 在自身 try/catch 内求值。
+ * - 不产生 FAILED task + RUNNING/PENDING invocation 的半成品。
  */
 export function settleGrillPlanRunnerFailure(
-  taskRepo: TaskRepositoryPort,
-  invocationRepo: ModelInvocationRepositoryPort,
-  transaction: <T>(fn: () => T) => T,
+  deps: GrillPlanRunnerDeps,
+  projDb: ProjectDatabase,
   taskId: string,
 ): void {
   try {
-    const task = taskRepo.getById(taskId);
-    if (!task) return;
-
-    if (
-      task.status === 'SUCCEEDED' ||
-      task.status === 'FAILED' ||
-      task.status === 'STALE' ||
-      task.status === 'CANCELLED'
-    ) {
+    let taskRepo: TaskRepositoryPort;
+    let invocationRepo: ModelInvocationRepositoryPort;
+    try {
+      taskRepo = deps.getTaskRepo(projDb);
+      invocationRepo = deps.getInvocationRepo(projDb);
+    } catch {
       return;
     }
+
+    const task = taskRepo.getById(taskId);
+    if (!task) return;
+    if (isTerminalStatus(task.status)) return;
 
     if (task.status === 'PENDING') {
       const ok = taskRepo.failPending(taskId, SETTLE_ERROR_CODE, SETTLE_ERROR_MESSAGE);
       if (!ok) {
         const reread = taskRepo.getById(taskId);
-        if (
-          reread &&
-          reread.status !== 'SUCCEEDED' &&
-          reread.status !== 'FAILED' &&
-          reread.status !== 'STALE' &&
-          reread.status !== 'CANCELLED'
-        ) {
-          // 仍非终态但 CAS 失败：无法安全处理，不再重试
+        if (reread && !isTerminalStatus(reread.status)) {
+          // 仍非终态但 CAS 失败：无法安全处理
         }
       }
       return;
     }
 
-    // RUNNING
-    transaction(() => {
+    // RUNNING：严格 CAS 事务
+    projDb.transaction(() => {
       const invocations = invocationRepo.listByTask(taskId);
       for (const inv of invocations) {
         if (inv.status === 'PENDING' || inv.status === 'RUNNING') {
-          invocationRepo.markFailed(
+          const ok = invocationRepo.markFailed(
             inv.id,
             [inv.status],
             SETTLE_ERROR_CODE,
             SETTLE_INVOCATION_ERROR,
             null,
           );
+          if (!ok) {
+            const reread = invocationRepo.getById(inv.id);
+            if (reread && !isTerminalStatus(reread.status)) {
+              throw new Error('settlement CAS conflict');
+            }
+          }
         }
       }
-      taskRepo.failRunning(taskId, SETTLE_ERROR_CODE, SETTLE_ERROR_MESSAGE);
+      const taskOk = taskRepo.failRunning(taskId, SETTLE_ERROR_CODE, SETTLE_ERROR_MESSAGE);
+      if (!taskOk) {
+        const reread = taskRepo.getById(taskId);
+        if (reread && !isTerminalStatus(reread.status)) {
+          throw new Error('settlement CAS conflict');
+        }
+      }
     });
   } catch {
     // settlement 自身失败：不产生 unhandled rejection，不泄露信息
@@ -99,21 +120,21 @@ export function settleGrillPlanRunnerFailure(
 /**
  * 调度后台 Grill 规划任务执行。
  *
- * 打开独立 DB → 执行 → settlement on error → 关闭 DB（只一次）。
- * 若 DB 打开失败，使用 fallback 将任务标记 FAILED（如果可能）。
+ * 单一异常边界：所有同步初始化在 try/catch 内，异步执行在 async IIFE 内，
+ * 最终 .catch() 保险禁止 unhandled rejection。
+ *
+ * 返回 GrillPlanScheduleResult 供调用方判断是否需要 fallback。
  */
 export function scheduleGrillPlanRun(
   deps: GrillPlanRunnerDeps,
   projectId: string,
   taskId: string,
-): void {
+): GrillPlanScheduleResult {
   let projDb: ProjectDatabase;
   try {
     projDb = deps.openDb(projectId);
   } catch {
-    // DB 无法打开：无法安全终结任务（无可用连接）
-    // 留待下次 startup recovery 处理
-    return;
+    return { scheduled: false, reason: 'OPEN_FAILED' };
   }
 
   let closed = false;
@@ -128,20 +149,29 @@ export function scheduleGrillPlanRun(
     }
   };
 
-  const engineDeps = deps.buildEngineDeps(projDb);
+  let engineDeps: GrillQuestionPlanEngineDeps;
+  try {
+    engineDeps = deps.buildEngineDeps(projDb);
+  } catch {
+    // 同步初始化失败：尝试 settlement 后关闭
+    settleGrillPlanRunnerFailure(deps, projDb, taskId);
+    closeDb();
+    return { scheduled: false, reason: 'SETUP_FAILED' };
+  }
 
-  void executeGrillQuestionPlan(engineDeps, taskId)
-    .catch(() => {
-      settleGrillPlanRunnerFailure(
-        deps.getTaskRepo(projDb),
-        deps.getInvocationRepo(projDb),
-        <T>(fn: () => T) => projDb.transaction(fn),
-        taskId,
-      );
-    })
-    .finally(() => {
+  void (async () => {
+    try {
+      await executeGrillQuestionPlan(engineDeps, taskId);
+    } catch {
+      settleGrillPlanRunnerFailure(deps, projDb, taskId);
+    } finally {
       closeDb();
-    });
+    }
+  })().catch(() => {
+    // 最终保险：禁止 unhandled rejection
+  });
+
+  return { scheduled: true };
 }
 
 // ── Startup Recovery ──────────────────────────────────────────────

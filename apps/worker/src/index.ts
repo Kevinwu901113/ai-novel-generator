@@ -1166,7 +1166,15 @@ async function handleRequestQuestionPlan(
     );
 
     // 异步调度后台执行（独立 DB，不阻塞 IPC 响应）
-    runGrillQuestionPlan(payload.projectId, requested.taskId);
+    const scheduleResult = scheduleGrillPlanRun(
+      buildGrillPlanRunnerDeps(),
+      payload.projectId,
+      requested.taskId,
+    );
+    if (!scheduleResult.scheduled) {
+      // 调度失败：使用请求 DB 立即终结任务，释放 dedupe
+      taskRepo.failPending(requested.taskId, 'TASK_EXECUTION_FAILED', '问题规划任务调度失败');
+    }
 
     return {
       taskId: requested.taskId,
