@@ -3,10 +3,10 @@
  *
  * 职责：
  * - 请求问题规划（requestQuestionPlan）
- * - 任务轮询（recursive setTimeout，single-flight）
+ * - 任务轮询（unified polling controller，single-flight）
  * - 加载问题规划提案（listQuestionPlanProposals）
  * - 接受问题规划提案（acceptQuestionPlanProposal）
- * - 竞态失效（generation token + proposal request sequence）
+ * - 竞态失效（generation token + operation-owned locks）
  * - 页面可见性管理（hidden 暂停，visible 立即恢复）
  * - 安全错误（toSafeUserError）
  */
@@ -31,41 +31,32 @@ const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
 const POLL_INTERVAL_MS = 2000;
 
 /** 任务终态错误消息映射 */
-function terminalTaskError(status: string, errorCode: string | null): string | null {
+function terminalTaskError(status: string, errorCode: string | null): string {
   switch (status) {
-    case 'FAILED':
-      return errorCode ? (ERROR_CODE_LABELS[errorCode] ?? '任务执行失败') : '任务执行失败';
+    case 'FAILED': {
+      const label = errorCode ? (ERROR_CODE_LABELS[errorCode] ?? '任务执行失败') : '任务执行失败';
+      return errorCode ? `${label}（${errorCode}）` : label;
+    }
     case 'CANCELLED':
       return '问题规划任务已取消';
     case 'STALE':
       return '问题规划任务已过期';
     default:
-      return null;
+      return '任务已完成';
   }
 }
 
 interface UseGrillQuestionPlanResult {
-  /** 当前任务 */
   readonly task: TaskPublicData | null;
-  /** 是否正在轮询 */
   readonly isPolling: boolean;
-  /** 请求问题规划 */
   readonly requestPlan: () => Promise<void>;
-  /** 是否正在请求 */
   readonly isRequesting: boolean;
-  /** 问题规划提案列表 */
   readonly proposals: ReadonlyArray<GrillQuestionPlanProposalPublicData>;
-  /** 是否正在加载提案 */
   readonly isLoadingProposals: boolean;
-  /** 接受提案 */
   readonly acceptProposal: (proposalId: string) => Promise<boolean>;
-  /** 是否正在接受 */
   readonly isAccepting: boolean;
-  /** 刷新提案列表 */
   readonly refreshProposals: () => Promise<void>;
-  /** 错误消息 */
   readonly error: string | null;
-  /** 清除错误 */
   readonly clearError: () => void;
 }
 
@@ -87,42 +78,128 @@ export function useGrillQuestionPlan(
   const [error, setError] = useState<string | null>(null);
 
   // ── refs ────────────────────────────────────────────────────────────
-  /** generation token：每次 session/project 切换递增 */
   const generationRef = useRef(0);
-  /** 当前轮询 loop generation（用于 recursive setTimeout） */
   const pollLoopGenRef = useRef(0);
-  /** 当前轮询 timer ID */
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  /** terminal latch：终态一旦应用，不再接受后续响应 */
   const terminalLatchRef = useRef(false);
-  /** request/accept 锁 */
-  const requestLockRef = useRef(false);
-  const acceptLockRef = useRef(false);
-  /** 最新 session version（ref 供异步回调使用） */
+  const pollInFlightRef = useRef(false);
+  const resumeRequestedRef = useRef(false);
+  const requestOpRef = useRef<{ gen: number } | null>(null);
+  const acceptOpRef = useRef<{ gen: number } | null>(null);
   const currentSessionVersionRef = useRef(currentSessionVersion);
   currentSessionVersionRef.current = currentSessionVersion;
-  /** 最新 onAcceptSuccess callback */
   const onAcceptSuccessRef = useRef(onAcceptSuccess);
   onAcceptSuccessRef.current = onAcceptSuccess;
-  /** proposal request sequence：只允许最新请求写入 */
   const proposalRequestSeqRef = useRef(0);
-
-  // ── 计数器 ref（重置相关） ─────────────────────────────────────────
   const taskRef = useRef<TaskPublicData | null>(null);
   taskRef.current = task;
-
-  // ── 加载提案 ref（供轮询回调使用） ────────────────────────────────
   const loadProposalsRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
-  // ── 清理轮询 ──────────────────────────────────────────────────────
+  // ── requestPollNow ref（解决循环引用） ────────────────────────────
+  const requestPollNowRef = useRef<() => void>(() => {});
+
+  // ── 停止轮询 ──────────────────────────────────────────────────────
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
       clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
     pollLoopGenRef.current += 1;
+    pollInFlightRef.current = false;
+    resumeRequestedRef.current = false;
     setIsPolling(false);
   }, []);
+
+  // ── 统一 polling controller ────────────────────────────────────────
+  const requestPollNow = useCallback(() => {
+    const loopGen = pollLoopGenRef.current;
+    const gen = generationRef.current;
+
+    if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) return;
+    if (terminalLatchRef.current) return;
+    if (pollInFlightRef.current) {
+      resumeRequestedRef.current = true;
+      return;
+    }
+
+    const currentTask = taskRef.current;
+    if (!currentTask) return;
+
+    if (pollTimerRef.current !== null) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+
+    pollInFlightRef.current = true;
+    resumeRequestedRef.current = false;
+
+    Promise.resolve(window.desktop.tasks.get(currentTask.projectId, currentTask.id))
+      .then((updated) => {
+        pollInFlightRef.current = false;
+
+        if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) return;
+
+        setTask(updated);
+
+        if (TERMINAL_TASK_STATUSES.has(updated.status)) {
+          terminalLatchRef.current = true;
+          if (pollTimerRef.current !== null) {
+            clearTimeout(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+          pollLoopGenRef.current += 1;
+          setIsPolling(false);
+          if (updated.status === 'SUCCEEDED') {
+            void loadProposalsRef.current();
+          } else {
+            setError(terminalTaskError(updated.status, updated.errorCode));
+          }
+          return;
+        }
+
+        // 非终态：安排下一次 poll
+        pollTimerRef.current = setTimeout(() => {
+          requestPollNowRef.current();
+        }, POLL_INTERVAL_MS);
+
+        // 在途请求返回后，如果 resume 被请求且页面可见，补一次
+        if (
+          resumeRequestedRef.current &&
+          !terminalLatchRef.current &&
+          loopGen === pollLoopGenRef.current &&
+          gen === generationRef.current &&
+          !document.hidden
+        ) {
+          resumeRequestedRef.current = false;
+          requestPollNowRef.current();
+        }
+      })
+      .catch(() => {
+        pollInFlightRef.current = false;
+        if (loopGen === pollLoopGenRef.current && gen === generationRef.current) {
+          pollTimerRef.current = setTimeout(() => {
+            requestPollNowRef.current();
+          }, POLL_INTERVAL_MS);
+        }
+      });
+  }, []);
+
+  requestPollNowRef.current = requestPollNow;
+
+  // ── 开始轮询 ──────────────────────────────────────────────────────
+  const startPolling = useCallback(
+    (_gen: number) => {
+      stopPolling();
+      terminalLatchRef.current = false;
+      pollLoopGenRef.current += 1;
+      setIsPolling(true);
+
+      pollTimerRef.current = setTimeout(() => {
+        requestPollNowRef.current();
+      }, 0);
+    },
+    [stopPolling],
+  );
 
   // ── 加载提案 ──────────────────────────────────────────────────────
   const loadProposals = useCallback(async () => {
@@ -134,15 +211,10 @@ export function useGrillQuestionPlan(
 
     try {
       const list = await window.desktop.grill.listQuestionPlanProposals({ projectId, sessionId });
-
-      // 只有最新 request 可以写入
-      if (gen !== generationRef.current || seq !== proposalRequestSeqRef.current) {
-        return;
-      }
-
+      if (gen !== generationRef.current || seq !== proposalRequestSeqRef.current) return;
       setProposals(list);
     } catch {
-      // 非关键错误，不设置 error
+      // 非关键错误
     } finally {
       if (gen === generationRef.current && seq === proposalRequestSeqRef.current) {
         setIsLoadingProposals(false);
@@ -150,73 +222,16 @@ export function useGrillQuestionPlan(
     }
   }, [projectId, sessionId]);
 
-  // 保持 loadProposals ref 最新
   loadProposalsRef.current = loadProposals;
-
-  // ── 开始轮询（recursive setTimeout，single-flight） ─────────────
-  const startPolling = useCallback(
-    (gen: number) => {
-      stopPolling();
-      terminalLatchRef.current = false;
-      const loopGen = ++pollLoopGenRef.current;
-      setIsPolling(true);
-
-      // poll 函数：同步调度，不使用 async/await
-      const poll = () => {
-        if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
-          return;
-        }
-
-        const currentTask = taskRef.current;
-        if (!currentTask || terminalLatchRef.current) {
-          return;
-        }
-
-        Promise.resolve(window.desktop.tasks.get(currentTask.projectId, currentTask.id))
-          .then((updated) => {
-            // 再次检查 loop 和 generation
-            if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
-              return;
-            }
-
-            setTask(updated);
-
-            if (TERMINAL_TASK_STATUSES.has(updated.status)) {
-              terminalLatchRef.current = true;
-              stopPolling();
-
-              if (updated.status === 'SUCCEEDED') {
-                void loadProposalsRef.current();
-              } else {
-                const errMsg = terminalTaskError(updated.status, updated.errorCode);
-                if (errMsg) setError(errMsg);
-              }
-              return;
-            }
-
-            // 非终态：安排下一次 poll
-            pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
-          })
-          .catch(() => {
-            // 单次 poll 失败不停止轮询
-            if (loopGen === pollLoopGenRef.current && gen === generationRef.current) {
-              pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
-            }
-          });
-      };
-
-      // 首次立即 poll
-      pollTimerRef.current = setTimeout(poll, 0);
-    },
-    [stopPolling],
-  );
 
   // ── 请求问题规划 ──────────────────────────────────────────────────
   const requestPlan = useCallback(async () => {
     if (!projectId || !sessionId) return;
-    if (requestLockRef.current) return;
+    if (requestOpRef.current) return;
 
-    requestLockRef.current = true;
+    const gen = generationRef.current;
+    const op = { gen };
+    requestOpRef.current = op;
     setIsRequesting(true);
     setError(null);
 
@@ -227,15 +242,12 @@ export function useGrillQuestionPlan(
         expectedSessionVersion: currentSessionVersionRef.current,
       });
 
-      // generation 检查
-      if (result.sessionId !== sessionId) {
-        return;
-      }
+      if (requestOpRef.current !== op) return;
+      if (gen !== generationRef.current) return;
 
-      // 创建临时 task
       const newTask: TaskPublicData = {
         id: result.taskId,
-        projectId: projectId,
+        projectId,
         taskType: 'GRILL_QUESTION_PLAN',
         status: 'PENDING',
         attemptCount: 0,
@@ -250,12 +262,16 @@ export function useGrillQuestionPlan(
 
       setTask(newTask);
       terminalLatchRef.current = false;
-      startPolling(generationRef.current);
+      startPolling(gen);
     } catch (err) {
+      if (requestOpRef.current !== op) return;
+      if (gen !== generationRef.current) return;
       setError(toSafeUserError(err, SAFE_ERROR_FALLBACK).message);
     } finally {
-      requestLockRef.current = false;
-      setIsRequesting(false);
+      if (requestOpRef.current === op) {
+        requestOpRef.current = null;
+        setIsRequesting(false);
+      }
     }
   }, [projectId, sessionId, startPolling]);
 
@@ -263,10 +279,11 @@ export function useGrillQuestionPlan(
   const acceptProposal = useCallback(
     async (proposalId: string): Promise<boolean> => {
       if (!projectId || !sessionId) return false;
-      if (acceptLockRef.current) return false;
+      if (acceptOpRef.current) return false;
 
       const gen = generationRef.current;
-      acceptLockRef.current = true;
+      const op = { gen };
+      acceptOpRef.current = op;
       setIsAccepting(true);
       setError(null);
 
@@ -278,27 +295,28 @@ export function useGrillQuestionPlan(
           expectedSessionVersion: currentSessionVersionRef.current,
         });
 
-        // generation 检查
+        if (acceptOpRef.current !== op) return false;
         if (gen !== generationRef.current) return false;
 
-        // 刷新后检查
         await onAcceptSuccessRef.current();
+        if (acceptOpRef.current !== op) return false;
         if (gen !== generationRef.current) return false;
 
-        // 刷新提案
         await loadProposalsRef.current();
+        if (acceptOpRef.current !== op) return false;
         if (gen !== generationRef.current) return false;
 
         return true;
       } catch (err) {
+        if (acceptOpRef.current !== op) return false;
         if (gen !== generationRef.current) return false;
         setError(toSafeUserError(err, SAFE_ERROR_FALLBACK).message);
         return false;
       } finally {
-        if (gen === generationRef.current) {
+        if (acceptOpRef.current === op) {
+          acceptOpRef.current = null;
           setIsAccepting(false);
         }
-        acceptLockRef.current = false;
       }
     },
     [projectId, sessionId],
@@ -316,8 +334,8 @@ export function useGrillQuestionPlan(
     setIsLoadingProposals(false);
     setIsAccepting(false);
     terminalLatchRef.current = false;
-    requestLockRef.current = false;
-    acceptLockRef.current = false;
+    requestOpRef.current = null;
+    acceptOpRef.current = null;
     proposalRequestSeqRef.current = 0;
   }, [sessionId, projectId, stopPolling]);
 
@@ -325,49 +343,12 @@ export function useGrillQuestionPlan(
   useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) {
-        // hidden：取消下一次 timer
         if (pollTimerRef.current !== null) {
           clearTimeout(pollTimerRef.current);
           pollTimerRef.current = null;
         }
       } else if (isPolling && !terminalLatchRef.current) {
-        // visible：触发一次即时 poll
-        const loopGen = pollLoopGenRef.current;
-        const gen = generationRef.current;
-
-        pollTimerRef.current = setTimeout(() => {
-          if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
-            return;
-          }
-          const currentTask = taskRef.current;
-          if (!currentTask || terminalLatchRef.current) return;
-
-          Promise.resolve(window.desktop.tasks.get(currentTask.projectId, currentTask.id))
-            .then((updated) => {
-              if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) return;
-              setTask(updated);
-              if (TERMINAL_TASK_STATUSES.has(updated.status)) {
-                terminalLatchRef.current = true;
-                stopPolling();
-                if (updated.status === 'SUCCEEDED') {
-                  void loadProposalsRef.current();
-                } else {
-                  const errMsg = terminalTaskError(updated.status, updated.errorCode);
-                  if (errMsg) setError(errMsg);
-                }
-              } else {
-                // 恢复正常 polling loop
-                pollTimerRef.current = setTimeout(() => {
-                  if (loopGen === pollLoopGenRef.current && gen === generationRef.current) {
-                    startPolling(gen);
-                  }
-                }, POLL_INTERVAL_MS);
-              }
-            })
-            .catch(() => {
-              /* ignore */
-            });
-        }, 0);
+        requestPollNowRef.current();
       }
     };
 
@@ -375,7 +356,7 @@ export function useGrillQuestionPlan(
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [isPolling, stopPolling, startPolling]);
+  }, [isPolling]);
 
   // ── unmount 清理 ──────────────────────────────────────────────────
   useEffect(() => {
@@ -384,7 +365,6 @@ export function useGrillQuestionPlan(
     };
   }, [stopPolling]);
 
-  // ── clearError ────────────────────────────────────────────────────
   const clearError = useCallback(() => setError(null), []);
 
   return {

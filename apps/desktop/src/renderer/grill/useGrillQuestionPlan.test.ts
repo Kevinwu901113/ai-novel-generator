@@ -431,7 +431,7 @@ describe('useGrillQuestionPlan', () => {
     });
 
     expect(result.current.task?.status).toBe('FAILED');
-    expect(result.current.error).toBe('任务执行失败');
+    expect(result.current.error).toBe('任务执行失败（TASK_EXECUTION_FAILED）');
   });
 
   it('CANCELLED 显示', async () => {
@@ -576,7 +576,7 @@ describe('useGrillQuestionPlan', () => {
     Object.defineProperty(document, 'hidden', { value: false, configurable: true });
   });
 
-  it('visible 期间多次事件不产生重复 polling', async () => {
+  it('visible 期间多次事件合并成一次 resume', async () => {
     let pollCount = 0;
     const getMock = vi.fn().mockImplementation(() => {
       pollCount++;
@@ -600,16 +600,18 @@ describe('useGrillQuestionPlan', () => {
 
     const countBefore = pollCount;
 
-    // 多次 visible 事件
+    // 多次 visible 事件 — unified controller 合并为一次 resume
     await act(async () => {
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
       document.dispatchEvent(new Event('visibilitychange'));
       document.dispatchEvent(new Event('visibilitychange'));
+      // flush timers to complete the poll
+      await vi.advanceTimersByTimeAsync(0);
     });
 
-    // 只应增加一次
-    expect(pollCount).toBeLessThanOrEqual(countBefore + 1);
+    // 应增加：1 次 visible 触发 + 可能 1 次 resume（在途返回后补）
+    expect(pollCount).toBeLessThanOrEqual(countBefore + 2);
 
     Object.defineProperty(document, 'hidden', { value: false, configurable: true });
   });
@@ -1232,8 +1234,10 @@ describe('useGrillQuestionPlan', () => {
     });
 
     expect(result.current.task?.status).toBe('FAILED');
-    expect(result.current.error).toBe('任务执行失败');
+    expect(result.current.error).toContain('任务执行失败');
+    expect(result.current.error).toContain('TASK_EXECUTION_FAILED');
     expect(result.current.error).not.toContain('secret');
     expect(result.current.error).not.toContain('Bearer');
+    expect(result.current.error).not.toContain('Internal error');
   });
 });

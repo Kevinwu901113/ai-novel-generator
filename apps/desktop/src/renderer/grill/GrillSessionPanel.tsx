@@ -56,16 +56,31 @@ export function GrillSessionPanel({
 }: GrillSessionPanelProps) {
   const questionListHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastFocusTokenRef = useRef(0);
+  const questionListRafRef = useRef<number | null>(null);
 
   // 接受成功后聚焦问题列表标题
   useEffect(() => {
     if (questionListFocusToken > 0 && questionListFocusToken !== lastFocusTokenRef.current) {
       lastFocusTokenRef.current = questionListFocusToken;
-      requestAnimationFrame(() => {
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+      }
+      questionListRafRef.current = requestAnimationFrame(() => {
+        questionListRafRef.current = null;
         questionListHeadingRef.current?.focus();
       });
     }
   }, [questionListFocusToken]);
+
+  // unmount 时清理 RAF
+  useEffect(() => {
+    return () => {
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+        questionListRafRef.current = null;
+      }
+    };
+  }, []);
 
   const [showAddForm, setShowAddForm] = useState(false);
   const [topic, setTopic] = useState('');

@@ -3,7 +3,7 @@
  *
  * 职责：
  * - 显示"请求问题规划"按钮
- * - 显示任务状态（PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED/STALE）
+ * - 显示任务状态
  * - 显示问题规划提案列表
  * - 提供显式接受按钮
  * - 处理 stale 状态
@@ -51,34 +51,29 @@ function dependencyLabel(dep: GrillPlannedDependencyPublicData): string {
   return `计划问题${dep.questionKey ? ` (${dep.questionKey})` : ''}`;
 }
 
+/** 从 proposal 列表生成稳定的 batch key */
+function proposalBatchKey(proposals: ReadonlyArray<GrillQuestionPlanProposalPublicData>): string {
+  if (proposals.length === 0) return '';
+  return proposals
+    .map((p) => p.id)
+    .sort()
+    .join(',');
+}
+
 interface GrillQuestionPlanPanelProps {
-  /** 上下文 key（如 projectId:sessionId），用于焦点追踪重置 */
   contextKey: string;
-  /** 当前 session 是否处于 ACTIVE 状态 */
   sessionIsActive: boolean;
-  /** 是否有选中的 session */
   hasSession: boolean;
-  /** 当前任务 */
   task: TaskPublicData | null;
-  /** 是否正在轮询 */
   isPolling: boolean;
-  /** 请求问题规划 */
   onRequestPlan: () => void;
-  /** 是否正在请求 */
   isRequesting: boolean;
-  /** 问题规划提案列表 */
   proposals: ReadonlyArray<GrillQuestionPlanProposalPublicData>;
-  /** 是否正在加载提案 */
   isLoadingProposals: boolean;
-  /** 接受提案 */
   onAcceptProposal: (proposalId: string) => void;
-  /** 是否正在接受 */
   isAccepting: boolean;
-  /** 全局加载状态（来自其他 hook） */
   isLoading: boolean;
-  /** 错误消息 */
   error: string | null;
-  /** 清除错误 */
   onClearError: () => void;
 }
 
@@ -102,60 +97,73 @@ export function GrillQuestionPlanPanel({
   const taskHeadingRef = useRef<HTMLHeadingElement>(null);
   const proposalHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastFocusedTaskIdRef = useRef<string | null>(null);
-  const lastFocusedProposalGenRef = useRef(0);
-  const rafIdRef = useRef<number | null>(null);
+  const lastFocusedProposalBatchRef = useRef<string>('');
+  const taskRafRef = useRef<number | null>(null);
+  const proposalRafRef = useRef<number | null>(null);
 
-  // ── 清理 RAF ─────────────────────────────────────────────────────
+  // ── 清理所有 RAF ─────────────────────────────────────────────────
   useEffect(() => {
     return () => {
-      if (rafIdRef.current !== null) {
-        cancelAnimationFrame(rafIdRef.current);
-        rafIdRef.current = null;
+      if (taskRafRef.current !== null) {
+        cancelAnimationFrame(taskRafRef.current);
+        taskRafRef.current = null;
+      }
+      if (proposalRafRef.current !== null) {
+        cancelAnimationFrame(proposalRafRef.current);
+        proposalRafRef.current = null;
       }
     };
   }, []);
 
-  // ── contextKey 变化时重置焦点身份 ──────────────────────────────
+  // ── contextKey 变化时重置焦点身份和 RAF ──────────────────────
   useEffect(() => {
     lastFocusedTaskIdRef.current = null;
-    lastFocusedProposalGenRef.current = 0;
-    if (rafIdRef.current !== null) {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = null;
+    lastFocusedProposalBatchRef.current = '';
+    if (taskRafRef.current !== null) {
+      cancelAnimationFrame(taskRafRef.current);
+      taskRafRef.current = null;
+    }
+    if (proposalRafRef.current !== null) {
+      cancelAnimationFrame(proposalRafRef.current);
+      proposalRafRef.current = null;
     }
   }, [contextKey]);
 
-  // ── 任务首次出现时焦点进入任务标题（按 task.id 追踪） ────────
+  // ── task 首次出现时聚焦 task heading（按 task.id 追踪） ────────
   useEffect(() => {
     if (!task) return;
     if (task.id === lastFocusedTaskIdRef.current) return;
     lastFocusedTaskIdRef.current = task.id;
 
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
+    if (taskRafRef.current !== null) {
+      cancelAnimationFrame(taskRafRef.current);
+    }
+    taskRafRef.current = requestAnimationFrame(() => {
+      taskRafRef.current = null;
       taskHeadingRef.current?.focus();
     });
   }, [task]);
 
-  // ── 提案首次出现时焦点进入提案区域标题 ────────────────────────
+  // ── proposal batch 首次出现时聚焦 proposal heading ────────────
   useEffect(() => {
-    if (proposals.length === 0) return;
-    const proposalGen = lastFocusedProposalGenRef.current + 1;
-    lastFocusedProposalGenRef.current = proposalGen;
+    const batchKey = proposalBatchKey(proposals);
+    if (!batchKey) return;
+    if (batchKey === lastFocusedProposalBatchRef.current) return;
+    lastFocusedProposalBatchRef.current = batchKey;
 
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
+    if (proposalRafRef.current !== null) {
+      cancelAnimationFrame(proposalRafRef.current);
+    }
+    proposalRafRef.current = requestAnimationFrame(() => {
+      proposalRafRef.current = null;
       proposalHeadingRef.current?.focus();
     });
   }, [proposals]);
 
-  // ── 请求按钮 disabled 条件 ────────────────────────────────────
+  // ── disabled 条件 ────────────────────────────────────────────────
   const canRequest = hasSession && sessionIsActive && !isRequesting && !isPolling && !isLoading;
 
-  // ── 是否显示任务状态区域 ──────────────────────────────────────
   const showTaskStatus = task !== null;
-
-  // ── 是否显示提案区域 ──────────────────────────────────────────
   const showProposals = proposals.length > 0 || isLoadingProposals;
 
   return (
@@ -283,7 +291,6 @@ function ProposalCard({ proposal, onAccept, isAccepting, isLoading }: ProposalCa
         {proposal.reviewedAt && <span>审核时间：{formatTime(proposal.reviewedAt)}</span>}
       </div>
 
-      {/* 问题列表 */}
       {proposal.questions.length > 0 && (
         <div className="grill-plan-questions">
           <h5>规划问题</h5>
@@ -295,7 +302,6 @@ function ProposalCard({ proposal, onAccept, isAccepting, isLoading }: ProposalCa
         </div>
       )}
 
-      {/* 接受按钮 */}
       <div className="grill-plan-proposal-actions">
         <button
           className="btn-primary btn-small"
@@ -313,7 +319,6 @@ function ProposalCard({ proposal, onAccept, isAccepting, isLoading }: ProposalCa
   );
 }
 
-/** 规划问题卡片组件 */
 interface PlannedQuestionCardProps {
   question: GrillPlannedQuestionPublicData;
 }
@@ -346,7 +351,6 @@ function PlannedQuestionCard({ question }: PlannedQuestionCardProps) {
   );
 }
 
-/** 格式化时间 */
 function formatTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });

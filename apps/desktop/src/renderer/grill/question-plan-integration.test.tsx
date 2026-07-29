@@ -16,7 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, cleanup, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GrillWorkbench } from './GrillWorkbench';
 import type {
@@ -104,7 +104,9 @@ const mockTask: TaskPublicData = {
 
 async function selectSession() {
   const sessionItem = await screen.findByText('测试会话');
-  sessionItem.click();
+  await act(async () => {
+    sessionItem.click();
+  });
   await waitFor(() => {
     expect(screen.getByText('请求问题规划')).toBeDefined();
   });
@@ -487,7 +489,9 @@ describe('问题规划集成测试', () => {
 
     // 选择第一个 session
     const sessionItem1 = await screen.findByText('测试会话');
-    sessionItem1.click();
+    await act(async () => {
+      sessionItem1.click();
+    });
 
     await waitFor(() => {
       expect(screen.getByText('请求问题规划')).toBeDefined();
@@ -495,7 +499,9 @@ describe('问题规划集成测试', () => {
 
     // 切换到第二个 session
     const sessionItem2 = screen.getByText('第二个会话');
-    sessionItem2.click();
+    await act(async () => {
+      sessionItem2.click();
+    });
 
     await waitFor(() => {
       expect(screen.getByText('请求问题规划')).toBeDefined();

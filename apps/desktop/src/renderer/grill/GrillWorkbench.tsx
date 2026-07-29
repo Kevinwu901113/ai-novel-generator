@@ -54,8 +54,9 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   // 接受成功后聚焦问题列表标题
   const [questionListFocusToken, setQuestionListFocusToken] = useState(0);
 
-  // 接受成功时的 context snapshot，用于确保只在当前 context 触发 focus
-  const acceptContextRef = useRef<{ projectId: string; sessionId: string | null } | null>(null);
+  // live context ref：始终反映最新 projectId/sessionId
+  const liveContextRef = useRef({ projectId, sessionId: selectedSessionId });
+  liveContextRef.current = { projectId, sessionId: selectedSessionId };
 
   // Question Plan — request, task polling, proposal loading, accept
   const questionPlanHook = useGrillQuestionPlan(
@@ -63,23 +64,34 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     selectedSessionId,
     sessionHook.session?.version ?? 0,
     async () => {
-      // 记录当前 context
-      const ctx = { projectId, sessionId: selectedSessionId };
-      acceptContextRef.current = ctx;
+      // 捕获当前 context
+      const expectedProjectId = liveContextRef.current.projectId;
+      const expectedSessionId = liveContextRef.current.sessionId;
 
       // 接受成功后刷新 session、questions、proposals
       await sessionRefreshRef.current();
-      await listQuestionsRef.current();
-      await proposalsRefreshRef.current();
-
-      // 只有当前 context 仍然匹配时才聚焦
       if (
-        acceptContextRef.current === ctx &&
-        acceptContextRef.current.projectId === projectId &&
-        acceptContextRef.current.sessionId === selectedSessionId
-      ) {
-        setQuestionListFocusToken((t) => t + 1);
-      }
+        liveContextRef.current.projectId !== expectedProjectId ||
+        liveContextRef.current.sessionId !== expectedSessionId
+      )
+        return;
+
+      await listQuestionsRef.current();
+      if (
+        liveContextRef.current.projectId !== expectedProjectId ||
+        liveContextRef.current.sessionId !== expectedSessionId
+      )
+        return;
+
+      await proposalsRefreshRef.current();
+      if (
+        liveContextRef.current.projectId !== expectedProjectId ||
+        liveContextRef.current.sessionId !== expectedSessionId
+      )
+        return;
+
+      // 只有 context 仍然匹配时才聚焦
+      setQuestionListFocusToken((t) => t + 1);
     },
   );
 
