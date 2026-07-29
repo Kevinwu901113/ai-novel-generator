@@ -1,6 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { resolve } from 'node:path';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve, join } from 'node:path';
 import { PlotPilotAdapter, PlotPilotAdapterError, type PlotPilotHealth } from './index.js';
+
+export type PlotPilotSidecarState =
+  'STOPPED' | 'STARTING' | 'READY_OWNED' | 'READY_EXTERNAL' | 'STOPPING' | 'FAILED';
 
 export interface PlotPilotSidecarOptions {
   readonly plotPilotRoot: string;
@@ -10,10 +14,9 @@ export interface PlotPilotSidecarOptions {
   readonly environment?: Readonly<Record<string, string>>;
   readonly startupTimeoutMs?: number;
   readonly pollIntervalMs?: number;
+  readonly stopTimeoutMs?: number;
   readonly onLog?: (entry: { stream: 'stdout' | 'stderr'; text: string }) => void;
 }
-
-export type PlotPilotSidecarState = 'stopped' | 'starting' | 'ready' | 'failed' | 'stopping';
 
 export interface PlotPilotSidecarStatus {
   readonly state: PlotPilotSidecarState;
@@ -22,147 +25,278 @@ export interface PlotPilotSidecarStatus {
   readonly lastError: string | null;
 }
 
-const delay = async (milliseconds: number): Promise<void> => {
-  await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, milliseconds));
+export interface SidecarClock {
+  now(): number;
+  delay(ms: number): Promise<void>;
+}
+
+const realClock: SidecarClock = {
+  now: () => Date.now(),
+  delay: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
 };
 
+export function validateSidecarConfig(options: PlotPilotSidecarOptions): void {
+  const root = resolve(options.plotPilotRoot);
+  if (!existsSync(root)) {
+    throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', 'PlotPilot checkout 目录不存在');
+  }
+  const entry = join(root, 'interfaces', 'main.py');
+  if (!existsSync(entry)) {
+    throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', 'PlotPilot 入口文件不存在');
+  }
+  if (!options.pythonExecutable && !process.env.PLOTPILOT_PYTHON) {
+    throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', '未配置 Python 可执行文件路径');
+  }
+  const port = options.port ?? 8005;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new PlotPilotAdapterError('PLOTPILOT_CONFIG_INVALID', '端口号无效');
+  }
+  const host = options.host ?? '127.0.0.1';
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+    throw new PlotPilotAdapterError(
+      'PLOTPILOT_CONFIG_INVALID',
+      'PlotPilot sidecar 仅允许绑定 loopback 地址',
+    );
+  }
+}
+
 export class PlotPilotSidecarManager {
-  private readonly options: Required<
+  private readonly opts: Required<
     Pick<
       PlotPilotSidecarOptions,
-      'pythonExecutable' | 'host' | 'port' | 'startupTimeoutMs' | 'pollIntervalMs'
+      'pythonExecutable' | 'host' | 'port' | 'startupTimeoutMs' | 'pollIntervalMs' | 'stopTimeoutMs'
     >
   > &
     PlotPilotSidecarOptions;
-  private process: ChildProcessWithoutNullStreams | null = null;
-  private state: PlotPilotSidecarState = 'stopped';
+  private readonly clock: SidecarClock;
+  private child: ChildProcess | null = null;
+  private state: PlotPilotSidecarState = 'STOPPED';
   private lastError: string | null = null;
   private healthSnapshot: PlotPilotHealth | null = null;
+  private startPromise: Promise<PlotPilotSidecarStatus> | null = null;
+  private settled = false;
 
-  constructor(options: PlotPilotSidecarOptions) {
-    this.options = {
+  constructor(options: PlotPilotSidecarOptions, clock: SidecarClock = realClock) {
+    this.opts = {
       ...options,
-      pythonExecutable: options.pythonExecutable ?? 'python',
+      pythonExecutable: options.pythonExecutable ?? process.env.PLOTPILOT_PYTHON ?? 'python',
       host: options.host ?? '127.0.0.1',
       port: options.port ?? 8005,
       startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
       pollIntervalMs: options.pollIntervalMs ?? 500,
+      stopTimeoutMs: options.stopTimeoutMs ?? 5_000,
     };
+    this.clock = clock;
   }
 
   get adapter(): PlotPilotAdapter {
-    return new PlotPilotAdapter({ baseUrl: `http://${this.options.host}:${this.options.port}` });
+    return new PlotPilotAdapter({ baseUrl: `http://${this.opts.host}:${this.opts.port}` });
   }
 
   status(): PlotPilotSidecarStatus {
     return {
       state: this.state,
-      pid: this.process?.pid ?? null,
+      pid: this.child?.pid ?? null,
       health: this.healthSnapshot,
       lastError: this.lastError,
     };
   }
 
   async start(): Promise<PlotPilotSidecarStatus> {
-    if (this.state === 'ready' || this.state === 'starting') return this.status();
+    if (this.startPromise) return this.startPromise;
+    if (this.state === 'READY_OWNED' || this.state === 'READY_EXTERNAL') {
+      return this.status();
+    }
+    if (this.state === 'STOPPING') {
+      throw new PlotPilotAdapterError('PLOTPILOT_LIFECYCLE', 'PlotPilot 正在停止中，无法启动');
+    }
 
-    const existing = await this.tryHealth();
-    if (existing) {
-      this.state = 'ready';
-      this.healthSnapshot = existing;
+    this.startPromise = this.doStart();
+    this.startPromise.catch(() => {});
+    try {
+      return await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  async stop(): Promise<PlotPilotSidecarStatus> {
+    if (this.state === 'STOPPED' || this.state === 'FAILED') {
+      this.state = 'STOPPED';
+      this.child = null;
+      this.healthSnapshot = null;
       this.lastError = null;
       return this.status();
     }
 
-    this.state = 'starting';
-    this.lastError = null;
-    const root = resolve(this.options.plotPilotRoot);
-    const child = spawn(
-      this.options.pythonExecutable,
-      [
-        '-m',
-        'uvicorn',
-        'interfaces.main:app',
-        '--host',
-        this.options.host,
-        '--port',
-        String(this.options.port),
-      ],
-      {
-        cwd: root,
-        env: {
-          ...process.env,
-          ...this.options.environment,
-          PYTHONUNBUFFERED: '1',
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-      },
-    );
-    this.process = child;
-
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (text: string) => this.options.onLog?.({ stream: 'stdout', text }));
-    child.stderr.on('data', (text: string) => this.options.onLog?.({ stream: 'stderr', text }));
-    child.once('exit', (code, signal) => {
-      if (this.process !== child) return;
-      this.process = null;
+    if (this.state === 'READY_EXTERNAL') {
+      this.state = 'STOPPED';
       this.healthSnapshot = null;
-      if (this.state !== 'stopping' && this.state !== 'stopped') {
-        this.state = 'failed';
-        this.lastError = `PlotPilot sidecar 已退出（code=${String(code)}, signal=${String(signal)}）`;
-      } else {
-        this.state = 'stopped';
+      this.lastError = null;
+      return this.status();
+    }
+
+    this.state = 'STOPPING';
+    const childToStop = this.child;
+
+    if (childToStop && childToStop.exitCode === null && childToStop.signalCode === null) {
+      try {
+        await this.adapter.shutdown();
+      } catch {
+        // graceful shutdown failed, fall through to kill
       }
-    });
 
-    const deadline = Date.now() + this.options.startupTimeoutMs;
-    while (Date.now() < deadline) {
-      if (child.exitCode !== null) break;
-      const health = await this.tryHealth();
-      if (health) {
-        this.state = 'ready';
-        this.healthSnapshot = health;
-        return this.status();
+      if (
+        this.child === childToStop &&
+        childToStop.exitCode === null &&
+        childToStop.signalCode === null
+      ) {
+        childToStop.kill('SIGTERM');
+        const deadline = this.clock.now() + this.opts.stopTimeoutMs;
+        while (
+          this.child === childToStop &&
+          childToStop.exitCode === null &&
+          this.clock.now() < deadline
+        ) {
+          await this.clock.delay(50);
+        }
+        if (
+          this.child === childToStop &&
+          childToStop.exitCode === null &&
+          childToStop.signalCode === null
+        ) {
+          childToStop.kill('SIGKILL');
+        }
       }
-      await delay(this.options.pollIntervalMs);
     }
 
-    this.state = 'failed';
-    this.lastError = 'PlotPilot sidecar 启动超时';
-    child.kill();
-    throw new PlotPilotAdapterError('PLOTPILOT_TIMEOUT', this.lastError);
-  }
-
-  async stop(): Promise<PlotPilotSidecarStatus> {
-    if (this.state === 'stopped') return this.status();
-    this.state = 'stopping';
-
-    try {
-      await this.adapter.shutdown();
-    } catch {
-      this.process?.kill();
-    }
-
-    const processToStop = this.process;
-    if (processToStop) {
-      const deadline = Date.now() + 5_000;
-      while (this.process === processToStop && Date.now() < deadline) await delay(100);
-      if (this.process === processToStop) processToStop.kill('SIGKILL');
-    }
-
-    this.process = null;
-    this.state = 'stopped';
+    this.child = null;
+    this.state = 'STOPPED';
     this.healthSnapshot = null;
     this.lastError = null;
     return this.status();
   }
 
+  private async doStart(): Promise<PlotPilotSidecarStatus> {
+    validateSidecarConfig(this.opts);
+
+    const existing = await this.tryHealth();
+    if (existing) {
+      this.state = 'READY_EXTERNAL';
+      this.healthSnapshot = existing;
+      this.lastError = null;
+      return this.status();
+    }
+
+    this.state = 'STARTING';
+    this.lastError = null;
+    this.settled = false;
+
+    let child: ChildProcess;
+    try {
+      child = spawn(
+        this.opts.pythonExecutable,
+        [
+          '-m',
+          'uvicorn',
+          'interfaces.main:app',
+          '--host',
+          this.opts.host,
+          '--port',
+          String(this.opts.port),
+        ],
+        {
+          cwd: resolve(this.opts.plotPilotRoot),
+          env: { ...process.env, ...this.opts.environment, PYTHONUNBUFFERED: '1' },
+          stdio: ['ignore', 'pipe', 'pipe'],
+          shell: false,
+          windowsHide: true,
+        },
+      );
+    } catch {
+      this.state = 'FAILED';
+      this.lastError = 'PlotPilot sidecar 进程创建失败';
+      throw new PlotPilotAdapterError('PLOTPILOT_UNAVAILABLE', this.lastError);
+    }
+
+    this.child = child;
+
+    const settleOnce = (fn: () => void) => {
+      if (this.settled) return;
+      this.settled = true;
+      fn();
+    };
+
+    child.on('error', () => {
+      settleOnce(() => {
+        if (this.child === child) {
+          this.child = null;
+          this.healthSnapshot = null;
+          if (this.state === 'STARTING' || this.state === 'READY_OWNED') {
+            this.state = 'FAILED';
+            this.lastError = 'PlotPilot sidecar 进程启动失败';
+          }
+        }
+      });
+    });
+
+    child.on('exit', (code, signal) => {
+      settleOnce(() => {
+        if (this.child === child) {
+          this.child = null;
+          this.healthSnapshot = null;
+          if (this.state !== 'STOPPING' && this.state !== 'STOPPED') {
+            this.state = 'FAILED';
+            this.lastError = `PlotPilot sidecar 已退出（code=${String(code)}, signal=${String(signal)}）`;
+          } else {
+            this.state = 'STOPPED';
+          }
+        }
+      });
+    });
+
+    if (child.stdout) {
+      child.stdout.setEncoding('utf8');
+      child.stdout.on('data', (text: string) => this.opts.onLog?.({ stream: 'stdout', text }));
+    }
+    if (child.stderr) {
+      child.stderr.setEncoding('utf8');
+      child.stderr.on('data', (text: string) => this.opts.onLog?.({ stream: 'stderr', text }));
+    }
+
+    const deadline = this.clock.now() + this.opts.startupTimeoutMs;
+    while (this.clock.now() < deadline) {
+      if (this.child !== child) break;
+      if (child.exitCode !== null || child.signalCode !== null) break;
+      const health = await this.tryHealth();
+      if (health) {
+        this.state = 'READY_OWNED';
+        this.healthSnapshot = health;
+        return this.status();
+      }
+      await this.clock.delay(this.opts.pollIntervalMs);
+    }
+
+    if ((this.state as string) === 'FAILED') {
+      throw new PlotPilotAdapterError(
+        'PLOTPILOT_UNAVAILABLE',
+        this.lastError ?? 'PlotPilot sidecar 启动失败',
+      );
+    }
+
+    this.state = 'FAILED';
+    this.lastError = 'PlotPilot sidecar 启动超时';
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL');
+    }
+    this.child = null;
+    throw new PlotPilotAdapterError('PLOTPILOT_TIMEOUT', this.lastError);
+  }
+
   private async tryHealth(): Promise<PlotPilotHealth | null> {
     try {
       return await new PlotPilotAdapter({
-        baseUrl: `http://${this.options.host}:${this.options.port}`,
+        baseUrl: `http://${this.opts.host}:${this.opts.port}`,
         requestTimeoutMs: 1_000,
       }).health();
     } catch {
