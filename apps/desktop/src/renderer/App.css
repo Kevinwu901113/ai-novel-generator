@@ -2082,3 +2082,465 @@ body {
     border-bottom-color: #7f1d1d;
   }
 }
+
+/* ── 问题规划面板 ──────────────────────────────────────────────── */
+
+.grill-question-plan-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+/* 请求区域 */
+.grill-plan-request-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.grill-plan-request-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.grill-plan-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 错误提示 */
+.grill-plan-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+}
+
+.grill-plan-error button {
+  background: none;
+  border: none;
+  color: #b91c1c;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.grill-plan-error button:hover {
+  background-color: #fee2e2;
+  border-radius: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-plan-error {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+
+  .grill-plan-error button {
+    color: #fca5a5;
+  }
+
+  .grill-plan-error button:hover {
+    background-color: #450a0a;
+  }
+}
+
+/* 任务状态区域 */
+.grill-plan-task-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.grill-plan-task-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.grill-plan-task-heading:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.grill-plan-task-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grill-plan-task-id {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: var(--color-text-secondary);
+}
+
+.grill-plan-task-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  background-color: var(--color-bg);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.grill-plan-task-status-badge.status-pending {
+  background-color: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.grill-plan-task-status-badge.status-running {
+  background-color: #dbeafe;
+  color: #1e40af;
+  border-color: #93c5fd;
+}
+
+.grill-plan-task-status-badge.status-succeeded {
+  background-color: #d1fae5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+
+.grill-plan-task-status-badge.status-failed {
+  background-color: #fef2f2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
+.grill-plan-task-status-badge.status-cancelled {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  border-color: #d1d5db;
+}
+
+.grill-plan-task-status-badge.status-stale {
+  background-color: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-plan-task-status-badge.status-pending {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #92400e;
+  }
+
+  .grill-plan-task-status-badge.status-running {
+    background-color: #172554;
+    color: #93c5fd;
+    border-color: #1e40af;
+  }
+
+  .grill-plan-task-status-badge.status-succeeded {
+    background-color: #052e16;
+    color: #6ee7b7;
+    border-color: #065f46;
+  }
+
+  .grill-plan-task-status-badge.status-failed {
+    background-color: #450a0a;
+    color: #fca5a5;
+    border-color: #991b1b;
+  }
+
+  .grill-plan-task-status-badge.status-cancelled {
+    background-color: #1f2937;
+    color: #d1d5db;
+    border-color: #4b5563;
+  }
+
+  .grill-plan-task-status-badge.status-stale {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #92400e;
+  }
+}
+
+.grill-plan-polling-indicator {
+  font-size: 14px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.grill-plan-task-error {
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-plan-task-error {
+    color: #fca5a5;
+  }
+}
+
+.grill-plan-task-hint {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* 提案列表区域 */
+.grill-plan-proposals-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.grill-plan-proposals-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.grill-plan-proposals-heading:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.grill-plan-loading {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 8px 0;
+}
+
+.grill-plan-proposal-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 提案卡片 */
+.grill-plan-proposal-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  transition: border-color 0.15s;
+}
+
+.grill-plan-proposal-card:hover {
+  border-color: var(--color-primary);
+}
+
+.grill-plan-proposal-stale {
+  opacity: 0.7;
+  border-color: var(--color-border);
+  border-style: dashed;
+}
+
+.grill-plan-proposal-stale:hover {
+  border-color: var(--color-border);
+}
+
+.grill-plan-proposal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grill-plan-stale-label {
+  font-size: 11px;
+  color: #92400e;
+  background-color: #fef3c7;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-plan-stale-label {
+    background-color: #451a03;
+    color: #fcd34d;
+  }
+}
+
+.grill-plan-proposal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.grill-plan-proposal-time {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 规划问题列表 */
+.grill-plan-questions {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+
+.grill-plan-questions h5 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 8px 0;
+}
+
+.grill-plan-question-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.grill-plan-question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+}
+
+.grill-plan-question-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grill-plan-question-key {
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: var(--color-primary);
+  background-color: var(--color-primary-light);
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.grill-plan-question-topic {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.grill-plan-question-text {
+  font-size: 13px;
+  color: var(--color-text);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.grill-plan-question-rationale {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.grill-plan-question-dependencies {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.grill-plan-question-dependencies ul {
+  list-style: none;
+  padding: 0;
+  margin: 4px 0 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.grill-plan-dep {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+}
+
+.grill-plan-dep-existing {
+  color: #1e40af;
+  border-color: #93c5fd;
+}
+
+.grill-plan-dep-planned {
+  color: #059669;
+  border-color: #6ee7b7;
+}
+
+@media (prefers-color-scheme: dark) {
+  .grill-plan-dep-existing {
+    color: #93c5fd;
+    border-color: #1e40af;
+  }
+
+  .grill-plan-dep-planned {
+    color: #6ee7b7;
+    border-color: #059669;
+  }
+}
+
+/* 提案操作 */
+.grill-plan-proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.grill-plan-proposal-actions .btn-primary {
+  padding: 6px 16px;
+  font-size: 13px;
+}
+
+.grill-plan-action-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* focus-visible 样式 */
+.grill-question-plan-panel button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

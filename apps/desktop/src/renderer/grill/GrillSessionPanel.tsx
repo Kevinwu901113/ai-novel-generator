@@ -4,7 +4,7 @@
  * 显示 session 状态、version、操作按钮、问题列表、添加问题表单。
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { GrillSessionPublicData, GrillQuestionPublicData } from '@ai-novel/contracts';
 import {
   sessionStatusLabel,
@@ -17,6 +17,8 @@ import {
 import { validateTopic, validateQuestionText } from './validation';
 
 interface GrillSessionPanelProps {
+  /** 稳定的上下文标识：`${projectId}:${session.id}` */
+  contextKey: string;
   session: GrillSessionPublicData;
   questions: ReadonlyArray<GrillQuestionPublicData>;
   isLoading: boolean;
@@ -33,9 +35,12 @@ interface GrillSessionPanelProps {
   onSupersede: (questionId: string) => void;
   onSelectQuestion: (questionId: string) => void;
   selectedQuestionId: string | null;
+  /** 增量时聚焦问题列表标题（接受成功后触发） */
+  questionListFocusToken?: number;
 }
 
 export function GrillSessionPanel({
+  contextKey,
   session,
   questions,
   isLoading,
@@ -50,7 +55,48 @@ export function GrillSessionPanel({
   onSupersede,
   onSelectQuestion,
   selectedQuestionId,
+  questionListFocusToken = 0,
 }: GrillSessionPanelProps) {
+  const questionListHeadingRef = useRef<HTMLHeadingElement>(null);
+  const lastFocusTokenRef = useRef(0);
+  const questionListRafRef = useRef<number | null>(null);
+  const contextKeyRef = useRef(contextKey);
+
+  // 接受成功后聚焦问题列表标题；context 变化时旧 token 标记为已消费
+  useEffect(() => {
+    if (contextKeyRef.current !== contextKey) {
+      contextKeyRef.current = contextKey;
+      // 旧 context 的 token 已消费：旧 token 不得聚焦新 session
+      lastFocusTokenRef.current = questionListFocusToken;
+    } else if (questionListFocusToken > 0 && questionListFocusToken !== lastFocusTokenRef.current) {
+      lastFocusTokenRef.current = questionListFocusToken;
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+      }
+      questionListRafRef.current = requestAnimationFrame(() => {
+        questionListRafRef.current = null;
+        questionListHeadingRef.current?.focus();
+      });
+    }
+    return () => {
+      // contextKey/token 变化或 unmount 时取消未执行的 RAF
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+        questionListRafRef.current = null;
+      }
+    };
+  }, [contextKey, questionListFocusToken]);
+
+  // unmount 时清理 RAF
+  useEffect(() => {
+    return () => {
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+        questionListRafRef.current = null;
+      }
+    };
+  }, []);
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [topic, setTopic] = useState('');
   const [questionText, setQuestionText] = useState('');
@@ -139,7 +185,9 @@ export function GrillSessionPanel({
       {/* 问题列表 */}
       <div className="grill-questions-section">
         <div className="grill-section-header">
-          <h4>问题列表</h4>
+          <h4 ref={questionListHeadingRef} tabIndex={-1}>
+            问题列表
+          </h4>
           {isActive && (
             <button
               className="btn-small"
