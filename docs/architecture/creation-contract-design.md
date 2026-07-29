@@ -378,13 +378,25 @@ function pathsOverlap(a: string, b: string): boolean {
 锁定 `/supportingCharacters/alice/name` 后：
 
 - `remove-character alice` → 冲突（entity 包含 locked child）
-- `upsert-character alice`（完整替换）→ 冲突（entity 包含 locked child）
-- `upsert-character bob` → 不冲突
+- `upsert-supporting-character alice`（完整替换）→ 冲突（entity 包含 locked child）
+- `upsert-supporting-character bob` → 不冲突
 - `set-scalar /supportingCharacters/alice/role` → 不冲突
 
 ### Absent Optional Field Lock
 
-V1 允许锁定合法但当前缺失的 optional field。
+V1 允许锁定合法但当前缺失的 optional field，**仅限**：
+
+1. Fixed optional top-level section（如 `/themes`、`/targetLength`）
+2. 已存在 structured object 中的 optional child（如 protagonist 存在时的 `/protagonist/role`）
+3. 已存在 collection entity 中的 optional child（如 alice 存在时的 `/supportingCharacters/alice/role`）
+
+**禁止**：
+
+- 对不存在 characterKey 的 descendant path 加 lock（→ validation error）
+- 对不存在 relationshipKey 的 descendant path 加 lock（→ validation error）
+- 通过不存在 entity path 隐式预留未来 key
+
+如需禁止未来新增所有 supporting characters，锁定 `/supportingCharacters`（整个 section），而不是锁定不存在 entity 的 descendant。
 
 **语义**："该字段锁定为缺失"：
 
@@ -396,17 +408,19 @@ V1 允许锁定合法但当前缺失的 optional field。
 **Lock validator 必须区分**：
 
 - 路径是否合法（grammar + schema 中存在该 section/field 定义）
-- 当前值存在或缺失（不影响 lock 合法性）
+- Entity 段路径：所引用的 characterKey/relationshipKey 必须存在于当前 snapshot
+- 当前值存在或缺失（在上述 entity 存在前提下，不影响 lock 合法性）
 - 缺失不等于非法路径
 
 **示例**：
 
-当前 sections 无 `/themes`（缺失），用户 lock `/themes`：
-
-- Lock 成功（路径合法，缺失不影响）
-- AI proposal 输出包含 themes → CONTRACT_MODEL_LOCK_VIOLATION
-- Review operation `set-string-list /themes [...]` → CONTRACT_LOCK_CONFLICT
-- Unlock `/themes` 后可新增
+- sections 无 `/themes`，lock `/themes` → 允许
+- protagonist.role 缺失，lock `/protagonist/role` → 允许
+- alice 已存在但 role 缺失，lock `/supportingCharacters/alice/role` → 允许
+- alice 不存在，lock `/supportingCharacters/alice/role` → validation error
+- AI proposal 输出包含已锁缺失字段 → CONTRACT_MODEL_LOCK_VIOLATION
+- Review operation set 已锁缺失字段 → CONTRACT_LOCK_CONFLICT
+- Unlock 后可新增
 
 ### Lock/Unlock 操作
 
@@ -415,7 +429,7 @@ V1 允许锁定合法但当前缺失的 optional field。
 1. 读取当前 version（CAS expectedContractVersion）
 2. 验证 fieldPath 符合 path grammar 且是 V1 schema 中合法路径
 3. 验证 fieldPath 不与任何现有 lockedFieldPaths overlap（`pathsOverlap` → 错误）
-4. 允许锁定当前缺失的 optional field（路径合法即可，不要求值存在）
+4. 允许锁定当前缺失的 optional field（仅限 fixed section 或已存在 entity 的 optional child；不存在 entity 的 descendant path → validation error）
 5. 构造新 lockedFieldPaths = sorted unique(当前 + fieldPath)
 6. sections 保持不变
 7. 计算新 contractSnapshotHash
@@ -771,7 +785,8 @@ type ContractPatchOperation =
   | SetStringListFieldOperation
   | SetStructuredFieldOperation
   | RemoveOptionalFieldOperation
-  | UpsertCharacterOperation
+  | UpsertProtagonistOperation
+  | UpsertSupportingCharacterOperation
   | RemoveCharacterOperation
   | UpsertRelationshipOperation
   | RemoveRelationshipOperation;
@@ -844,7 +859,7 @@ type SetStructuredFieldOperation =
 
 **Write-set**：目标 structured section 及其所有 descendant paths。
 
-注意：protagonist 使用 UpsertCharacterOperation（`target: 'protagonist'`），不使用 set-structured。
+注意：protagonist 使用 UpsertProtagonistOperation，不使用 set-structured。
 
 #### RemoveOptionalFieldOperation
 
@@ -866,8 +881,6 @@ type RemoveOptionalFieldOperation = {
     | '/protagonist/motivation'
     | '/protagonist/arc'
     | '/protagonist/traits'
-    | '/targetLength/unit'
-    | '/targetLength/value'
     | '/contentBoundaries/rating'
     | '/contentBoundaries/allowedContent'
     | '/contentBoundaries/prohibitedContent'
@@ -883,29 +896,55 @@ type RemoveOptionalFieldOperation = {
 - Required field 不得 remove（`/premise`、`/genre`、`/tone`、`/targetAudience`、`/narrativePov`、`/tense`、`/protagonist` 不出现在此 union 中）
 - Entity remove 必须使用 RemoveCharacterOperation / RemoveRelationshipOperation
 
-#### UpsertCharacterOperation
+**Structured section 内 required child 规则（targetLength）**：
+
+targetLength 是 optional structured section，但其中 `unit` 和 `value` 在 targetLength 存在时均为 required：
+
+- 不能创建部分 targetLength（缺 unit 或 value → schema validation 失败）
+- 不能单独 remove `/targetLength/unit` 或 `/targetLength/value`（不在 union 中 → unknown/not-allowed operation）
+- 修改其中字段使用 `set-scalar /targetLength/unit` 或 `set-scalar /targetLength/value`
+- 清除整个结构使用 `remove-field /targetLength`
+- 每次 ChangeSet 应用后执行完整 schema validation，保证 snapshot 完整合法
+
+#### UpsertProtagonistOperation
 
 ```typescript
-type UpsertCharacterOperation = {
-  kind: 'upsert-character';
-  target: 'protagonist' | CharacterKey;
-  value: ProtagonistCharacter | SupportingCharacter;
+type UpsertProtagonistOperation = {
+  kind: 'upsert-protagonist';
+  value: ProtagonistCharacter;
 };
 ```
 
 **规则**：
 
-- `target: 'protagonist'`：value 必须是 ProtagonistCharacter（含 motivation/arc）
-- `target: CharacterKey`：value 必须是 SupportingCharacter（含 relationship）
-- `value.characterKey` 必须等于 target key（protagonist 时使用 value 中的 characterKey）
 - Value 是**完整 replacement object**，不是 partial patch
-- 已存在 entity 的 characterKey 不可就地修改（stable identity）
+- 首次构造 ContractVersion 时，由 `value.characterKey` 建立初始主角 key
+- 已存在契约时，`value.characterKey` 必须等于当前 protagonist.characterKey（不匹配 → validation error）
+- 不允许借整体 replacement 修改主角 stable key
+- Protagonist 不可 remove（required section）
+
+**Write-set**：`/protagonist` 及所有 descendant paths。
+
+#### UpsertSupportingCharacterOperation
+
+```typescript
+type UpsertSupportingCharacterOperation = {
+  kind: 'upsert-supporting-character';
+  target: CharacterKey;
+  value: SupportingCharacter;
+};
+```
+
+**规则**：
+
+- `target` 明确是 supporting character key（与 protagonist 无判别冲突——即使 CharacterKey 字符串值为 "protagonist"，kind 已区分语义）
+- `value.characterKey` 必须等于 target
+- Value 是完整 replacement object
 - 若 target 不存在则创建新 entity（insert）；若存在则整体替换（replace）
+- 已存在 entity 的 characterKey 不可就地修改（stable identity）
+- Supporting character key 不得与 protagonist.characterKey 冲突（→ validation error）
 
-**Write-set**：
-
-- protagonist：`/protagonist` 及所有 descendant paths
-- supporting character：`/supportingCharacters/{target}` 及所有 descendant paths
+**Write-set**：`/supportingCharacters/{target}` 及所有 descendant paths。
 
 #### RemoveCharacterOperation
 
@@ -969,13 +1008,14 @@ Operations 是经验证的**无序原子 ChangeSet**（选项 B）：
 1. 禁止重复 target（同一 canonical path 出现两次 → 验证错误）
 2. 禁止同 target set + remove
 3. 禁止 parent/child write-set overlap（如同时 `set-structured /targetLength` 和 `set-scalar /targetLength/value`）
-4. 禁止 entity upsert 与其 child path operation 同时存在（如 `upsert-character alice` + `set-scalar /supportingCharacters/alice/name`）
+4. 禁止 entity upsert 与其 child path operation 同时存在（如 `upsert-supporting-character alice` + `set-scalar /supportingCharacters/alice/name`；`upsert-protagonist` + `set-scalar /protagonist/name`）
 5. 禁止 entity remove 与其 child path operation 同时存在
-6. 禁止 stable key 就地变更（upsert value.characterKey ≠ 已存在 entity 的 key → 验证错误）
-7. RemoveCharacter 后 relationship 引用验证（基于应用全部 operations 后的最终 snapshot）
-8. 所有 operation 应用后执行一次完整 V1 schema validation + reference integrity check
+6. 禁止 stable key 就地变更（upsert value.characterKey/relationshipKey ≠ 已存在 entity 的 key → 验证错误）
+7. Supporting character key 不得与 protagonist.characterKey 冲突（基于最终 snapshot → 验证错误）
+8. RemoveCharacter 后 relationship 引用验证（基于应用全部 operations 后的最终 snapshot）
+9. 所有 operation 应用后执行一次完整 V1 schema validation + reference integrity check
 
-**Provenance 确定性**：持久化 provenance 时按 `kind + canonical target path` 排序，得到确定性序列。
+**Provenance 确定性**：持久化 provenance 时按 `kind + canonical target path` 排序，得到确定性序列。Canonical target path：`upsert-protagonist` 为 `/protagonist`；带 target 的 entity operation 为 `/supportingCharacters/{target}` 或 `/relationships/{target}`；path 类 operation 为其 path。
 
 **解析流程**：
 
@@ -1237,6 +1277,17 @@ GenerateChapterRequest {
 - Operations 不同输入顺序产生相同最终 snapshot/hash（order-independence）
 - 重复 operation target 拒绝
 - Parent/child write-set overlap 拒绝
+- remove `/targetLength/unit` → unknown/not-allowed operation
+- remove `/targetLength/value` → unknown/not-allowed operation
+- remove `/targetLength` → 成功
+- set targetLength unit/value 后 snapshot 仍完整合法
+- supporting CharacterKey = "protagonist" 不与 operation kind 混淆
+- 已存在 protagonist characterKey 修改 → validation error
+- 首次契约 protagonist key 建立成功
+- supporting key 与 protagonist key 冲突 → validation error
+- alice 不存在时 lock `/supportingCharacters/alice/role` → validation error
+- 不存在 relationshipKey 的 descendant lock → validation error
+- 已存在 entity 的缺失 optional child lock → 成功
 
 ### M1-C2：AI task and process bridge
 
@@ -1345,29 +1396,32 @@ GenerateChapterRequest {
 
 以下决策已被主体设计依赖，M1-C1 实现时必须遵循：
 
-| 决策                             | 裁决                                                        |
-| -------------------------------- | ----------------------------------------------------------- |
-| Lock 粒度                        | field path 级                                               |
-| User direct edit 版本策略        | 每次成功保存创建新 version                                  |
-| Provenance 存储                  | V1 内嵌 canonical JSON（provenanceJson）                    |
-| unresolvedQuestions 归属         | V1 属于契约 typed section（可被后续生成消费）               |
-| Schema migration 策略            | 历史 version 不改写，读取时显式转换                         |
-| Proposal stale 判定              | 基于 Grill/Contract baseline mismatch，不采用时间自动过期   |
-| 多 Grill session                 | 单个 proposal 只关联一个明确 session baseline               |
-| Proposal 原始内容                | 不可变                                                      |
-| schemaVersion 格式               | 单调整数                                                    |
-| expectedContractVersion 首次语义 | null（表示"当前无版本"）                                    |
-| lockedFieldPaths 语义            | canonical sorted unique set                                 |
-| Lock path overlap                | symmetric（ancestor/descendant/equal 均拒绝）               |
-| Absent optional field lock       | 允许（锁定为缺失，新增该字段需先 unlock）                   |
-| Field path 语法                  | JSON Pointer 风格，collection 用 stable key                 |
-| Review patch 模型                | closed typed operation union                                |
-| ChangeSet 语义                   | 无序原子集合（选项 B），结果与输入顺序无关                  |
-| Stable identity 不可变           | characterKey/relationshipKey 不可就地修改                   |
-| Upsert value 模型                | 完整 replacement object，不是 partial patch                 |
-| Hash 验证层                      | SQLite 长度检查 + domain/repository 层 hex 格式验证         |
-| Lock event 审计                  | append-only，不冗余存储 version_number                      |
-| Current pointer CAS              | UPDATE WHERE current_version_id = expected（首次用 INSERT） |
+| 决策                             | 裁决                                                                     |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Lock 粒度                        | field path 级                                                            |
+| User direct edit 版本策略        | 每次成功保存创建新 version                                               |
+| Provenance 存储                  | V1 内嵌 canonical JSON（provenanceJson）                                 |
+| unresolvedQuestions 归属         | V1 属于契约 typed section（可被后续生成消费）                            |
+| Schema migration 策略            | 历史 version 不改写，读取时显式转换                                      |
+| Proposal stale 判定              | 基于 Grill/Contract baseline mismatch，不采用时间自动过期                |
+| 多 Grill session                 | 单个 proposal 只关联一个明确 session baseline                            |
+| Proposal 原始内容                | 不可变                                                                   |
+| schemaVersion 格式               | 单调整数                                                                 |
+| expectedContractVersion 首次语义 | null（表示"当前无版本"）                                                 |
+| lockedFieldPaths 语义            | canonical sorted unique set                                              |
+| Lock path overlap                | symmetric（ancestor/descendant/equal 均拒绝）                            |
+| Absent optional field lock       | 允许（锁定为缺失），仅限 fixed section 或已存在 entity 的 optional child |
+| Absent entity descendant lock    | 禁止（不存在 characterKey/relationshipKey 的 descendant 不可 lock）      |
+| Field path 语法                  | JSON Pointer 风格，collection 用 stable key                              |
+| Review patch 模型                | closed typed operation union                                             |
+| Character upsert 判别            | 拆分为 upsert-protagonist / upsert-supporting-character                  |
+| targetLength required child      | 不可单独 remove unit/value，只能整体 remove /targetLength                |
+| ChangeSet 语义                   | 无序原子集合（选项 B），结果与输入顺序无关                               |
+| Stable identity 不可变           | characterKey/relationshipKey 不可就地修改                                |
+| Upsert value 模型                | 完整 replacement object，不是 partial patch                              |
+| Hash 验证层                      | SQLite 长度检查 + domain/repository 层 hex 格式验证                      |
+| Lock event 审计                  | append-only，不冗余存储 version_number                                   |
+| Current pointer CAS              | UPDATE WHERE current_version_id = expected（首次用 INSERT）              |
 
 ### 真正未决的后续决策
 
