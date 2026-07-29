@@ -67,7 +67,7 @@ States: `STOPPED`, `STARTING`, `READY_OWNED`, `READY_EXTERNAL`, `STOPPING`, `FAI
 - single-flight `start()`: concurrent callers share one promise, only one spawn
 - owned vs external process distinction: `stop()` never kills an external service
 - `spawn` with `shell: false`, executable and args separated
-- `error`, `exit`, and `close` events settle state exactly once
+- `error` and `exit` events share a per-child single-settlement guard (`exit` is the authoritative termination event; `close` is not separately used for lifecycle settlement)
 - readiness timeout reclaims owned child with SIGKILL
 - stop timeout escalates SIGTERM → SIGKILL deterministically
 - injectable clock for deterministic testing
