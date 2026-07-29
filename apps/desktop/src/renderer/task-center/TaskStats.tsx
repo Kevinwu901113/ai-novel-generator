@@ -23,7 +23,12 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   // 有错误且没有上次成功数据时，只显示错误
   if (error && !stats) {
     return (
-      <div className="task-stats-error" data-testid="task-stats-error">
+      <div
+        className="task-stats-error"
+        data-testid="task-stats-error"
+        role="alert"
+        aria-live="assertive"
+      >
         统计加载失败：{error}
       </div>
     );
@@ -33,7 +38,12 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   if (error && stats) {
     return (
       <div className="task-stats" data-testid="task-stats">
-        <div className="task-stats-stale-notice" data-testid="task-stats-stale">
+        <div
+          className="task-stats-stale-notice"
+          data-testid="task-stats-stale"
+          role="status"
+          aria-live="polite"
+        >
           ⚠ 统计可能已过期
         </div>
         <TaskStatsContent stats={stats} />
@@ -43,7 +53,11 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
 
   // 无数据且无错误时，显示加载中
   if (!stats) {
-    return <div className="task-stats-loading">加载统计中…</div>;
+    return (
+      <div className="task-stats-loading" role="status" aria-live="polite">
+        加载统计中…
+      </div>
+    );
   }
 
   // 正常显示
