@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PlotPilotAdapter, PlotPilotAdapterError } from './index.js';
+import { PlotPilotAdapter } from './index.js';
 
 function sseResponse(frames: ReadonlyArray<Record<string, unknown>>): Response {
   const payload = frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join('');
@@ -62,7 +62,7 @@ describe('PlotPilotAdapter', () => {
     const fetchImpl = vi.fn<typeof fetch>().mockRejectedValue(new Error('connection refused'));
     const adapter = new PlotPilotAdapter({ fetchImpl });
 
-    await expect(adapter.health()).rejects.toMatchObject<Partial<PlotPilotAdapterError>>({
+    await expect(adapter.health()).rejects.toMatchObject({
       code: 'PLOTPILOT_UNAVAILABLE',
       message: '无法连接 PlotPilot sidecar',
     });

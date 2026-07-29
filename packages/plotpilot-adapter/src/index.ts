@@ -1,15 +1,9 @@
-/**
- * PlotPilot sidecar adapter.
- *
- * This package deliberately exposes a narrow, typed boundary. The Electron
- * renderer must never call PlotPilot directly; calls should be routed through
- * the application's Worker/Main IPC boundary.
- */
-
 export interface PlotPilotAdapterOptions {
   readonly baseUrl?: string;
   readonly fetchImpl?: typeof globalThis.fetch;
   readonly requestTimeoutMs?: number;
+  readonly maxEventBytes?: number;
+  readonly maxTotalBytes?: number;
 }
 
 export interface PlotPilotHealth {
@@ -60,13 +54,19 @@ export interface StreamHandlers {
   readonly signal?: AbortSignal;
 }
 
+export type PlotPilotErrorCode =
+  | 'PLOTPILOT_UNAVAILABLE'
+  | 'PLOTPILOT_TIMEOUT'
+  | 'PLOTPILOT_ABORTED'
+  | 'PLOTPILOT_HTTP_ERROR'
+  | 'PLOTPILOT_RESPONSE_INVALID'
+  | 'PLOTPILOT_BUFFER_OVERFLOW'
+  | 'PLOTPILOT_CONFIG_INVALID'
+  | 'PLOTPILOT_LIFECYCLE';
+
 export class PlotPilotAdapterError extends Error {
   constructor(
-    public readonly code:
-      | 'PLOTPILOT_UNAVAILABLE'
-      | 'PLOTPILOT_TIMEOUT'
-      | 'PLOTPILOT_HTTP_ERROR'
-      | 'PLOTPILOT_RESPONSE_INVALID',
+    public readonly code: PlotPilotErrorCode,
     message: string,
     public readonly statusCode: number | null = null,
   ) {
@@ -77,6 +77,8 @@ export class PlotPilotAdapterError extends Error {
 
 const DEFAULT_BASE_URL = 'http://127.0.0.1:8005';
 const DEFAULT_TIMEOUT_MS = 15_000;
+const DEFAULT_MAX_EVENT_BYTES = 1_048_576;
+const DEFAULT_MAX_TOTAL_BYTES = 67_108_864;
 
 function normalizeBaseUrl(value: string): string {
   return value.replace(/\/+$/, '');
@@ -102,42 +104,191 @@ function parseHealth(value: unknown): PlotPilotHealth {
   };
 }
 
-function parseSseFrame(frame: string): PlotPilotStreamEvent[] {
-  const events: PlotPilotStreamEvent[] = [];
-  for (const line of frame.split(/\r?\n/)) {
-    if (!line.startsWith('data:')) continue;
-    const payload = line.slice(5).trimStart();
-    if (!payload) continue;
-    try {
-      const parsed: unknown = JSON.parse(payload);
-      if (isRecord(parsed) && typeof parsed.type === 'string') {
-        events.push(parsed as PlotPilotStreamEvent);
+interface SseParsedFrame {
+  data: string;
+  event: string | null;
+  id: string | null;
+  retry: number | null;
+}
+
+function parseSseBlock(block: string): SseParsedFrame | null {
+  let data = '';
+  let hasData = false;
+  let event: string | null = null;
+  let id: string | null = null;
+  let retry: number | null = null;
+
+  for (const rawLine of block.split(/\r?\n/)) {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith(':')) continue;
+    if (line === '') continue;
+
+    const colonIndex = line.indexOf(':');
+    let field: string;
+    let value: string;
+    if (colonIndex === -1) {
+      field = line;
+      value = '';
+    } else {
+      field = line.slice(0, colonIndex);
+      value = line.slice(colonIndex + 1);
+      if (value.startsWith(' ')) value = value.slice(1);
+    }
+
+    switch (field) {
+      case 'data':
+        hasData = true;
+        data += (data ? '\n' : '') + value;
+        break;
+      case 'event':
+        event = value;
+        break;
+      case 'id':
+        id = value;
+        break;
+      case 'retry': {
+        const n = Number(value);
+        if (Number.isInteger(n) && n >= 0) retry = n;
+        break;
       }
-    } catch {
-      throw new PlotPilotAdapterError('PLOTPILOT_RESPONSE_INVALID', 'PlotPilot SSE 事件不是有效 JSON');
+      default:
+        break;
     }
   }
-  return events;
+
+  if (!hasData && event === null && id === null && retry === null) return null;
+  return { data, event, id, retry };
+}
+
+function frameToStreamEvent(frame: SseParsedFrame): PlotPilotStreamEvent | null {
+  if (!frame.data) return null;
+  if (frame.data === '[DONE]') return null;
+  try {
+    const parsed: unknown = JSON.parse(frame.data);
+    if (isRecord(parsed) && typeof parsed.type === 'string') {
+      return parsed as PlotPilotStreamEvent;
+    }
+    return null;
+  } catch {
+    throw new PlotPilotAdapterError(
+      'PLOTPILOT_RESPONSE_INVALID',
+      'PlotPilot SSE 事件不是有效 JSON',
+    );
+  }
+}
+
+export async function* parseSseStream(
+  body: ReadableStream<Uint8Array>,
+  options: { signal?: AbortSignal; maxEventBytes?: number; maxTotalBytes?: number } = {},
+): AsyncGenerator<PlotPilotStreamEvent> {
+  const maxEvent = options.maxEventBytes ?? DEFAULT_MAX_EVENT_BYTES;
+  const maxTotal = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let totalBytes = 0;
+
+  const onAbort = () => {
+    reader.cancel().catch(() => {});
+  };
+  if (options.signal) {
+    if (options.signal.aborted) {
+      reader.releaseLock();
+      throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 流式请求已取消');
+    }
+    options.signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxTotal) {
+          throw new PlotPilotAdapterError(
+            'PLOTPILOT_BUFFER_OVERFLOW',
+            'PlotPilot SSE 流超出总大小限制',
+          );
+        }
+        buffer += decoder.decode(value, { stream: true });
+      }
+
+      let sepIndex: number;
+      while ((sepIndex = findSeparator(buffer)) >= 0) {
+        const block = buffer.slice(0, sepIndex);
+        const sepLen = buffer[sepIndex] === '\r' ? 4 : 2;
+        buffer = buffer.slice(sepIndex + sepLen);
+
+        if (block.length > maxEvent) {
+          throw new PlotPilotAdapterError(
+            'PLOTPILOT_BUFFER_OVERFLOW',
+            'PlotPilot SSE 单事件超出大小限制',
+          );
+        }
+
+        const frame = parseSseBlock(block);
+        if (frame) {
+          const event = frameToStreamEvent(frame);
+          if (event) yield event;
+        }
+      }
+
+      if (buffer.length > maxEvent) {
+        throw new PlotPilotAdapterError(
+          'PLOTPILOT_BUFFER_OVERFLOW',
+          'PlotPilot SSE 单事件超出大小限制',
+        );
+      }
+
+      if (done) break;
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const frame = parseSseBlock(buffer);
+      if (frame) {
+        const event = frameToStreamEvent(frame);
+        if (event) yield event;
+      }
+    }
+  } finally {
+    if (options.signal) {
+      options.signal.removeEventListener('abort', onAbort);
+    }
+    reader.releaseLock();
+  }
+}
+
+function findSeparator(buffer: string): number {
+  const lfIndex = buffer.indexOf('\n\n');
+  const crlfIndex = buffer.indexOf('\r\n\r\n');
+  if (lfIndex === -1) return crlfIndex;
+  if (crlfIndex === -1) return lfIndex;
+  return Math.min(lfIndex, crlfIndex);
 }
 
 export class PlotPilotAdapter {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly requestTimeoutMs: number;
+  private readonly maxEventBytes: number;
+  private readonly maxTotalBytes: number;
 
   constructor(options: PlotPilotAdapterOptions = {}) {
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? DEFAULT_BASE_URL);
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_EVENT_BYTES;
+    this.maxTotalBytes = options.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES;
   }
 
   async health(signal?: AbortSignal): Promise<PlotPilotHealth> {
-    const response = await this.request('/health', { method: 'GET', signal });
+    const response = await this.request('/health', { method: 'GET' }, signal, true);
     return parseHealth(await response.json());
   }
 
   async shutdown(signal?: AbortSignal): Promise<void> {
-    await this.request('/internal/shutdown', { method: 'POST', signal });
+    await this.request('/internal/shutdown', { method: 'POST' }, signal, true);
   }
 
   async generateChapter(input: GenerateChapterInput, handlers: StreamHandlers = {}): Promise<void> {
@@ -191,8 +342,8 @@ export class PlotPilotAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: handlers.signal,
       },
+      handlers.signal,
       false,
     );
 
@@ -200,43 +351,31 @@ export class PlotPilotAdapter {
       throw new PlotPilotAdapterError('PLOTPILOT_RESPONSE_INVALID', 'PlotPilot 未返回流式响应');
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (value) buffer += decoder.decode(value, { stream: true });
-
-        let separatorIndex: number;
-        while ((separatorIndex = buffer.indexOf('\n\n')) >= 0) {
-          const frame = buffer.slice(0, separatorIndex);
-          buffer = buffer.slice(separatorIndex + 2);
-          for (const event of parseSseFrame(frame)) handlers.onEvent?.(event);
-        }
-
-        if (done) break;
-      }
-
-      buffer += decoder.decode();
-      if (buffer.trim()) {
-        for (const event of parseSseFrame(buffer)) handlers.onEvent?.(event);
-      }
-    } finally {
-      reader.releaseLock();
+    for await (const event of parseSseStream(response.body, {
+      signal: handlers.signal,
+      maxEventBytes: this.maxEventBytes,
+      maxTotalBytes: this.maxTotalBytes,
+    })) {
+      handlers.onEvent?.(event);
     }
   }
 
-  private async request(path: string, init: RequestInit, useTimeout = true): Promise<Response> {
+  private async request(
+    path: string,
+    init: RequestInit,
+    callerSignal: AbortSignal | undefined,
+    useTimeout: boolean,
+  ): Promise<Response> {
     const timeoutController = new AbortController();
-    const timeout = useTimeout
-      ? setTimeout(() => timeoutController.abort(), this.requestTimeoutMs)
-      : null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
 
-    const combinedSignal = init.signal
-      ? AbortSignal.any([init.signal, timeoutController.signal])
-      : timeoutController.signal;
+    if (useTimeout) {
+      timeout = setTimeout(() => timeoutController.abort(), this.requestTimeoutMs);
+    }
+
+    const signals: AbortSignal[] = [timeoutController.signal];
+    if (callerSignal) signals.push(callerSignal);
+    const combinedSignal = AbortSignal.any(signals);
 
     try {
       const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -254,7 +393,10 @@ export class PlotPilotAdapter {
     } catch (error: unknown) {
       if (error instanceof PlotPilotAdapterError) throw error;
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new PlotPilotAdapterError('PLOTPILOT_TIMEOUT', 'PlotPilot 请求超时或已取消');
+        if (callerSignal?.aborted) {
+          throw new PlotPilotAdapterError('PLOTPILOT_ABORTED', 'PlotPilot 请求已取消');
+        }
+        throw new PlotPilotAdapterError('PLOTPILOT_TIMEOUT', 'PlotPilot 请求超时');
       }
       throw new PlotPilotAdapterError('PLOTPILOT_UNAVAILABLE', '无法连接 PlotPilot sidecar');
     } finally {
