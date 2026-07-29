@@ -507,4 +507,218 @@ describe('问题规划集成测试', () => {
       expect(screen.getByText('请求问题规划')).toBeDefined();
     });
   });
+
+  // ── accept 刷新链四阶段 context race ──────────────────────────
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function callsWith(mock: ReturnType<typeof vi.fn>, needle: string): number {
+    return mock.mock.calls.filter((c) => JSON.stringify(c).includes(needle)).length;
+  }
+
+  const session2 = { ...mockSession, id: 'sess-00000002', goal: '第二个会话' };
+
+  async function acceptFlowSetup(api: ReturnType<typeof createMockAPI>) {
+    const user = userEvent.setup();
+    render(<GrillWorkbench projectId="proj-00000001" />);
+    await selectSession();
+    await user.click(screen.getByText('请求问题规划'));
+    await waitFor(() => {
+      expect(screen.getByText('接受此规划')).toBeDefined();
+    });
+    return { user, api };
+  }
+
+  async function switchToSession2() {
+    const sessionItem2 = screen.getAllByText('第二个会话')[0];
+    await act(async () => {
+      sessionItem2.click();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('请求问题规划')).toBeDefined();
+    });
+  }
+
+  it('accept RPC pending 时切换 session：旧 context 刷新链完全不执行', async () => {
+    const acceptDeferred = deferred<unknown>();
+    const api = setupDesktop(
+      createMockAPI({
+        listSessions: vi.fn().mockResolvedValue([mockSession, session2]),
+        getSession: vi
+          .fn()
+          .mockImplementation((...args: ReadonlyArray<unknown>) =>
+            JSON.stringify(args).includes('sess-00000002')
+              ? Promise.resolve(session2)
+              : Promise.resolve(mockSession),
+          ),
+        acceptQuestionPlanProposal: vi.fn().mockReturnValue(acceptDeferred.promise),
+      }),
+    );
+    const { user } = await acceptFlowSetup(api);
+
+    await user.click(screen.getByText('接受此规划'));
+
+    await switchToSession2();
+
+    const getSessionOld = callsWith(
+      api.grill.getSession as ReturnType<typeof vi.fn>,
+      'sess-00000001',
+    );
+    const planProposalsOld = callsWith(
+      api.grill.listQuestionPlanProposals as ReturnType<typeof vi.fn>,
+      'sess-00000001',
+    );
+
+    await act(async () => {
+      acceptDeferred.resolve(mockQuestions);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 旧 context 的 session/question-plan 刷新不得执行
+    expect(callsWith(api.grill.getSession as ReturnType<typeof vi.fn>, 'sess-00000001')).toBe(
+      getSessionOld,
+    );
+    expect(
+      callsWith(api.grill.listQuestionPlanProposals as ReturnType<typeof vi.fn>, 'sess-00000001'),
+    ).toBe(planProposalsOld);
+    // focus token 不得推进
+    expect(document.querySelector('.grill-questions-section h4')).not.toHaveFocus();
+  });
+
+  it('session refresh pending 时切换 session：后续 questions 刷新中止', async () => {
+    const refreshDeferred = deferred<unknown>();
+    let gate = false;
+    const api = setupDesktop(
+      createMockAPI({
+        listSessions: vi.fn().mockResolvedValue([mockSession, session2]),
+        getSession: vi.fn().mockImplementation((...args: ReadonlyArray<unknown>) => {
+          const s = JSON.stringify(args);
+          if (s.includes('sess-00000002')) return Promise.resolve(session2);
+          if (gate) return refreshDeferred.promise;
+          return Promise.resolve(mockSession);
+        }),
+      }),
+    );
+    const { user } = await acceptFlowSetup(api);
+
+    gate = true;
+    await user.click(screen.getByText('接受此规划'));
+
+    await switchToSession2();
+
+    const listQuestionsOld = callsWith(
+      api.grill.listQuestions as ReturnType<typeof vi.fn>,
+      'sess-00000001',
+    );
+
+    await act(async () => {
+      refreshDeferred.resolve(mockSession);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 旧 context 的 questions 刷新不得执行
+    expect(callsWith(api.grill.listQuestions as ReturnType<typeof vi.fn>, 'sess-00000001')).toBe(
+      listQuestionsOld,
+    );
+    expect(document.querySelector('.grill-questions-section h4')).not.toHaveFocus();
+  });
+
+  it('questions refresh pending 时切换 session：后续 proposals 刷新中止', async () => {
+    const questionsDeferred = deferred<unknown>();
+    let gate = false;
+    const api = setupDesktop(
+      createMockAPI({
+        listSessions: vi.fn().mockResolvedValue([mockSession, session2]),
+        getSession: vi
+          .fn()
+          .mockImplementation((...args: ReadonlyArray<unknown>) =>
+            JSON.stringify(args).includes('sess-00000002')
+              ? Promise.resolve(session2)
+              : Promise.resolve(mockSession),
+          ),
+        listQuestions: vi.fn().mockImplementation((...args: ReadonlyArray<unknown>) => {
+          const s = JSON.stringify(args);
+          if (s.includes('sess-00000002')) return Promise.resolve([]);
+          if (gate) return questionsDeferred.promise;
+          return Promise.resolve(mockQuestions);
+        }),
+      }),
+    );
+    const { user } = await acceptFlowSetup(api);
+
+    gate = true;
+    await user.click(screen.getByText('接受此规划'));
+
+    await switchToSession2();
+
+    const listProposalsOld = callsWith(
+      api.grill.listProposals as ReturnType<typeof vi.fn>,
+      'sess-00000001',
+    );
+
+    await act(async () => {
+      questionsDeferred.resolve(mockQuestions);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 旧 context 的 normal proposals 刷新不得执行
+    expect(callsWith(api.grill.listProposals as ReturnType<typeof vi.fn>, 'sess-00000001')).toBe(
+      listProposalsOld,
+    );
+    expect(document.querySelector('.grill-questions-section h4')).not.toHaveFocus();
+  });
+
+  it('proposals refresh pending 时切换 session：question-plan 提案刷新中止且 focus token 不推进', async () => {
+    const proposalsDeferred = deferred<unknown>();
+    let gate = false;
+    const api = setupDesktop(
+      createMockAPI({
+        listSessions: vi.fn().mockResolvedValue([mockSession, session2]),
+        getSession: vi
+          .fn()
+          .mockImplementation((...args: ReadonlyArray<unknown>) =>
+            JSON.stringify(args).includes('sess-00000002')
+              ? Promise.resolve(session2)
+              : Promise.resolve(mockSession),
+          ),
+        listProposals: vi.fn().mockImplementation((...args: ReadonlyArray<unknown>) => {
+          const s = JSON.stringify(args);
+          if (s.includes('sess-00000002')) return Promise.resolve([]);
+          if (gate) return proposalsDeferred.promise;
+          return Promise.resolve([]);
+        }),
+      }),
+    );
+    const { user } = await acceptFlowSetup(api);
+
+    gate = true;
+    await user.click(screen.getByText('接受此规划'));
+
+    await switchToSession2();
+
+    const planProposalsOld = callsWith(
+      api.grill.listQuestionPlanProposals as ReturnType<typeof vi.fn>,
+      'sess-00000001',
+    );
+
+    await act(async () => {
+      proposalsDeferred.resolve([]);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // 旧 context 的 question-plan 提案刷新不得执行
+    expect(
+      callsWith(api.grill.listQuestionPlanProposals as ReturnType<typeof vi.fn>, 'sess-00000001'),
+    ).toBe(planProposalsOld);
+    // focus token 不得推进
+    expect(document.querySelector('.grill-questions-section h4')).not.toHaveFocus();
+  });
 });

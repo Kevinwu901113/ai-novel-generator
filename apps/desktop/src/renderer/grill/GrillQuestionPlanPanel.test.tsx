@@ -164,14 +164,47 @@ describe('GrillQuestionPlanPanel', () => {
     expect(screen.getByText('排队中')).toBeDefined();
   });
 
-  it('FAILED 显示错误码', () => {
+  it('FAILED 已知错误码显示统一安全中文标签', () => {
     const failedTask = {
       ...mockTask,
       status: 'FAILED' as const,
       errorCode: 'TASK_EXECUTION_FAILED',
     };
     render(<GrillQuestionPlanPanel {...defaultProps({ task: failedTask })} />);
-    expect(screen.getByText('错误：TASK_EXECUTION_FAILED')).toBeDefined();
+    expect(screen.getByText('错误：任务执行失败（TASK_EXECUTION_FAILED）')).toBeDefined();
+  });
+
+  it('FAILED 未知错误码显示回退中文标签加错误码', () => {
+    const failedTask = {
+      ...mockTask,
+      status: 'FAILED' as const,
+      errorCode: 'UNKNOWN_CODE',
+    };
+    render(<GrillQuestionPlanPanel {...defaultProps({ task: failedTask })} />);
+    expect(screen.getByText('错误：任务执行失败（UNKNOWN_CODE）')).toBeDefined();
+  });
+
+  it('FAILED errorCode 为 null 时只显示中文标签', () => {
+    const failedTask = {
+      ...mockTask,
+      status: 'FAILED' as const,
+      errorCode: null,
+    };
+    render(<GrillQuestionPlanPanel {...defaultProps({ task: failedTask })} />);
+    expect(screen.getByText('错误：任务执行失败')).toBeDefined();
+  });
+
+  it('FAILED 不渲染 errorMessage 内容', () => {
+    const failedTask = {
+      ...mockTask,
+      status: 'FAILED' as const,
+      errorCode: 'TASK_EXECUTION_FAILED',
+      errorMessage: 'Internal error at /var/app/secret with Bearer token abc123',
+    };
+    render(<GrillQuestionPlanPanel {...defaultProps({ task: failedTask })} />);
+    expect(document.body.textContent).not.toContain('secret');
+    expect(document.body.textContent).not.toContain('Bearer');
+    expect(document.body.textContent).not.toContain('Internal error');
   });
 
   // ── 提案列表 ──────────────────────────────────────────────────
@@ -318,47 +351,81 @@ describe('GrillQuestionPlanPanel', () => {
     });
   });
 
-  // ── 真实 keyboard 测试（userEvent） ───────────────────────────
+  // ── 真实 keyboard 测试（userEvent + tab 导航） ────────────────
 
-  it('Enter 触发请求按钮', async () => {
+  it('Tab 聚焦请求按钮后 Enter 恰好触发一次', async () => {
     const user = userEvent.setup();
     const onRequestPlan = vi.fn();
     render(<GrillQuestionPlanPanel {...defaultProps({ onRequestPlan })} />);
 
+    await user.tab();
     const btn = screen.getByText('请求问题规划');
-    await user.click(btn);
+    expect(btn).toHaveFocus();
+
     await user.keyboard('{Enter}');
 
-    // click 调用一次，Enter 通过原生 button 行为再调用一次
-    expect(onRequestPlan).toHaveBeenCalled();
+    expect(onRequestPlan).toHaveBeenCalledTimes(1);
   });
 
-  it('Space 触发请求按钮', async () => {
+  it('Tab 聚焦请求按钮后 Space 恰好触发一次', async () => {
     const user = userEvent.setup();
     const onRequestPlan = vi.fn();
     render(<GrillQuestionPlanPanel {...defaultProps({ onRequestPlan })} />);
 
+    await user.tab();
     const btn = screen.getByText('请求问题规划');
-    btn.focus();
+    expect(btn).toHaveFocus();
+
     await user.keyboard(' ');
 
-    expect(onRequestPlan).toHaveBeenCalled();
+    expect(onRequestPlan).toHaveBeenCalledTimes(1);
   });
 
-  it('Enter 触发接受按钮', async () => {
+  it('Tab 导航到接受按钮后 Enter 恰好触发一次并传递 proposalId', async () => {
     const user = userEvent.setup();
     const onAcceptProposal = vi.fn();
     render(
       <GrillQuestionPlanPanel {...defaultProps({ proposals: [mockProposal], onAcceptProposal })} />,
     );
 
-    const btn = screen.getByText('接受此规划');
-    await user.click(btn);
+    // 等待组件自动聚焦 proposal heading（RAF）完成，消除与 tab 的竞态
+    await waitFor(() => {
+      expect(document.querySelector('.grill-plan-proposals-heading')).toHaveFocus();
+    });
 
+    const acceptBtn = screen.getByText('接受此规划');
+    await user.tab();
+    expect(acceptBtn).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+
+    expect(onAcceptProposal).toHaveBeenCalledTimes(1);
     expect(onAcceptProposal).toHaveBeenCalledWith('prop-plan-001');
   });
 
-  it('disabled 按钮 Enter/Space 不触发', async () => {
+  it('Tab 导航到接受按钮后 Space 恰好触发一次并传递 proposalId', async () => {
+    const user = userEvent.setup();
+    const onAcceptProposal = vi.fn();
+    render(
+      <GrillQuestionPlanPanel {...defaultProps({ proposals: [mockProposal], onAcceptProposal })} />,
+    );
+
+    // 等待组件自动聚焦 proposal heading（RAF）完成，消除与 tab 的竞态
+    await waitFor(() => {
+      expect(document.querySelector('.grill-plan-proposals-heading')).toHaveFocus();
+    });
+
+    const acceptBtn = screen.getByText('接受此规划');
+    await user.tab();
+    expect(acceptBtn).toHaveFocus();
+
+    await user.keyboard(' ');
+
+    expect(onAcceptProposal).toHaveBeenCalledTimes(1);
+    expect(onAcceptProposal).toHaveBeenCalledWith('prop-plan-001');
+  });
+
+  it('disabled 请求按钮 Enter/Space 触发 0 次', async () => {
     const user = userEvent.setup();
     const onRequestPlan = vi.fn();
     render(<GrillQuestionPlanPanel {...defaultProps({ onRequestPlan, hasSession: false })} />);
@@ -366,11 +433,105 @@ describe('GrillQuestionPlanPanel', () => {
     const btn = screen.getByText('请求问题规划') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
 
-    btn.focus();
+    await user.tab();
     await user.keyboard('{Enter}');
     await user.keyboard(' ');
 
-    expect(onRequestPlan).not.toHaveBeenCalled();
+    expect(onRequestPlan).toHaveBeenCalledTimes(0);
+  });
+
+  it('SUPERSEDED 提案接受按钮 Enter/Space 触发 0 次', async () => {
+    const user = userEvent.setup();
+    const onAcceptProposal = vi.fn();
+    const staleProposal = { ...mockProposal, status: 'SUPERSEDED' as const };
+    render(
+      <GrillQuestionPlanPanel
+        {...defaultProps({ proposals: [staleProposal], onAcceptProposal })}
+      />,
+    );
+
+    const btn = screen.getByText('接受此规划') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+
+    await user.tab();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    await user.keyboard(' ');
+
+    expect(onAcceptProposal).toHaveBeenCalledTimes(0);
+  });
+
+  it('ACCEPTED 提案接受按钮 Enter/Space 触发 0 次', async () => {
+    const user = userEvent.setup();
+    const onAcceptProposal = vi.fn();
+    const acceptedProposal = { ...mockProposal, status: 'ACCEPTED' as const };
+    render(
+      <GrillQuestionPlanPanel
+        {...defaultProps({ proposals: [acceptedProposal], onAcceptProposal })}
+      />,
+    );
+
+    const btn = screen.getByText('接受此规划') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+
+    await user.tab();
+    await user.tab();
+    await user.keyboard('{Enter}');
+    await user.keyboard(' ');
+
+    expect(onAcceptProposal).toHaveBeenCalledTimes(0);
+  });
+
+  // ── RAF 生命周期（cancelAnimationFrame spy） ──────────────────
+
+  it('unmount 时取消未完成的 RAF', () => {
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => 42);
+    const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    const { unmount } = render(<GrillQuestionPlanPanel {...defaultProps({ task: mockTask })} />);
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+
+    unmount();
+    expect(cancelSpy).toHaveBeenCalledWith(42);
+
+    rafSpy.mockRestore();
+    cancelSpy.mockRestore();
+  });
+
+  it('contextKey 切换时取消未完成的 RAF 并标记 token 已消费', () => {
+    let rafId = 0;
+    const rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(() => ++rafId);
+    const cancelSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {});
+
+    const { rerender } = render(
+      <GrillQuestionPlanPanel
+        {...defaultProps({ task: mockTask, contextKey: 'proj-00000001:sess-00000001' })}
+      />,
+    );
+    expect(rafSpy).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <GrillQuestionPlanPanel
+        {...defaultProps({ task: { ...mockTask }, contextKey: 'proj-00000001:sess-00000002' })}
+      />,
+    );
+
+    // contextKey reset effect 取消旧 RAF（id=1），随后 task effect 重新聚焦（id=2）
+    expect(cancelSpy).toHaveBeenCalledWith(1);
+    expect(rafSpy).toHaveBeenCalledTimes(2);
+
+    rafSpy.mockRestore();
+    cancelSpy.mockRestore();
+  });
+
+  it('task 与 proposal 同时出现时 proposal RAF 最后执行，焦点确定性落在 proposal heading', async () => {
+    render(
+      <GrillQuestionPlanPanel {...defaultProps({ task: mockTask, proposals: [mockProposal] })} />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector('.grill-plan-proposals-heading')).toHaveFocus();
+    });
   });
 
   // ── 错误关闭 ──────────────────────────────────────────────────

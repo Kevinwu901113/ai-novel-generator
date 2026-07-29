@@ -17,7 +17,7 @@ import type {
   GrillPlannedDependencyPublicData,
   TaskPublicData,
 } from '@ai-novel/contracts';
-import { proposalStatusLabel } from './status-labels';
+import { proposalStatusLabel, formatFailedTaskLabel } from './status-labels';
 
 /** 任务终态集合 */
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
@@ -215,8 +215,10 @@ export function GrillQuestionPlanPanel({
               </span>
             )}
           </div>
-          {task.status === 'FAILED' && task.errorCode && (
-            <div className="grill-plan-task-error">错误：{task.errorCode}</div>
+          {task.status === 'FAILED' && (
+            <div className="grill-plan-task-error">
+              错误：{formatFailedTaskLabel(task.errorCode)}
+            </div>
           )}
           <div className="grill-plan-task-hint">
             <span>可在任务活动中心查看详细状态</span>

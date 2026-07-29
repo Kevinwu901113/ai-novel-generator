@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
+import { renderHook, act, cleanup as rtlCleanup } from '@testing-library/react';
 import { useGrillQuestionPlan } from './useGrillQuestionPlan';
 import type {
   DesktopAPI,
@@ -125,6 +125,17 @@ function setupDesktop(api: ReturnType<typeof createMockAPI>) {
   return api;
 }
 
+/** deferred promise 辅助 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 // ── 测试 ──────────────────────────────────────────────────────────
 
 describe('useGrillQuestionPlan', () => {
@@ -133,6 +144,8 @@ describe('useGrillQuestionPlan', () => {
   });
 
   afterEach(() => {
+    // 显式卸载所有 hook：防止上一测试的 visibility listener/timer 泄漏到下一测试
+    rtlCleanup();
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -146,7 +159,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('请求使用当前 project/session/version', async () => {
     const api = setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 3, onAcceptSuccess),
@@ -173,7 +186,7 @@ describe('useGrillQuestionPlan', () => {
         requestQuestionPlan: vi.fn().mockReturnValue(requestPromise),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -199,7 +212,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('请求只调用一次（防止双提交）', async () => {
     const api = setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -214,7 +227,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('返回 taskId 后显示任务状态', async () => {
     setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -239,7 +252,7 @@ describe('useGrillQuestionPlan', () => {
           ),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -265,7 +278,7 @@ describe('useGrillQuestionPlan', () => {
         })),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -307,7 +320,7 @@ describe('useGrillQuestionPlan', () => {
       return { ...mockTask, status: 'RUNNING' };
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -348,7 +361,7 @@ describe('useGrillQuestionPlan', () => {
       status: 'SUCCEEDED',
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -380,7 +393,7 @@ describe('useGrillQuestionPlan', () => {
       status: 'SUCCEEDED',
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -416,7 +429,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -443,7 +456,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -470,7 +483,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -495,7 +508,7 @@ describe('useGrillQuestionPlan', () => {
     });
     const getMock = vi.fn().mockReturnValue(pollPromise);
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, unmount } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -533,7 +546,7 @@ describe('useGrillQuestionPlan', () => {
       return { ...mockTask, status: 'RUNNING' };
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -576,14 +589,14 @@ describe('useGrillQuestionPlan', () => {
     Object.defineProperty(document, 'hidden', { value: false, configurable: true });
   });
 
-  it('visible 期间多次事件合并成一次 resume', async () => {
+  it('已 visible 时重复 visibilitychange：tasks.get 增量为 0', async () => {
     let pollCount = 0;
     const getMock = vi.fn().mockImplementation(() => {
       pollCount++;
       return { ...mockTask, status: 'RUNNING' };
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -600,18 +613,17 @@ describe('useGrillQuestionPlan', () => {
 
     const countBefore = pollCount;
 
-    // 多次 visible 事件 — unified controller 合并为一次 resume
+    // 页面已经 visible 时连续派发 visibilitychange：不是真实 transition
     await act(async () => {
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
       document.dispatchEvent(new Event('visibilitychange'));
       document.dispatchEvent(new Event('visibilitychange'));
       document.dispatchEvent(new Event('visibilitychange'));
-      // flush timers to complete the poll
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // 应增加：1 次 visible 触发 + 可能 1 次 resume（在途返回后补）
-    expect(pollCount).toBeLessThanOrEqual(countBefore + 2);
+    // 增量必须为 0（不设置 resume、不安排 timer、不发请求）
+    expect(pollCount).toBe(countBefore);
 
     Object.defineProperty(document, 'hidden', { value: false, configurable: true });
   });
@@ -624,7 +636,7 @@ describe('useGrillQuestionPlan', () => {
       status: 'SUCCEEDED',
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
@@ -650,7 +662,7 @@ describe('useGrillQuestionPlan', () => {
       status: 'SUCCEEDED',
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ projectId }) => useGrillQuestionPlan(projectId, 'sess-00000001', 2, onAcceptSuccess),
@@ -687,7 +699,7 @@ describe('useGrillQuestionPlan', () => {
         get: getMock,
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -706,7 +718,7 @@ describe('useGrillQuestionPlan', () => {
       status: 'SUCCEEDED',
     });
     setupDesktop(createMockAPI({ get: getMock }));
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
@@ -749,7 +761,7 @@ describe('useGrillQuestionPlan', () => {
           .mockResolvedValue([newProposal]),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -793,7 +805,7 @@ describe('useGrillQuestionPlan', () => {
         listQuestionPlanProposals: vi.fn().mockReturnValueOnce(listPromise1).mockResolvedValue([]),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
@@ -820,7 +832,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -847,7 +859,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -876,7 +888,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -905,7 +917,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -936,7 +948,7 @@ describe('useGrillQuestionPlan', () => {
         listQuestionPlanProposals: vi.fn().mockResolvedValue([staleProposal]),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -957,7 +969,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('未点击前不调用 accept', async () => {
     const api = setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     renderHook(() => useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess));
 
@@ -970,7 +982,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('显式点击调用一次', async () => {
     const api = setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -992,7 +1004,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('payload 使用最新 session.version', async () => {
     const api = setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ version }) =>
@@ -1015,7 +1027,7 @@ describe('useGrillQuestionPlan', () => {
 
   it('accept 成功刷新 session', async () => {
     setupDesktop(createMockAPI());
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1038,7 +1050,7 @@ describe('useGrillQuestionPlan', () => {
         acceptQuestionPlanProposal: vi.fn().mockReturnValue(acceptPromise),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1070,7 +1082,7 @@ describe('useGrillQuestionPlan', () => {
         ),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1095,7 +1107,7 @@ describe('useGrillQuestionPlan', () => {
         ),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1122,7 +1134,7 @@ describe('useGrillQuestionPlan', () => {
         acceptQuestionPlanProposal: vi.fn().mockReturnValue(acceptPromise),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
@@ -1158,7 +1170,7 @@ describe('useGrillQuestionPlan', () => {
         listQuestionPlanProposals: vi.fn().mockResolvedValue([newProposal]),
       }),
     );
-    const onAcceptSuccess = vi.fn().mockResolvedValue(undefined);
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result, rerender } = renderHook(
       ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
@@ -1194,7 +1206,7 @@ describe('useGrillQuestionPlan', () => {
         ),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1219,7 +1231,7 @@ describe('useGrillQuestionPlan', () => {
         }),
       }),
     );
-    const onAcceptSuccess = vi.fn();
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
 
     const { result } = renderHook(() =>
       useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
@@ -1239,5 +1251,701 @@ describe('useGrillQuestionPlan', () => {
     expect(result.current.error).not.toContain('secret');
     expect(result.current.error).not.toContain('Bearer');
     expect(result.current.error).not.toContain('Internal error');
+  });
+
+  // ── Poll operation ownership（deferred promise） ────────────────
+
+  interface Deferred {
+    readonly promise: Promise<unknown>;
+    readonly resolve: (value: unknown) => void;
+    readonly reject: (error: unknown) => void;
+  }
+
+  function deferredPollMock() {
+    const polls: Deferred[] = [];
+    const getMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      polls.push(d);
+      return d.promise;
+    });
+    return { polls, getMock };
+  }
+
+  const requestResultA = {
+    taskId: 'task-AAAAAAAA',
+    projectId: 'proj-00000001',
+    sessionId: 'sess-00000001',
+    baseSessionVersion: 2,
+  };
+  const requestResultB = {
+    taskId: 'task-BBBBBBBB',
+    projectId: 'proj-00000001',
+    sessionId: 'sess-00000002',
+    baseSessionVersion: 2,
+  };
+
+  it('session A poll pending → 切换 B：A 返回不得破坏 B 的 poll ownership', async () => {
+    const { polls, getMock } = deferredPollMock();
+    const requestMock = vi
+      .fn()
+      .mockResolvedValueOnce(requestResultA)
+      .mockResolvedValueOnce(requestResultB);
+    setupDesktop(createMockAPI({ get: getMock, requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
+      { initialProps: { sessionId: 'sess-00000001' } },
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1); // poll A 在途
+
+    rerender({ sessionId: 'sess-00000002' });
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2); // poll B 在途
+
+    // A poll 返回：不得应用响应、不得清除 B 的 active poll、不得安排 timer
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, id: 'task-AAAAAAAA', status: 'RUNNING' });
+    });
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+    expect(result.current.task?.status).toBe('PENDING');
+
+    // timer 推进不得启动第二个 B poll（B 的 ownership 仍存在）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    // B 返回后才允许下一次 poll
+    await act(async () => {
+      polls[1].resolve({ ...mockTask, id: 'task-BBBBBBBB', status: 'RUNNING' });
+    });
+    expect(result.current.task?.status).toBe('RUNNING');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('project A poll pending → 切换 B：A 返回不得破坏 B 的 poll ownership', async () => {
+    const { polls, getMock } = deferredPollMock();
+    const requestMock = vi
+      .fn()
+      .mockResolvedValueOnce(requestResultA)
+      .mockResolvedValueOnce({ ...requestResultB, projectId: 'proj-00000002' });
+    setupDesktop(createMockAPI({ get: getMock, requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useGrillQuestionPlan(projectId, 'sess-00000001', 2, onAcceptSuccess),
+      { initialProps: { projectId: 'proj-00000001' } },
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    rerender({ projectId: 'proj-00000002' });
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, id: 'task-AAAAAAAA', status: 'SUCCEEDED' });
+    });
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+    expect(result.current.task?.status).toBe('PENDING');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      polls[1].resolve({ ...mockTask, id: 'task-BBBBBBBB', status: 'RUNNING' });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('同 session 内 task A poll pending → 请求 task B：A 返回被忽略', async () => {
+    const { polls, getMock } = deferredPollMock();
+    const requestMock = vi
+      .fn()
+      .mockResolvedValueOnce(requestResultA)
+      .mockResolvedValueOnce({ ...requestResultB, sessionId: 'sess-00000001' });
+    setupDesktop(createMockAPI({ get: getMock, requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, id: 'task-AAAAAAAA', status: 'SUCCEEDED' });
+    });
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+    expect(result.current.task?.status).toBe('PENDING');
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      polls[1].resolve({ ...mockTask, id: 'task-BBBBBBBB', status: 'RUNNING' });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('unmount 后 RUNNING poll 返回：不得安排 timer', async () => {
+    const { polls, getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, unmount } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    unmount();
+
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, status: 'RUNNING' });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+  });
+
+  // ── hidden/visible 严格语义 ──────────────────────────────────────
+
+  it('poll pending 时进入 hidden，RUNNING 返回后不安排下一次 timer', async () => {
+    const { polls, getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // hidden 期间 RUNNING 返回：自然结算但不安排下一次 timer
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, status: 'RUNNING' });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // 真实 hidden→visible transition 后恢复一次
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+  });
+
+  it('hidden 时 requestPlan 不启动 tasks.get：推进 10 秒增量为 0', async () => {
+    const { getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(0);
+
+    // 真实 hidden→visible transition 后恢复
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+  });
+
+  it('poll pending 时进入 hidden，reject 后不安排 retry timer', async () => {
+    const { polls, getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    await act(async () => {
+      polls[0].reject(new Error('network'));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // visible 后恢复
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+  });
+
+  it('poll pending 时多次 hidden→visible：结算后恰好补一次', async () => {
+    const { polls, getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // 三个完整 hidden→visible 周期（poll 仍 pending）
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+    }
+    // pending 期间不得发起新请求
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // 结算后恰好补一次（不是三次）
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, status: 'RUNNING' });
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    // 补的这次仍在途：推进时间不得再启动请求
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+  });
+
+  it('终态结算清除 resumeRequested：之后 visible 不再 poll', async () => {
+    const { polls, getMock } = deferredPollMock();
+    setupDesktop(createMockAPI({ get: getMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // pending 期间 hidden→visible：设置 resumeRequested
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+
+    // 终态结算：不得触发 resume 补 poll
+    await act(async () => {
+      polls[0].resolve({ ...mockTask, status: 'SUCCEEDED' });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10000);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    // 终态后再次 hidden→visible：不得 resume
+    await act(async () => {
+      Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(getMock).toHaveBeenCalledTimes(1);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+  });
+
+  // ── request operation ownership ──────────────────────────────────
+
+  it('request A pending → 切换 session → B pending：A resolve 不释放 B 锁，第三次请求不调用 IPC', async () => {
+    const requests: Deferred[] = [];
+    const requestMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      requests.push(d);
+      return d.promise;
+    });
+    setupDesktop(createMockAPI({ requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
+      { initialProps: { sessionId: 'sess-00000001' } },
+    );
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+    expect(result.current.isRequesting).toBe(true);
+
+    rerender({ sessionId: 'sess-00000002' });
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+    expect(requestMock).toHaveBeenCalledTimes(2);
+    expect(result.current.isRequesting).toBe(true);
+
+    // A resolve：不得 setTask、不得 startPolling、不得释放 B 的锁
+    await act(async () => {
+      requests[0].resolve(requestResultA);
+    });
+    expect(result.current.task).toBeNull();
+    expect(result.current.isRequesting).toBe(true);
+
+    // 第三次请求：B 锁仍在，不调用 IPC
+    await act(async () => {
+      await result.current.requestPlan();
+    });
+    expect(requestMock).toHaveBeenCalledTimes(2);
+
+    // B resolve 后才释放
+    await act(async () => {
+      requests[1].resolve(requestResultB);
+    });
+    expect(result.current.isRequesting).toBe(false);
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+  });
+
+  it('request A reject 不污染 B：无错误显示且 B 锁不释放', async () => {
+    const requests: Deferred[] = [];
+    const requestMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      requests.push(d);
+      return d.promise;
+    });
+    setupDesktop(createMockAPI({ requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
+      { initialProps: { sessionId: 'sess-00000001' } },
+    );
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+
+    rerender({ sessionId: 'sess-00000002' });
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+
+    await act(async () => {
+      requests[0].reject(Object.assign(new Error('/tmp/secret.sql'), { code: 'UNKNOWN_CODE' }));
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isRequesting).toBe(true);
+
+    await act(async () => {
+      requests[1].resolve(requestResultB);
+    });
+    expect(result.current.error).toBeNull();
+    expect(result.current.isRequesting).toBe(false);
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+  });
+
+  it('request A pending → 切换 project → B pending：A resolve 不释放 B 锁', async () => {
+    const requests: Deferred[] = [];
+    const requestMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      requests.push(d);
+      return d.promise;
+    });
+    setupDesktop(createMockAPI({ requestQuestionPlan: requestMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useGrillQuestionPlan(projectId, 'sess-00000001', 2, onAcceptSuccess),
+      { initialProps: { projectId: 'proj-00000001' } },
+    );
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+
+    rerender({ projectId: 'proj-00000002' });
+
+    act(() => {
+      void result.current.requestPlan();
+    });
+    expect(requestMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      requests[0].resolve(requestResultA);
+    });
+    expect(result.current.task).toBeNull();
+    expect(result.current.isRequesting).toBe(true);
+
+    await act(async () => {
+      requests[1].resolve({ ...requestResultB, projectId: 'proj-00000002' });
+    });
+    expect(result.current.isRequesting).toBe(false);
+    expect(result.current.task?.id).toBe('task-BBBBBBBB');
+  });
+
+  // ── accept operation ownership ───────────────────────────────────
+
+  it('accept A pending → 切换 session → B pending：A 结算不释放 B 锁，第三个 accept 不穿透', async () => {
+    const accepts: Deferred[] = [];
+    const acceptMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      accepts.push(d);
+      return d.promise;
+    });
+    setupDesktop(createMockAPI({ acceptQuestionPlanProposal: acceptMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useGrillQuestionPlan('proj-00000001', sessionId, 2, onAcceptSuccess),
+      { initialProps: { sessionId: 'sess-00000001' } },
+    );
+
+    act(() => {
+      void result.current.acceptProposal('prop-A');
+    });
+    expect(result.current.isAccepting).toBe(true);
+
+    rerender({ sessionId: 'sess-00000002' });
+
+    act(() => {
+      void result.current.acceptProposal('prop-B');
+    });
+    expect(acceptMock).toHaveBeenCalledTimes(2);
+    expect(result.current.isAccepting).toBe(true);
+
+    // A 结算：不得触发 onAcceptSuccess、不得释放 B 的锁
+    await act(async () => {
+      accepts[0].resolve(mockQuestions);
+    });
+    expect(onAcceptSuccess).toHaveBeenCalledTimes(0);
+    expect(result.current.isAccepting).toBe(true);
+
+    // 第三个 accept 不得穿透
+    let third = true;
+    await act(async () => {
+      third = await result.current.acceptProposal('prop-C');
+    });
+    expect(third).toBe(false);
+    expect(acceptMock).toHaveBeenCalledTimes(2);
+
+    // B 结算后才释放，onAcceptSuccess 收到 B 的 context
+    await act(async () => {
+      accepts[1].resolve(mockQuestions);
+    });
+    expect(result.current.isAccepting).toBe(false);
+    expect(onAcceptSuccess).toHaveBeenCalledTimes(1);
+    expect(onAcceptSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'proj-00000001',
+        sessionId: 'sess-00000002',
+      }),
+    );
+  });
+
+  it('accept A pending → 切换 project → B pending：A 结算不释放 B 锁', async () => {
+    const accepts: Deferred[] = [];
+    const acceptMock = vi.fn().mockImplementation(() => {
+      const d = deferred<unknown>();
+      accepts.push(d);
+      return d.promise;
+    });
+    setupDesktop(createMockAPI({ acceptQuestionPlanProposal: acceptMock }));
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result, rerender } = renderHook(
+      ({ projectId }) => useGrillQuestionPlan(projectId, 'sess-00000001', 2, onAcceptSuccess),
+      { initialProps: { projectId: 'proj-00000001' } },
+    );
+
+    act(() => {
+      void result.current.acceptProposal('prop-A');
+    });
+
+    rerender({ projectId: 'proj-00000002' });
+
+    act(() => {
+      void result.current.acceptProposal('prop-B');
+    });
+    expect(acceptMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      accepts[0].resolve(mockQuestions);
+    });
+    expect(onAcceptSuccess).toHaveBeenCalledTimes(0);
+    expect(result.current.isAccepting).toBe(true);
+
+    await act(async () => {
+      accepts[1].resolve(mockQuestions);
+    });
+    expect(result.current.isAccepting).toBe(false);
+    expect(onAcceptSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 'proj-00000002',
+        sessionId: 'sess-00000001',
+      }),
+    );
+  });
+
+  // ── accept context ───────────────────────────────────────────────
+
+  it('onAcceptSuccess 接收不可变 context payload', async () => {
+    setupDesktop(createMockAPI());
+    const onAcceptSuccess = vi.fn().mockResolvedValue(true);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.acceptProposal('prop-plan-001');
+    });
+
+    expect(ok).toBe(true);
+    expect(onAcceptSuccess).toHaveBeenCalledTimes(1);
+    expect(onAcceptSuccess).toHaveBeenCalledWith({
+      generation: expect.any(Number) as number,
+      projectId: 'proj-00000001',
+      sessionId: 'sess-00000001',
+    });
+  });
+
+  it('onAcceptSuccess 返回 false：不加载提案且 accept 返回 false', async () => {
+    const api = setupDesktop(createMockAPI());
+    const onAcceptSuccess = vi.fn().mockResolvedValue(false);
+
+    const { result } = renderHook(() =>
+      useGrillQuestionPlan('proj-00000001', 'sess-00000001', 2, onAcceptSuccess),
+    );
+
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.acceptProposal('prop-plan-001');
+    });
+
+    expect(ok).toBe(false);
+    expect(onAcceptSuccess).toHaveBeenCalledTimes(1);
+    expect(api.grill.listQuestionPlanProposals).toHaveBeenCalledTimes(0);
   });
 });

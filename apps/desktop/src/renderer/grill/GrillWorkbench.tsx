@@ -12,7 +12,7 @@ import { useGrillSessions } from './useGrillSessions';
 import { useGrillSession } from './useGrillSession';
 import { useGrillQuestions } from './useGrillQuestions';
 import { useGrillProposals } from './useGrillProposals';
-import { useGrillQuestionPlan } from './useGrillQuestionPlan';
+import { useGrillQuestionPlan, type GrillPlanAcceptContext } from './useGrillQuestionPlan';
 import { GrillSessionList } from './GrillSessionList';
 import { GrillSessionPanel } from './GrillSessionPanel';
 import { GrillQuestionDetail } from './GrillQuestionDetail';
@@ -63,35 +63,23 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     projectId,
     selectedSessionId,
     sessionHook.session?.version ?? 0,
-    async () => {
-      // 捕获当前 context
-      const expectedProjectId = liveContextRef.current.projectId;
-      const expectedSessionId = liveContextRef.current.sessionId;
+    async (context: GrillPlanAcceptContext): Promise<boolean> => {
+      // 每个阶段前后校验 accept context 是否仍是当前 context
+      const contextMatches = () =>
+        liveContextRef.current.projectId === context.projectId &&
+        liveContextRef.current.sessionId === context.sessionId;
 
-      // 接受成功后刷新 session、questions、proposals
+      if (!contextMatches()) return false;
+
+      // 接受成功后依次刷新 session、questions、normal proposals
       await sessionRefreshRef.current();
-      if (
-        liveContextRef.current.projectId !== expectedProjectId ||
-        liveContextRef.current.sessionId !== expectedSessionId
-      )
-        return;
+      if (!contextMatches()) return false;
 
       await listQuestionsRef.current();
-      if (
-        liveContextRef.current.projectId !== expectedProjectId ||
-        liveContextRef.current.sessionId !== expectedSessionId
-      )
-        return;
+      if (!contextMatches()) return false;
 
       await proposalsRefreshRef.current();
-      if (
-        liveContextRef.current.projectId !== expectedProjectId ||
-        liveContextRef.current.sessionId !== expectedSessionId
-      )
-        return;
-
-      // 只有 context 仍然匹配时才聚焦
-      setQuestionListFocusToken((t) => t + 1);
+      return contextMatches();
     },
   );
 
@@ -149,6 +137,8 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   proposalsRefreshRef.current = proposalsHook.refresh;
   const questionPlanRefreshRef = useRef(questionPlanHook.refreshProposals);
   questionPlanRefreshRef.current = questionPlanHook.refreshProposals;
+  const acceptPlanProposalRef = useRef(questionPlanHook.acceptProposal);
+  acceptPlanProposalRef.current = questionPlanHook.acceptProposal;
   const addQuestionsRef = useRef(questionsHook.addQuestions);
   addQuestionsRef.current = questionsHook.addQuestions;
   const answerQuestionRef = useRef(questionsHook.answerQuestion);
@@ -220,6 +210,20 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
 
   const handleSelectSession = useCallback((sessionId: string) => {
     setSelectedSessionId(sessionId);
+  }, []);
+
+  /** 接受问题规划提案；全部刷新完成且 context 未变时才推进 focus token */
+  const handleAcceptPlanProposal = useCallback(async (proposalId: string) => {
+    const capturedProjectId = liveContextRef.current.projectId;
+    const capturedSessionId = liveContextRef.current.sessionId;
+    const ok = await acceptPlanProposalRef.current(proposalId);
+    if (
+      ok &&
+      liveContextRef.current.projectId === capturedProjectId &&
+      liveContextRef.current.sessionId === capturedSessionId
+    ) {
+      setQuestionListFocusToken((t) => t + 1);
+    }
   }, []);
 
   const handleSelectQuestion = useCallback((questionId: string) => {
@@ -305,6 +309,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
           {sessionHook.session ? (
             <>
               <GrillSessionPanel
+                contextKey={`${projectId}:${sessionHook.session.id}`}
                 session={sessionHook.session}
                 questions={questionsHook.questions}
                 isLoading={isAnyLoading}
@@ -331,7 +336,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
                 isRequesting={questionPlanHook.isRequesting}
                 proposals={questionPlanHook.proposals}
                 isLoadingProposals={questionPlanHook.isLoadingProposals}
-                onAcceptProposal={questionPlanHook.acceptProposal}
+                onAcceptProposal={handleAcceptPlanProposal}
                 isAccepting={questionPlanHook.isAccepting}
                 isLoading={isAnyLoading}
                 error={questionPlanHook.error}

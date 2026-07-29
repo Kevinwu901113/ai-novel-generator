@@ -17,6 +17,8 @@ import {
 import { validateTopic, validateQuestionText } from './validation';
 
 interface GrillSessionPanelProps {
+  /** 稳定的上下文标识：`${projectId}:${session.id}` */
+  contextKey: string;
   session: GrillSessionPublicData;
   questions: ReadonlyArray<GrillQuestionPublicData>;
   isLoading: boolean;
@@ -38,6 +40,7 @@ interface GrillSessionPanelProps {
 }
 
 export function GrillSessionPanel({
+  contextKey,
   session,
   questions,
   isLoading,
@@ -57,10 +60,15 @@ export function GrillSessionPanel({
   const questionListHeadingRef = useRef<HTMLHeadingElement>(null);
   const lastFocusTokenRef = useRef(0);
   const questionListRafRef = useRef<number | null>(null);
+  const contextKeyRef = useRef(contextKey);
 
-  // 接受成功后聚焦问题列表标题
+  // 接受成功后聚焦问题列表标题；context 变化时旧 token 标记为已消费
   useEffect(() => {
-    if (questionListFocusToken > 0 && questionListFocusToken !== lastFocusTokenRef.current) {
+    if (contextKeyRef.current !== contextKey) {
+      contextKeyRef.current = contextKey;
+      // 旧 context 的 token 已消费：旧 token 不得聚焦新 session
+      lastFocusTokenRef.current = questionListFocusToken;
+    } else if (questionListFocusToken > 0 && questionListFocusToken !== lastFocusTokenRef.current) {
       lastFocusTokenRef.current = questionListFocusToken;
       if (questionListRafRef.current !== null) {
         cancelAnimationFrame(questionListRafRef.current);
@@ -70,7 +78,14 @@ export function GrillSessionPanel({
         questionListHeadingRef.current?.focus();
       });
     }
-  }, [questionListFocusToken]);
+    return () => {
+      // contextKey/token 变化或 unmount 时取消未执行的 RAF
+      if (questionListRafRef.current !== null) {
+        cancelAnimationFrame(questionListRafRef.current);
+        questionListRafRef.current = null;
+      }
+    };
+  }, [contextKey, questionListFocusToken]);
 
   // unmount 时清理 RAF
   useEffect(() => {
