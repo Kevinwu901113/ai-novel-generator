@@ -405,13 +405,24 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 8. provider.testConnection rejection 后 provider.getState 仍被调用
-  it('testConnection 失败后 provider.getState 仍被调用', async () => {
+  // 8. provider.testConnection rejection 后 getState 返回 failed 状态
+  it('testConnection 失败后 getState 返回 failed 状态并显示', async () => {
+    const failedProviderState = {
+      ...mockProviderState,
+      lastTestStatus: 'failed',
+      lastTestErrorCode: 'PROVIDER_TIMEOUT',
+      lastTestedAt: '2024-01-02T00:00:00Z',
+      lastTestLatencyMs: 123,
+    };
+
     const api = createMockDesktopAPI({
       provider: {
         ...createMockDesktopAPI().provider,
         testConnection: vi.fn().mockRejectedValue(new Error('连接超时')),
-        getState: vi.fn().mockResolvedValue(mockProviderState),
+        getState: vi
+          .fn()
+          .mockResolvedValueOnce(mockProviderState)
+          .mockResolvedValueOnce(failedProviderState),
       },
     });
     setupDesktop(api);
@@ -420,7 +431,7 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
-    // 等待 App 完成初始渲染
+    // 等待初始化 getState 完成
     await waitFor(
       () => {
         expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
@@ -428,7 +439,7 @@ describe('App 级别测试', () => {
       { timeout: 10000 },
     );
 
-    // 找到测试连接按钮
+    // 点击测试连接
     const testBtn = screen.getByRole('button', { name: '测试连接' });
     await act(async () => {
       testBtn.click();
@@ -617,6 +628,101 @@ describe('App 级别测试', () => {
       () => {
         const nameInput = screen.getByLabelText('项目名称');
         expect(nameInput).toHaveFocus();
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  // 13. 创建项目成功后 Grill 工作区显示
+  it('创建项目成功后 Grill 工作区显示', async () => {
+    setupDesktop();
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待 App 完成初始渲染
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '新建项目' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 切换到新建项目
+    const newProjectBtn = screen.getByRole('button', { name: '新建项目' });
+    act(() => {
+      newProjectBtn.click();
+    });
+
+    // 填写表单
+    const nameInput = screen.getByLabelText('项目名称');
+    const ideaInput = screen.getByLabelText('描述你想写的小说……');
+
+    fireEvent.change(nameInput, { target: { value: '测试项目' } });
+    fireEvent.change(ideaInput, { target: { value: '测试想法' } });
+
+    // 点击创建
+    const createBtn = screen.getByText('创建项目');
+    await act(async () => {
+      createBtn.click();
+    });
+
+    // Grill 工作区应该显示
+    await waitFor(
+      () => {
+        expect(screen.getByLabelText('Grill 工作台')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+  });
+
+  // 14. 删除 API Key 成功后 API Key 输入获得焦点
+  it('删除 API Key 成功后 API Key 输入获得焦点', async () => {
+    const api = createMockDesktopAPI({
+      provider: {
+        ...createMockDesktopAPI().provider,
+        deleteApiKey: vi.fn().mockResolvedValue({ ...mockProviderState, hasApiKey: false }),
+      },
+    });
+    setupDesktop(api);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待 App 完成初始渲染
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '删除 API Key' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 点击删除
+    const deleteBtn = screen.getByRole('button', { name: '删除 API Key' });
+    act(() => {
+      deleteBtn.click();
+    });
+
+    // 确认删除
+    await waitFor(
+      () => {
+        expect(screen.getByRole('button', { name: '确认删除 API Key' })).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    const confirmBtn = screen.getByRole('button', { name: '确认删除 API Key' });
+    await act(async () => {
+      confirmBtn.click();
+    });
+
+    // API Key 输入应该获得焦点
+    await waitFor(
+      () => {
+        const apiKeyInput = screen.getByLabelText('API Key');
+        expect(apiKeyInput).toHaveFocus();
       },
       { timeout: 5000 },
     );

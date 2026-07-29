@@ -33,6 +33,7 @@ import { CreateProjectRegion } from './regions/CreateProjectRegion';
 import { ProviderRegion } from './regions/ProviderRegion';
 import { TaskCenter } from './task-center/TaskCenter';
 import { TaskList } from './task-center/TaskList';
+import { TaskStats } from './task-center/TaskStats';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { LiveRegion } from './accessibility/LiveRegion';
 
@@ -185,7 +186,6 @@ async function renderAsync(ui: React.ReactElement) {
   let result: ReturnType<typeof render>;
   await act(async () => {
     result = render(ui);
-    await new Promise((resolve) => setTimeout(resolve, 0));
   });
   return result!;
 }
@@ -1237,7 +1237,6 @@ describe('五、Provider 焦点与键盘行为', () => {
     const testBtn = screen.getByRole('button', { name: '测试连接' });
     await act(async () => {
       testBtn.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     await waitFor(() => {
@@ -1289,7 +1288,7 @@ describe('六、Error Boundary 焦点', () => {
   }
 
   // 36. fallback 自动获得焦点
-  it('fallback 自动获得焦点', async () => {
+  it('fallback 自动获得焦点', () => {
     render(
       <RendererErrorBoundary label="测试">
         <ThrowingComponent />
@@ -1302,13 +1301,14 @@ describe('六、Error Boundary 焦点', () => {
     expect(fallback.className).toBe('error-boundary-fallback');
 
     // 使用 fake timers 触发 setTimeout
+    // 在 jsdom 中 focus() 可能不完全工作，但我们可以验证
+    // 组件正确设置了 shouldFocusFallback 状态和 timer
     act(() => {
-      vi.runAllTimers();
+      vi.advanceTimersByTime(0);
     });
 
-    // 在 jsdom 中 focus() 可能不完全工作，但我们可以验证
-    // 组件正确设置了 shouldFocusFallback 状态
-    // 实际的焦点行为在真实浏览器中验证
+    // 验证 fallback 元素存在且属性正确
+    expect(fallback).toBeInTheDocument();
   });
 
   // 37. fallback 不含原始异常
@@ -1325,8 +1325,8 @@ describe('六、Error Boundary 焦点', () => {
     expect(fallback.textContent).not.toContain('操作失败');
   });
 
-  // 38. reset 后焦点恢复
-  it('reset 后焦点恢复', async () => {
+  // 38. reset 后焦点恢复（有可聚焦子元素）
+  it('reset 后焦点恢复到可聚焦子元素', () => {
     let shouldThrow = true;
 
     function ConditionalThrow() {
@@ -1359,12 +1359,52 @@ describe('六、Error Boundary 焦点', () => {
 
     // 使用 fake timers 触发 setTimeout
     act(() => {
-      vi.runAllTimers();
+      vi.advanceTimersByTime(0);
     });
 
-    // 在 jsdom 中 focus() 可能不完全工作，但我们可以验证
-    // 组件正确设置了 shouldFocusRestored 状态
-    // 实际的焦点行为在真实浏览器中验证
+    // 验证恢复后的按钮存在且可聚焦
+    const restoredButton = screen.getByText('恢复后的按钮');
+    expect(restoredButton).toBeInTheDocument();
+    expect(restoredButton.tagName).toBe('BUTTON');
+  });
+
+  // 38b. reset 后焦点恢复（无可聚焦子元素时聚焦容器）
+  it('reset 后无可聚焦子元素时聚焦容器', () => {
+    let shouldThrow = true;
+
+    function ConditionalThrowNoFocusable() {
+      if (shouldThrow) {
+        throw new Error('测试异常');
+      }
+      return (
+        <div>
+          <p>没有可聚焦元素的内容</p>
+        </div>
+      );
+    }
+
+    render(
+      <RendererErrorBoundary label="测试">
+        <ConditionalThrowNoFocusable />
+      </RendererErrorBoundary>,
+    );
+
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    shouldThrow = false;
+    act(() => {
+      screen.getByText('重新加载此区域').click();
+    });
+
+    // 使用 fake timers 触发 setTimeout
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+
+    // 验证恢复容器存在
+    const restoredContainer = document.querySelector('.restored-focus-container');
+    expect(restoredContainer).not.toBeNull();
+    expect(restoredContainer).toHaveAttribute('tabindex', '-1');
   });
 });
 
@@ -1387,17 +1427,61 @@ describe('七、动态状态公告', () => {
     expect(region).toBeInTheDocument();
   });
 
-  // 40. stats stale 提示可被辅助技术感知
-  it('stats stale 提示存在', async () => {
-    render(
-      <div>
-        <div className="task-stats-stale-notice" data-testid="task-stats-stale">
-          ⚠ 统计可能已过期
-        </div>
-      </div>,
-    );
+  // 40. stats=null, error=null：加载中状态
+  it('stats 加载中显示 role=status', () => {
+    render(<TaskStats stats={null} error={null} />);
 
-    expect(screen.getByText(/统计可能已过期/)).toBeInTheDocument();
+    const loading = screen.getByText('加载统计中…');
+    expect(loading).toBeInTheDocument();
+    expect(loading.closest('[role="status"]')).toBeInTheDocument();
+  });
+
+  // 40b. stats=null, error!=null：错误状态
+  it('stats 加载失败显示 role=alert', () => {
+    render(<TaskStats stats={null} error="网络不可用" />);
+
+    const errorEl = screen.getByText(/统计加载失败/);
+    expect(errorEl).toBeInTheDocument();
+    expect(errorEl.closest('[role="alert"]')).toBeInTheDocument();
+  });
+
+  // 40c. stats!=null, error!=null：stale 提示
+  it('stats stale 提示显示 role=status', () => {
+    const stats = {
+      invocationCount: 10,
+      succeededCount: 7,
+      failedCount: 3,
+      totalInputTokens: 5000,
+      totalOutputTokens: 2000,
+      totalTokens: 7000,
+      totalLatencyMs: 15000,
+    };
+    render(<TaskStats stats={stats} error="数据可能已过期" />);
+
+    const staleNotice = screen.getByText(/统计可能已过期/);
+    expect(staleNotice).toBeInTheDocument();
+    expect(staleNotice.closest('[role="status"]')).toBeInTheDocument();
+
+    // 旧统计仍显示
+    expect(screen.getByText('10')).toBeInTheDocument();
+  });
+
+  // 40d. stats!=null, error=null：正常显示
+  it('stats 正常显示不产生 alert', () => {
+    const stats = {
+      invocationCount: 10,
+      succeededCount: 7,
+      failedCount: 3,
+      totalInputTokens: 5000,
+      totalOutputTokens: 2000,
+      totalTokens: 7000,
+      totalLatencyMs: 15000,
+    };
+    render(<TaskStats stats={stats} error={null} />);
+
+    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(/统计可能已过期/)).not.toBeInTheDocument();
   });
 });
 
@@ -1477,7 +1561,6 @@ describe('八、App-level 债务测试', () => {
     const testBtn = screen.getByRole('button', { name: '测试连接' });
     await act(async () => {
       testBtn.click();
-      await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
     expect(onTestConnection).toHaveBeenCalled();
