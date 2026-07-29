@@ -29,6 +29,10 @@ import {
   isValidGrillListProposalsInput,
   isValidGrillListAnswerHistoryInput,
   isValidGrillListQuestionsInput,
+  isValidGrillRequestQuestionPlanInput,
+  isValidGrillAcceptQuestionPlanProposalInput,
+  isValidGrillListQuestionPlanProposalsInput,
+  isValidGrillQuestionPlanProposalIdInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -41,6 +45,8 @@ import {
   type GrillQuestionPublicData,
   type GrillAnswerPublicData,
   type GrillProposalPublicData,
+  type GrillRequestQuestionPlanResult,
+  type GrillQuestionPlanProposalPublicData,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -536,6 +542,72 @@ ipcMain.handle(
       command: 'grill.listProposals',
       payload: input,
     })) as ReadonlyArray<GrillProposalPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_REQUEST_QUESTION_PLAN,
+  async (_event, input: unknown): Promise<GrillRequestQuestionPlanResult> => {
+    if (!isValidGrillRequestQuestionPlanInput(input)) {
+      throw Object.assign(new Error('无效的请求问题规划输入'), { code: 'GRILL_VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.requestQuestionPlan',
+      payload: input,
+    })) as GrillRequestQuestionPlanResult;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillQuestionPublicData>> => {
+    if (!isValidGrillAcceptQuestionPlanProposalInput(input)) {
+      throw Object.assign(new Error('无效的接受问题规划提案输入'), {
+        code: 'GRILL_VALIDATION_ERROR',
+      });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.acceptQuestionPlanProposal',
+      payload: input,
+    })) as ReadonlyArray<GrillQuestionPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_LIST_QUESTION_PLAN_PROPOSALS,
+  async (_event, input: unknown): Promise<ReadonlyArray<GrillQuestionPlanProposalPublicData>> => {
+    if (!isValidGrillListQuestionPlanProposalsInput(input)) {
+      throw Object.assign(new Error('无效的问题规划提案列表输入'), {
+        code: 'GRILL_VALIDATION_ERROR',
+      });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.listQuestionPlanProposals',
+      payload: input,
+    })) as ReadonlyArray<GrillQuestionPlanProposalPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRILL_GET_QUESTION_PLAN_PROPOSAL,
+  async (_event, input: unknown): Promise<GrillQuestionPlanProposalPublicData> => {
+    if (!isValidGrillQuestionPlanProposalIdInput(input)) {
+      throw Object.assign(new Error('无效的问题规划提案查询输入'), {
+        code: 'GRILL_VALIDATION_ERROR',
+      });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'grill.getQuestionPlanProposal',
+      payload: input,
+    })) as GrillQuestionPlanProposalPublicData;
   },
 );
 

@@ -518,6 +518,64 @@ describe('TaskRepository', () => {
     expect(task!.errorCode).toBe('E1');
   });
 
+  it('failPending 成功：PENDING → FAILED，attemptCount 不递增', () => {
+    createTask('task-1', 'PENDING');
+    const result = projDb
+      .getTaskRepository()
+      .failPending('task-1', 'PROVIDER_NOT_CONFIGURED', '未配置', '2024-01-02T00:00:00.000Z');
+    expect(result).toBe(true);
+
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('FAILED');
+    expect(task!.errorCode).toBe('PROVIDER_NOT_CONFIGURED');
+    expect(task!.errorMessage).toBe('未配置');
+    expect(task!.attemptCount).toBe(0);
+    expect(task!.finishedAt).toBe('2024-01-02T00:00:00.000Z');
+  });
+
+  it('failPending 失败：状态不是 PENDING', () => {
+    createTask('task-1', 'RUNNING');
+    const result = projDb
+      .getTaskRepository()
+      .failPending('task-1', 'API_KEY_REQUIRED', '缺少 Key', '2024-01-02T00:00:00.000Z');
+    expect(result).toBe(false);
+
+    const task = projDb.getTaskRepository().getById('task-1');
+    expect(task!.status).toBe('RUNNING');
+  });
+
+  it('failPending 后 dedupe key 释放（可重新创建同 key 任务）', () => {
+    projDb.getTaskRepository().create({
+      id: 'task-1',
+      projectId: 'proj-1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'PENDING',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      dedupeKey: 'grill:sess:1',
+      createdAt: '2024-01-01T00:00:00.000Z',
+      updatedAt: '2024-01-01T00:00:00.000Z',
+    });
+    projDb
+      .getTaskRepository()
+      .failPending('task-1', 'API_KEY_REQUIRED', '缺少 Key', '2024-01-02T00:00:00.000Z');
+
+    // FAILED 不在 partial unique index 范围内，可以重新创建
+    expect(() =>
+      projDb.getTaskRepository().create({
+        id: 'task-2',
+        projectId: 'proj-1',
+        taskType: 'GRILL_QUESTION_PLAN',
+        status: 'PENDING',
+        inputVersionJson: '{}',
+        payloadJson: '{}',
+        dedupeKey: 'grill:sess:1',
+        createdAt: '2024-01-02T00:00:00.000Z',
+        updatedAt: '2024-01-02T00:00:00.000Z',
+      }),
+    ).not.toThrow();
+  });
+
   it('markStale 成功', () => {
     createTask('task-1', 'PENDING');
     const result = projDb

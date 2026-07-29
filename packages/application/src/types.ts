@@ -195,6 +195,7 @@ export interface TaskData {
   readonly resultJson: string | null;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
+  readonly dedupeKey: string | null;
   readonly attemptCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -211,6 +212,7 @@ export interface CreateTaskInput {
   readonly taskType: TaskType;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
+  readonly dedupeKey?: string;
 }
 
 /** 任务仓库端口 */
@@ -225,6 +227,8 @@ export interface TaskRepositoryPort {
   completeRunning(id: string, resultJson: string): boolean;
   /** CAS 失败：RUNNING → FAILED */
   failRunning(id: string, errorCode: string, errorMessage: string): boolean;
+  /** CAS 失败：PENDING → FAILED（claim 前终结，不递增 attempt_count） */
+  failPending(id: string, errorCode: string, errorMessage: string): boolean;
   /** CAS 标记 STALE */
   markStale(id: string, expectedStatuses: ReadonlyArray<TaskStatus>): boolean;
   /** CAS 重置为 PENDING */

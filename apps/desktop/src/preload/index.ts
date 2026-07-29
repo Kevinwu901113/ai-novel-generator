@@ -36,6 +36,10 @@ const IPC_CHANNELS = {
   GRILL_CREATE_PROPOSAL: 'ipc:grill-create-proposal',
   GRILL_REVIEW_PROPOSAL: 'ipc:grill-review-proposal',
   GRILL_LIST_PROPOSALS: 'ipc:grill-list-proposals',
+  GRILL_REQUEST_QUESTION_PLAN: 'ipc:grill-request-question-plan',
+  GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'ipc:grill-accept-question-plan-proposal',
+  GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'ipc:grill-list-question-plan-proposals',
+  GRILL_GET_QUESTION_PLAN_PROPOSAL: 'ipc:grill-get-question-plan-proposal',
 } as const;
 
 /**
@@ -66,10 +70,16 @@ import type {
   GrillListProposalsInput,
   GrillListAnswerHistoryInput,
   GrillListQuestionsInput,
+  GrillRequestQuestionPlanInput,
+  GrillAcceptQuestionPlanProposalInput,
+  GrillListQuestionPlanProposalsInput,
+  GrillQuestionPlanProposalIdInput,
   GrillSessionPublicData,
   GrillQuestionPublicData,
   GrillAnswerPublicData,
   GrillProposalPublicData,
+  GrillRequestQuestionPlanResult,
+  GrillQuestionPlanProposalPublicData,
 } from '@ai-novel/contracts';
 
 /**
@@ -227,6 +237,30 @@ const desktopAPI: DesktopAPI = {
       input: GrillListProposalsInput,
     ): Promise<ReadonlyArray<GrillProposalPublicData>> {
       return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_PROPOSALS, input);
+    },
+
+    async requestQuestionPlan(
+      input: GrillRequestQuestionPlanInput,
+    ): Promise<GrillRequestQuestionPlanResult> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_REQUEST_QUESTION_PLAN, input);
+    },
+
+    async acceptQuestionPlanProposal(
+      input: GrillAcceptQuestionPlanProposalInput,
+    ): Promise<ReadonlyArray<GrillQuestionPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL, input);
+    },
+
+    async listQuestionPlanProposals(
+      input: GrillListQuestionPlanProposalsInput,
+    ): Promise<ReadonlyArray<GrillQuestionPlanProposalPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_LIST_QUESTION_PLAN_PROPOSALS, input);
+    },
+
+    async getQuestionPlanProposal(
+      input: GrillQuestionPlanProposalIdInput,
+    ): Promise<GrillQuestionPlanProposalPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRILL_GET_QUESTION_PLAN_PROPOSAL, input);
     },
   },
 };
