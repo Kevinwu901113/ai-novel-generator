@@ -1300,15 +1300,11 @@ describe('六、Error Boundary 焦点', () => {
     expect(fallback).toHaveAttribute('aria-label', '测试加载异常');
     expect(fallback.className).toBe('error-boundary-fallback');
 
-    // 使用 fake timers 触发 setTimeout
-    // 在 jsdom 中 focus() 可能不完全工作，但我们可以验证
-    // 组件正确设置了 shouldFocusFallback 状态和 timer
     act(() => {
       vi.advanceTimersByTime(0);
     });
 
-    // 验证 fallback 元素存在且属性正确
-    expect(fallback).toBeInTheDocument();
+    expect(fallback).toHaveFocus();
   });
 
   // 37. fallback 不含原始异常
@@ -1353,19 +1349,15 @@ describe('六、Error Boundary 焦点', () => {
       screen.getByText('重新加载此区域').click();
     });
 
-    // 恢复后内容重新挂载
     expect(screen.getByText('恢复后的按钮')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
-    // 使用 fake timers 触发 setTimeout
     act(() => {
       vi.advanceTimersByTime(0);
     });
 
-    // 验证恢复后的按钮存在且可聚焦
-    const restoredButton = screen.getByText('恢复后的按钮');
-    expect(restoredButton).toBeInTheDocument();
-    expect(restoredButton.tagName).toBe('BUTTON');
+    const restoredButton = screen.getByRole('button', { name: '恢复后的按钮' });
+    expect(restoredButton).toHaveFocus();
   });
 
   // 38b. reset 后焦点恢复（无可聚焦子元素时聚焦容器）
@@ -1396,15 +1388,13 @@ describe('六、Error Boundary 焦点', () => {
       screen.getByText('重新加载此区域').click();
     });
 
-    // 使用 fake timers 触发 setTimeout
     act(() => {
       vi.advanceTimersByTime(0);
     });
 
-    // 验证恢复容器存在
-    const restoredContainer = document.querySelector('.restored-focus-container');
+    const restoredContainer = document.querySelector<HTMLElement>('.restored-focus-container');
     expect(restoredContainer).not.toBeNull();
-    expect(restoredContainer).toHaveAttribute('tabindex', '-1');
+    expect(restoredContainer).toHaveFocus();
   });
 });
 

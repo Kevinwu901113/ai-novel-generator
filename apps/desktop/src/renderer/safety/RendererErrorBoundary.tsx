@@ -67,14 +67,23 @@ export class RendererErrorBoundary extends Component<
     return { hasError: true, shouldFocusFallback: true };
   }
 
+  override componentDidMount(): void {
+    // React 19 StrictMode 下 error boundary 可能仅触发 componentDidMount 而非 componentDidUpdate
+    this.scheduleFocusIfNeeded();
+  }
+
   override componentDidUpdate(
     _prevProps: RendererErrorBoundaryProps,
     _prevState: RendererErrorBoundaryState,
   ): void {
+    this.scheduleFocusIfNeeded();
+  }
+
+  /** 调度焦点移动（共享 componentDidMount / componentDidUpdate 逻辑） */
+  private scheduleFocusIfNeeded(): void {
     // fallback 出现后将焦点移动到 fallback 容器
     if (this.state.shouldFocusFallback && this.fallbackRef.current) {
       const ref = this.fallbackRef.current;
-      this.clearFocusTimer();
       // 使用 setTimeout 确保在 React DOM 更新后设置焦点
       this.focusTimer = setTimeout(() => {
         ref.focus();
@@ -86,7 +95,6 @@ export class RendererErrorBoundary extends Component<
     // reset 后焦点进入重新挂载区域
     if (this.state.shouldFocusRestored && this.restoredRef.current) {
       const container = this.restoredRef.current;
-      this.clearFocusTimer();
       this.focusTimer = setTimeout(() => {
         // 尝试找到首个真正可聚焦元素
         const firstFocusable = container.querySelector<HTMLElement>(FOCUSABLE_SELECTOR);

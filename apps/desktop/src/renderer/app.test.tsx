@@ -8,7 +8,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup, act, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor, fireEvent, within } from '@testing-library/react';
 import type { DesktopAPI } from '@ai-novel/contracts';
 import { App } from './App';
 
@@ -405,8 +405,8 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 8. provider.testConnection rejection 后 getState 返回 failed 状态
-  it('testConnection 失败后 getState 返回 failed 状态并显示', async () => {
+  // 8. provider.testConnection finally 调用 getState 并渲染失败状态
+  it('testConnection finally 调用 getState 并渲染失败状态', async () => {
     const failedProviderState = {
       ...mockProviderState,
       lastTestStatus: 'failed',
@@ -431,7 +431,6 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
-    // 等待初始化 getState 完成
     await waitFor(
       () => {
         expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
@@ -439,22 +438,26 @@ describe('App 级别测试', () => {
       { timeout: 10000 },
     );
 
-    // 点击测试连接
+    const initialCalls = api.provider.getState.mock.calls.length;
+
     const testBtn = screen.getByRole('button', { name: '测试连接' });
     await act(async () => {
       testBtn.click();
     });
 
-    // testConnection 被调用
-    expect(api.provider.testConnection).toHaveBeenCalled();
-
-    // 等待 getState 被调用（在 finally 块中）
     await waitFor(
       () => {
-        expect(api.provider.getState).toHaveBeenCalled();
+        expect(api.provider.getState.mock.calls.length).toBeGreaterThan(initialCalls);
       },
       { timeout: 5000 },
     );
+
+    const providerSection = screen.getByLabelText('模型服务');
+    expect(within(providerSection).getByText(/PROVIDER_TIMEOUT/)).toHaveTextContent(/连接超时/);
+    const testTimeLabel = within(providerSection).getByText(/测试时间/);
+    expect(testTimeLabel.closest('p')).not.toHaveTextContent('—');
+    const latencyLabel = within(providerSection).getByText(/延迟/);
+    expect(latencyLabel.closest('p')).toHaveTextContent('123ms');
   });
 
   // 9. App 同一 global error 只有一个 alert/live region
@@ -509,48 +512,7 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 10. testConnection rejection 后 getState 返回 failed 状态
-  it('testConnection rejection 后 getState 返回 failed 状态', async () => {
-    const api = createMockDesktopAPI({
-      provider: {
-        ...createMockDesktopAPI().provider,
-        testConnection: vi.fn().mockRejectedValue(new Error('连接超时')),
-        getState: vi.fn().mockResolvedValue(mockProviderState),
-      },
-    });
-    setupDesktop(api);
-
-    await act(async () => {
-      render(<App />);
-    });
-
-    // 等待 App 完成初始渲染
-    await waitFor(
-      () => {
-        expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
-      },
-      { timeout: 10000 },
-    );
-
-    // 点击测试连接
-    const testBtn = screen.getByRole('button', { name: '测试连接' });
-    await act(async () => {
-      testBtn.click();
-    });
-
-    // testConnection 被调用
-    expect(api.provider.testConnection).toHaveBeenCalled();
-
-    // 等待 getState 被调用
-    await waitFor(
-      () => {
-        expect(api.provider.getState).toHaveBeenCalled();
-      },
-      { timeout: 5000 },
-    );
-  });
-
-  // 11. Provider 原始错误不泄露
+  // 10. Provider 原始错误不泄露
   it('Provider 原始错误不泄露', async () => {
     const api = createMockDesktopAPI({
       provider: {
@@ -633,15 +595,14 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 13. 创建项目成功后 Grill 工作区显示
-  it('创建项目成功后 Grill 工作区显示', async () => {
+  // 13. 创建项目成功后 Grill 标题获得焦点
+  it('创建项目成功后 Grill 标题获得焦点', async () => {
     setupDesktop();
 
     await act(async () => {
       render(<App />);
     });
 
-    // 等待 App 完成初始渲染
     await waitFor(
       () => {
         expect(screen.getByRole('button', { name: '新建项目' })).toBeInTheDocument();
@@ -649,29 +610,27 @@ describe('App 级别测试', () => {
       { timeout: 10000 },
     );
 
-    // 切换到新建项目
     const newProjectBtn = screen.getByRole('button', { name: '新建项目' });
     act(() => {
       newProjectBtn.click();
     });
 
-    // 填写表单
     const nameInput = screen.getByLabelText('项目名称');
     const ideaInput = screen.getByLabelText('描述你想写的小说……');
 
     fireEvent.change(nameInput, { target: { value: '测试项目' } });
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
-    // 点击创建
     const createBtn = screen.getByText('创建项目');
     await act(async () => {
       createBtn.click();
     });
 
-    // Grill 工作区应该显示
     await waitFor(
       () => {
-        expect(screen.getByLabelText('Grill 工作台')).toBeInTheDocument();
+        const grillWorkbench = screen.getByLabelText('Grill 工作台');
+        const grillHeading = within(grillWorkbench).getByRole('heading', { level: 2 });
+        expect(grillHeading).toHaveFocus();
       },
       { timeout: 5000 },
     );
