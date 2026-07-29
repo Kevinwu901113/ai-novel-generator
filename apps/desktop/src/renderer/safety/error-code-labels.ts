@@ -29,6 +29,10 @@ export const ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
   // ── Grill 相关 ───────────────────────────────────────────────────
   GRILL_VERSION_CONFLICT: '会话已在其他操作中更新，数据已自动刷新',
   GRILL_VALIDATION_ERROR: '输入验证失败',
+  GRILL_PLAN_ALREADY_RUNNING: '问题规划任务已在进行中',
+  GRILL_PLAN_STALE: '问题规划提案已过期',
+  GRILL_PLAN_PROPOSAL_NOT_FOUND: '问题规划提案不存在',
+  GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE: '问题规划提案无法接受',
 
   // ── 通用 ─────────────────────────────────────────────────────────
   NETWORK_UNAVAILABLE: '网络不可用',

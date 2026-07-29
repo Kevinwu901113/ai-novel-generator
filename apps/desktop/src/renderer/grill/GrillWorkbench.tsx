@@ -12,9 +12,11 @@ import { useGrillSessions } from './useGrillSessions';
 import { useGrillSession } from './useGrillSession';
 import { useGrillQuestions } from './useGrillQuestions';
 import { useGrillProposals } from './useGrillProposals';
+import { useGrillQuestionPlan } from './useGrillQuestionPlan';
 import { GrillSessionList } from './GrillSessionList';
 import { GrillSessionPanel } from './GrillSessionPanel';
 import { GrillQuestionDetail } from './GrillQuestionDetail';
+import { GrillQuestionPlanPanel } from './GrillQuestionPlanPanel';
 import { GrillDiagnostics } from './GrillDiagnostics';
 
 interface GrillWorkbenchProps {
@@ -47,6 +49,19 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     selectedSessionId,
     sessionHook.session?.version ?? 0,
     sessionHook.refresh,
+  );
+
+  // Question Plan — request, task polling, proposal loading, accept
+  const questionPlanHook = useGrillQuestionPlan(
+    projectId,
+    selectedSessionId,
+    sessionHook.session?.version ?? 0,
+    async () => {
+      // 接受成功后刷新 session、questions、proposals
+      await sessionRefreshRef.current();
+      await listQuestionsRef.current();
+      await proposalsRefreshRef.current();
+    },
   );
 
   // 使用 ref 保持 getCurrentAnswers 的稳定引用，避免 loadAnswers 因 questionsHook 整体变化而重建
@@ -101,6 +116,8 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   listQuestionsRef.current = questionsHook.listQuestions;
   const proposalsRefreshRef = useRef(proposalsHook.refresh);
   proposalsRefreshRef.current = proposalsHook.refresh;
+  const questionPlanRefreshRef = useRef(questionPlanHook.refreshProposals);
+  questionPlanRefreshRef.current = questionPlanHook.refreshProposals;
   const addQuestionsRef = useRef(questionsHook.addQuestions);
   addQuestionsRef.current = questionsHook.addQuestions;
   const answerQuestionRef = useRef(questionsHook.answerQuestion);
@@ -118,6 +135,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     await listQuestionsRef.current();
     await loadAnswers();
     await proposalsRefreshRef.current();
+    await questionPlanRefreshRef.current();
     setLastRefreshAt(new Date().toLocaleTimeString('zh-CN'));
   }, [loadAnswers]);
 
@@ -181,6 +199,7 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
   const hasVersionConflict =
     sessionHook.versionConflict || questionsHook.conflictNotice || proposalsHook.conflictNotice;
   // 普通错误：仅在没有版本冲突时显示
+  // questionPlanHook.error 由 GrillQuestionPlanPanel 自行管理
   const combinedError = hasVersionConflict
     ? null
     : sessionHook.error || questionsHook.error || proposalsHook.error;
@@ -250,25 +269,42 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
           />
         </div>
 
-        {/* 中栏：Session 面板 + 问题列表 */}
+        {/* 中栏：Session 面板 + 问题列表 + 问题规划 */}
         <div className="grill-workbench-center">
           {sessionHook.session ? (
-            <GrillSessionPanel
-              session={sessionHook.session}
-              questions={questionsHook.questions}
-              isLoading={isAnyLoading}
-              onStart={sessionHook.startSession}
-              onPause={sessionHook.pauseSession}
-              onResume={sessionHook.resumeSession}
-              onComplete={sessionHook.completeSession}
-              onAbandon={sessionHook.abandonSession}
-              onAddQuestions={handleAddQuestions}
-              onMarkAsked={handleMarkAsked}
-              onSkip={handleSkip}
-              onSupersede={handleSupersede}
-              onSelectQuestion={handleSelectQuestion}
-              selectedQuestionId={selectedQuestionId}
-            />
+            <>
+              <GrillSessionPanel
+                session={sessionHook.session}
+                questions={questionsHook.questions}
+                isLoading={isAnyLoading}
+                onStart={sessionHook.startSession}
+                onPause={sessionHook.pauseSession}
+                onResume={sessionHook.resumeSession}
+                onComplete={sessionHook.completeSession}
+                onAbandon={sessionHook.abandonSession}
+                onAddQuestions={handleAddQuestions}
+                onMarkAsked={handleMarkAsked}
+                onSkip={handleSkip}
+                onSupersede={handleSupersede}
+                onSelectQuestion={handleSelectQuestion}
+                selectedQuestionId={selectedQuestionId}
+              />
+              <GrillQuestionPlanPanel
+                sessionIsActive={sessionHook.session.status === 'ACTIVE'}
+                hasSession={true}
+                task={questionPlanHook.task}
+                isPolling={questionPlanHook.isPolling}
+                onRequestPlan={questionPlanHook.requestPlan}
+                isRequesting={questionPlanHook.isRequesting}
+                proposals={questionPlanHook.proposals}
+                isLoadingProposals={questionPlanHook.isLoadingProposals}
+                onAcceptProposal={questionPlanHook.acceptProposal}
+                isAccepting={questionPlanHook.isAccepting}
+                isLoading={isAnyLoading}
+                error={questionPlanHook.error}
+                onClearError={questionPlanHook.clearError}
+              />
+            </>
           ) : (
             <div className="empty-state">
               <p>选择一个 Grill 会话</p>
