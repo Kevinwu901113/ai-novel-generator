@@ -52,6 +52,8 @@ function dependencyLabel(dep: GrillPlannedDependencyPublicData): string {
 }
 
 interface GrillQuestionPlanPanelProps {
+  /** 上下文 key（如 projectId:sessionId），用于焦点追踪重置 */
+  contextKey: string;
   /** 当前 session 是否处于 ACTIVE 状态 */
   sessionIsActive: boolean;
   /** 是否有选中的 session */
@@ -81,6 +83,7 @@ interface GrillQuestionPlanPanelProps {
 }
 
 export function GrillQuestionPlanPanel({
+  contextKey,
   sessionIsActive,
   hasSession,
   task,
@@ -98,35 +101,53 @@ export function GrillQuestionPlanPanel({
   // ── 焦点管理 refs ──────────────────────────────────────────────
   const taskHeadingRef = useRef<HTMLHeadingElement>(null);
   const proposalHeadingRef = useRef<HTMLHeadingElement>(null);
-  const hasFocusedTaskRef = useRef(false);
-  const hasFocusedProposalRef = useRef(false);
+  const lastFocusedTaskIdRef = useRef<string | null>(null);
+  const lastFocusedProposalGenRef = useRef(0);
+  const rafIdRef = useRef<number | null>(null);
 
-  // ── 任务首次出现时焦点进入任务标题 ────────────────────────────
+  // ── 清理 RAF ─────────────────────────────────────────────────────
   useEffect(() => {
-    if (task && !hasFocusedTaskRef.current) {
-      hasFocusedTaskRef.current = true;
-      // 使用 setTimeout 确保 DOM 已更新
-      requestAnimationFrame(() => {
-        taskHeadingRef.current?.focus();
-      });
+    return () => {
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, []);
+
+  // ── contextKey 变化时重置焦点身份 ──────────────────────────────
+  useEffect(() => {
+    lastFocusedTaskIdRef.current = null;
+    lastFocusedProposalGenRef.current = 0;
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
     }
+  }, [contextKey]);
+
+  // ── 任务首次出现时焦点进入任务标题（按 task.id 追踪） ────────
+  useEffect(() => {
+    if (!task) return;
+    if (task.id === lastFocusedTaskIdRef.current) return;
+    lastFocusedTaskIdRef.current = task.id;
+
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      taskHeadingRef.current?.focus();
+    });
   }, [task]);
 
   // ── 提案首次出现时焦点进入提案区域标题 ────────────────────────
   useEffect(() => {
-    if (proposals.length > 0 && !hasFocusedProposalRef.current) {
-      hasFocusedProposalRef.current = true;
-      requestAnimationFrame(() => {
-        proposalHeadingRef.current?.focus();
-      });
-    }
-  }, [proposals]);
+    if (proposals.length === 0) return;
+    const proposalGen = lastFocusedProposalGenRef.current + 1;
+    lastFocusedProposalGenRef.current = proposalGen;
 
-  // ── session 切换时重置焦点标记 ────────────────────────────────
-  useEffect(() => {
-    hasFocusedTaskRef.current = false;
-    hasFocusedProposalRef.current = false;
-  }, []);
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      proposalHeadingRef.current?.focus();
+    });
+  }, [proposals]);
 
   // ── 请求按钮 disabled 条件 ────────────────────────────────────
   const canRequest = hasSession && sessionIsActive && !isRequesting && !isPolling && !isLoading;
@@ -176,9 +197,7 @@ export function GrillQuestionPlanPanel({
             问题规划任务
           </h4>
           <div className="grill-plan-task-info">
-            <span className="grill-plan-task-id" title={task.id}>
-              {shortTaskId(task.id)}
-            </span>
+            <span className="grill-plan-task-id">{shortTaskId(task.id)}</span>
             <span className={`grill-plan-task-status-badge status-${task.status.toLowerCase()}`}>
               {TASK_STATUS_LABELS[task.status] ?? task.status}
             </span>

@@ -1,26 +1,25 @@
 /**
- * Grill 问题规划 hook。
+ * useGrillQuestionPlan — 问题规划 hook。
  *
- * 管理问题规划的完整工作流：
- * - 请求问题规划 → 获得 taskId
- * - 任务轮询（PENDING/RUNNING/SUCCEEDED/FAILED/CANCELLED/STALE）
- * - 提案加载与展示
- * - 显式接受提案
- * - 竞态失效（generation token）
- *
- * 设计原则：
- * - 不自动接受，用户必须显式点击
- * - 使用 generation token 防止旧响应覆盖新界面
- * - polling 使用 useRef 管理 timer，unmount/切换时清理
- * - 页面 hidden 时暂停轮询，visible 时立即刷新
+ * 职责：
+ * - 请求问题规划（requestQuestionPlan）
+ * - 任务轮询（recursive setTimeout，single-flight）
+ * - 加载问题规划提案（listQuestionPlanProposals）
+ * - 接受问题规划提案（acceptQuestionPlanProposal）
+ * - 竞态失效（generation token + proposal request sequence）
+ * - 页面可见性管理（hidden 暂停，visible 立即恢复）
+ * - 安全错误（toSafeUserError）
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { GrillQuestionPlanProposalPublicData, TaskPublicData } from '@ai-novel/contracts';
-import { grillErrorMessage } from './status-labels';
+import type { TaskPublicData, GrillQuestionPlanProposalPublicData } from '@ai-novel/contracts';
 import { toSafeUserError } from '../safety/safe-error';
+import { ERROR_CODE_LABELS } from '../safety/error-code-labels';
 
-/** 任务终态集合 */
+/** 安全错误回退消息 */
+const SAFE_ERROR_FALLBACK = '操作失败，请稍后重试';
+
+/** 任务终态 */
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
   'SUCCEEDED',
   'FAILED',
@@ -28,50 +27,55 @@ const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set([
   'STALE',
 ]);
 
-/** 轮询间隔（毫秒） */
+/** 轮询间隔 (ms) */
 const POLL_INTERVAL_MS = 2000;
 
-/** hook 返回值接口 */
-interface UseGrillQuestionPlanResult {
-  /** 当前任务状态（仅显示当前问题计划任务） */
-  task: TaskPublicData | null;
-  /** 当前任务是否正在轮询 */
-  isPolling: boolean;
-  /** 请求问题规划（返回 taskId） */
-  requestPlan: () => Promise<void>;
-  /** 是否正在请求 */
-  isRequesting: boolean;
-  /** 问题规划提案列表 */
-  proposals: ReadonlyArray<GrillQuestionPlanProposalPublicData>;
-  /** 是否正在加载提案 */
-  isLoadingProposals: boolean;
-  /** 接受提案 */
-  acceptProposal: (proposalId: string) => Promise<boolean>;
-  /** 是否正在接受 */
-  isAccepting: boolean;
-  /** 安全错误消息 */
-  error: string | null;
-  /** 清除错误 */
-  clearError: () => void;
-  /** 手动刷新提案列表 */
-  refreshProposals: () => Promise<void>;
+/** 任务终态错误消息映射 */
+function terminalTaskError(status: string, errorCode: string | null): string | null {
+  switch (status) {
+    case 'FAILED':
+      return errorCode ? (ERROR_CODE_LABELS[errorCode] ?? '任务执行失败') : '任务执行失败';
+    case 'CANCELLED':
+      return '问题规划任务已取消';
+    case 'STALE':
+      return '问题规划任务已过期';
+    default:
+      return null;
+  }
 }
 
-/**
- * 问题规划 hook。
- *
- * @param projectId 当前项目 ID
- * @param sessionId 当前 session ID（null 表示无选中 session）
- * @param currentSessionVersion 当前 session 版本（来自 session hook，用于 expectedSessionVersion）
- * @param onAcceptSuccess 接受成功后的回调（用于刷新 session、questions 等）
- */
+interface UseGrillQuestionPlanResult {
+  /** 当前任务 */
+  readonly task: TaskPublicData | null;
+  /** 是否正在轮询 */
+  readonly isPolling: boolean;
+  /** 请求问题规划 */
+  readonly requestPlan: () => Promise<void>;
+  /** 是否正在请求 */
+  readonly isRequesting: boolean;
+  /** 问题规划提案列表 */
+  readonly proposals: ReadonlyArray<GrillQuestionPlanProposalPublicData>;
+  /** 是否正在加载提案 */
+  readonly isLoadingProposals: boolean;
+  /** 接受提案 */
+  readonly acceptProposal: (proposalId: string) => Promise<boolean>;
+  /** 是否正在接受 */
+  readonly isAccepting: boolean;
+  /** 刷新提案列表 */
+  readonly refreshProposals: () => Promise<void>;
+  /** 错误消息 */
+  readonly error: string | null;
+  /** 清除错误 */
+  readonly clearError: () => void;
+}
+
 export function useGrillQuestionPlan(
   projectId: string | null,
   sessionId: string | null,
   currentSessionVersion: number,
   onAcceptSuccess: () => Promise<void>,
 ): UseGrillQuestionPlanResult {
-  // ── 状态 ──────────────────────────────────────────────────────
+  // ── 状态 ──────────────────────────────────────────────────────────
   const [task, setTask] = useState<TaskPublicData | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const [isRequesting, setIsRequesting] = useState(false);
@@ -82,205 +86,132 @@ export function useGrillQuestionPlan(
   const [isAccepting, setIsAccepting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── 竞态失效：generation token ────────────────────────────────
-  // 每次 session/project 切换时递增，旧响应的 generation 与当前不匹配时丢弃
+  // ── refs ────────────────────────────────────────────────────────────
+  /** generation token：每次 session/project 切换递增 */
   const generationRef = useRef(0);
-
-  // ── 轮询 timer ────────────────────────────────────────────────
-  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── 请求锁 ────────────────────────────────────────────────────
+  /** 当前轮询 loop generation（用于 recursive setTimeout） */
+  const pollLoopGenRef = useRef(0);
+  /** 当前轮询 timer ID */
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** terminal latch：终态一旦应用，不再接受后续响应 */
+  const terminalLatchRef = useRef(false);
+  /** request/accept 锁 */
   const requestLockRef = useRef(false);
-
-  // ── 接受锁 ────────────────────────────────────────────────────
   const acceptLockRef = useRef(false);
-
-  // ── 当前 session 版本 ref（用于轮询回调中获取最新值） ─────────
+  /** 最新 session version（ref 供异步回调使用） */
   const currentSessionVersionRef = useRef(currentSessionVersion);
   currentSessionVersionRef.current = currentSessionVersion;
-
-  // ── onAcceptSuccess ref ───────────────────────────────────────
+  /** 最新 onAcceptSuccess callback */
   const onAcceptSuccessRef = useRef(onAcceptSuccess);
   onAcceptSuccessRef.current = onAcceptSuccess;
+  /** proposal request sequence：只允许最新请求写入 */
+  const proposalRequestSeqRef = useRef(0);
 
-  // ── 清理轮询 timer ────────────────────────────────────────────
+  // ── 计数器 ref（重置相关） ─────────────────────────────────────────
+  const taskRef = useRef<TaskPublicData | null>(null);
+  taskRef.current = task;
+
+  // ── 加载提案 ref（供轮询回调使用） ────────────────────────────────
+  const loadProposalsRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  // ── 清理轮询 ──────────────────────────────────────────────────────
   const stopPolling = useCallback(() => {
     if (pollTimerRef.current !== null) {
-      clearInterval(pollTimerRef.current);
+      clearTimeout(pollTimerRef.current);
       pollTimerRef.current = null;
     }
+    pollLoopGenRef.current += 1;
     setIsPolling(false);
   }, []);
 
-  // ── 加载提案列表 ──────────────────────────────────────────────
-  const loadProposals = useCallback(
-    async (gen: number) => {
-      if (!projectId || !sessionId) {
-        setProposals([]);
+  // ── 加载提案 ──────────────────────────────────────────────────────
+  const loadProposals = useCallback(async () => {
+    if (!sessionId || !projectId) return;
+
+    const gen = generationRef.current;
+    const seq = ++proposalRequestSeqRef.current;
+    setIsLoadingProposals(true);
+
+    try {
+      const list = await window.desktop.grill.listQuestionPlanProposals({ projectId, sessionId });
+
+      // 只有最新 request 可以写入
+      if (gen !== generationRef.current || seq !== proposalRequestSeqRef.current) {
         return;
       }
-      setIsLoadingProposals(true);
-      try {
-        const list = await window.desktop.grill.listQuestionPlanProposals({
-          projectId,
-          sessionId,
-        });
-        // 检查 generation 是否仍然有效
-        if (gen !== generationRef.current) return;
-        setProposals(list);
-      } catch {
-        if (gen !== generationRef.current) return;
-        // 非致命错误，不设置 error
-      } finally {
-        if (gen === generationRef.current) {
-          setIsLoadingProposals(false);
-        }
+
+      setProposals(list);
+    } catch {
+      // 非关键错误，不设置 error
+    } finally {
+      if (gen === generationRef.current && seq === proposalRequestSeqRef.current) {
+        setIsLoadingProposals(false);
       }
-    },
-    [projectId, sessionId],
-  );
+    }
+  }, [projectId, sessionId]);
 
-  // ── 获取任务状态 ──────────────────────────────────────────────
-  const fetchTask = useCallback(
-    async (taskId: string, gen: number): Promise<TaskPublicData | null> => {
-      if (!projectId) return null;
-      try {
-        const t = await window.desktop.tasks.get(projectId, taskId);
-        if (gen !== generationRef.current) return null;
-        return t;
-      } catch {
-        if (gen !== generationRef.current) return null;
-        const safe = toSafeUserError(undefined, '获取任务状态失败');
-        setError(safe.message);
-        return null;
-      }
-    },
-    [projectId],
-  );
+  // 保持 loadProposals ref 最新
+  loadProposalsRef.current = loadProposals;
 
-  // ── 处理任务终态 ──────────────────────────────────────────────
-  const handleTerminalTask = useCallback(
-    async (t: TaskPublicData, gen: number) => {
-      setTask(t);
-      stopPolling();
-
-      if (t.status === 'SUCCEEDED') {
-        // 任务成功，加载提案
-        await loadProposals(gen);
-      } else if (t.status === 'FAILED') {
-        // 显示安全错误
-        const safe = toSafeUserError(
-          t.errorCode ? { code: t.errorCode } : undefined,
-          '问题规划任务失败',
-        );
-        setError(safe.message);
-      } else if (t.status === 'CANCELLED') {
-        setError('问题规划任务已取消');
-      } else if (t.status === 'STALE') {
-        setError('问题规划任务已过期');
-      }
-    },
-    [stopPolling, loadProposals],
-  );
-
-  // ── 轮询逻辑 ──────────────────────────────────────────────────
+  // ── 开始轮询（recursive setTimeout，single-flight） ─────────────
   const startPolling = useCallback(
-    (taskId: string, gen: number) => {
+    (gen: number) => {
       stopPolling();
+      terminalLatchRef.current = false;
+      const loopGen = ++pollLoopGenRef.current;
       setIsPolling(true);
 
-      const poll = async () => {
-        if (gen !== generationRef.current) {
-          stopPolling();
+      // poll 函数：同步调度，不使用 async/await
+      const poll = () => {
+        if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
           return;
         }
 
-        const t = await fetchTask(taskId, gen);
-        if (!t || gen !== generationRef.current) return;
-
-        setTask(t);
-
-        if (TERMINAL_TASK_STATUSES.has(t.status)) {
-          await handleTerminalTask(t, gen);
+        const currentTask = taskRef.current;
+        if (!currentTask || terminalLatchRef.current) {
+          return;
         }
+
+        Promise.resolve(window.desktop.tasks.get(currentTask.projectId, currentTask.id))
+          .then((updated) => {
+            // 再次检查 loop 和 generation
+            if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
+              return;
+            }
+
+            setTask(updated);
+
+            if (TERMINAL_TASK_STATUSES.has(updated.status)) {
+              terminalLatchRef.current = true;
+              stopPolling();
+
+              if (updated.status === 'SUCCEEDED') {
+                void loadProposalsRef.current();
+              } else {
+                const errMsg = terminalTaskError(updated.status, updated.errorCode);
+                if (errMsg) setError(errMsg);
+              }
+              return;
+            }
+
+            // 非终态：安排下一次 poll
+            pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+          })
+          .catch(() => {
+            // 单次 poll 失败不停止轮询
+            if (loopGen === pollLoopGenRef.current && gen === generationRef.current) {
+              pollTimerRef.current = setTimeout(poll, POLL_INTERVAL_MS);
+            }
+          });
       };
 
-      // 立即执行一次
-      void poll();
-
-      // 设置轮询 timer
-      pollTimerRef.current = setInterval(() => {
-        void poll();
-      }, POLL_INTERVAL_MS);
+      // 首次立即 poll
+      pollTimerRef.current = setTimeout(poll, 0);
     },
-    [stopPolling, fetchTask, handleTerminalTask],
+    [stopPolling],
   );
 
-  // ── 页面可见性处理 ────────────────────────────────────────────
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.hidden) {
-        // 页面隐藏时暂停轮询
-        if (pollTimerRef.current !== null) {
-          clearInterval(pollTimerRef.current);
-          pollTimerRef.current = null;
-        }
-      } else if (isPolling && task && !TERMINAL_TASK_STATUSES.has(task.status)) {
-        // 页面重新可见时，如果正在轮询且任务未完成，立即刷新
-        const gen = generationRef.current;
-        const taskId = task.id;
-        void (async () => {
-          const t = await fetchTask(taskId, gen);
-          if (!t || gen !== generationRef.current) return;
-          setTask(t);
-          if (TERMINAL_TASK_STATUSES.has(t.status)) {
-            await handleTerminalTask(t, gen);
-          } else {
-            // 恢复轮询
-            startPolling(taskId, gen);
-          }
-        })();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, [isPolling, task, fetchTask, handleTerminalTask, startPolling]);
-
-  // ── session/project 切换时重置 ────────────────────────────────
-  useEffect(() => {
-    // 递增 generation，使所有旧响应失效
-    generationRef.current += 1;
-    const gen = generationRef.current;
-
-    // 停止轮询
-    stopPolling();
-
-    // 重置状态
-    setTask(null);
-    setProposals([]);
-    setError(null);
-    setIsRequesting(false);
-    setIsAccepting(false);
-    requestLockRef.current = false;
-    acceptLockRef.current = false;
-
-    // 如果有 sessionId，加载当前提案（可能已有之前的规划结果）
-    if (sessionId && projectId) {
-      void loadProposals(gen);
-    }
-  }, [projectId, sessionId, loadProposals]);
-
-  // ── 组件卸载时清理 ────────────────────────────────────────────
-  useEffect(() => {
-    return () => {
-      stopPolling();
-    };
-  }, [stopPolling]);
-
-  // ── 请求问题规划 ──────────────────────────────────────────────
+  // ── 请求问题规划 ──────────────────────────────────────────────────
   const requestPlan = useCallback(async () => {
     if (!projectId || !sessionId) return;
     if (requestLockRef.current) return;
@@ -289,8 +220,6 @@ export function useGrillQuestionPlan(
     setIsRequesting(true);
     setError(null);
 
-    const gen = generationRef.current;
-
     try {
       const result = await window.desktop.grill.requestQuestionPlan({
         projectId,
@@ -298,13 +227,15 @@ export function useGrillQuestionPlan(
         expectedSessionVersion: currentSessionVersionRef.current,
       });
 
-      // 检查 generation
-      if (gen !== generationRef.current) return;
+      // generation 检查
+      if (result.sessionId !== sessionId) {
+        return;
+      }
 
-      // 保存 taskId 并开始轮询
-      setTask({
+      // 创建临时 task
+      const newTask: TaskPublicData = {
         id: result.taskId,
-        projectId,
+        projectId: projectId,
         taskType: 'GRILL_QUESTION_PLAN',
         status: 'PENDING',
         attemptCount: 0,
@@ -315,33 +246,29 @@ export function useGrillQuestionPlan(
         updatedAt: new Date().toISOString(),
         startedAt: null,
         finishedAt: null,
-      });
+      };
 
-      startPolling(result.taskId, gen);
+      setTask(newTask);
+      terminalLatchRef.current = false;
+      startPolling(generationRef.current);
     } catch (err) {
-      if (gen !== generationRef.current) return;
-      const code = (err as Error & { code?: string }).code;
-      const safe = toSafeUserError(err, grillErrorMessage(code, '请求问题规划失败'));
-      setError(safe.message);
+      setError(toSafeUserError(err, SAFE_ERROR_FALLBACK).message);
     } finally {
-      if (gen === generationRef.current) {
-        requestLockRef.current = false;
-        setIsRequesting(false);
-      }
+      requestLockRef.current = false;
+      setIsRequesting(false);
     }
   }, [projectId, sessionId, startPolling]);
 
-  // ── 接受提案 ──────────────────────────────────────────────────
+  // ── 接受提案 ──────────────────────────────────────────────────────
   const acceptProposal = useCallback(
     async (proposalId: string): Promise<boolean> => {
       if (!projectId || !sessionId) return false;
       if (acceptLockRef.current) return false;
 
+      const gen = generationRef.current;
       acceptLockRef.current = true;
       setIsAccepting(true);
       setError(null);
-
-      const gen = generationRef.current;
 
       try {
         await window.desktop.grill.acceptQuestionPlanProposal({
@@ -351,41 +278,114 @@ export function useGrillQuestionPlan(
           expectedSessionVersion: currentSessionVersionRef.current,
         });
 
-        // 检查 generation
+        // generation 检查
         if (gen !== generationRef.current) return false;
 
-        // 接受成功，刷新提案列表
-        await loadProposals(gen);
-
-        // 通知外部刷新（session、questions 等）
+        // 刷新后检查
         await onAcceptSuccessRef.current();
+        if (gen !== generationRef.current) return false;
+
+        // 刷新提案
+        await loadProposalsRef.current();
+        if (gen !== generationRef.current) return false;
 
         return true;
       } catch (err) {
         if (gen !== generationRef.current) return false;
-        const code = (err as Error & { code?: string }).code;
-        const safe = toSafeUserError(err, grillErrorMessage(code, '接受问题规划提案失败'));
-        setError(safe.message);
+        setError(toSafeUserError(err, SAFE_ERROR_FALLBACK).message);
         return false;
       } finally {
         if (gen === generationRef.current) {
-          acceptLockRef.current = false;
           setIsAccepting(false);
         }
+        acceptLockRef.current = false;
       }
     },
-    [projectId, sessionId, loadProposals],
+    [projectId, sessionId],
   );
 
-  // ── 手动刷新提案 ──────────────────────────────────────────────
-  const refreshProposals = useCallback(async () => {
-    await loadProposals(generationRef.current);
-  }, [loadProposals]);
-
-  // ── 清除错误 ──────────────────────────────────────────────────
-  const clearError = useCallback(() => {
+  // ── session/project 切换重置 ──────────────────────────────────────
+  useEffect(() => {
+    generationRef.current += 1;
+    stopPolling();
+    setTask(null);
+    setProposals([]);
     setError(null);
-  }, []);
+    setIsPolling(false);
+    setIsRequesting(false);
+    setIsLoadingProposals(false);
+    setIsAccepting(false);
+    terminalLatchRef.current = false;
+    requestLockRef.current = false;
+    acceptLockRef.current = false;
+    proposalRequestSeqRef.current = 0;
+  }, [sessionId, projectId, stopPolling]);
+
+  // ── 页面可见性管理 ────────────────────────────────────────────────
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.hidden) {
+        // hidden：取消下一次 timer
+        if (pollTimerRef.current !== null) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+      } else if (isPolling && !terminalLatchRef.current) {
+        // visible：触发一次即时 poll
+        const loopGen = pollLoopGenRef.current;
+        const gen = generationRef.current;
+
+        pollTimerRef.current = setTimeout(() => {
+          if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) {
+            return;
+          }
+          const currentTask = taskRef.current;
+          if (!currentTask || terminalLatchRef.current) return;
+
+          Promise.resolve(window.desktop.tasks.get(currentTask.projectId, currentTask.id))
+            .then((updated) => {
+              if (loopGen !== pollLoopGenRef.current || gen !== generationRef.current) return;
+              setTask(updated);
+              if (TERMINAL_TASK_STATUSES.has(updated.status)) {
+                terminalLatchRef.current = true;
+                stopPolling();
+                if (updated.status === 'SUCCEEDED') {
+                  void loadProposalsRef.current();
+                } else {
+                  const errMsg = terminalTaskError(updated.status, updated.errorCode);
+                  if (errMsg) setError(errMsg);
+                }
+              } else {
+                // 恢复正常 polling loop
+                pollTimerRef.current = setTimeout(() => {
+                  if (loopGen === pollLoopGenRef.current && gen === generationRef.current) {
+                    startPolling(gen);
+                  }
+                }, POLL_INTERVAL_MS);
+              }
+            })
+            .catch(() => {
+              /* ignore */
+            });
+        }, 0);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [isPolling, stopPolling, startPolling]);
+
+  // ── unmount 清理 ──────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      stopPolling();
+    };
+  }, [stopPolling]);
+
+  // ── clearError ────────────────────────────────────────────────────
+  const clearError = useCallback(() => setError(null), []);
 
   return {
     task,
@@ -396,8 +396,8 @@ export function useGrillQuestionPlan(
     isLoadingProposals,
     acceptProposal,
     isAccepting,
+    refreshProposals: loadProposals,
     error,
     clearError,
-    refreshProposals,
   };
 }

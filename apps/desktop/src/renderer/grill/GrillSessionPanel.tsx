@@ -4,7 +4,7 @@
  * 显示 session 状态、version、操作按钮、问题列表、添加问题表单。
  */
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { GrillSessionPublicData, GrillQuestionPublicData } from '@ai-novel/contracts';
 import {
   sessionStatusLabel,
@@ -33,6 +33,8 @@ interface GrillSessionPanelProps {
   onSupersede: (questionId: string) => void;
   onSelectQuestion: (questionId: string) => void;
   selectedQuestionId: string | null;
+  /** 增量时聚焦问题列表标题（接受成功后触发） */
+  questionListFocusToken?: number;
 }
 
 export function GrillSessionPanel({
@@ -50,7 +52,21 @@ export function GrillSessionPanel({
   onSupersede,
   onSelectQuestion,
   selectedQuestionId,
+  questionListFocusToken = 0,
 }: GrillSessionPanelProps) {
+  const questionListHeadingRef = useRef<HTMLHeadingElement>(null);
+  const lastFocusTokenRef = useRef(0);
+
+  // 接受成功后聚焦问题列表标题
+  useEffect(() => {
+    if (questionListFocusToken > 0 && questionListFocusToken !== lastFocusTokenRef.current) {
+      lastFocusTokenRef.current = questionListFocusToken;
+      requestAnimationFrame(() => {
+        questionListHeadingRef.current?.focus();
+      });
+    }
+  }, [questionListFocusToken]);
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [topic, setTopic] = useState('');
   const [questionText, setQuestionText] = useState('');
@@ -139,7 +155,9 @@ export function GrillSessionPanel({
       {/* 问题列表 */}
       <div className="grill-questions-section">
         <div className="grill-section-header">
-          <h4>问题列表</h4>
+          <h4 ref={questionListHeadingRef} tabIndex={-1}>
+            问题列表
+          </h4>
           {isActive && (
             <button
               className="btn-small"

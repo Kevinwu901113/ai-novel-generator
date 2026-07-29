@@ -51,16 +51,35 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
     sessionHook.refresh,
   );
 
+  // 接受成功后聚焦问题列表标题
+  const [questionListFocusToken, setQuestionListFocusToken] = useState(0);
+
+  // 接受成功时的 context snapshot，用于确保只在当前 context 触发 focus
+  const acceptContextRef = useRef<{ projectId: string; sessionId: string | null } | null>(null);
+
   // Question Plan — request, task polling, proposal loading, accept
   const questionPlanHook = useGrillQuestionPlan(
     projectId,
     selectedSessionId,
     sessionHook.session?.version ?? 0,
     async () => {
+      // 记录当前 context
+      const ctx = { projectId, sessionId: selectedSessionId };
+      acceptContextRef.current = ctx;
+
       // 接受成功后刷新 session、questions、proposals
       await sessionRefreshRef.current();
       await listQuestionsRef.current();
       await proposalsRefreshRef.current();
+
+      // 只有当前 context 仍然匹配时才聚焦
+      if (
+        acceptContextRef.current === ctx &&
+        acceptContextRef.current.projectId === projectId &&
+        acceptContextRef.current.sessionId === selectedSessionId
+      ) {
+        setQuestionListFocusToken((t) => t + 1);
+      }
     },
   );
 
@@ -288,8 +307,10 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
                 onSupersede={handleSupersede}
                 onSelectQuestion={handleSelectQuestion}
                 selectedQuestionId={selectedQuestionId}
+                questionListFocusToken={questionListFocusToken}
               />
               <GrillQuestionPlanPanel
+                contextKey={`${projectId}:${selectedSessionId ?? ''}`}
                 sessionIsActive={sessionHook.session.status === 'ACTIVE'}
                 hasSession={true}
                 task={questionPlanHook.task}
