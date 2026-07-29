@@ -10,6 +10,7 @@ import type {
   GrillQuestionStatus,
   GrillAnswerSource,
   GrillProposalStatus,
+  GrillQuestionPlanProposalStatus,
 } from '@ai-novel/domain';
 
 // ── 数据接口 ──────────────────────────────────────────────────────
@@ -141,4 +142,40 @@ export interface GrillProposalRepositoryPort {
   markAccepted(id: string): boolean;
   markRejected(id: string): boolean;
   markSuperseded(id: string): boolean;
+}
+
+// ── 问题规划提案端口 ──────────────────────────────────────────────
+
+export interface GrillQuestionPlanProposalData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly invocationId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly questionsJson: string;
+  readonly status: GrillQuestionPlanProposalStatus;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+export interface CreateGrillQuestionPlanProposalInput {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly invocationId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly questionsJson: string;
+}
+
+export interface GrillQuestionPlanProposalRepositoryPort {
+  create(data: CreateGrillQuestionPlanProposalInput): void;
+  getById(id: string): GrillQuestionPlanProposalData | null;
+  listBySession(sessionId: string): ReadonlyArray<GrillQuestionPlanProposalData>;
+  markAccepted(id: string): boolean;
+  markRejected(id: string): boolean;
+  markStale(id: string): boolean;
 }

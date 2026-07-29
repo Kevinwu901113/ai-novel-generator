@@ -21,6 +21,10 @@ import type {
   GrillProposalRow,
   CreateGrillProposalData,
   DbGrillProposalStatus,
+  GrillQuestionPlanProposalRepository,
+  GrillQuestionPlanProposalRow,
+  CreateGrillQuestionPlanProposalData,
+  DbGrillQuestionPlanProposalStatus,
 } from './types.js';
 
 // ── 烧烤会话仓库实现 ──────────────────────────────────────────────
@@ -402,6 +406,91 @@ export class GrillProposalRepositoryImpl implements GrillProposalRepository {
       confidence: row.confidence as number,
       rationale: row.rationale as string,
       status: row.status as DbGrillProposalStatus,
+      createdAt: row.created_at as string,
+      reviewedAt: (row.reviewed_at as string) ?? null,
+    };
+  }
+}
+
+// ── 烧烤问题规划提案仓库实现 ──────────────────────────────────────
+
+export class GrillQuestionPlanProposalRepositoryImpl implements GrillQuestionPlanProposalRepository {
+  constructor(private readonly db: DatabaseSync) {}
+
+  create(data: CreateGrillQuestionPlanProposalData): void {
+    this.db
+      .prepare(
+        `INSERT INTO grill_question_plan_proposals
+           (id, project_id, session_id, task_id, invocation_id,
+            base_session_version, schema_version, questions_json, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PROPOSED', ?)`,
+      )
+      .run(
+        data.id,
+        data.projectId,
+        data.sessionId,
+        data.taskId,
+        data.invocationId,
+        data.baseSessionVersion,
+        data.schemaVersion,
+        data.questionsJson,
+        data.createdAt,
+      );
+  }
+
+  getById(id: string): GrillQuestionPlanProposalRow | null {
+    const row = this.db
+      .prepare(
+        `SELECT id, project_id, session_id, task_id, invocation_id,
+                base_session_version, schema_version, questions_json,
+                status, created_at, reviewed_at
+         FROM grill_question_plan_proposals WHERE id = ?`,
+      )
+      .get(id) as Record<string, unknown> | undefined;
+
+    if (!row) return null;
+    return this.toRow(row);
+  }
+
+  listBySession(sessionId: string): ReadonlyArray<GrillQuestionPlanProposalRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, project_id, session_id, task_id, invocation_id,
+                base_session_version, schema_version, questions_json,
+                status, created_at, reviewed_at
+         FROM grill_question_plan_proposals WHERE session_id = ? ORDER BY created_at`,
+      )
+      .all(sessionId) as Array<Record<string, unknown>>;
+
+    return rows.map((r) => this.toRow(r));
+  }
+
+  transitionStatus(
+    id: string,
+    expectedStatus: DbGrillQuestionPlanProposalStatus,
+    newStatus: DbGrillQuestionPlanProposalStatus,
+    now: string,
+  ): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE grill_question_plan_proposals SET status = ?, reviewed_at = ?
+         WHERE id = ? AND status = ?`,
+      )
+      .run(newStatus, now, id, expectedStatus);
+    return result.changes === 1;
+  }
+
+  private toRow(row: Record<string, unknown>): GrillQuestionPlanProposalRow {
+    return {
+      id: row.id as string,
+      projectId: row.project_id as string,
+      sessionId: row.session_id as string,
+      taskId: row.task_id as string,
+      invocationId: row.invocation_id as string,
+      baseSessionVersion: row.base_session_version as number,
+      schemaVersion: row.schema_version as number,
+      questionsJson: row.questions_json as string,
+      status: row.status as DbGrillQuestionPlanProposalStatus,
       createdAt: row.created_at as string,
       reviewedAt: (row.reviewed_at as string) ?? null,
     };

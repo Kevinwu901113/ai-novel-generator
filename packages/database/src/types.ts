@@ -189,6 +189,8 @@ export interface ProjectDatabaseManager {
   getGrillAnswerRepository(): GrillAnswerRepository;
   /** 获取推理提案仓库 */
   getGrillProposalRepository(): GrillProposalRepository;
+  /** 获取问题规划提案仓库 */
+  getGrillQuestionPlanProposalRepository(): GrillQuestionPlanProposalRepository;
   /** 执行事务 */
   transaction<T>(fn: () => T): T;
   /** 关闭数据库连接 */
@@ -215,6 +217,7 @@ export interface TaskRow {
   readonly resultJson: string | null;
   readonly errorCode: string | null;
   readonly errorMessage: string | null;
+  readonly dedupeKey: string | null;
   readonly attemptCount: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -232,6 +235,7 @@ export interface CreateTaskData {
   readonly status: DbTaskStatus;
   readonly inputVersionJson: string;
   readonly payloadJson: string;
+  readonly dedupeKey?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -248,6 +252,8 @@ export interface TaskRepository {
   completeRunning(id: string, resultJson: string, now: string): boolean;
   /** CAS 失败：RUNNING → FAILED，返回是否成功 */
   failRunning(id: string, errorCode: string, errorMessage: string, now: string): boolean;
+  /** CAS 失败：PENDING → FAILED（claim 前终结，不递增 attempt_count），返回是否成功 */
+  failPending(id: string, errorCode: string, errorMessage: string, now: string): boolean;
   /** CAS 标记 STALE，expectedStatuses 限制当前状态 */
   markStale(id: string, expectedStatuses: ReadonlyArray<DbTaskStatus>, now: string): boolean;
   /** CAS 重置为 PENDING，expectedStatus 限制当前状态 */
@@ -523,6 +529,53 @@ export interface GrillProposalRepository {
     id: string,
     expectedStatus: DbGrillProposalStatus,
     newStatus: DbGrillProposalStatus,
+    now: string,
+  ): boolean;
+}
+
+// ── 烧烤问题规划提案（project.sqlite）────────────────────────────
+
+/** 问题规划提案状态 */
+export type DbGrillQuestionPlanProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'STALE';
+
+/** 问题规划提案行 —— 仅保存经验证的规范化计划，不保存原始模型输出 */
+export interface GrillQuestionPlanProposalRow {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly invocationId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly questionsJson: string;
+  readonly status: DbGrillQuestionPlanProposalStatus;
+  readonly createdAt: string;
+  readonly reviewedAt: string | null;
+}
+
+/** 创建问题规划提案数据 */
+export interface CreateGrillQuestionPlanProposalData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly invocationId: string;
+  readonly baseSessionVersion: number;
+  readonly schemaVersion: number;
+  readonly questionsJson: string;
+  readonly createdAt: string;
+}
+
+/** 问题规划提案仓库 */
+export interface GrillQuestionPlanProposalRepository {
+  create(data: CreateGrillQuestionPlanProposalData): void;
+  getById(id: string): GrillQuestionPlanProposalRow | null;
+  listBySession(sessionId: string): ReadonlyArray<GrillQuestionPlanProposalRow>;
+  /** CAS 状态转换 */
+  transitionStatus(
+    id: string,
+    expectedStatus: DbGrillQuestionPlanProposalStatus,
+    newStatus: DbGrillQuestionPlanProposalStatus,
     now: string,
   ): boolean;
 }

@@ -40,6 +40,7 @@ function createMockTask(overrides: Partial<TaskData> = {}): TaskData {
     resultJson: null,
     errorCode: null,
     errorMessage: null,
+    dedupeKey: null,
     attemptCount: 0,
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
@@ -182,6 +183,12 @@ function createMockDeps(
     failRunning: vi.fn((id: string, errorCode: string, errorMessage: string) => {
       const t = taskStore.get(id);
       if (!t || t.status !== 'RUNNING') return false;
+      taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
+    }),
+    failPending: vi.fn((id: string, errorCode: string, errorMessage: string) => {
+      const t = taskStore.get(id);
+      if (!t || t.status !== 'PENDING') return false;
       taskStore.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
       return true;
     }),

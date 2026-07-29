@@ -29,6 +29,10 @@ describe('Grill IPC channels', () => {
     'GRILL_CREATE_PROPOSAL',
     'GRILL_REVIEW_PROPOSAL',
     'GRILL_LIST_PROPOSALS',
+    'GRILL_REQUEST_QUESTION_PLAN',
+    'GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL',
+    'GRILL_LIST_QUESTION_PLAN_PROPOSALS',
+    'GRILL_GET_QUESTION_PLAN_PROPOSAL',
   ] as const;
 
   it.each(GRILL_CHANNELS)('IPC_CHANNELS 包含 %s', (channelKey) => {
@@ -37,9 +41,9 @@ describe('Grill IPC channels', () => {
     expect(IPC_CHANNELS[channelKey]).toMatch(/^ipc:grill-/);
   });
 
-  it('共有 19 个 grill 频道', () => {
+  it('共有 23 个 grill 频道', () => {
     const grillChannelKeys = Object.keys(IPC_CHANNELS).filter((k) => k.startsWith('GRILL_'));
-    expect(grillChannelKeys).toHaveLength(19);
+    expect(grillChannelKeys).toHaveLength(23);
   });
 
   it('所有 grill 频道值唯一', () => {

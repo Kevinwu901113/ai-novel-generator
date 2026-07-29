@@ -39,7 +39,9 @@ export class SQLiteMigrator implements Migrator {
     const pending = migrations.filter((m) => m.version > dbVersion);
     if (pending.length === 0) return 0;
 
-    // 在事务中运行所有待应用迁移
+    // 迁移可能重建被外键引用的表（如放宽 CHECK 约束）。
+    // PRAGMA foreign_keys 在事务内无效，必须在 BEGIN 之外关闭，迁移结束后恢复。
+    this.db.exec('PRAGMA foreign_keys = OFF');
     this.db.exec('BEGIN');
     try {
       for (const migration of pending) {
@@ -52,6 +54,8 @@ export class SQLiteMigrator implements Migrator {
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
+    } finally {
+      this.db.exec('PRAGMA foreign_keys = ON');
     }
 
     return pending.length;

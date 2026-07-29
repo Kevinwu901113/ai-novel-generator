@@ -12,6 +12,7 @@ import {
   GrillQuestionRepositoryImpl,
   GrillAnswerRepositoryImpl,
   GrillProposalRepositoryImpl,
+  GrillQuestionPlanProposalRepositoryImpl,
 } from './grill-repositories.js';
 import type {
   ProjectDatabaseManager,
@@ -32,6 +33,7 @@ import type {
   GrillQuestionRepository,
   GrillAnswerRepository,
   GrillProposalRepository,
+  GrillQuestionPlanProposalRepository,
   Migration,
 } from './types.js';
 
@@ -221,6 +223,89 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
       CREATE INDEX idx_grill_proposals_session ON grill_inference_proposals(session_id);
     `,
   },
+  {
+    version: 4,
+    sql: `
+      -- 重建 tasks 表：放宽 task_type CHECK 以支持 GRILL_QUESTION_PLAN，
+      -- 并新增可空 dedupe_key 列用于数据库级任务去重。
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_version_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        result_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        dedupe_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        stale_at TEXT,
+        cancelled_at TEXT,
+        CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST', 'GRILL_QUESTION_PLAN')),
+        CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+        CHECK (attempt_count >= 0),
+        CHECK (json_valid(input_version_json)),
+        CHECK (json_valid(payload_json)),
+        CHECK (result_json IS NULL OR json_valid(result_json))
+      ) STRICT;
+
+      INSERT INTO tasks_new (
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      )
+      SELECT
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, NULL,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX idx_tasks_status ON tasks(status);
+      CREATE INDEX idx_tasks_project_created ON tasks(project_id, created_at);
+
+      -- 去重：同一 dedupe_key 在 PENDING/RUNNING 状态下至多一个活跃任务。
+      -- 任务终结（SUCCEEDED/FAILED/STALE/CANCELLED）后自动释放，可重新创建。
+      CREATE UNIQUE INDEX idx_tasks_dedupe_active
+        ON tasks(dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status IN ('PENDING', 'RUNNING');
+
+      -- Grill 问题规划提案：仅保存经验证的规范化计划，不保存原始模型输出。
+      CREATE TABLE grill_question_plan_proposals (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        invocation_id TEXT NOT NULL,
+        base_session_version INTEGER NOT NULL,
+        schema_version INTEGER NOT NULL,
+        questions_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PROPOSED',
+        created_at TEXT NOT NULL,
+        reviewed_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES grill_sessions(id),
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (invocation_id) REFERENCES model_invocations(id),
+        CONSTRAINT uq_grill_plan_proposals_task UNIQUE (task_id),
+        CONSTRAINT uq_grill_plan_proposals_invocation UNIQUE (invocation_id),
+        CHECK (status IN ('PROPOSED', 'ACCEPTED', 'REJECTED', 'STALE')),
+        CHECK (base_session_version >= 1),
+        CHECK (schema_version = 1),
+        CHECK (json_valid(questions_json))
+      ) STRICT;
+
+      CREATE INDEX idx_grill_plan_proposals_session
+        ON grill_question_plan_proposals(session_id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -304,8 +389,8 @@ class TaskRepositoryImpl implements TaskRepository {
   create(data: CreateTaskData): void {
     this.db
       .prepare(
-        `INSERT INTO tasks (id, project_id, task_type, status, input_version_json, payload_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, project_id, task_type, status, input_version_json, payload_json, dedupe_key, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         data.id,
@@ -314,6 +399,7 @@ class TaskRepositoryImpl implements TaskRepository {
         data.status,
         data.inputVersionJson,
         data.payloadJson,
+        data.dedupeKey ?? null,
         data.createdAt,
         data.updatedAt,
       );
@@ -323,7 +409,7 @@ class TaskRepositoryImpl implements TaskRepository {
     const row = this.db
       .prepare(
         `SELECT id, project_id, task_type, status, input_version_json, payload_json,
-                result_json, error_code, error_message, attempt_count,
+                result_json, error_code, error_message, attempt_count, dedupe_key,
                 created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
          FROM tasks WHERE id = ?`,
       )
@@ -337,7 +423,7 @@ class TaskRepositoryImpl implements TaskRepository {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, task_type, status, input_version_json, payload_json,
-                result_json, error_code, error_message, attempt_count,
+                result_json, error_code, error_message, attempt_count, dedupe_key,
                 created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
          FROM tasks WHERE project_id = ? ORDER BY created_at DESC LIMIT ?`,
       )
@@ -350,7 +436,7 @@ class TaskRepositoryImpl implements TaskRepository {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, task_type, status, input_version_json, payload_json,
-                result_json, error_code, error_message, attempt_count,
+                result_json, error_code, error_message, attempt_count, dedupe_key,
                 created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
          FROM tasks WHERE status = ? ORDER BY created_at`,
       )
@@ -396,6 +482,16 @@ class TaskRepositoryImpl implements TaskRepository {
     return result.changes === 1;
   }
 
+  failPending(id: string, errorCode: string, errorMessage: string, now: string): boolean {
+    const result = this.db
+      .prepare(
+        `UPDATE tasks SET status = 'FAILED', error_code = ?, error_message = ?, updated_at = ?, finished_at = ?
+         WHERE id = ? AND status = 'PENDING'`,
+      )
+      .run(errorCode, errorMessage, now, now, id);
+    return result.changes === 1;
+  }
+
   markStale(id: string, expectedStatuses: ReadonlyArray<DbTaskStatus>, now: string): boolean {
     if (expectedStatuses.length === 0) return false;
     const placeholders = expectedStatuses.map(() => '?').join(', ');
@@ -422,7 +518,7 @@ class TaskRepositoryImpl implements TaskRepository {
     const rows = this.db
       .prepare(
         `SELECT id, project_id, task_type, status, input_version_json, payload_json,
-                result_json, error_code, error_message, attempt_count,
+                result_json, error_code, error_message, attempt_count, dedupe_key,
                 created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
          FROM tasks WHERE status = 'RUNNING'`,
       )
@@ -442,6 +538,7 @@ class TaskRepositoryImpl implements TaskRepository {
       resultJson: (row.result_json as string) ?? null,
       errorCode: (row.error_code as string) ?? null,
       errorMessage: (row.error_message as string) ?? null,
+      dedupeKey: (row.dedupe_key as string) ?? null,
       attemptCount: row.attempt_count as number,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
@@ -677,6 +774,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly grillQuestionRepo: GrillQuestionRepositoryImpl;
   private readonly grillAnswerRepo: GrillAnswerRepositoryImpl;
   private readonly grillProposalRepo: GrillProposalRepositoryImpl;
+  private readonly grillQuestionPlanProposalRepo: GrillQuestionPlanProposalRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -697,6 +795,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.grillQuestionRepo = new GrillQuestionRepositoryImpl(this.db);
     this.grillAnswerRepo = new GrillAnswerRepositoryImpl(this.db);
     this.grillProposalRepo = new GrillProposalRepositoryImpl(this.db);
+    this.grillQuestionPlanProposalRepo = new GrillQuestionPlanProposalRepositoryImpl(this.db);
   }
 
   getProjectMetadataRepository(): ProjectMetadataRepository {
@@ -725,6 +824,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getGrillProposalRepository(): GrillProposalRepository {
     return this.grillProposalRepo;
+  }
+
+  getGrillQuestionPlanProposalRepository(): GrillQuestionPlanProposalRepository {
+    return this.grillQuestionPlanProposalRepo;
   }
 
   transaction<T>(fn: () => T): T {
