@@ -1,8 +1,8 @@
 # 当前状态
 
 **文档基线日期**：2026-07-30
-**Main SHA**：`5cefd6e06cf8862a983da074460158b2173915a7`
-**基线事件**：PR #8 (PlotPilot sidecar foundation) 合并
+**Main SHA**：`7df3ac5640f1c3f5ba6fcf46ffe563ca19ac0717`
+**基线事件**：PR #11 (AI question-plan Renderer) 合并
 
 ---
 
@@ -19,15 +19,8 @@
 | Grill 领域模型、持久化、IPC 全链路                        | M2-A1    | #3     |
 | Grill 桌面工作台（session/question/answer/proposal）      | M2-A1.5  | #4, #5 |
 | AI question-plan backend（GRILL_QUESTION_PLAN 任务）      | M2-A2-BE | #9     |
+| AI question-plan Renderer（触发、审核、显式接受）         | M2-A2-FE | #11    |
 | PlotPilot sidecar foundation（adapter + lifecycle + SSE） | —        | #8     |
-
-## In Review
-
-| 能力                           | PR  | 状态         |
-| ------------------------------ | --- | ------------ |
-| AI question-plan Renderer 集成 | #11 | open，未合并 |
-
-> PR #11 未合并前，不将其视为主线事实。
 
 ## 当前不能做的事
 

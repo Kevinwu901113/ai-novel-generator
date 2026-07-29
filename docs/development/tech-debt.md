@@ -232,23 +232,19 @@ macOS Keychain 实现已完成，但 Windows（Credential Manager）和 Linux（
 
 ## TD-011: AI 问题规划 Renderer 集成
 
-**状态**: PARTIALLY_RESOLVED
-**优先级**: 当前
-**最后核验基线**: 5cefd6e
+**状态**: RESOLVED
+**优先级**: —
+**最后核验基线**: 7df3ac5
 
 ### 问题
 
-AI 问题规划后端已完成（PR #9，GRILL_QUESTION_PLAN 任务类型、严格解析、stale 检测、proposal 持久化）。Renderer 集成在 PR #11 中，当前 open 未合并。
+AI 问题规划后端已完成（PR #9，GRILL_QUESTION_PLAN 任务类型、严格解析、stale 检测、proposal 持久化）。Renderer 集成曾在 PR #11 中处于 open 状态。
 
-### 影响
+### 解决
 
-- 后端能力已可用，但用户无法通过 UI 触发和审核 AI 问题规划
-- 需要 PR #11 合并后此项才能标记 RESOLVED
-
-### 后续动作
-
-- 完成 PR #11 审核和合并
-- 合并后更新本条目为 RESOLVED
+- PR #11 已合并（merge commit `7df3ac5640f1c3f5ba6fcf46ffe563ca19ac0717`）
+- Renderer 提供触发规划任务、任务状态轮询、proposal 审核与显式接受
+- 覆盖操作所有权、hidden/visible 轮询、accept 刷新上下文、焦点/RAF 生命周期、FAILED 安全标签等回归测试
 
 ---
 
