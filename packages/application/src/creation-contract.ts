@@ -17,6 +17,7 @@ import type {
   ContractVersionSummary,
   ProposalPublicData,
   CreationContractSectionsPublicData,
+  ContractProvenancePublicData,
 } from '@ai-novel/contracts';
 import type {
   CreationContractProposalRepositoryPort,
@@ -114,6 +115,25 @@ function parseLockedFieldPathsJson(json: string): ReadonlyArray<string> {
   return parsed as ReadonlyArray<string>;
 }
 
+function parseProvenanceJson(json: string): ContractProvenancePublicData {
+  const parsed: unknown = JSON.parse(json);
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new ContractDataCorruptionError('provenanceJson is not an object');
+  }
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.source !== 'string') {
+    throw new ContractDataCorruptionError('provenanceJson.source is not a string');
+  }
+  return {
+    source: obj.source as ContractProvenancePublicData['source'],
+    ...(obj.proposalId !== undefined && { proposalId: obj.proposalId as string }),
+    ...(obj.grillSessionId !== undefined && { grillSessionId: obj.grillSessionId as string }),
+    ...(obj.grillSessionVersion !== undefined && {
+      grillSessionVersion: obj.grillSessionVersion as number,
+    }),
+  };
+}
+
 // ── GetCurrentCreationContract ─────────────────────────────────
 
 export interface GetCurrentCreationContractInput {
@@ -153,6 +173,7 @@ export function getCurrentCreationContract(
     sections: sectionsToPublicData(sections),
     lockedFieldPaths,
     contractSnapshotHash: version.contractSnapshotHash,
+    provenance: parseProvenanceJson(version.provenanceJson),
     createdAt: version.createdAt,
     createdBy: version.createdBy,
   };

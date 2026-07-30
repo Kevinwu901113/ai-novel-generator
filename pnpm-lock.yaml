@@ -129,11 +129,21 @@ importers:
 
   packages/contracts:
     devDependencies:
+      '@ai-novel/domain':
+        specifier: workspace:*
+        version: link:../domain
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
 
   packages/database:
+    dependencies:
+      '@ai-novel/application':
+        specifier: workspace:*
+        version: link:../application
+      '@ai-novel/domain':
+        specifier: workspace:*
+        version: link:../domain
     devDependencies:
       typescript:
         specifier: ^5.8.0

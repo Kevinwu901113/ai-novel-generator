@@ -70,6 +70,8 @@ export interface CreateCreationContractProposalInput {
   readonly schemaVersion: number;
   readonly sectionsJson: string;
   readonly sectionsHash: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
 }
 
 export interface CreateCreationContractVersionInput {
@@ -84,6 +86,7 @@ export interface CreateCreationContractVersionInput {
   readonly lockedFieldPathsJson: string;
   readonly contractSnapshotHash: string;
   readonly provenanceJson: string;
+  readonly createdAt: string;
   readonly createdBy: ContractVersionCreatedBy;
 }
 
@@ -99,8 +102,9 @@ export interface CreationContractProposalRepositoryPort {
     id: string,
     expectedStatus: ProposalStatus,
     newStatus: ProposalStatus,
+    now: string,
   ): boolean;
-  supersedeAllProposed(projectId: string): number;
+  supersedeAllProposed(projectId: string, now: string): number;
 }
 
 export interface CreationContractVersionRepositoryPort {
@@ -112,8 +116,13 @@ export interface CreationContractVersionRepositoryPort {
 }
 
 export interface CreationContractCurrentRepositoryPort {
-  insertFirst(projectId: string, versionId: string): boolean;
-  casUpdate(projectId: string, expectedVersionId: string, newVersionId: string): boolean;
+  insertFirst(projectId: string, versionId: string, now: string): boolean;
+  casUpdate(
+    projectId: string,
+    expectedVersionId: string,
+    newVersionId: string,
+    now: string,
+  ): boolean;
   get(projectId: string): CreationContractCurrentData | null;
 }
 

@@ -4,7 +4,17 @@
  * 使用 node:sqlite 的 DatabaseSync 同步 API。
  */
 
+import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import {
+  CREATION_CONTRACT_SCHEMA_VERSION,
+  isLowercaseSha256Hex,
+  canonicalSerializeContractSections,
+  canonicalSerializeLockedFieldPaths,
+  validateCreationContractSections,
+  parseContractFieldPath,
+  canonicalizeContractFieldPath,
+} from '@ai-novel/domain';
 import type {
   CreationContractProposalRepository,
   CreationContractProposalRow,
@@ -19,6 +29,28 @@ import type {
   CreationContractLockEventRow,
   CreateCreationContractLockEventData,
 } from './types.js';
+
+// ── SHA-256 helper ────────────────────────────────────────────────
+
+export function sha256Utf8(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+// ── Corruption errors ─────────────────────────────────────────────
+
+export class ContractDataCorruptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContractDataCorruptionError';
+  }
+}
+
+export class ContractSchemaUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ContractSchemaUnsupportedError';
+  }
+}
 
 // ── 读取验证辅助 ────────────────────────────────────────────────
 
@@ -63,7 +95,10 @@ const VALID_CREATED_BY: ReadonlySet<string> = new Set([
   'unlock',
 ]);
 
-function requireProposalStatus(row: Record<string, unknown>, context: string): import('./types.js').DbProposalStatus {
+function requireProposalStatus(
+  row: Record<string, unknown>,
+  context: string,
+): import('./types.js').DbProposalStatus {
   const v = row.status;
   if (typeof v !== 'string' || !VALID_PROPOSAL_STATUSES.has(v)) {
     throw new Error(`${context}: status 无效 "${String(v)}"`);
@@ -71,7 +106,10 @@ function requireProposalStatus(row: Record<string, unknown>, context: string): i
   return v as import('./types.js').DbProposalStatus;
 }
 
-function requireCreatedBy(row: Record<string, unknown>, context: string): import('./types.js').DbContractVersionCreatedBy {
+function requireCreatedBy(
+  row: Record<string, unknown>,
+  context: string,
+): import('./types.js').DbContractVersionCreatedBy {
   const v = row.created_by;
   if (typeof v !== 'string' || !VALID_CREATED_BY.has(v)) {
     throw new Error(`${context}: created_by 无效 "${String(v)}"`);
@@ -85,6 +123,27 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
   constructor(private readonly db: DatabaseSync) {}
 
   create(data: CreateCreationContractProposalData): void {
+    // Validate schemaVersion
+    if (data.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+      throw new ContractSchemaUnsupportedError(
+        `proposal create: unsupported schemaVersion ${data.schemaVersion}`,
+      );
+    }
+    // Validate sectionsJson is canonical
+    const parsed = JSON.parse(data.sectionsJson);
+    const validated = validateCreationContractSections(parsed);
+    const canonical = canonicalSerializeContractSections(validated);
+    if (canonical !== data.sectionsJson) {
+      throw new ContractDataCorruptionError('proposal create: sectionsJson is not canonical');
+    }
+    // Validate sectionsHash
+    if (!isLowercaseSha256Hex(data.sectionsHash)) {
+      throw new ContractDataCorruptionError('proposal create: sectionsHash is not lowercase hex');
+    }
+    const recomputedHash = sha256Utf8(canonical);
+    if (recomputedHash !== data.sectionsHash) {
+      throw new ContractDataCorruptionError('proposal create: sectionsHash mismatch');
+    }
     this.db
       .prepare(
         `INSERT INTO creation_contract_proposals
@@ -156,8 +215,8 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
     id: string,
     expectedStatus: DbProposalStatus,
     newStatus: DbProposalStatus,
+    now: string,
   ): boolean {
-    const now = new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE creation_contract_proposals
@@ -168,8 +227,7 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
     return result.changes === 1;
   }
 
-  supersedeAllProposed(projectId: string): number {
-    const now = new Date().toISOString();
+  supersedeAllProposed(projectId: string, now: string): number {
     const result = this.db
       .prepare(
         `UPDATE creation_contract_proposals
@@ -182,6 +240,33 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
 
   private toRow(row: Record<string, unknown>): CreationContractProposalRow {
     const ctx = 'creation_contract_proposals';
+    const schemaVersion = requireNumber(row, 'schema_version', ctx);
+    if (schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+      throw new ContractSchemaUnsupportedError(
+        `${ctx}: unsupported schemaVersion ${schemaVersion}`,
+      );
+    }
+    const sectionsHash = requireString(row, 'sections_hash', ctx);
+    if (!isLowercaseSha256Hex(sectionsHash)) {
+      throw new ContractDataCorruptionError(`${ctx}: sections_hash is not lowercase hex`);
+    }
+    const sectionsJson = requireString(row, 'sections_json', ctx);
+    try {
+      const parsed = JSON.parse(sectionsJson);
+      const validated = validateCreationContractSections(parsed);
+      const canonical = canonicalSerializeContractSections(validated);
+      if (canonical !== sectionsJson) {
+        throw new ContractDataCorruptionError(`${ctx}: sections_json is not canonical`);
+      }
+      const recomputed = sha256Utf8(canonical);
+      if (recomputed !== sectionsHash) {
+        throw new ContractDataCorruptionError(`${ctx}: sections_hash mismatch`);
+      }
+    } catch (e) {
+      if (e instanceof ContractDataCorruptionError || e instanceof ContractSchemaUnsupportedError)
+        throw e;
+      throw new ContractDataCorruptionError(`${ctx}: sections_json validation failed`);
+    }
     return {
       id: requireString(row, 'id', ctx),
       projectId: requireString(row, 'project_id', ctx),
@@ -191,9 +276,9 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
       baseGrillSessionId: requireString(row, 'base_grill_session_id', ctx),
       baseGrillSessionVersion: requireNumber(row, 'base_grill_session_version', ctx),
       baseContractVersion: optionalNumber(row, 'base_contract_version'),
-      schemaVersion: requireNumber(row, 'schema_version', ctx),
-      sectionsJson: requireString(row, 'sections_json', ctx),
-      sectionsHash: requireString(row, 'sections_hash', ctx),
+      schemaVersion,
+      sectionsJson,
+      sectionsHash,
       createdAt: requireString(row, 'created_at', ctx),
       updatedAt: requireString(row, 'updated_at', ctx),
     };
@@ -206,6 +291,49 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
   constructor(private readonly db: DatabaseSync) {}
 
   create(data: CreateCreationContractVersionData): void {
+    // Validate schemaVersion
+    if (data.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+      throw new ContractSchemaUnsupportedError(
+        `version create: unsupported schemaVersion ${data.schemaVersion}`,
+      );
+    }
+    // Validate sectionsJson is canonical
+    const parsedSections = JSON.parse(data.sectionsJson);
+    const validatedSections = validateCreationContractSections(parsedSections);
+    const canonicalSections = canonicalSerializeContractSections(validatedSections);
+    if (canonicalSections !== data.sectionsJson) {
+      throw new ContractDataCorruptionError('version create: sectionsJson is not canonical');
+    }
+    // Validate locked paths canonical
+    const parsedPaths = JSON.parse(data.lockedFieldPathsJson);
+    if (!Array.isArray(parsedPaths) || !parsedPaths.every((p: unknown) => typeof p === 'string')) {
+      throw new ContractDataCorruptionError('version create: lockedFieldPathsJson is not string[]');
+    }
+    const canonicalPaths = parsedPaths.map((p: string) => canonicalizeContractFieldPath(p));
+    for (const p of canonicalPaths) {
+      parseContractFieldPath(p);
+    }
+    const canonicalPathsJson = canonicalSerializeLockedFieldPaths(canonicalPaths);
+    if (canonicalPathsJson !== data.lockedFieldPathsJson) {
+      throw new ContractDataCorruptionError(
+        'version create: lockedFieldPathsJson is not canonical',
+      );
+    }
+    // Validate null-pair for based_on
+    if ((data.basedOnGrillSessionId === null) !== (data.basedOnGrillSessionVersion === null)) {
+      throw new ContractDataCorruptionError('version create: based_on null-pair mismatch');
+    }
+    // Validate provenance JSON
+    const prov = JSON.parse(data.provenanceJson);
+    if (typeof prov !== 'object' || prov === null || typeof prov.source !== 'string') {
+      throw new ContractDataCorruptionError('version create: provenanceJson invalid');
+    }
+    // Validate contractSnapshotHash
+    if (!isLowercaseSha256Hex(data.contractSnapshotHash)) {
+      throw new ContractDataCorruptionError(
+        'version create: contractSnapshotHash is not lowercase hex',
+      );
+    }
     this.db
       .prepare(
         `INSERT INTO creation_contract_versions
@@ -289,18 +417,85 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
 
   private toRow(row: Record<string, unknown>): CreationContractVersionRow {
     const ctx = 'creation_contract_versions';
+    const schemaVersion = requireNumber(row, 'schema_version', ctx);
+    if (schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+      throw new ContractSchemaUnsupportedError(
+        `${ctx}: unsupported schemaVersion ${schemaVersion}`,
+      );
+    }
+    const contractSnapshotHash = requireString(row, 'contract_snapshot_hash', ctx);
+    if (!isLowercaseSha256Hex(contractSnapshotHash)) {
+      throw new ContractDataCorruptionError(`${ctx}: contract_snapshot_hash is not lowercase hex`);
+    }
+    const sectionsJson = requireString(row, 'sections_json', ctx);
+    const lockedFieldPathsJson = requireString(row, 'locked_field_paths_json', ctx);
+    const provenanceJson = requireString(row, 'provenance_json', ctx);
+
+    // Validate sections canonical form
+    try {
+      const parsed = JSON.parse(sectionsJson);
+      const validated = validateCreationContractSections(parsed);
+      const canonical = canonicalSerializeContractSections(validated);
+      if (canonical !== sectionsJson) {
+        throw new ContractDataCorruptionError(`${ctx}: sections_json is not canonical`);
+      }
+    } catch (e) {
+      if (e instanceof ContractDataCorruptionError || e instanceof ContractSchemaUnsupportedError)
+        throw e;
+      throw new ContractDataCorruptionError(`${ctx}: sections_json validation failed`);
+    }
+
+    // Validate locked paths: sorted, unique, valid
+    try {
+      const paths = JSON.parse(lockedFieldPathsJson);
+      if (!Array.isArray(paths) || !paths.every((p: unknown) => typeof p === 'string')) {
+        throw new ContractDataCorruptionError(`${ctx}: locked_field_paths_json is not string[]`);
+      }
+      const canonicalPaths = paths.map((p: string) => canonicalizeContractFieldPath(p));
+      for (const p of canonicalPaths) {
+        parseContractFieldPath(p);
+      }
+      const sorted = canonicalSerializeLockedFieldPaths(canonicalPaths);
+      if (sorted !== lockedFieldPathsJson) {
+        throw new ContractDataCorruptionError(`${ctx}: locked_field_paths_json is not canonical`);
+      }
+    } catch (e) {
+      if (e instanceof ContractDataCorruptionError || e instanceof ContractSchemaUnsupportedError)
+        throw e;
+      throw new ContractDataCorruptionError(`${ctx}: locked_field_paths validation failed`);
+    }
+
+    // Validate provenance JSON
+    try {
+      const prov = JSON.parse(provenanceJson);
+      if (typeof prov !== 'object' || prov === null || typeof prov.source !== 'string') {
+        throw new ContractDataCorruptionError(`${ctx}: provenance_json invalid`);
+      }
+    } catch (e) {
+      if (e instanceof ContractDataCorruptionError || e instanceof ContractSchemaUnsupportedError)
+        throw e;
+      throw new ContractDataCorruptionError(`${ctx}: provenance_json parse failed`);
+    }
+
+    // Validate null-pair for based_on
+    const basedOnSessionId = optionalString(row, 'based_on_grill_session_id');
+    const basedOnSessionVersion = optionalNumber(row, 'based_on_grill_session_version');
+    if ((basedOnSessionId === null) !== (basedOnSessionVersion === null)) {
+      throw new ContractDataCorruptionError(`${ctx}: based_on null-pair mismatch`);
+    }
+
     return {
       id: requireString(row, 'id', ctx),
       projectId: requireString(row, 'project_id', ctx),
       version: requireNumber(row, 'version', ctx),
-      schemaVersion: requireNumber(row, 'schema_version', ctx),
+      schemaVersion,
       sourceProposalId: optionalString(row, 'source_proposal_id'),
-      basedOnGrillSessionId: optionalString(row, 'based_on_grill_session_id'),
-      basedOnGrillSessionVersion: optionalNumber(row, 'based_on_grill_session_version'),
-      sectionsJson: requireString(row, 'sections_json', ctx),
-      lockedFieldPathsJson: requireString(row, 'locked_field_paths_json', ctx),
-      contractSnapshotHash: requireString(row, 'contract_snapshot_hash', ctx),
-      provenanceJson: requireString(row, 'provenance_json', ctx),
+      basedOnGrillSessionId: basedOnSessionId,
+      basedOnGrillSessionVersion: basedOnSessionVersion,
+      sectionsJson,
+      lockedFieldPathsJson,
+      contractSnapshotHash,
+      provenanceJson,
       createdAt: requireString(row, 'created_at', ctx),
       createdBy: requireCreatedBy(row, ctx),
     };
@@ -312,8 +507,7 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
 export class CreationContractCurrentRepositoryImpl implements CreationContractCurrentRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  insertFirst(projectId: string, versionId: string): boolean {
-    const now = new Date().toISOString();
+  insertFirst(projectId: string, versionId: string, now: string): boolean {
     try {
       this.db
         .prepare(
@@ -335,8 +529,8 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
     projectId: string,
     expectedVersionId: string,
     newVersionId: string,
+    now: string,
   ): boolean {
-    const now = new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE creation_contract_current
