@@ -304,8 +304,7 @@ function canonicalize(value: unknown): unknown {
     const result: Record<string, unknown> = {};
     for (const { raw, nfc: nk } of nfcKeys) {
       const v = obj[raw];
-      if (v === undefined)
-        throw new Error(`canonical 序列化不允许 key "${nk}" 为 undefined`);
+      if (v === undefined) throw new Error(`canonical 序列化不允许 key "${nk}" 为 undefined`);
       result[nk] = canonicalize(v);
     }
     return result;
@@ -313,16 +312,12 @@ function canonicalize(value: unknown): unknown {
   throw new Error(`canonical 序列化不支持类型: ${typeof value}`);
 }
 
-export function canonicalSerializeContractSections(
-  sections: CreationContractSections,
-): string {
+export function canonicalSerializeContractSections(sections: CreationContractSections): string {
   const validated = validateCreationContractSections(sections);
   return JSON.stringify(canonicalize(validated));
 }
 
-export function canonicalSerializeLockedFieldPaths(
-  paths: readonly string[],
-): string {
+export function canonicalSerializeLockedFieldPaths(paths: readonly string[]): string {
   const parsed = paths.map((p) => {
     const canonical = canonicalizeContractFieldPath(p);
     parseContractFieldPath(canonical);
@@ -468,10 +463,7 @@ function validateProtagonistCharacter(value: unknown): ProtagonistCharacter {
   };
 }
 
-function validateSupportingCharacterItem(
-  value: unknown,
-  index: number,
-): SupportingCharacter {
+function validateSupportingCharacterItem(value: unknown, index: number): SupportingCharacter {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`supportingCharacters[${index}] 必须是对象`);
   }
@@ -511,10 +503,7 @@ function validateSupportingCharacterItem(
   };
 }
 
-function validateRelationshipEntryItem(
-  value: unknown,
-  index: number,
-): RelationshipEntry {
+function validateRelationshipEntryItem(value: unknown, index: number): RelationshipEntry {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`relationships[${index}] 必须是对象`);
   }
@@ -545,11 +534,7 @@ function validateRelationshipEntryItem(
   const toCharacterKey = createCharacterKey(nfc(obj.toCharacterKey));
   const type = normalizeAndTrim(obj.type, `relationships[${index}].type`);
   if ([...type].length > 100) throw new Error(`relationships[${index}].type 超过 100 字符`);
-  const dynamic = validateOptionalString(
-    obj.dynamic,
-    `relationships[${index}].dynamic`,
-    300,
-  );
+  const dynamic = validateOptionalString(obj.dynamic, `relationships[${index}].dynamic`, 300);
 
   return {
     relationshipKey,
@@ -614,9 +599,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   'unresolvedQuestions',
 ]);
 
-export function validateCreationContractSections(
-  input: unknown,
-): CreationContractSections {
+export function validateCreationContractSections(input: unknown): CreationContractSections {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new Error('CreationContractSections 必须是对象');
   }
@@ -669,9 +652,7 @@ export function validateCreationContractSections(
     if (obj.relationships.length > 30) {
       throw new Error('relationships 最多 30 项');
     }
-    relationships = obj.relationships.map((item, i) =>
-      validateRelationshipEntryItem(item, i),
-    );
+    relationships = obj.relationships.map((item, i) => validateRelationshipEntryItem(item, i));
   }
 
   const worldRules =
@@ -846,93 +827,114 @@ export function pathsOverlap(a: string, b: string): boolean {
 
 // ── Lock Validation ────────────────────────────────────────────
 
-const PROTAGONIST_OPTIONAL_CHILDREN: ReadonlySet<string> = new Set([
-  'role',
-  'motivation',
-  'arc',
-  'traits',
+const STRUCTURED_OPTIONAL_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['protagonist', new Set(['role', 'motivation', 'arc', 'traits'])],
+  ['targetLength', new Set<string>()],
+  ['contentBoundaries', new Set(['rating', 'allowedContent', 'prohibitedContent', 'notes'])],
 ]);
 
-const CONTENT_BOUNDARIES_OPTIONAL_CHILDREN: ReadonlySet<string> = new Set([
-  'rating',
-  'allowedContent',
-  'prohibitedContent',
-  'notes',
+const COLLECTION_OPTIONAL_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['supportingCharacters', new Set(['role', 'relationship', 'traits'])],
+  ['relationships', new Set(['dynamic'])],
 ]);
+
+function findCollectionEntity(
+  snapshot: CreationContractSections,
+  section: string,
+  entityKey: string,
+): Record<string, unknown> | null {
+  if (section === 'supportingCharacters') {
+    const found = (snapshot.supportingCharacters ?? []).find((c) => c.characterKey === entityKey);
+    return found ? (found as unknown as Record<string, unknown>) : null;
+  }
+  if (section === 'relationships') {
+    const found = (snapshot.relationships ?? []).find((r) => r.relationshipKey === entityKey);
+    return found ? (found as unknown as Record<string, unknown>) : null;
+  }
+  return null;
+}
 
 export function validateNewLockPath(
   path: string,
   existingLocks: readonly string[],
   snapshot: CreationContractSections | null,
 ): void {
-  const canonicalPath = canonicalizeContractFieldPath(path);
+  const canonicalPath = nfc(canonicalizeContractFieldPath(path));
   const parsed = parseContractFieldPath(canonicalPath);
 
-  const validatedExisting = existingLocks.map((lp) => {
-    const c = canonicalizeContractFieldPath(lp);
+  const validatedExisting: string[] = [];
+  const seenExisting = new Set<string>();
+  for (const lp of existingLocks) {
+    const c = nfc(canonicalizeContractFieldPath(lp));
     parseContractFieldPath(c);
-    return nfc(c);
-  });
+    if (seenExisting.has(c)) {
+      throw new Error(`现有 lock 中存在重复 path: "${c}"`);
+    }
+    seenExisting.add(c);
+    validatedExisting.push(c);
+  }
+  for (let i = 0; i < validatedExisting.length; i++) {
+    for (let j = i + 1; j < validatedExisting.length; j++) {
+      if (pathsOverlap(validatedExisting[i], validatedExisting[j])) {
+        throw new Error(
+          `现有 lock 中存在重叠 path: "${validatedExisting[i]}" 与 "${validatedExisting[j]}"`,
+        );
+      }
+    }
+  }
 
   for (const existingLock of validatedExisting) {
-    if (pathsOverlap(nfc(canonicalPath), existingLock)) {
+    if (pathsOverlap(canonicalPath, existingLock)) {
       throw new Error(`lock path "${canonicalPath}" 与现有 lock "${existingLock}" 重叠`);
     }
   }
 
-  if (parsed.entityKey !== undefined) {
-    if (snapshot === null) {
-      throw new Error(
-        `snapshot 为空时不允许锁定 collection descendant path: "${canonicalPath}"`,
-      );
-    }
-    if (parsed.section === 'supportingCharacters') {
-      const chars = snapshot.supportingCharacters ?? [];
-      if (!chars.some((c) => c.characterKey === parsed.entityKey)) {
-        throw new Error(`角色 "${parsed.entityKey}" 不存在于 snapshot 中`);
-      }
-    }
-    if (parsed.section === 'relationships') {
-      const rels = snapshot.relationships ?? [];
-      if (!rels.some((r) => r.relationshipKey === parsed.entityKey)) {
-        throw new Error(`关系 "${parsed.entityKey}" 不存在于 snapshot 中`);
-      }
+  if (snapshot === null) {
+    if (parsed.entityKey !== undefined || parsed.field !== undefined) {
+      throw new Error(`snapshot 为空时只允许锁定顶层 section path: "${canonicalPath}"`);
     }
     return;
   }
 
-  if (parsed.field !== undefined) {
-    if (parsed.section === 'protagonist') {
-      if (!PROTAGONIST_OPTIONAL_CHILDREN.has(parsed.field)) {
-        throw new Error(`protagonist/${parsed.field} 是必需字段，不允许锁定`);
-      }
-      return;
-    }
-    if (parsed.section === 'contentBoundaries') {
-      if (snapshot !== null && snapshot.contentBoundaries === undefined) {
-        throw new Error('contentBoundaries 不存在时不允许锁定其子字段');
-      }
-      if (!CONTENT_BOUNDARIES_OPTIONAL_CHILDREN.has(parsed.field)) {
-        throw new Error(`contentBoundaries/${parsed.field} 不是合法 optional 子字段`);
-      }
-      return;
-    }
-    if (parsed.section === 'targetLength') {
-      if (snapshot !== null && snapshot.targetLength === undefined) {
-        throw new Error('targetLength 不存在时不允许锁定其子字段');
-      }
-      throw new Error(`targetLength/${parsed.field} 是必需子字段，不允许单独锁定`);
-    }
-    throw new Error(`section "${parsed.section}" 不支持 field-level lock`);
+  if (parsed.entityKey === undefined && parsed.field === undefined) {
+    return;
   }
 
+  if (parsed.entityKey !== undefined) {
+    const entity = findCollectionEntity(snapshot, parsed.section, parsed.entityKey);
+    if (entity === null) {
+      throw new Error(
+        `entity "${parsed.entityKey}" 不存在于 snapshot 的 "${parsed.section}" 中，不允许锁定其路径`,
+      );
+    }
+    if (parsed.field === undefined) return;
+    if (entity[parsed.field] !== undefined) return;
+    const optionalChildren = COLLECTION_OPTIONAL_CHILDREN.get(parsed.section);
+    if (!optionalChildren || !optionalChildren.has(parsed.field)) {
+      throw new Error(`字段 "${canonicalPath}" 当前缺失且不是 optional 子字段，不允许锁定`);
+    }
+    return;
+  }
+
+  const snapshotRec = snapshot as unknown as Record<string, unknown>;
+  const sectionValue = snapshotRec[parsed.section];
+  if (sectionValue === undefined) {
+    throw new Error(`${parsed.section} 不存在时不允许锁定其子字段`);
+  }
+  if (typeof sectionValue !== 'object' || sectionValue === null || Array.isArray(sectionValue)) {
+    throw new Error(`section "${parsed.section}" 不支持 field-level lock`);
+  }
+  if ((sectionValue as Record<string, unknown>)[parsed.field!] !== undefined) {
+    return;
+  }
+  const optionalChildren = STRUCTURED_OPTIONAL_CHILDREN.get(parsed.section);
+  if (!optionalChildren || !optionalChildren.has(parsed.field!)) {
+    throw new Error(`字段 "${canonicalPath}" 当前缺失且不是 optional 子字段，不允许锁定`);
+  }
   return;
 }
 
-export function validateUnlockPath(
-  path: string,
-  existingLocks: readonly string[],
-): void {
+export function validateUnlockPath(path: string, existingLocks: readonly string[]): void {
   const canonicalPath = canonicalizeContractFieldPath(path);
   if (!existingLocks.includes(canonicalPath)) {
     throw new Error(`路径 "${canonicalPath}" 未被锁定`);
@@ -959,9 +961,7 @@ const SCALAR_ENUM_PATHS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['/targetLength/unit', new Set(['words', 'chapters'])],
 ]);
 
-const SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set([
-  '/targetLength/value',
-]);
+const SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set(['/targetLength/value']);
 
 const SUPPORTING_CHAR_SCALAR_FIELDS: ReadonlySet<string> = new Set([
   'name',
@@ -969,10 +969,7 @@ const SUPPORTING_CHAR_SCALAR_FIELDS: ReadonlySet<string> = new Set([
   'relationship',
 ]);
 
-const RELATIONSHIP_SCALAR_FIELDS: ReadonlySet<string> = new Set([
-  'type',
-  'dynamic',
-]);
+const RELATIONSHIP_SCALAR_FIELDS: ReadonlySet<string> = new Set(['type', 'dynamic']);
 
 const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
   '/genre',
@@ -987,10 +984,7 @@ const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
   '/contentBoundaries/prohibitedContent',
 ]);
 
-const STRUCTURED_PATHS: ReadonlySet<string> = new Set([
-  '/targetLength',
-  '/contentBoundaries',
-]);
+const STRUCTURED_PATHS: ReadonlySet<string> = new Set(['/targetLength', '/contentBoundaries']);
 
 const REMOVE_FIELD_PATHS: ReadonlySet<string> = new Set([
   '/themes',
@@ -1280,11 +1274,7 @@ function parseSetScalar(input: Record<string, unknown>): SetScalarFieldOperation
     } as SetScalarFieldOperation;
   }
 
-  const relMatch = matchCollectionScalarPath(
-    path,
-    'relationships',
-    RELATIONSHIP_SCALAR_FIELDS,
-  );
+  const relMatch = matchCollectionScalarPath(path, 'relationships', RELATIONSHIP_SCALAR_FIELDS);
   if (relMatch) {
     const value = expectString(input.value, 'set-scalar.value');
     return {
@@ -1501,8 +1491,7 @@ function applySetScalarField(
     if (!Array.isArray(collection)) {
       throw new Error(`无法对非数组 section "${parsed.section}" 设置子字段`);
     }
-    const keyField =
-      parsed.section === 'supportingCharacters' ? 'characterKey' : 'relationshipKey';
+    const keyField = parsed.section === 'supportingCharacters' ? 'characterKey' : 'relationshipKey';
     const index = collection.findIndex(
       (item) => (item as Record<string, unknown>)[keyField] === parsed.entityKey,
     );
@@ -1549,8 +1538,7 @@ function applySetStringListField(
     if (!Array.isArray(collection)) {
       throw new Error(`无法对非数组 section "${parsed.section}" 设置子字段`);
     }
-    const keyField =
-      parsed.section === 'supportingCharacters' ? 'characterKey' : 'relationshipKey';
+    const keyField = parsed.section === 'supportingCharacters' ? 'characterKey' : 'relationshipKey';
     const index = collection.findIndex(
       (item) => (item as Record<string, unknown>)[keyField] === parsed.entityKey,
     );
@@ -1632,9 +1620,7 @@ function applySingleOperation(
       const existing = [...(snapshot.supportingCharacters ?? [])];
       const index = existing.findIndex((c) => c.characterKey === op.target);
       if (index === -1) {
-        const inserted = [...existing, op.value];
-        inserted.sort((a, b) => codePointCompare(a.characterKey, b.characterKey));
-        return { ...snapshot, supportingCharacters: inserted };
+        return { ...snapshot, supportingCharacters: [...existing, op.value] };
       }
       return {
         ...snapshot,
@@ -1642,20 +1628,20 @@ function applySingleOperation(
       };
     }
     case 'remove-character': {
-      const existing = snapshot.supportingCharacters ?? [];
-      const filtered = existing.filter((c) => c.characterKey !== op.target);
+      const existing = snapshot.supportingCharacters;
+      if (!existing || !existing.some((c) => c.characterKey === op.target)) {
+        throw new Error(`remove-character: 角色 "${op.target}" 不存在`);
+      }
       return {
         ...snapshot,
-        supportingCharacters: filtered.length > 0 ? filtered : undefined,
+        supportingCharacters: existing.filter((c) => c.characterKey !== op.target),
       };
     }
     case 'upsert-relationship': {
       const existing = [...(snapshot.relationships ?? [])];
       const index = existing.findIndex((r) => r.relationshipKey === op.target);
       if (index === -1) {
-        const inserted = [...existing, op.value];
-        inserted.sort((a, b) => codePointCompare(a.relationshipKey, b.relationshipKey));
-        return { ...snapshot, relationships: inserted };
+        return { ...snapshot, relationships: [...existing, op.value] };
       }
       return {
         ...snapshot,
@@ -1663,11 +1649,13 @@ function applySingleOperation(
       };
     }
     case 'remove-relationship': {
-      const existing = snapshot.relationships ?? [];
-      const filtered = existing.filter((r) => r.relationshipKey !== op.target);
+      const existing = snapshot.relationships;
+      if (!existing || !existing.some((r) => r.relationshipKey === op.target)) {
+        throw new Error(`remove-relationship: 关系 "${op.target}" 不存在`);
+      }
       return {
         ...snapshot,
-        relationships: filtered.length > 0 ? filtered : undefined,
+        relationships: existing.filter((r) => r.relationshipKey !== op.target),
       };
     }
   }
@@ -1774,14 +1762,10 @@ export function applyContractPatchOperations(
     }
     for (const rel of snapshot.relationships) {
       if (!allCharKeys.has(rel.fromCharacterKey)) {
-        throw new Error(
-          `最终 snapshot 中 relationship 引用未知角色: "${rel.fromCharacterKey}"`,
-        );
+        throw new Error(`最终 snapshot 中 relationship 引用未知角色: "${rel.fromCharacterKey}"`);
       }
       if (!allCharKeys.has(rel.toCharacterKey)) {
-        throw new Error(
-          `最终 snapshot 中 relationship 引用未知角色: "${rel.toCharacterKey}"`,
-        );
+        throw new Error(`最终 snapshot 中 relationship 引用未知角色: "${rel.toCharacterKey}"`);
       }
     }
   }

@@ -48,12 +48,7 @@ function makeSupporting(key: string, name: string): SupportingCharacter {
   };
 }
 
-function makeRelationship(
-  key: string,
-  from: string,
-  to: string,
-  type = 'ally',
-): RelationshipEntry {
+function makeRelationship(key: string, from: string, to: string, type = 'ally'): RelationshipEntry {
   return {
     relationshipKey: createRelationshipKey(key),
     fromCharacterKey: createCharacterKey(from),
@@ -293,9 +288,7 @@ describe('canonical serialization', () => {
   it('business array order matters', () => {
     const a = makeSections({ genre: ['fantasy', 'adventure'] });
     const b = makeSections({ genre: ['adventure', 'fantasy'] });
-    expect(canonicalSerializeContractSections(a)).not.toBe(
-      canonicalSerializeContractSections(b),
-    );
+    expect(canonicalSerializeContractSections(a)).not.toBe(canonicalSerializeContractSections(b));
   });
 
   it('snapshot includes sections, locks, schemaVersion', () => {
@@ -353,9 +346,7 @@ describe('canonical serialization', () => {
   });
 
   it('rejects invalid lock path in serialization', () => {
-    expect(() =>
-      canonicalSerializeLockedFieldPaths(['/unknownSection']),
-    ).toThrow();
+    expect(() => canonicalSerializeLockedFieldPaths(['/unknownSection'])).toThrow();
   });
 
   it('rejects invalid typed-cast sections', () => {
@@ -436,9 +427,7 @@ describe('validateCreationContractSections', () => {
 
   it('rejects targetLength.value = 0', () => {
     expect(() =>
-      validateCreationContractSections(
-        makeSections({ targetLength: { unit: 'words', value: 0 } }),
-      ),
+      validateCreationContractSections(makeSections({ targetLength: { unit: 'words', value: 0 } })),
     ).toThrow();
   });
 
@@ -601,21 +590,21 @@ describe('validateNewLockPath', () => {
   });
 
   it('rejects lock on non-existent entity descendant', () => {
-    expect(() =>
-      validateNewLockPath('/supportingCharacters/bob/role', [], snapshot),
-    ).toThrow('不存在');
+    expect(() => validateNewLockPath('/supportingCharacters/bob/role', [], snapshot)).toThrow(
+      '不存在',
+    );
   });
 
   it('rejects collection descendant when snapshot is null', () => {
-    expect(() =>
-      validateNewLockPath('/supportingCharacters/alice/role', [], null),
-    ).toThrow('snapshot 为空');
+    expect(() => validateNewLockPath('/supportingCharacters/alice/role', [], null)).toThrow(
+      'snapshot 为空',
+    );
   });
 
   it('rejects lock on non-existent contentBoundaries child when section absent', () => {
-    expect(() =>
-      validateNewLockPath('/contentBoundaries/notes', [], snapshot),
-    ).toThrow('contentBoundaries 不存在');
+    expect(() => validateNewLockPath('/contentBoundaries/notes', [], snapshot)).toThrow(
+      'contentBoundaries 不存在',
+    );
   });
 
   it('allows lock on contentBoundaries when section absent (top-level)', () => {
@@ -623,9 +612,50 @@ describe('validateNewLockPath', () => {
   });
 
   it('rejects lock on targetLength child when section absent', () => {
+    expect(() => validateNewLockPath('/targetLength/value', [], snapshot)).toThrow(
+      'targetLength 不存在',
+    );
+  });
+
+  it('allows lock on required child /protagonist/name when field exists', () => {
+    expect(() => validateNewLockPath('/protagonist/name', [], snapshot)).not.toThrow();
+  });
+
+  it('allows lock on /targetLength/value when targetLength exists', () => {
+    const withTarget = makeSections({ targetLength: { unit: 'words', value: 80000 } });
+    expect(() => validateNewLockPath('/targetLength/value', [], withTarget)).not.toThrow();
+  });
+
+  it('allows lock on relationship required child when relationship exists', () => {
+    const withRel = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+      relationships: [makeRelationship('r1', 'hero', 'alice')],
+    });
     expect(() =>
-      validateNewLockPath('/targetLength/value', [], snapshot),
-    ).toThrow('targetLength 不存在');
+      validateNewLockPath('/relationships/r1/fromCharacterKey', [], withRel),
+    ).not.toThrow();
+  });
+
+  it('rejects lock on missing optional child of missing collection entity', () => {
+    const withRel = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+      relationships: [makeRelationship('r1', 'hero', 'alice')],
+    });
+    expect(() => validateNewLockPath('/relationships/r2/dynamic', [], withRel)).toThrow('不存在');
+  });
+
+  it('allows top-level lock when snapshot is null', () => {
+    expect(() => validateNewLockPath('/premise', [], null)).not.toThrow();
+  });
+
+  it('rejects duplicate paths in existingLocks', () => {
+    expect(() => validateNewLockPath('/premise', ['/genre', '/genre'], snapshot)).toThrow('重复');
+  });
+
+  it('rejects overlapping paths in existingLocks', () => {
+    expect(() =>
+      validateNewLockPath('/premise', ['/protagonist', '/protagonist/name'], snapshot),
+    ).toThrow('重叠');
   });
 });
 
@@ -642,14 +672,14 @@ describe('validateUnlockPath', () => {
 
 describe('getCanonicalTargetPath', () => {
   it('set-scalar', () => {
-    expect(
-      getCanonicalTargetPath({ kind: 'set-scalar', path: '/premise', value: 'x' }),
-    ).toBe('/premise');
+    expect(getCanonicalTargetPath({ kind: 'set-scalar', path: '/premise', value: 'x' })).toBe(
+      '/premise',
+    );
   });
   it('upsert-protagonist', () => {
-    expect(
-      getCanonicalTargetPath({ kind: 'upsert-protagonist', value: makeProtagonist() }),
-    ).toBe('/protagonist');
+    expect(getCanonicalTargetPath({ kind: 'upsert-protagonist', value: makeProtagonist() })).toBe(
+      '/protagonist',
+    );
   });
   it('upsert-supporting-character', () => {
     expect(
@@ -702,9 +732,9 @@ describe('parseContractPatchOperation', () => {
   });
 
   it('rejects unknown kind', () => {
-    expect(() =>
-      parseContractPatchOperation({ kind: 'unknown-op', path: '/premise' }),
-    ).toThrow('未知 operation kind');
+    expect(() => parseContractPatchOperation({ kind: 'unknown-op', path: '/premise' })).toThrow(
+      '未知 operation kind',
+    );
   });
 
   it('rejects unknown path for set-scalar', () => {
@@ -764,9 +794,9 @@ describe('parseContractPatchOperation', () => {
   });
 
   it('rejects missing keys', () => {
-    expect(() =>
-      parseContractPatchOperation({ kind: 'set-scalar', path: '/premise' }),
-    ).toThrow('缺少必需字段');
+    expect(() => parseContractPatchOperation({ kind: 'set-scalar', path: '/premise' })).toThrow(
+      '缺少必需字段',
+    );
   });
 
   it('parses valid set-string-list', () => {
@@ -787,9 +817,9 @@ describe('parseContractPatchOperation', () => {
   });
 
   it('rejects remove-field on required path', () => {
-    expect(() =>
-      parseContractPatchOperation({ kind: 'remove-field', path: '/premise' }),
-    ).toThrow('不允许');
+    expect(() => parseContractPatchOperation({ kind: 'remove-field', path: '/premise' })).toThrow(
+      '不允许',
+    );
   });
 
   it('rejects remove-field on targetLength/unit', () => {
@@ -932,7 +962,7 @@ describe('applyContractPatchOperations', () => {
       withChar,
       makeContext(withChar),
     );
-    expect(result.supportingCharacters).toBeUndefined();
+    expect(result.supportingCharacters).toEqual([]);
   });
 
   it('rejects duplicate target', () => {
@@ -1035,9 +1065,7 @@ describe('applyContractPatchOperations', () => {
     const r2 = applyContractPatchOperations(ops2, base, makeContext(base));
     expect(r1.premise).toBe(r2.premise);
     expect(r1.genre).toEqual(r2.genre);
-    expect(canonicalSerializeContractSections(r1)).toBe(
-      canonicalSerializeContractSections(r2),
-    );
+    expect(canonicalSerializeContractSections(r1)).toBe(canonicalSerializeContractSections(r2));
   });
 
   it('two character inserts reversed → identical snapshot', () => {
@@ -1056,17 +1084,12 @@ describe('applyContractPatchOperations', () => {
     const ops2 = [...ops1].reverse();
     const r1 = applyContractPatchOperations(ops1, base, makeContext(base));
     const r2 = applyContractPatchOperations(ops2, base, makeContext(base));
-    expect(canonicalSerializeContractSections(r1)).toBe(
-      canonicalSerializeContractSections(r2),
-    );
+    expect(canonicalSerializeContractSections(r1)).toBe(canonicalSerializeContractSections(r2));
   });
 
   it('two relationship inserts reversed → identical snapshot', () => {
     const withChars = makeSections({
-      supportingCharacters: [
-        makeSupporting('alice', 'Alice'),
-        makeSupporting('bob', 'Bob'),
-      ],
+      supportingCharacters: [makeSupporting('alice', 'Alice'), makeSupporting('bob', 'Bob')],
     });
     const ops1: ReadonlyArray<ContractPatchOperation> = [
       {
@@ -1083,9 +1106,7 @@ describe('applyContractPatchOperations', () => {
     const ops2 = [...ops1].reverse();
     const r1 = applyContractPatchOperations(ops1, withChars, makeContext(withChars));
     const r2 = applyContractPatchOperations(ops2, withChars, makeContext(withChars));
-    expect(canonicalSerializeContractSections(r1)).toBe(
-      canonicalSerializeContractSections(r2),
-    );
+    expect(canonicalSerializeContractSections(r1)).toBe(canonicalSerializeContractSections(r2));
   });
 
   it('insert + update mixed order → identical snapshot', () => {
@@ -1103,9 +1124,7 @@ describe('applyContractPatchOperations', () => {
     const ops2 = [...ops1].reverse();
     const r1 = applyContractPatchOperations(ops1, withChar, makeContext(withChar));
     const r2 = applyContractPatchOperations(ops2, withChar, makeContext(withChar));
-    expect(canonicalSerializeContractSections(r1)).toBe(
-      canonicalSerializeContractSections(r2),
-    );
+    expect(canonicalSerializeContractSections(r1)).toBe(canonicalSerializeContractSections(r2));
   });
 
   it('remove entire targetLength succeeds', () => {
@@ -1155,8 +1174,137 @@ describe('applyContractPatchOperations', () => {
       withBoth,
       makeContext(withBoth),
     );
+    expect(result.supportingCharacters).toEqual([]);
+    expect(result.relationships).toEqual([]);
+  });
+
+  it('insert preserves existing order and appends', () => {
+    const withChars = makeSections({
+      supportingCharacters: [makeSupporting('b', 'B'), makeSupporting('a', 'A')],
+    });
+    const result = applyContractPatchOperations(
+      [
+        {
+          kind: 'upsert-supporting-character',
+          target: createCharacterKey('c'),
+          value: makeSupporting('c', 'C'),
+        },
+      ],
+      withChars,
+      makeContext(withChars),
+    );
+    expect(result.supportingCharacters!.map((x) => x.characterKey)).toEqual(['b', 'a', 'c']);
+  });
+
+  it('same-ChangeSet inserts append in stable key order regardless of input order', () => {
+    const withChars = makeSections({
+      supportingCharacters: [makeSupporting('b', 'B'), makeSupporting('a', 'A')],
+    });
+    const insertD: ContractPatchOperation = {
+      kind: 'upsert-supporting-character',
+      target: createCharacterKey('d'),
+      value: makeSupporting('d', 'D'),
+    };
+    const insertC: ContractPatchOperation = {
+      kind: 'upsert-supporting-character',
+      target: createCharacterKey('c'),
+      value: makeSupporting('c', 'C'),
+    };
+    const r1 = applyContractPatchOperations([insertD, insertC], withChars, makeContext(withChars));
+    const r2 = applyContractPatchOperations([insertC, insertD], withChars, makeContext(withChars));
+    expect(r1.supportingCharacters!.map((x) => x.characterKey)).toEqual(['b', 'a', 'c', 'd']);
+    expect(r2.supportingCharacters!.map((x) => x.characterKey)).toEqual(['b', 'a', 'c', 'd']);
+  });
+
+  it('update keeps entity position', () => {
+    const withChars = makeSections({
+      supportingCharacters: [makeSupporting('b', 'B'), makeSupporting('a', 'A')],
+    });
+    const result = applyContractPatchOperations(
+      [
+        {
+          kind: 'upsert-supporting-character',
+          target: createCharacterKey('b'),
+          value: makeSupporting('b', 'B2'),
+        },
+      ],
+      withChars,
+      makeContext(withChars),
+    );
+    expect(result.supportingCharacters!.map((x) => x.characterKey)).toEqual(['b', 'a']);
+    expect(result.supportingCharacters![0].name).toBe('B2');
+  });
+
+  it('relationship insert preserves existing order and appends', () => {
+    const withRels = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice'), makeSupporting('bob', 'Bob')],
+      relationships: [makeRelationship('r2', 'hero', 'alice')],
+    });
+    const result = applyContractPatchOperations(
+      [
+        {
+          kind: 'upsert-relationship',
+          target: createRelationshipKey('r1'),
+          value: makeRelationship('r1', 'hero', 'bob'),
+        },
+      ],
+      withRels,
+      makeContext(withRels),
+    );
+    expect(result.relationships!.map((x) => x.relationshipKey)).toEqual(['r2', 'r1']);
+  });
+
+  it('remove-field /supportingCharacters yields undefined', () => {
+    const withChars = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+    });
+    const result = applyContractPatchOperations(
+      [{ kind: 'remove-field', path: '/supportingCharacters' }],
+      withChars,
+      makeContext(withChars),
+    );
     expect(result.supportingCharacters).toBeUndefined();
-    expect(result.relationships).toBeUndefined();
+  });
+
+  it('remove-character on nonexistent target rejected', () => {
+    expect(() =>
+      applyContractPatchOperations(
+        [{ kind: 'remove-character', target: createCharacterKey('ghost') }],
+        base,
+        makeContext(base),
+      ),
+    ).toThrow('不存在');
+  });
+
+  it('remove-relationship on nonexistent target rejected', () => {
+    const withRels = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+      relationships: [makeRelationship('r1', 'hero', 'alice')],
+    });
+    expect(() =>
+      applyContractPatchOperations(
+        [{ kind: 'remove-relationship', target: createRelationshipKey('r9') }],
+        withRels,
+        makeContext(withRels),
+      ),
+    ).toThrow('不存在');
+  });
+
+  it('failed removal leaves ChangeSet atomic (no partial apply)', () => {
+    const withChars = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+    });
+    expect(() =>
+      applyContractPatchOperations(
+        [
+          { kind: 'set-scalar', path: '/premise', value: 'Changed premise' },
+          { kind: 'remove-character', target: createCharacterKey('ghost') },
+        ],
+        withChars,
+        makeContext(withChars),
+      ),
+    ).toThrow('不存在');
+    expect(withChars.premise).not.toBe('Changed premise');
   });
 
   it('does not mutate input snapshot', () => {

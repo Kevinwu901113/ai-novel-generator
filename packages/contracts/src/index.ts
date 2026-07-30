@@ -924,18 +924,39 @@ export function isValidGrillQuestionPlanProposalIdInput(
   return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId) && isPlannerId(obj.proposalId);
 }
 
-// ── 创作契约 DTO ────────────────────────────────────────────────
+// ── 创作契约 DTO ──────────────────────────────────────────────────
 
-/** 创作契约 sections 公开数据 —— 解析后的 typed sections，不含原始 JSON */
+import type {
+  ProposalStatus,
+  ContractVersionCreatedBy,
+  NarrativePov,
+  Tense,
+  TargetLengthUnit,
+  ProvenanceSource,
+} from '@ai-novel/domain';
+
+// ── Public literal unions (re-exported from domain) ───────────────
+
+export type {
+  ProposalStatus,
+  ContractVersionCreatedBy,
+  NarrativePov,
+  Tense,
+  TargetLengthUnit,
+  ProvenanceSource,
+};
+
+// ── Sections public DTO (closed, typed) ───────────────────────────
+
 export interface CreationContractSectionsPublicData {
   readonly premise: string;
   readonly genre: ReadonlyArray<string>;
   readonly tone: ReadonlyArray<string>;
   readonly themes?: ReadonlyArray<string>;
   readonly targetAudience: string;
-  readonly narrativePov: 'FIRST' | 'THIRD_LIMITED' | 'THIRD_OMNISCIENT' | 'SECOND' | 'OTHER';
-  readonly tense: 'PAST' | 'PRESENT' | 'MIXED';
-  readonly targetLength?: { readonly unit: 'words' | 'chapters'; readonly value: number };
+  readonly narrativePov: NarrativePov;
+  readonly tense: Tense;
+  readonly targetLength?: { readonly unit: TargetLengthUnit; readonly value: number };
   readonly structure?: string;
   readonly protagonist: {
     readonly characterKey: string;
@@ -971,7 +992,15 @@ export interface CreationContractSectionsPublicData {
   readonly unresolvedQuestions?: ReadonlyArray<string>;
 }
 
-/** 创作契约版本公开数据 —— 返回给调用方的安全数据 */
+// ── Version public DTO ────────────────────────────────────────────
+
+export interface ContractProvenancePublicData {
+  readonly source: ProvenanceSource;
+  readonly proposalId?: string;
+  readonly grillSessionId?: string;
+  readonly grillSessionVersion?: number;
+}
+
 export interface ContractVersionPublicData {
   readonly id: string;
   readonly projectId: string;
@@ -983,11 +1012,11 @@ export interface ContractVersionPublicData {
   readonly sections: CreationContractSectionsPublicData;
   readonly lockedFieldPaths: ReadonlyArray<string>;
   readonly contractSnapshotHash: string;
+  readonly provenance: ContractProvenancePublicData;
   readonly createdAt: string;
-  readonly createdBy: string;
+  readonly createdBy: ContractVersionCreatedBy;
 }
 
-/** 创作契约版本摘要 —— 列表展示用 */
 export interface ContractVersionSummary {
   readonly id: string;
   readonly projectId: string;
@@ -995,16 +1024,17 @@ export interface ContractVersionSummary {
   readonly schemaVersion: number;
   readonly contractSnapshotHash: string;
   readonly createdAt: string;
-  readonly createdBy: string;
+  readonly createdBy: ContractVersionCreatedBy;
 }
 
-/** 创作契约提案公开数据 */
+// ── Proposal public DTO ───────────────────────────────────────────
+
 export interface ProposalPublicData {
   readonly id: string;
   readonly projectId: string;
   readonly taskId: string;
   readonly invocationId: string;
-  readonly status: string;
+  readonly status: ProposalStatus;
   readonly baseGrillSessionId: string;
   readonly baseGrillSessionVersion: number;
   readonly baseContractVersion: number | null;
@@ -1015,182 +1045,254 @@ export interface ProposalPublicData {
   readonly updatedAt: string;
 }
 
-/** 创作契约基线引用 DTO */
-export interface ContractBaselineRefPublicData {
-  readonly contractVersionId: string | null;
-  readonly contractVersion: number | null;
-  readonly contractSnapshotHash: string | null;
-}
+// ── Query input DTOs ──────────────────────────────────────────────
 
-/** 查询当前创作契约输入 */
 export interface GetCurrentCreationContractInput {
   readonly projectId: string;
 }
 
-/** 列出创作契约版本输入 */
 export interface ListCreationContractVersionsInput {
   readonly projectId: string;
 }
 
-/** 获取创作契约提案输入 */
 export interface GetCreationContractProposalInput {
   readonly projectId: string;
   readonly proposalId: string;
 }
 
-/** 列出创作契约提案输入 */
 export interface ListCreationContractProposalsInput {
   readonly projectId: string;
 }
 
-// ── 创作契约 ContractPatchOperation DTO ─────────────────────────
+// ── Closed-path ContractPatchOperation DTO ────────────────────────
 
-/** DTO 版 ContractPatchOperation —— IPC 传输用，无 branded type */
 export type ContractPatchOperationDTO =
-  | ContractPatchSetScalarDTO
-  | ContractPatchSetStringListDTO
-  | ContractPatchSetStructuredDTO
-  | ContractPatchRemoveFieldDTO
+  | ContractPatchSetPremiseDTO
+  | ContractPatchSetNarrativePovDTO
+  | ContractPatchSetTenseDTO
+  | ContractPatchSetTargetAudienceDTO
+  | ContractPatchSetStructureDTO
+  | ContractPatchSetGenreDTO
+  | ContractPatchSetToneDTO
+  | ContractPatchSetThemesDTO
+  | ContractPatchSetWorldRulesDTO
+  | ContractPatchSetMustIncludeDTO
+  | ContractPatchSetMustAvoidDTO
+  | ContractPatchSetUnresolvedQuestionsDTO
+  | ContractPatchSetTargetLengthDTO
+  | ContractPatchSetContentBoundariesDTO
   | ContractPatchUpsertProtagonistDTO
   | ContractPatchUpsertSupportingCharacterDTO
   | ContractPatchUpsertRelationshipDTO
+  | ContractPatchSetSupportingCharScalarDTO
+  | ContractPatchSetRelationshipScalarDTO
+  | ContractPatchRemoveOptionalFieldDTO
   | ContractPatchRemoveCharacterDTO
   | ContractPatchRemoveRelationshipDTO;
 
-export interface ContractPatchSetScalarDTO {
+/** set-scalar: /premise → string */
+export interface ContractPatchSetPremiseDTO {
   readonly kind: 'set-scalar';
-  readonly path: string;
-  readonly value: string | number;
+  readonly path: '/premise';
+  readonly value: string;
 }
 
-export interface ContractPatchSetStringListDTO {
+/** set-scalar: /narrativePov → NarrativePov */
+export interface ContractPatchSetNarrativePovDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/narrativePov';
+  readonly value: NarrativePov;
+}
+
+/** set-scalar: /tense → Tense */
+export interface ContractPatchSetTenseDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/tense';
+  readonly value: Tense;
+}
+
+/** set-scalar: /targetAudience → string */
+export interface ContractPatchSetTargetAudienceDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/targetAudience';
+  readonly value: string;
+}
+
+/** set-scalar: /structure → string */
+export interface ContractPatchSetStructureDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/structure';
+  readonly value: string;
+}
+
+/** set-string-list: /genre → string[] */
+export interface ContractPatchSetGenreDTO {
   readonly kind: 'set-string-list';
-  readonly path: string;
+  readonly path: '/genre';
   readonly value: ReadonlyArray<string>;
 }
 
-export interface ContractPatchSetStructuredDTO {
+/** set-string-list: /tone → string[] */
+export interface ContractPatchSetToneDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/tone';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-string-list: /themes → string[] */
+export interface ContractPatchSetThemesDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/themes';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-string-list: /worldRules → string[] */
+export interface ContractPatchSetWorldRulesDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/worldRules';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-string-list: /mustInclude → string[] */
+export interface ContractPatchSetMustIncludeDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/mustInclude';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-string-list: /mustAvoid → string[] */
+export interface ContractPatchSetMustAvoidDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/mustAvoid';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-string-list: /unresolvedQuestions → string[] */
+export interface ContractPatchSetUnresolvedQuestionsDTO {
+  readonly kind: 'set-string-list';
+  readonly path: '/unresolvedQuestions';
+  readonly value: ReadonlyArray<string>;
+}
+
+/** set-structured: /targetLength → { unit, value } */
+export interface ContractPatchSetTargetLengthDTO {
   readonly kind: 'set-structured';
-  readonly path: '/targetLength' | '/contentBoundaries';
-  readonly value: unknown;
+  readonly path: '/targetLength';
+  readonly value: { readonly unit: TargetLengthUnit; readonly value: number };
 }
 
-export interface ContractPatchRemoveFieldDTO {
-  readonly kind: 'remove-field';
-  readonly path: string;
+/** set-structured: /contentBoundaries → object */
+export interface ContractPatchSetContentBoundariesDTO {
+  readonly kind: 'set-structured';
+  readonly path: '/contentBoundaries';
+  readonly value: {
+    readonly rating?: string;
+    readonly allowedContent?: ReadonlyArray<string>;
+    readonly prohibitedContent?: ReadonlyArray<string>;
+    readonly notes?: string;
+  };
 }
 
+/** upsert-protagonist */
 export interface ContractPatchUpsertProtagonistDTO {
   readonly kind: 'upsert-protagonist';
-  readonly value: unknown;
+  readonly value: {
+    readonly characterKey: string;
+    readonly name: string;
+    readonly role?: string;
+    readonly motivation?: string;
+    readonly arc?: string;
+    readonly traits?: ReadonlyArray<string>;
+  };
 }
 
+/** upsert-supporting-character */
 export interface ContractPatchUpsertSupportingCharacterDTO {
   readonly kind: 'upsert-supporting-character';
   readonly target: string;
-  readonly value: unknown;
+  readonly value: {
+    readonly characterKey: string;
+    readonly name: string;
+    readonly role?: string;
+    readonly relationship?: string;
+    readonly traits?: ReadonlyArray<string>;
+  };
 }
 
+/** upsert-relationship */
 export interface ContractPatchUpsertRelationshipDTO {
   readonly kind: 'upsert-relationship';
   readonly target: string;
-  readonly value: unknown;
+  readonly value: {
+    readonly relationshipKey: string;
+    readonly fromCharacterKey: string;
+    readonly toCharacterKey: string;
+    readonly type: string;
+    readonly dynamic?: string;
+  };
 }
 
+/** set-scalar on supporting character field */
+export interface ContractPatchSetSupportingCharScalarDTO {
+  readonly kind: 'set-scalar';
+  readonly path:
+    | `/supportingCharacters/${string}/name`
+    | `/supportingCharacters/${string}/role`
+    | `/supportingCharacters/${string}/relationship`;
+  readonly value: string;
+}
+
+/** set-scalar on relationship field */
+export interface ContractPatchSetRelationshipScalarDTO {
+  readonly kind: 'set-scalar';
+  readonly path: `/relationships/${string}/type` | `/relationships/${string}/dynamic`;
+  readonly value: string;
+}
+
+/** remove-field (optional sections/fields only) */
+export interface ContractPatchRemoveOptionalFieldDTO {
+  readonly kind: 'remove-field';
+  readonly path:
+    | '/themes'
+    | '/structure'
+    | '/targetLength'
+    | '/contentBoundaries'
+    | '/worldRules'
+    | '/mustInclude'
+    | '/mustAvoid'
+    | '/unresolvedQuestions'
+    | '/supportingCharacters'
+    | '/relationships';
+}
+
+/** remove-character */
 export interface ContractPatchRemoveCharacterDTO {
   readonly kind: 'remove-character';
   readonly target: string;
 }
 
+/** remove-relationship */
 export interface ContractPatchRemoveRelationshipDTO {
   readonly kind: 'remove-relationship';
   readonly target: string;
 }
 
-// ── 创作契约 Mutation DTO ───────────────────────────────────────
+// ── Runtime validation constants ──────────────────────────────────
 
-/** 接受创作契约提案输入 */
-export interface AcceptCreationContractProposalInput {
-  readonly projectId: string;
-  readonly proposalId: string;
-  readonly expectedProposalSectionsHash: string;
-  readonly expectedGrillSessionVersion: number;
-  readonly expectedContractVersion: number | null;
-  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
-}
+const VALID_PROPOSAL_STATUS: ReadonlySet<string> = new Set([
+  'PROPOSED',
+  'ACCEPTED',
+  'REJECTED',
+  'SUPERSEDED',
+  'STALE',
+]);
 
-/** 拒绝创作契约提案输入 */
-export interface RejectCreationContractProposalInput {
-  readonly projectId: string;
-  readonly proposalId: string;
-  readonly expectedProposalSectionsHash: string;
-}
-
-/** 锁定创作契约字段输入 */
-export interface LockCreationContractFieldInput {
-  readonly projectId: string;
-  readonly fieldPath: string;
-  readonly expectedContractVersion: number;
-}
-
-/** 解锁创作契约字段输入 */
-export interface UnlockCreationContractFieldInput {
-  readonly projectId: string;
-  readonly fieldPath: string;
-  readonly expectedContractVersion: number;
-}
-
-/** 用户直接编辑创作契约输入 */
-export interface UpdateCreationContractByUserInput {
-  readonly projectId: string;
-  readonly expectedContractVersion: number;
-  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
-}
-
-/** 请求创作契约提案输入（触发 AI task） */
-export interface RequestCreationContractProposalInput {
-  readonly projectId: string;
-  readonly expectedGrillSessionVersion: number;
-}
-
-// ── 创作契约 IPC 频道 ───────────────────────────────────────────
-
-export const CONTRACT_IPC_CHANNELS = {
-  GET_CURRENT: 'ipc:contract-get-current',
-  LIST_VERSIONS: 'ipc:contract-list-versions',
-  GET_PROPOSAL: 'ipc:contract-get-proposal',
-  LIST_PROPOSALS: 'ipc:contract-list-proposals',
-  ACCEPT_PROPOSAL: 'ipc:contract-accept-proposal',
-  REJECT_PROPOSAL: 'ipc:contract-reject-proposal',
-  LOCK_FIELD: 'ipc:contract-lock-field',
-  UNLOCK_FIELD: 'ipc:contract-unlock-field',
-  UPDATE_BY_USER: 'ipc:contract-update-by-user',
-  REQUEST_PROPOSAL: 'ipc:contract-request-proposal',
-} as const;
-
-// ── 创作契约 ContractAPI ────────────────────────────────────────
-
-/** 创作契约 API —— 通过 contextBridge 暴露给 Renderer */
-export interface ContractAPI {
-  getCurrent(input: GetCurrentCreationContractInput): Promise<ContractVersionPublicData | null>;
-  listVersions(
-    input: ListCreationContractVersionsInput,
-  ): Promise<ReadonlyArray<ContractVersionSummary>>;
-  getProposal(input: GetCreationContractProposalInput): Promise<ProposalPublicData>;
-  listProposals(
-    input: ListCreationContractProposalsInput,
-  ): Promise<ReadonlyArray<ProposalPublicData>>;
-  acceptProposal(input: AcceptCreationContractProposalInput): Promise<ContractVersionPublicData>;
-  rejectProposal(input: RejectCreationContractProposalInput): Promise<ProposalPublicData>;
-  lockField(input: LockCreationContractFieldInput): Promise<ContractVersionPublicData>;
-  unlockField(input: UnlockCreationContractFieldInput): Promise<ContractVersionPublicData>;
-  updateByUser(input: UpdateCreationContractByUserInput): Promise<ContractVersionPublicData>;
-  requestProposal(
-    input: RequestCreationContractProposalInput,
-  ): Promise<{ readonly taskId: string }>;
-}
-
-// ── 创作契约 DTO 运行时验证 ─────────────────────────────────────
+const VALID_CREATED_BY: ReadonlySet<string> = new Set([
+  'user',
+  'ai-proposal-accepted',
+  'lock',
+  'unlock',
+]);
 
 const VALID_NARRATIVE_POV: ReadonlySet<string> = new Set([
   'FIRST',
@@ -1199,21 +1301,19 @@ const VALID_NARRATIVE_POV: ReadonlySet<string> = new Set([
   'SECOND',
   'OTHER',
 ]);
+
 const VALID_TENSE: ReadonlySet<string> = new Set(['PAST', 'PRESENT', 'MIXED']);
+
 const VALID_TARGET_LENGTH_UNIT: ReadonlySet<string> = new Set(['words', 'chapters']);
-const VALID_PROPOSAL_STATUS: ReadonlySet<string> = new Set([
-  'PROPOSED',
-  'ACCEPTED',
-  'REJECTED',
-  'SUPERSEDED',
-  'STALE',
-]);
-const VALID_CREATED_BY: ReadonlySet<string> = new Set([
+
+const VALID_PROVENANCE_SOURCE: ReadonlySet<string> = new Set([
   'user',
   'ai-proposal-accepted',
   'lock',
   'unlock',
+  'initial',
 ]);
+
 const VALID_PATCH_KINDS: ReadonlySet<string> = new Set([
   'set-scalar',
   'set-string-list',
@@ -1226,37 +1326,202 @@ const VALID_PATCH_KINDS: ReadonlySet<string> = new Set([
   'remove-relationship',
 ]);
 
+const SET_SCALAR_PATH_VALUE_MAP: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['/narrativePov', VALID_NARRATIVE_POV],
+  ['/tense', VALID_TENSE],
+]);
+
+const SET_SCALAR_STRING_PATHS: ReadonlySet<string> = new Set([
+  '/premise',
+  '/targetAudience',
+  '/structure',
+]);
+
+const SET_SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set(['/targetLength/value']);
+
+const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
+  '/genre',
+  '/tone',
+  '/themes',
+  '/worldRules',
+  '/mustInclude',
+  '/mustAvoid',
+  '/unresolvedQuestions',
+  '/contentBoundaries/allowedContent',
+  '/contentBoundaries/prohibitedContent',
+]);
+
+const STRUCTURED_PATHS: ReadonlySet<string> = new Set(['/targetLength', '/contentBoundaries']);
+
+const REMOVE_FIELD_PATHS: ReadonlySet<string> = new Set([
+  '/themes',
+  '/structure',
+  '/targetLength',
+  '/contentBoundaries',
+  '/worldRules',
+  '/mustInclude',
+  '/mustAvoid',
+  '/unresolvedQuestions',
+  '/supportingCharacters',
+  '/relationships',
+]);
+
+const SUPPORTING_CHAR_SCALAR_RE = /^\/supportingCharacters\/[^/]+\/(name|role|relationship)$/;
+const RELATIONSHIP_SCALAR_RE = /^\/relationships\/[^/]+\/(type|dynamic)$/;
+
+// ── Runtime validators ────────────────────────────────────────────
+
+function isStringArray(v: unknown): v is ReadonlyArray<string> {
+  return Array.isArray(v) && v.every((x) => typeof x === 'string');
+}
+
+function hasExactKeys(obj: Record<string, unknown>, keys: ReadonlyArray<string>): boolean {
+  const objKeys = Object.keys(obj).sort();
+  const expected = [...keys].sort();
+  return objKeys.length === expected.length && objKeys.every((k, i) => k === expected[i]);
+}
+
+/** All keys in obj must be in allowed; all required must be present. */
+function hasKeys(
+  obj: Record<string, unknown>,
+  allowed: ReadonlyArray<string>,
+  required: ReadonlyArray<string>,
+): boolean {
+  const allowedSet = new Set(allowed);
+  for (const k of Object.keys(obj)) {
+    if (!allowedSet.has(k)) return false;
+  }
+  for (const r of required) {
+    if (!(r in obj)) return false;
+  }
+  return true;
+}
+
+function isValidSetScalarDTO(obj: Record<string, unknown>): boolean {
+  if (typeof obj.path !== 'string' || typeof obj.kind !== 'string') return false;
+  if (obj.kind !== 'set-scalar') return false;
+  const path = obj.path;
+
+  if (SET_SCALAR_STRING_PATHS.has(path)) {
+    return typeof obj.value === 'string';
+  }
+  if (SET_SCALAR_NUMBER_PATHS.has(path)) {
+    return typeof obj.value === 'number';
+  }
+  const enumSet = SET_SCALAR_PATH_VALUE_MAP.get(path);
+  if (enumSet) {
+    return typeof obj.value === 'string' && enumSet.has(obj.value);
+  }
+  if (SUPPORTING_CHAR_SCALAR_RE.test(path)) {
+    return typeof obj.value === 'string';
+  }
+  if (RELATIONSHIP_SCALAR_RE.test(path)) {
+    return typeof obj.value === 'string';
+  }
+  return false;
+}
+
+function isValidStringListDTO(obj: Record<string, unknown>): boolean {
+  if (typeof obj.path !== 'string') return false;
+  return (
+    obj.kind === 'set-string-list' && STRING_LIST_PATHS.has(obj.path) && isStringArray(obj.value)
+  );
+}
+
+function isValidStructuredDTO(obj: Record<string, unknown>): boolean {
+  if (typeof obj.path !== 'string' || obj.value === null || typeof obj.value !== 'object')
+    return false;
+  if (obj.kind !== 'set-structured') return false;
+  if (!STRUCTURED_PATHS.has(obj.path)) return false;
+
+  if (obj.path === '/targetLength') {
+    const v = obj.value as Record<string, unknown>;
+    return (
+      hasExactKeys(v, ['unit', 'value']) &&
+      typeof v.unit === 'string' &&
+      VALID_TARGET_LENGTH_UNIT.has(v.unit) &&
+      typeof v.value === 'number'
+    );
+  }
+  if (obj.path === '/contentBoundaries') {
+    const v = obj.value as Record<string, unknown>;
+    const allowed = ['rating', 'allowedContent', 'prohibitedContent', 'notes'];
+    for (const k of Object.keys(v)) {
+      if (!allowed.includes(k)) return false;
+    }
+    if (v.rating !== undefined && typeof v.rating !== 'string') return false;
+    if (v.allowedContent !== undefined && !isStringArray(v.allowedContent)) return false;
+    if (v.prohibitedContent !== undefined && !isStringArray(v.prohibitedContent)) return false;
+    if (v.notes !== undefined && typeof v.notes !== 'string') return false;
+    return true;
+  }
+  return false;
+}
+
 export function isValidContractPatchOperationDTO(data: unknown): data is ContractPatchOperationDTO {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   if (typeof obj.kind !== 'string' || !VALID_PATCH_KINDS.has(obj.kind)) return false;
+
   switch (obj.kind) {
     case 'set-scalar':
-      return (
-        typeof obj.path === 'string' &&
-        (typeof obj.value === 'string' || typeof obj.value === 'number')
-      );
+      return hasExactKeys(obj, ['kind', 'path', 'value']) && isValidSetScalarDTO(obj);
     case 'set-string-list':
-      return (
-        typeof obj.path === 'string' &&
-        Array.isArray(obj.value) &&
-        (obj.value as unknown[]).every((v) => typeof v === 'string')
-      );
+      return hasExactKeys(obj, ['kind', 'path', 'value']) && isValidStringListDTO(obj);
     case 'set-structured':
-      return (
-        (obj.path === '/targetLength' || obj.path === '/contentBoundaries') &&
-        obj.value !== null &&
-        typeof obj.value === 'object'
-      );
+      return hasExactKeys(obj, ['kind', 'path', 'value']) && isValidStructuredDTO(obj);
     case 'remove-field':
-      return typeof obj.path === 'string';
+      return (
+        hasExactKeys(obj, ['kind', 'path']) &&
+        typeof obj.path === 'string' &&
+        REMOVE_FIELD_PATHS.has(obj.path)
+      );
     case 'upsert-protagonist':
-      return typeof obj.value === 'object' && obj.value !== null;
+      return (
+        hasExactKeys(obj, ['kind', 'value']) &&
+        typeof obj.value === 'object' &&
+        obj.value !== null &&
+        hasKeys(
+          obj.value as Record<string, unknown>,
+          ['characterKey', 'name', 'role', 'motivation', 'arc', 'traits'],
+          ['characterKey', 'name'],
+        ) &&
+        typeof (obj.value as Record<string, unknown>).characterKey === 'string' &&
+        typeof (obj.value as Record<string, unknown>).name === 'string'
+      );
     case 'upsert-supporting-character':
+      return (
+        hasExactKeys(obj, ['kind', 'target', 'value']) &&
+        typeof obj.target === 'string' &&
+        typeof obj.value === 'object' &&
+        obj.value !== null &&
+        hasKeys(
+          obj.value as Record<string, unknown>,
+          ['characterKey', 'name', 'role', 'relationship', 'traits'],
+          ['characterKey', 'name'],
+        ) &&
+        typeof (obj.value as Record<string, unknown>).characterKey === 'string' &&
+        typeof (obj.value as Record<string, unknown>).name === 'string'
+      );
     case 'upsert-relationship':
+      return (
+        hasExactKeys(obj, ['kind', 'target', 'value']) &&
+        typeof obj.target === 'string' &&
+        typeof obj.value === 'object' &&
+        obj.value !== null &&
+        hasKeys(
+          obj.value as Record<string, unknown>,
+          ['relationshipKey', 'fromCharacterKey', 'toCharacterKey', 'type', 'dynamic'],
+          ['relationshipKey', 'fromCharacterKey', 'toCharacterKey', 'type'],
+        ) &&
+        typeof (obj.value as Record<string, unknown>).relationshipKey === 'string' &&
+        typeof (obj.value as Record<string, unknown>).fromCharacterKey === 'string' &&
+        typeof (obj.value as Record<string, unknown>).toCharacterKey === 'string' &&
+        typeof (obj.value as Record<string, unknown>).type === 'string'
+      );
     case 'remove-character':
     case 'remove-relationship':
-      return typeof obj.target === 'string';
+      return hasExactKeys(obj, ['kind', 'target']) && typeof obj.target === 'string';
     default:
       return false;
   }
@@ -1265,108 +1530,81 @@ export function isValidContractPatchOperationDTO(data: unknown): data is Contrac
 export function isValidContractPatchOperationsDTO(
   data: unknown,
 ): data is ReadonlyArray<ContractPatchOperationDTO> {
-  if (!Array.isArray(data)) return false;
-  return data.every(isValidContractPatchOperationDTO);
+  return Array.isArray(data) && data.every(isValidContractPatchOperationDTO);
 }
 
-export function isValidAcceptCreationContractProposalInput(
-  data: unknown,
-): data is AcceptCreationContractProposalInput {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.proposalId === 'string' &&
-    typeof obj.expectedProposalSectionsHash === 'string' &&
-    typeof obj.expectedGrillSessionVersion === 'number' &&
-    (obj.expectedContractVersion === null || typeof obj.expectedContractVersion === 'number') &&
-    isValidContractPatchOperationsDTO(obj.operations)
-  );
-}
-
-export function isValidRejectCreationContractProposalInput(
-  data: unknown,
-): data is RejectCreationContractProposalInput {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.proposalId === 'string' &&
-    typeof obj.expectedProposalSectionsHash === 'string'
-  );
-}
-
-export function isValidLockCreationContractFieldInput(
-  data: unknown,
-): data is LockCreationContractFieldInput {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.fieldPath === 'string' &&
-    typeof obj.expectedContractVersion === 'number'
-  );
-}
-
-export function isValidUnlockCreationContractFieldInput(
-  data: unknown,
-): data is UnlockCreationContractFieldInput {
-  return isValidLockCreationContractFieldInput(data);
-}
-
-export function isValidUpdateCreationContractByUserInput(
-  data: unknown,
-): data is UpdateCreationContractByUserInput {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' &&
-    typeof obj.expectedContractVersion === 'number' &&
-    isValidContractPatchOperationsDTO(obj.operations)
-  );
-}
-
-export function isValidRequestCreationContractProposalInput(
-  data: unknown,
-): data is RequestCreationContractProposalInput {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  return (
-    typeof obj.projectId === 'string' && typeof obj.expectedGrillSessionVersion === 'number'
-  );
-}
+// ── Sections runtime validator ────────────────────────────────────
 
 export function isValidCreationContractSectionsPublicData(
   data: unknown,
 ): data is CreationContractSectionsPublicData {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
+
   if (typeof obj.premise !== 'string') return false;
-  if (!Array.isArray(obj.genre) || !obj.genre.every((v: unknown) => typeof v === 'string'))
-    return false;
-  if (!Array.isArray(obj.tone) || !obj.tone.every((v: unknown) => typeof v === 'string'))
-    return false;
-  if (obj.themes !== undefined && !Array.isArray(obj.themes)) return false;
+  if (!isStringArray(obj.genre)) return false;
+  if (!isStringArray(obj.tone)) return false;
+  if (obj.themes !== undefined && !isStringArray(obj.themes)) return false;
   if (typeof obj.targetAudience !== 'string') return false;
   if (typeof obj.narrativePov !== 'string' || !VALID_NARRATIVE_POV.has(obj.narrativePov))
     return false;
   if (typeof obj.tense !== 'string' || !VALID_TENSE.has(obj.tense)) return false;
+
   if (obj.targetLength !== undefined) {
     if (typeof obj.targetLength !== 'object' || obj.targetLength === null) return false;
     const tl = obj.targetLength as Record<string, unknown>;
     if (typeof tl.unit !== 'string' || !VALID_TARGET_LENGTH_UNIT.has(tl.unit)) return false;
     if (typeof tl.value !== 'number') return false;
+    if (!hasExactKeys(tl, ['unit', 'value'])) return false;
   }
+
   if (obj.structure !== undefined && typeof obj.structure !== 'string') return false;
+
   if (typeof obj.protagonist !== 'object' || obj.protagonist === null) return false;
   const prot = obj.protagonist as Record<string, unknown>;
   if (typeof prot.characterKey !== 'string' || typeof prot.name !== 'string') return false;
+
+  if (obj.supportingCharacters !== undefined) {
+    if (!Array.isArray(obj.supportingCharacters)) return false;
+    for (const c of obj.supportingCharacters) {
+      if (typeof c !== 'object' || c === null) return false;
+      const ch = c as Record<string, unknown>;
+      if (typeof ch.characterKey !== 'string' || typeof ch.name !== 'string') return false;
+    }
+  }
+
+  if (obj.relationships !== undefined) {
+    if (!Array.isArray(obj.relationships)) return false;
+    for (const r of obj.relationships) {
+      if (typeof r !== 'object' || r === null) return false;
+      const rel = r as Record<string, unknown>;
+      if (typeof rel.relationshipKey !== 'string') return false;
+      if (typeof rel.fromCharacterKey !== 'string') return false;
+      if (typeof rel.toCharacterKey !== 'string') return false;
+      if (typeof rel.type !== 'string') return false;
+    }
+  }
+
+  if (obj.worldRules !== undefined && !isStringArray(obj.worldRules)) return false;
+  if (obj.mustInclude !== undefined && !isStringArray(obj.mustInclude)) return false;
+  if (obj.mustAvoid !== undefined && !isStringArray(obj.mustAvoid)) return false;
+
+  if (obj.contentBoundaries !== undefined) {
+    if (typeof obj.contentBoundaries !== 'object' || obj.contentBoundaries === null) return false;
+    const cb = obj.contentBoundaries as Record<string, unknown>;
+    if (cb.rating !== undefined && typeof cb.rating !== 'string') return false;
+    if (cb.allowedContent !== undefined && !isStringArray(cb.allowedContent)) return false;
+    if (cb.prohibitedContent !== undefined && !isStringArray(cb.prohibitedContent)) return false;
+    if (cb.notes !== undefined && typeof cb.notes !== 'string') return false;
+  }
+
+  if (obj.unresolvedQuestions !== undefined && !isStringArray(obj.unresolvedQuestions))
+    return false;
+
   return true;
 }
 
-export function isValidContractVersionPublicData(
-  data: unknown,
-): data is ContractVersionPublicData {
+export function isValidContractVersionPublicData(data: unknown): data is ContractVersionPublicData {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   return (
@@ -1376,10 +1614,16 @@ export function isValidContractVersionPublicData(
     typeof obj.schemaVersion === 'number' &&
     (obj.sourceProposalId === null || typeof obj.sourceProposalId === 'string') &&
     (obj.basedOnGrillSessionId === null || typeof obj.basedOnGrillSessionId === 'string') &&
-    (obj.basedOnGrillSessionVersion === null || typeof obj.basedOnGrillSessionVersion === 'number') &&
+    (obj.basedOnGrillSessionVersion === null ||
+      typeof obj.basedOnGrillSessionVersion === 'number') &&
     isValidCreationContractSectionsPublicData(obj.sections) &&
     Array.isArray(obj.lockedFieldPaths) &&
+    obj.lockedFieldPaths.every((p: unknown) => typeof p === 'string') &&
     typeof obj.contractSnapshotHash === 'string' &&
+    typeof obj.provenance === 'object' &&
+    obj.provenance !== null &&
+    typeof (obj.provenance as Record<string, unknown>).source === 'string' &&
+    VALID_PROVENANCE_SOURCE.has((obj.provenance as Record<string, unknown>).source as string) &&
     typeof obj.createdAt === 'string' &&
     typeof obj.createdBy === 'string' &&
     VALID_CREATED_BY.has(obj.createdBy)

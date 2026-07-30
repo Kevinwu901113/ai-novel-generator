@@ -8,12 +8,6 @@ import {
   isValidContractVersionPublicData,
   isValidProposalPublicData,
   isValidCreationContractSectionsPublicData,
-  isValidAcceptCreationContractProposalInput,
-  isValidRejectCreationContractProposalInput,
-  isValidLockCreationContractFieldInput,
-  isValidUnlockCreationContractFieldInput,
-  isValidUpdateCreationContractByUserInput,
-  isValidRequestCreationContractProposalInput,
   isAppError,
   isValidSaveApiKeyInput,
   isValidProviderPublicState,
@@ -694,6 +688,7 @@ describe('isValidContractVersionPublicData', () => {
     sections: VALID_SECTIONS_PUBLIC,
     lockedFieldPaths: [],
     contractSnapshotHash: 'a'.repeat(64),
+    provenance: { source: 'user' },
     createdAt: '2026-01-01T00:00:00Z',
     createdBy: 'user',
   };
@@ -744,99 +739,5 @@ describe('isValidProposalPublicData', () => {
 
   it('rejects null', () => {
     expect(isValidProposalPublicData(null)).toBe(false);
-  });
-});
-
-describe('创作契约 mutation 输入验证', () => {
-  it('accept 有效输入通过', () => {
-    expect(
-      isValidAcceptCreationContractProposalInput({
-        projectId: 'p1',
-        proposalId: 'prop1',
-        expectedProposalSectionsHash: 'a'.repeat(64),
-        expectedGrillSessionVersion: 1,
-        expectedContractVersion: null,
-        operations: [],
-      }),
-    ).toBe(true);
-  });
-
-  it('accept 缺少 proposalId 失败', () => {
-    expect(
-      isValidAcceptCreationContractProposalInput({
-        projectId: 'p1',
-        expectedProposalSectionsHash: 'a'.repeat(64),
-        expectedGrillSessionVersion: 1,
-        expectedContractVersion: null,
-        operations: [],
-      }),
-    ).toBe(false);
-  });
-
-  it('reject 有效输入通过', () => {
-    expect(
-      isValidRejectCreationContractProposalInput({
-        projectId: 'p1',
-        proposalId: 'prop1',
-        expectedProposalSectionsHash: 'a'.repeat(64),
-      }),
-    ).toBe(true);
-  });
-
-  it('lock 有效输入通过', () => {
-    expect(
-      isValidLockCreationContractFieldInput({
-        projectId: 'p1',
-        fieldPath: '/premise',
-        expectedContractVersion: 1,
-      }),
-    ).toBe(true);
-  });
-
-  it('unlock 有效输入通过', () => {
-    expect(
-      isValidUnlockCreationContractFieldInput({
-        projectId: 'p1',
-        fieldPath: '/premise',
-        expectedContractVersion: 1,
-      }),
-    ).toBe(true);
-  });
-
-  it('updateByUser 有效输入通过', () => {
-    expect(
-      isValidUpdateCreationContractByUserInput({
-        projectId: 'p1',
-        expectedContractVersion: 1,
-        operations: [{ kind: 'set-scalar', path: '/premise', value: 'new' }],
-      }),
-    ).toBe(true);
-  });
-
-  it('updateByUser 无效 operations 失败', () => {
-    expect(
-      isValidUpdateCreationContractByUserInput({
-        projectId: 'p1',
-        expectedContractVersion: 1,
-        operations: [{ kind: 'bad' }],
-      }),
-    ).toBe(false);
-  });
-
-  it('requestProposal 有效输入通过', () => {
-    expect(
-      isValidRequestCreationContractProposalInput({
-        projectId: 'p1',
-        expectedGrillSessionVersion: 2,
-      }),
-    ).toBe(true);
-  });
-
-  it('requestProposal 缺少字段失败', () => {
-    expect(
-      isValidRequestCreationContractProposalInput({
-        projectId: 'p1',
-      }),
-    ).toBe(false);
   });
 });
