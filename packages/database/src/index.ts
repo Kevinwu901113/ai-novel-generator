@@ -57,6 +57,19 @@ export type {
   GrillQuestionPlanProposalRow,
   CreateGrillQuestionPlanProposalData,
   DbGrillQuestionPlanProposalStatus,
+  DbProposalStatus,
+  DbContractVersionCreatedBy,
+  CreationContractProposalRow,
+  CreateCreationContractProposalData,
+  CreationContractProposalRepository,
+  CreationContractVersionRow,
+  CreateCreationContractVersionData,
+  CreationContractVersionRepository,
+  CreationContractCurrentRow,
+  CreationContractCurrentRepository,
+  CreationContractLockEventRow,
+  CreateCreationContractLockEventData,
+  CreationContractLockEventRepository,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）

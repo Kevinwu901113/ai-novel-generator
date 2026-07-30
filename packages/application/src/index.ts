@@ -154,3 +154,43 @@ export type {
   AcceptGrillQuestionPlanProposalInput,
   AcceptGrillQuestionPlanProposalResult,
 } from './grill-question-plan.js';
+
+// ── 创作契约端口和用例 ────────────────────────────────────────
+
+export {
+  ContractVersionConflictError,
+  ContractProposalStaleError,
+  ContractProposalNotFoundError,
+  ContractProposalNotAcceptableError,
+  ContractLockConflictError,
+  ContractModelLockViolationError,
+  ContractSchemaUnsupportedError,
+  ContractValidationError,
+} from './errors.js';
+
+export type {
+  CreationContractProposalData,
+  CreationContractVersionData,
+  CreationContractCurrentData,
+  CreationContractLockEventData,
+  CreateCreationContractProposalInput,
+  CreateCreationContractVersionInput,
+  CreationContractProposalRepositoryPort,
+  CreationContractVersionRepositoryPort,
+  CreationContractCurrentRepositoryPort,
+  CreationContractLockEventRepositoryPort,
+} from './creation-contract-types.js';
+
+export {
+  getCurrentCreationContract,
+  listCreationContractVersions,
+  getCreationContractProposal,
+  listCreationContractProposals,
+} from './creation-contract.js';
+export type {
+  CreationContractQueryDeps,
+  GetCurrentCreationContractInput,
+  ListCreationContractVersionsInput,
+  GetCreationContractProposalInput,
+  ListCreationContractProposalsInput,
+} from './creation-contract.js';
