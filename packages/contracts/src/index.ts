@@ -55,6 +55,14 @@ export type ErrorCode =
   | 'GRILL_PLAN_CYCLE_DETECTED'
   | 'GRILL_PLAN_PROPOSAL_NOT_FOUND'
   | 'GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE'
+  | 'CONTRACT_VERSION_CONFLICT'
+  | 'CONTRACT_PROPOSAL_STALE'
+  | 'CONTRACT_PROPOSAL_NOT_FOUND'
+  | 'CONTRACT_PROPOSAL_NOT_ACCEPTABLE'
+  | 'CONTRACT_LOCK_CONFLICT'
+  | 'CONTRACT_MODEL_LOCK_VIOLATION'
+  | 'CONTRACT_SCHEMA_UNSUPPORTED'
+  | 'CONTRACT_VALIDATION_FAILED'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -395,6 +403,14 @@ export function isAppError(data: unknown): data is AppError {
     'GRILL_PLAN_CYCLE_DETECTED',
     'GRILL_PLAN_PROPOSAL_NOT_FOUND',
     'GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE',
+    'CONTRACT_VERSION_CONFLICT',
+    'CONTRACT_PROPOSAL_STALE',
+    'CONTRACT_PROPOSAL_NOT_FOUND',
+    'CONTRACT_PROPOSAL_NOT_ACCEPTABLE',
+    'CONTRACT_LOCK_CONFLICT',
+    'CONTRACT_MODEL_LOCK_VIOLATION',
+    'CONTRACT_SCHEMA_UNSUPPORTED',
+    'CONTRACT_VALIDATION_FAILED',
     'INTERNAL_ERROR',
   ]);
   return (
@@ -906,4 +922,121 @@ export function isValidGrillQuestionPlanProposalIdInput(
   const obj = data as Record<string, unknown>;
   if (!hasOnlyKeys(obj, ['projectId', 'sessionId', 'proposalId'])) return false;
   return isPlannerId(obj.projectId) && isPlannerId(obj.sessionId) && isPlannerId(obj.proposalId);
+}
+
+// ── 创作契约 DTO ────────────────────────────────────────────────
+
+/** 创作契约 sections 公开数据 —— 解析后的 typed sections，不含原始 JSON */
+export interface CreationContractSectionsPublicData {
+  readonly premise: string;
+  readonly genre: ReadonlyArray<string>;
+  readonly tone: ReadonlyArray<string>;
+  readonly themes?: ReadonlyArray<string>;
+  readonly targetAudience: string;
+  readonly narrativePov: string;
+  readonly tense: string;
+  readonly targetLength?: { readonly unit: string; readonly value: number };
+  readonly structure?: string;
+  readonly protagonist: {
+    readonly characterKey: string;
+    readonly name: string;
+    readonly role?: string;
+    readonly motivation?: string;
+    readonly arc?: string;
+    readonly traits?: ReadonlyArray<string>;
+  };
+  readonly supportingCharacters?: ReadonlyArray<{
+    readonly characterKey: string;
+    readonly name: string;
+    readonly role?: string;
+    readonly relationship?: string;
+    readonly traits?: ReadonlyArray<string>;
+  }>;
+  readonly relationships?: ReadonlyArray<{
+    readonly relationshipKey: string;
+    readonly fromCharacterKey: string;
+    readonly toCharacterKey: string;
+    readonly type: string;
+    readonly dynamic?: string;
+  }>;
+  readonly worldRules?: ReadonlyArray<string>;
+  readonly mustInclude?: ReadonlyArray<string>;
+  readonly mustAvoid?: ReadonlyArray<string>;
+  readonly contentBoundaries?: {
+    readonly rating?: string;
+    readonly allowedContent?: ReadonlyArray<string>;
+    readonly prohibitedContent?: ReadonlyArray<string>;
+    readonly notes?: string;
+  };
+  readonly unresolvedQuestions?: ReadonlyArray<string>;
+}
+
+/** 创作契约版本公开数据 —— 返回给调用方的安全数据 */
+export interface ContractVersionPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly version: number;
+  readonly schemaVersion: number;
+  readonly sourceProposalId: string | null;
+  readonly sections: CreationContractSectionsPublicData;
+  readonly lockedFieldPaths: ReadonlyArray<string>;
+  readonly contractSnapshotHash: string;
+  readonly createdAt: string;
+  readonly createdBy: string;
+}
+
+/** 创作契约版本摘要 —— 列表展示用 */
+export interface ContractVersionSummary {
+  readonly id: string;
+  readonly projectId: string;
+  readonly version: number;
+  readonly schemaVersion: number;
+  readonly contractSnapshotHash: string;
+  readonly createdAt: string;
+  readonly createdBy: string;
+}
+
+/** 创作契约提案公开数据 */
+export interface ProposalPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly taskId: string;
+  readonly invocationId: string;
+  readonly status: string;
+  readonly baseGrillSessionId: string;
+  readonly baseGrillSessionVersion: number;
+  readonly baseContractVersion: number | null;
+  readonly schemaVersion: number;
+  readonly sections: CreationContractSectionsPublicData;
+  readonly sectionsHash: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 创作契约基线引用 DTO */
+export interface ContractBaselineRefPublicData {
+  readonly contractVersionId: string | null;
+  readonly contractVersion: number | null;
+  readonly contractSnapshotHash: string | null;
+}
+
+/** 查询当前创作契约输入 */
+export interface GetCurrentCreationContractInput {
+  readonly projectId: string;
+}
+
+/** 列出创作契约版本输入 */
+export interface ListCreationContractVersionsInput {
+  readonly projectId: string;
+}
+
+/** 获取创作契约提案输入 */
+export interface GetCreationContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+}
+
+/** 列出创作契约提案输入 */
+export interface ListCreationContractProposalsInput {
+  readonly projectId: string;
 }
