@@ -65,7 +65,7 @@ function makeVersion(
     sectionsJson: SECTIONS_JSON,
     lockedFieldPathsJson: '[]',
     contractSnapshotHash: HASH_A,
-    provenanceJson: '[]',
+    provenanceJson: '{"source":"user"}',
     createdAt: '2026-01-01T00:00:00Z',
     createdBy: 'ai-proposal-accepted',
     ...overrides,

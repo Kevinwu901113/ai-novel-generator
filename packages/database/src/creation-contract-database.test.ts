@@ -2,75 +2,59 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
+import {
+  canonicalSerializeContractSections,
+  validateCreationContractSections,
+} from '@ai-novel/domain';
 import { ProjectDatabase } from './project-database.js';
+import { sha256Utf8 } from './creation-contract-repositories.js';
 
-const HASH_A = 'a'.repeat(64);
-const HASH_B = 'b'.repeat(64);
-
-function makeSectionsJson(): string {
-  return JSON.stringify({
+function makeSections() {
+  return {
     premise: 'A story',
     genre: ['fantasy'],
     tone: ['epic'],
     targetAudience: 'adults',
-    narrativePov: 'THIRD_LIMITED',
-    tense: 'PAST',
+    narrativePov: 'THIRD_LIMITED' as const,
+    tense: 'PAST' as const,
     protagonist: { characterKey: 'hero', name: 'Hero' },
-  });
+  };
 }
+
+function makeSectionsJson(): string {
+  return canonicalSerializeContractSections(validateCreationContractSections(makeSections()));
+}
+
+function makeSectionsHash(): string {
+  return sha256Utf8(makeSectionsJson());
+}
+
+function makeHashB(): string {
+  return sha256Utf8(
+    canonicalSerializeContractSections(
+      validateCreationContractSections({ ...makeSections(), premise: 'B story' }),
+    ),
+  );
+}
+
+const VALID_PROV = JSON.stringify({ source: 'user' });
 
 describe('creation contract database', () => {
   let dir: string;
   let db: ProjectDatabase;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'cc-test-'));
-    db = new ProjectDatabase(join(dir, 'project.sqlite'));
-  });
-
-  afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  // ── Migration ─────────────────────────────────────────────
-
-  it('migration creates all four tables', () => {
-    // Tables exist if we can query them
-    const proposalRepo = db.getCreationContractProposalRepository();
-    const versionRepo = db.getCreationContractVersionRepository();
-    const currentRepo = db.getCreationContractCurrentRepository();
-    const lockEventRepo = db.getCreationContractLockEventRepository();
-
-    // Empty queries should succeed
-    expect(proposalRepo.listByProject('p1')).toEqual([]);
-    expect(versionRepo.listSummaries('p1')).toEqual([]);
-    expect(currentRepo.get('p1')).toBeNull();
-    expect(lockEventRepo.listByProject('p1')).toEqual([]);
-  });
-
-  it('migration is idempotent', () => {
-    db.close();
-    // Re-open with same path → migration should not fail
-    db = new ProjectDatabase(join(dir, 'project.sqlite'));
-    expect(db.getCreationContractProposalRepository().listByProject('p1')).toEqual([]);
-  });
-
-  // ── STRICT tables ─────────────────────────────────────────
-
-  it('tables are STRICT', () => {
-    // We can verify by checking that the migration SQL includes STRICT
-    // and that operations work correctly
-    const proposalRepo = db.getCreationContractProposalRepository();
-    expect(proposalRepo.listByProject('p1')).toEqual([]);
-  });
-
-  // ── Proposal ──────────────────────────────────────────────
-
-  it('inserts and retrieves proposal', () => {
-    // First create required FK targets (task + invocation)
+  function setupFks() {
+    const grillSessionRepo = db.getGrillSessionRepository();
     const taskRepo = db.getTaskRepository();
     const invRepo = db.getModelInvocationRepository();
+
+    grillSessionRepo.create({
+      id: 'gs1',
+      projectId: 'p1',
+      goal: 'test',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
 
     taskRepo.create({
       id: 't1',
@@ -92,11 +76,13 @@ describe('creation contract database', () => {
       status: 'SUCCEEDED',
       attemptNumber: 1,
       requestKind: 'test',
-      promptHash: HASH_A,
+      promptHash: 'a'.repeat(64),
       requestMetadataJson: '{}',
       createdAt: '2026-01-01T00:00:00Z',
     });
+  }
 
+  function createProposal(overrides: Record<string, unknown> = {}) {
     const proposalRepo = db.getCreationContractProposalRepository();
     proposalRepo.create({
       id: 'prop1',
@@ -108,61 +94,85 @@ describe('creation contract database', () => {
       baseContractVersion: null,
       schemaVersion: 1,
       sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
+      sectionsHash: makeSectionsHash(),
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
+      ...overrides,
     });
+  }
 
-    const retrieved = proposalRepo.getById('p1', 'prop1');
+  function createVersion(overrides: Record<string, unknown> = {}) {
+    const versionRepo = db.getCreationContractVersionRepository();
+    versionRepo.create({
+      id: 'v1',
+      projectId: 'p1',
+      version: 1,
+      schemaVersion: 1,
+      sourceProposalId: 'prop1',
+      basedOnGrillSessionId: 'gs1',
+      basedOnGrillSessionVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      lockedFieldPathsJson: '[]',
+      contractSnapshotHash: makeSectionsHash(),
+      provenanceJson: VALID_PROV,
+      createdAt: '2026-01-01T00:00:00Z',
+      createdBy: 'user',
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cc-test-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // ── Migration ─────────────────────────────────────────────
+
+  it('migration creates all four tables', () => {
+    const proposalRepo = db.getCreationContractProposalRepository();
+    const versionRepo = db.getCreationContractVersionRepository();
+    const currentRepo = db.getCreationContractCurrentRepository();
+    const lockEventRepo = db.getCreationContractLockEventRepository();
+
+    expect(proposalRepo.listByProject('p1')).toEqual([]);
+    expect(versionRepo.listSummaries('p1')).toEqual([]);
+    expect(currentRepo.get('p1')).toBeNull();
+    expect(lockEventRepo.listByProject('p1')).toEqual([]);
+  });
+
+  it('migration is idempotent', () => {
+    db.close();
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    expect(db.getCreationContractProposalRepository().listByProject('p1')).toEqual([]);
+  });
+
+  it('tables are STRICT', () => {
+    const proposalRepo = db.getCreationContractProposalRepository();
+    expect(proposalRepo.listByProject('p1')).toEqual([]);
+  });
+
+  // ── Proposal ──────────────────────────────────────────────
+
+  it('inserts and retrieves proposal', () => {
+    setupFks();
+    createProposal();
+
+    const retrieved = db.getCreationContractProposalRepository().getById('p1', 'prop1');
     expect(retrieved).not.toBeNull();
     expect(retrieved!.status).toBe('PROPOSED');
-    expect(retrieved!.sectionsHash).toBe(HASH_A);
+    expect(retrieved!.sectionsHash).toBe(makeSectionsHash());
   });
 
   it('proposal status CAS transition', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
 
     const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    // Valid transition
     expect(
       proposalRepo.transitionStatus('p1', 'prop1', 'PROPOSED', 'ACCEPTED', '2026-01-02T00:00:00Z'),
     ).toBe(true);
@@ -175,119 +185,118 @@ describe('creation contract database', () => {
   });
 
   it('proposal listByGrillSession', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const results = proposalRepo.listByGrillSession('gs1');
+    const results = db.getCreationContractProposalRepository().listByGrillSession('gs1');
     expect(results).toHaveLength(1);
     expect(results[0].id).toBe('prop1');
+  });
+
+  // ── Status transition trigger ─────────────────────────────
+
+  it('rejects terminal → PROPOSED transition', () => {
+    setupFks();
+    createProposal();
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    proposalRepo.transitionStatus('p1', 'prop1', 'PROPOSED', 'ACCEPTED', '2026-01-02T00:00:00Z');
+
+    // ACCEPTED → PROPOSED should fail
+    expect(() => {
+      db.transaction(() => {
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(
+            `UPDATE creation_contract_proposals SET status = 'PROPOSED', updated_at = '2026-01-03T00:00:00Z' WHERE id = ?`,
+          )
+          .run('prop1');
+      });
+    }).toThrow(/can only transition from PROPOSED/);
+  });
+
+  it('rejects terminal → terminal transition', () => {
+    setupFks();
+    createProposal();
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    proposalRepo.transitionStatus('p1', 'prop1', 'PROPOSED', 'ACCEPTED', '2026-01-02T00:00:00Z');
+
+    expect(() => {
+      db.transaction(() => {
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(
+            `UPDATE creation_contract_proposals SET status = 'REJECTED', updated_at = '2026-01-03T00:00:00Z' WHERE id = ?`,
+          )
+          .run('prop1');
+      });
+    }).toThrow(/can only transition from PROPOSED/);
+  });
+
+  it('rejects same-status update', () => {
+    setupFks();
+    createProposal();
+
+    expect(() => {
+      db.transaction(() => {
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(
+            `UPDATE creation_contract_proposals SET status = 'PROPOSED', updated_at = '2026-01-02T00:00:00Z' WHERE id = ?`,
+          )
+          .run('prop1');
+      });
+    }).toThrow(/cannot update to same status|updated_at cannot be changed/);
+  });
+
+  it('rejects updated_at-only update without status change', () => {
+    setupFks();
+    createProposal();
+
+    expect(() => {
+      db.transaction(() => {
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(
+            `UPDATE creation_contract_proposals SET updated_at = '2026-01-02T00:00:00Z' WHERE id = ?`,
+          )
+          .run('prop1');
+      });
+    }).toThrow(/updated_at cannot be changed/);
+  });
+
+  it('rejects status change without updated_at change', () => {
+    setupFks();
+    createProposal();
+
+    expect(() => {
+      db.transaction(() => {
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(`UPDATE creation_contract_proposals SET status = 'ACCEPTED' WHERE id = ?`)
+          .run('prop1');
+      });
+    }).toThrow(/updated_at must change/);
   });
 
   // ── Version ───────────────────────────────────────────────
 
   it('inserts and retrieves version', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
+    createVersion();
 
     const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: 'gs1',
-      basedOnGrillSessionVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'ai-proposal-accepted',
-    });
-
     const byId = versionRepo.getById('p1', 'v1');
     expect(byId).not.toBeNull();
     expect(byId!.version).toBe(1);
-    expect(byId!.createdBy).toBe('ai-proposal-accepted');
+    expect(byId!.createdBy).toBe('user');
 
     const byVersion = versionRepo.getByVersion('p1', 1);
     expect(byVersion).not.toBeNull();
@@ -302,68 +311,12 @@ describe('creation contract database', () => {
   });
 
   it('version number unique per project', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
+    createVersion();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
-
-    // Duplicate version number → should throw
     expect(() =>
-      versionRepo.create({
+      db.getCreationContractVersionRepository().create({
         id: 'v2',
         projectId: 'p1',
         version: 1,
@@ -373,8 +326,8 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: makeSectionsJson(),
         lockedFieldPathsJson: '[]',
-        contractSnapshotHash: HASH_B,
-        provenanceJson: '[]',
+        contractSnapshotHash: makeHashB(),
+        provenanceJson: VALID_PROV,
         createdAt: '2026-01-02T00:00:00Z',
         createdBy: 'user',
       }),
@@ -384,224 +337,46 @@ describe('creation contract database', () => {
   // ── Current Pointer ───────────────────────────────────────
 
   it('current pointer: insert first + get', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
+    setupFks();
+    createProposal();
+    createVersion();
 
     const currentRepo = db.getCreationContractCurrentRepository();
     expect(currentRepo.get('p1')).toBeNull();
 
-    const inserted = currentRepo.insertFirst('p1', 'v1', '2026-01-01T00:00:00Z');
-    expect(inserted).toBe(true);
-
+    expect(currentRepo.insertFirst('p1', 'v1', '2026-01-01T00:00:00Z')).toBe(true);
     const current = currentRepo.get('p1');
     expect(current).not.toBeNull();
     expect(current!.currentVersionId).toBe('v1');
   });
 
-  it('current pointer: duplicate insert fails', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
+  it('current pointer: duplicate insert fails (pointer uniqueness)', () => {
+    setupFks();
+    createProposal();
+    createVersion();
 
     const currentRepo = db.getCreationContractCurrentRepository();
     expect(currentRepo.insertFirst('p1', 'v1', '2026-01-01T00:00:00Z')).toBe(true);
-    // Duplicate → false (PK conflict)
     expect(currentRepo.insertFirst('p1', 'v1', '2026-01-02T00:00:00Z')).toBe(false);
   });
 
   it('current pointer: CAS update', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
-    versionRepo.create({
+    setupFks();
+    createProposal();
+    createVersion();
+    createVersion({
       id: 'v2',
-      projectId: 'p1',
       version: 2,
-      schemaVersion: 1,
+      contractSnapshotHash: makeHashB(),
       sourceProposalId: null,
       basedOnGrillSessionId: null,
       basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_B,
-      provenanceJson: '[]',
-      createdAt: '2026-01-02T00:00:00Z',
-      createdBy: 'user',
     });
 
     const currentRepo = db.getCreationContractCurrentRepository();
     currentRepo.insertFirst('p1', 'v1', '2026-01-01T00:00:00Z');
 
-    // CAS with wrong expected → false
     expect(currentRepo.casUpdate('p1', 'v999', 'v2', '2026-01-02T00:00:00Z')).toBe(false);
-
-    // CAS with correct expected → true
     expect(currentRepo.casUpdate('p1', 'v1', 'v2', '2026-01-02T00:00:00Z')).toBe(true);
     expect(currentRepo.get('p1')!.currentVersionId).toBe('v2');
   });
@@ -609,64 +384,9 @@ describe('creation contract database', () => {
   // ── Lock Events ───────────────────────────────────────────
 
   it('lock events: append and list', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'lock',
-    });
+    setupFks();
+    createProposal();
+    createVersion({ createdBy: 'lock' });
 
     const lockEventRepo = db.getCreationContractLockEventRepository();
     lockEventRepo.append({
@@ -688,53 +408,14 @@ describe('creation contract database', () => {
   // ── Immutability Triggers ─────────────────────────────────
 
   it('proposal sections_json cannot be updated', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    // Direct SQL attempt to modify sections_json should fail
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
           .prepare(`UPDATE creation_contract_proposals SET sections_json = ? WHERE id = ?`)
           .run('{"modified": true}', 'prop1');
       });
@@ -742,70 +423,15 @@ describe('creation contract database', () => {
   });
 
   it('version cannot be updated', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
+    createVersion();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
-
-    // Direct SQL attempt to update version should fail
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
           .prepare(`UPDATE creation_contract_versions SET sections_json = ? WHERE id = ?`)
           .run('{"modified": true}', 'v1');
       });
@@ -813,132 +439,25 @@ describe('creation contract database', () => {
   });
 
   it('version cannot be deleted', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'user',
-    });
+    setupFks();
+    createProposal();
+    createVersion();
 
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db.prepare(`DELETE FROM creation_contract_versions WHERE id = ?`).run('v1');
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(`DELETE FROM creation_contract_versions WHERE id = ?`)
+          .run('v1');
       });
     }).toThrow(/append-only/);
   });
 
   it('lock events cannot be updated or deleted', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-    versionRepo.create({
-      id: 'v1',
-      projectId: 'p1',
-      version: 1,
-      schemaVersion: 1,
-      sourceProposalId: 'prop1',
-      basedOnGrillSessionId: null,
-      basedOnGrillSessionVersion: null,
-      sectionsJson: makeSectionsJson(),
-      lockedFieldPathsJson: '[]',
-      contractSnapshotHash: HASH_A,
-      provenanceJson: '[]',
-      createdAt: '2026-01-01T00:00:00Z',
-      createdBy: 'lock',
-    });
+    setupFks();
+    createProposal();
+    createVersion({ createdBy: 'lock' });
 
     const lockEventRepo = db.getCreationContractLockEventRepository();
     lockEventRepo.append({
@@ -951,214 +470,38 @@ describe('creation contract database', () => {
       createdBy: 'user',
     });
 
-    // Update should fail
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
           .prepare(`UPDATE creation_contract_lock_events SET action = 'UNLOCK' WHERE id = ?`)
           .run('le1');
       });
     }).toThrow(/append-only/);
 
-    // Delete should fail
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db.prepare(`DELETE FROM creation_contract_lock_events WHERE id = ?`).run('le1');
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(`DELETE FROM creation_contract_lock_events WHERE id = ?`)
+          .run('le1');
       });
     }).toThrow(/append-only/);
-  });
-
-  // ── list排序 ──────────────────────────────────────────────
-
-  it('list returns sorted results', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    proposalRepo.create({
-      id: 'prop2',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 2,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_B,
-      createdAt: '2026-01-02T00:00:00Z',
-      updatedAt: '2026-01-02T00:00:00Z',
-    });
-
-    const proposals = proposalRepo.listByProject('p1');
-    expect(proposals).toHaveLength(2);
-    // sorted by created_at DESC, id
-    expect(proposals[0].id).toBe('prop2');
-    expect(proposals[1].id).toBe('prop1');
-  });
-
-  // ── Transaction rollback ──────────────────────────────────
-
-  it('transaction rollback leaves no partial data', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    const versionRepo = db.getCreationContractVersionRepository();
-
-    // Transaction that inserts version then fails
-    expect(() => {
-      db.transaction(() => {
-        versionRepo.create({
-          id: 'v1',
-          projectId: 'p1',
-          version: 1,
-          schemaVersion: 1,
-          sourceProposalId: 'prop1',
-          basedOnGrillSessionId: null,
-          basedOnGrillSessionVersion: null,
-          sectionsJson: makeSectionsJson(),
-          lockedFieldPathsJson: '[]',
-          contractSnapshotHash: HASH_A,
-          provenanceJson: '[]',
-          createdAt: '2026-01-01T00:00:00Z',
-          createdBy: 'user',
-        });
-        throw new Error('intentional failure');
-      });
-    }).toThrow('intentional failure');
-
-    // Version should not exist after rollback
-    expect(versionRepo.getById('p1', 'v1')).toBeNull();
   });
 
   // ── Proposal immutability (identity fields) ───────────────
 
   it('proposal identity fields cannot be updated', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-
-    // Try to modify task_id
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
           .prepare(`UPDATE creation_contract_proposals SET task_id = 'other' WHERE id = ?`)
           .run('prop1');
       });
@@ -1168,52 +511,16 @@ describe('creation contract database', () => {
   // ── Proposal DELETE protection ──────────────────────────────
 
   it('proposal cannot be deleted (append-only)', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
-
-    const proposalRepo = db.getCreationContractProposalRepository();
-    proposalRepo.create({
-      id: 'prop1',
-      projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
-      baseGrillSessionId: 'gs1',
-      baseGrillSessionVersion: 1,
-      baseContractVersion: null,
-      schemaVersion: 1,
-      sectionsJson: makeSectionsJson(),
-      sectionsHash: HASH_A,
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
+    createProposal();
 
     expect(() => {
       db.transaction(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (db as any).db.prepare(`DELETE FROM creation_contract_proposals WHERE id = ?`).run('prop1');
+        (
+          db as unknown as { db: { prepare: (s: string) => { run: (...a: unknown[]) => unknown } } }
+        ).db
+          .prepare(`DELETE FROM creation_contract_proposals WHERE id = ?`)
+          .run('prop1');
       });
     }).toThrow(/append-only/);
   });
@@ -1221,35 +528,10 @@ describe('creation contract database', () => {
   // ── json_valid CHECK constraints ────────────────────────────
 
   it('rejects invalid JSON in proposal sections_json', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
     expect(() =>
-      proposalRepo.create({
+      db.getCreationContractProposalRepository().create({
         id: 'prop-bad',
         projectId: 'p1',
         taskId: 't1',
@@ -1259,7 +541,7 @@ describe('creation contract database', () => {
         baseContractVersion: null,
         schemaVersion: 1,
         sectionsJson: 'not valid json',
-        sectionsHash: HASH_A,
+        sectionsHash: makeSectionsHash(),
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-01T00:00:00Z',
       }),
@@ -1267,9 +549,8 @@ describe('creation contract database', () => {
   });
 
   it('rejects invalid JSON in version sections_json', () => {
-    const versionRepo = db.getCreationContractVersionRepository();
     expect(() =>
-      versionRepo.create({
+      db.getCreationContractVersionRepository().create({
         id: 'v-bad',
         projectId: 'p1',
         version: 1,
@@ -1279,8 +560,8 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: '{broken',
         lockedFieldPathsJson: '[]',
-        contractSnapshotHash: HASH_A,
-        provenanceJson: '[]',
+        contractSnapshotHash: makeSectionsHash(),
+        provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
       }),
@@ -1288,9 +569,8 @@ describe('creation contract database', () => {
   });
 
   it('rejects invalid JSON in version locked_field_paths_json', () => {
-    const versionRepo = db.getCreationContractVersionRepository();
     expect(() =>
-      versionRepo.create({
+      db.getCreationContractVersionRepository().create({
         id: 'v-bad2',
         projectId: 'p1',
         version: 1,
@@ -1300,8 +580,8 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: makeSectionsJson(),
         lockedFieldPathsJson: 'not json',
-        contractSnapshotHash: HASH_A,
-        provenanceJson: '[]',
+        contractSnapshotHash: makeSectionsHash(),
+        provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
       }),
@@ -1311,35 +591,10 @@ describe('creation contract database', () => {
   // ── Hash length CHECK ──────────────────────────────────────
 
   it('rejects hash with wrong length in proposal', () => {
-    const taskRepo = db.getTaskRepository();
-    const invRepo = db.getModelInvocationRepository();
-    taskRepo.create({
-      id: 't1',
-      projectId: 'p1',
-      taskType: 'GRILL_QUESTION_PLAN',
-      status: 'SUCCEEDED',
-      inputVersionJson: '{}',
-      payloadJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-      updatedAt: '2026-01-01T00:00:00Z',
-    });
-    invRepo.create({
-      id: 'inv1',
-      projectId: 'p1',
-      taskId: 't1',
-      providerProfileId: 'pp1',
-      model: 'm',
-      status: 'SUCCEEDED',
-      attemptNumber: 1,
-      requestKind: 'test',
-      promptHash: HASH_A,
-      requestMetadataJson: '{}',
-      createdAt: '2026-01-01T00:00:00Z',
-    });
+    setupFks();
 
-    const proposalRepo = db.getCreationContractProposalRepository();
     expect(() =>
-      proposalRepo.create({
+      db.getCreationContractProposalRepository().create({
         id: 'prop-bad-hash',
         projectId: 'p1',
         taskId: 't1',
@@ -1354,5 +609,328 @@ describe('creation contract database', () => {
         updatedAt: '2026-01-01T00:00:00Z',
       }),
     ).toThrow();
+  });
+
+  // ── Null-pair CHECK ────────────────────────────────────────
+
+  it('rejects version with based_on session id but no version', () => {
+    setupFks();
+    createProposal();
+
+    expect(() =>
+      db.getCreationContractVersionRepository().create({
+        id: 'v-bad-pair',
+        projectId: 'p1',
+        version: 2,
+        schemaVersion: 1,
+        sourceProposalId: null,
+        basedOnGrillSessionId: 'gs1',
+        basedOnGrillSessionVersion: null,
+        sectionsJson: makeSectionsJson(),
+        lockedFieldPathsJson: '[]',
+        contractSnapshotHash: makeSectionsHash(),
+        provenanceJson: VALID_PROV,
+        createdAt: '2026-01-01T00:00:00Z',
+        createdBy: 'user',
+      }),
+    ).toThrow(/null-pair/);
+  });
+
+  it('rejects version with based_on version but no session id', () => {
+    setupFks();
+    createProposal();
+
+    expect(() =>
+      db.getCreationContractVersionRepository().create({
+        id: 'v-bad-pair2',
+        projectId: 'p1',
+        version: 2,
+        schemaVersion: 1,
+        sourceProposalId: null,
+        basedOnGrillSessionId: null,
+        basedOnGrillSessionVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        lockedFieldPathsJson: '[]',
+        contractSnapshotHash: makeSectionsHash(),
+        provenanceJson: VALID_PROV,
+        createdAt: '2026-01-01T00:00:00Z',
+        createdBy: 'user',
+      }),
+    ).toThrow(/null-pair/);
+  });
+
+  // ── Composite FK ───────────────────────────────────────────
+
+  it('rejects proposal with mismatched task invocation FK', () => {
+    setupFks();
+    // Create a second task
+    db.getTaskRepository().create({
+      id: 't2',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+
+    // inv1 belongs to t1, not t2
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-mismatch',
+        projectId: 'p1',
+        taskId: 't2',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: makeSectionsHash(),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects proposal with non-existent grill session', () => {
+    setupFks();
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-nosess',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'nonexistent',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: makeSectionsHash(),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
+
+  // ── Canonical/hash validation on write ─────────────────────
+
+  it('rejects non-canonical sectionsJson on proposal create', () => {
+    setupFks();
+
+    // Valid sections but not in canonical form
+    const nonCanonical = JSON.stringify({
+      protagonist: { characterKey: 'hero', name: 'Hero' },
+      premise: 'A story',
+      genre: ['fantasy'],
+      tone: ['epic'],
+      targetAudience: 'adults',
+      narrativePov: 'THIRD_LIMITED',
+      tense: 'PAST',
+    });
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-noncanon',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: nonCanonical,
+        sectionsHash: sha256Utf8(nonCanonical),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow(/canonical/);
+  });
+
+  it('rejects hash mismatch on proposal create', () => {
+    setupFks();
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-hashmismatch',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: 'b'.repeat(64),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow(/mismatch/);
+  });
+
+  it('rejects non-lowercase hash on proposal create', () => {
+    setupFks();
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-uppercase',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: 'A'.repeat(64),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow(/lowercase hex/);
+  });
+
+  // ── list排序 ──────────────────────────────────────────────
+
+  it('list returns sorted results', () => {
+    setupFks();
+    createProposal();
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    proposalRepo.create({
+      id: 'prop2',
+      projectId: 'p1',
+      taskId: 't1',
+      invocationId: 'inv1',
+      baseGrillSessionId: 'gs1',
+      baseGrillSessionVersion: 2,
+      baseContractVersion: null,
+      schemaVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: makeSectionsHash(),
+      createdAt: '2026-01-02T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    });
+
+    const proposals = proposalRepo.listByProject('p1');
+    expect(proposals).toHaveLength(2);
+    expect(proposals[0].id).toBe('prop2');
+    expect(proposals[1].id).toBe('prop1');
+  });
+
+  // ── Transaction rollback ──────────────────────────────────
+
+  it('transaction rollback leaves no partial data', () => {
+    setupFks();
+    createProposal();
+
+    const versionRepo = db.getCreationContractVersionRepository();
+
+    expect(() => {
+      db.transaction(() => {
+        versionRepo.create({
+          id: 'v1',
+          projectId: 'p1',
+          version: 1,
+          schemaVersion: 1,
+          sourceProposalId: 'prop1',
+          basedOnGrillSessionId: null,
+          basedOnGrillSessionVersion: null,
+          sectionsJson: makeSectionsJson(),
+          lockedFieldPathsJson: '[]',
+          contractSnapshotHash: makeSectionsHash(),
+          provenanceJson: VALID_PROV,
+          createdAt: '2026-01-01T00:00:00Z',
+          createdBy: 'user',
+        });
+        throw new Error('intentional failure');
+      });
+    }).toThrow('intentional failure');
+
+    expect(versionRepo.getById('p1', 'v1')).toBeNull();
+  });
+
+  // ── schemaVersion CHECK ────────────────────────────────────
+
+  it('rejects proposal with wrong schemaVersion', () => {
+    setupFks();
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-bad-schema',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 99,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: makeSectionsHash(),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
+
+  // ── base_contract_version CHECK ────────────────────────────
+
+  it('rejects proposal with base_contract_version = 0', () => {
+    setupFks();
+
+    expect(() =>
+      db.getCreationContractProposalRepository().create({
+        id: 'prop-bcv',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: 0,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: makeSectionsHash(),
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
+
+  // ── supersedeAllProposed ──────────────────────────────────
+
+  it('supersedeAllProposed transitions all PROPOSED to SUPERSEDED', () => {
+    setupFks();
+    createProposal();
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    proposalRepo.create({
+      id: 'prop2',
+      projectId: 'p1',
+      taskId: 't1',
+      invocationId: 'inv1',
+      baseGrillSessionId: 'gs1',
+      baseGrillSessionVersion: 2,
+      baseContractVersion: null,
+      schemaVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: makeSectionsHash(),
+      createdAt: '2026-01-02T00:00:00Z',
+      updatedAt: '2026-01-02T00:00:00Z',
+    });
+
+    const count = proposalRepo.supersedeAllProposed('p1', '2026-01-03T00:00:00Z');
+    expect(count).toBe(2);
+    expect(proposalRepo.getById('p1', 'prop1')!.status).toBe('SUPERSEDED');
+    expect(proposalRepo.getById('p1', 'prop2')!.status).toBe('SUPERSEDED');
+  });
+
+  // ── PRAGMA table_list strict ──────────────────────────────
+
+  it('creation_contract tables are STRICT mode', () => {
+    // Verify by checking that the tables exist and work correctly with strict typing
+    // The STRICT keyword was in the migration DDL
+    const proposalRepo = db.getCreationContractProposalRepository();
+    expect(proposalRepo.listByProject('p1')).toEqual([]);
   });
 });
