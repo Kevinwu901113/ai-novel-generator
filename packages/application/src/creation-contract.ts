@@ -23,7 +23,7 @@ import type {
   CreationContractVersionRepositoryPort,
   CreationContractCurrentRepositoryPort,
 } from './creation-contract-types.js';
-import { ContractProposalNotFoundError } from './errors.js';
+import { ContractProposalNotFoundError, ContractDataCorruptionError } from './errors.js';
 
 // ── 依赖 ──────────────────────────────────────────────────────
 
@@ -133,7 +133,11 @@ export function getCurrentCreationContract(
   if (!current) return null;
 
   const version = deps.versionRepo.getById(input.projectId, current.currentVersionId);
-  if (!version) return null;
+  if (!version) {
+    throw new ContractDataCorruptionError(
+      `current pointer 引用不存在的版本: projectId=${input.projectId}, versionId=${current.currentVersionId}`,
+    );
+  }
 
   const sections = parseSectionsJson(version.sectionsJson);
   const lockedFieldPaths = parseLockedFieldPathsJson(version.lockedFieldPathsJson);
@@ -144,6 +148,8 @@ export function getCurrentCreationContract(
     version: version.version,
     schemaVersion: version.schemaVersion,
     sourceProposalId: version.sourceProposalId,
+    basedOnGrillSessionId: version.basedOnGrillSessionId,
+    basedOnGrillSessionVersion: version.basedOnGrillSessionVersion,
     sections: sectionsToPublicData(sections),
     lockedFieldPaths,
     contractSnapshotHash: version.contractSnapshotHash,

@@ -3,6 +3,17 @@ import {
   isValidHealthCheckResponse,
   isValidCreateProjectInput,
   isValidOpenProjectInput,
+  isValidContractPatchOperationDTO,
+  isValidContractPatchOperationsDTO,
+  isValidContractVersionPublicData,
+  isValidProposalPublicData,
+  isValidCreationContractSectionsPublicData,
+  isValidAcceptCreationContractProposalInput,
+  isValidRejectCreationContractProposalInput,
+  isValidLockCreationContractFieldInput,
+  isValidUnlockCreationContractFieldInput,
+  isValidUpdateCreationContractByUserInput,
+  isValidRequestCreationContractProposalInput,
   isAppError,
   isValidSaveApiKeyInput,
   isValidProviderPublicState,
@@ -528,6 +539,303 @@ describe('Grill 问题规划输入验证', () => {
         sessionId: 'sess-1',
         proposalId: 'prop-1',
         force: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+// ── 创作契约 DTO 验证 ──────────────────────────────────────────
+
+const VALID_SECTIONS_PUBLIC = {
+  premise: 'A story',
+  genre: ['fantasy'],
+  tone: ['epic'],
+  targetAudience: 'adults',
+  narrativePov: 'THIRD_LIMITED',
+  tense: 'PAST',
+  protagonist: { characterKey: 'hero', name: 'Hero' },
+};
+
+describe('isValidContractPatchOperationDTO', () => {
+  it('accepts valid set-scalar with string value', () => {
+    expect(
+      isValidContractPatchOperationDTO({ kind: 'set-scalar', path: '/premise', value: 'x' }),
+    ).toBe(true);
+  });
+
+  it('accepts valid set-scalar with number value', () => {
+    expect(
+      isValidContractPatchOperationDTO({
+        kind: 'set-scalar',
+        path: '/targetLength/value',
+        value: 80000,
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects set-scalar with missing value', () => {
+    expect(isValidContractPatchOperationDTO({ kind: 'set-scalar', path: '/premise' })).toBe(false);
+  });
+
+  it('accepts valid set-string-list', () => {
+    expect(
+      isValidContractPatchOperationDTO({
+        kind: 'set-string-list',
+        path: '/genre',
+        value: ['fantasy'],
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects set-string-list with non-string elements', () => {
+    expect(
+      isValidContractPatchOperationDTO({ kind: 'set-string-list', path: '/genre', value: [1] }),
+    ).toBe(false);
+  });
+
+  it('accepts valid set-structured', () => {
+    expect(
+      isValidContractPatchOperationDTO({
+        kind: 'set-structured',
+        path: '/targetLength',
+        value: { unit: 'words', value: 100 },
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects set-structured with invalid path', () => {
+    expect(
+      isValidContractPatchOperationDTO({ kind: 'set-structured', path: '/premise', value: {} }),
+    ).toBe(false);
+  });
+
+  it('accepts valid remove-field', () => {
+    expect(isValidContractPatchOperationDTO({ kind: 'remove-field', path: '/themes' })).toBe(true);
+  });
+
+  it('accepts valid upsert-protagonist', () => {
+    expect(
+      isValidContractPatchOperationDTO({
+        kind: 'upsert-protagonist',
+        value: { characterKey: 'h', name: 'H' },
+      }),
+    ).toBe(true);
+  });
+
+  it('accepts valid remove-character', () => {
+    expect(isValidContractPatchOperationDTO({ kind: 'remove-character', target: 'sidekick' })).toBe(
+      true,
+    );
+  });
+
+  it('rejects unknown kind', () => {
+    expect(isValidContractPatchOperationDTO({ kind: 'unknown-op' })).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isValidContractPatchOperationDTO(null)).toBe(false);
+  });
+});
+
+describe('isValidContractPatchOperationsDTO', () => {
+  it('accepts valid array', () => {
+    expect(
+      isValidContractPatchOperationsDTO([
+        { kind: 'set-scalar', path: '/premise', value: 'x' },
+        { kind: 'remove-field', path: '/themes' },
+      ]),
+    ).toBe(true);
+  });
+
+  it('accepts empty array', () => {
+    expect(isValidContractPatchOperationsDTO([])).toBe(true);
+  });
+
+  it('rejects non-array', () => {
+    expect(isValidContractPatchOperationsDTO({ kind: 'set-scalar' })).toBe(false);
+  });
+
+  it('rejects array with invalid element', () => {
+    expect(isValidContractPatchOperationsDTO([{ kind: 'bad' }])).toBe(false);
+  });
+});
+
+describe('isValidCreationContractSectionsPublicData', () => {
+  it('accepts valid sections', () => {
+    expect(isValidCreationContractSectionsPublicData(VALID_SECTIONS_PUBLIC)).toBe(true);
+  });
+
+  it('rejects missing premise', () => {
+    expect(
+      isValidCreationContractSectionsPublicData({ ...VALID_SECTIONS_PUBLIC, premise: undefined }),
+    ).toBe(false);
+  });
+
+  it('rejects missing protagonist', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { protagonist, ...rest } = VALID_SECTIONS_PUBLIC;
+    expect(isValidCreationContractSectionsPublicData(rest)).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isValidCreationContractSectionsPublicData(null)).toBe(false);
+  });
+});
+
+describe('isValidContractVersionPublicData', () => {
+  const validVersion = {
+    id: 'v1',
+    projectId: 'p1',
+    version: 1,
+    schemaVersion: 1,
+    sourceProposalId: null,
+    basedOnGrillSessionId: null,
+    basedOnGrillSessionVersion: null,
+    sections: VALID_SECTIONS_PUBLIC,
+    lockedFieldPaths: [],
+    contractSnapshotHash: 'a'.repeat(64),
+    createdAt: '2026-01-01T00:00:00Z',
+    createdBy: 'user',
+  };
+
+  it('accepts valid version', () => {
+    expect(isValidContractVersionPublicData(validVersion)).toBe(true);
+  });
+
+  it('rejects missing id', () => {
+    expect(isValidContractVersionPublicData({ ...validVersion, id: undefined })).toBe(false);
+  });
+
+  it('rejects invalid createdBy', () => {
+    expect(isValidContractVersionPublicData({ ...validVersion, createdBy: 'hacker' })).toBe(false);
+  });
+
+  it('accepts all valid createdBy values', () => {
+    for (const cb of ['user', 'ai-proposal-accepted', 'lock', 'unlock']) {
+      expect(isValidContractVersionPublicData({ ...validVersion, createdBy: cb })).toBe(true);
+    }
+  });
+});
+
+describe('isValidProposalPublicData', () => {
+  const validProposal = {
+    id: 'prop1',
+    projectId: 'p1',
+    taskId: 't1',
+    invocationId: 'inv1',
+    status: 'PROPOSED',
+    baseGrillSessionId: 'gs1',
+    baseGrillSessionVersion: 1,
+    baseContractVersion: null,
+    schemaVersion: 1,
+    sections: VALID_SECTIONS_PUBLIC,
+    sectionsHash: 'a'.repeat(64),
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+
+  it('accepts valid proposal', () => {
+    expect(isValidProposalPublicData(validProposal)).toBe(true);
+  });
+
+  it('rejects invalid status', () => {
+    expect(isValidProposalPublicData({ ...validProposal, status: 'INVALID' })).toBe(false);
+  });
+
+  it('rejects null', () => {
+    expect(isValidProposalPublicData(null)).toBe(false);
+  });
+});
+
+describe('创作契约 mutation 输入验证', () => {
+  it('accept 有效输入通过', () => {
+    expect(
+      isValidAcceptCreationContractProposalInput({
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: 'a'.repeat(64),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+      }),
+    ).toBe(true);
+  });
+
+  it('accept 缺少 proposalId 失败', () => {
+    expect(
+      isValidAcceptCreationContractProposalInput({
+        projectId: 'p1',
+        expectedProposalSectionsHash: 'a'.repeat(64),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+      }),
+    ).toBe(false);
+  });
+
+  it('reject 有效输入通过', () => {
+    expect(
+      isValidRejectCreationContractProposalInput({
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: 'a'.repeat(64),
+      }),
+    ).toBe(true);
+  });
+
+  it('lock 有效输入通过', () => {
+    expect(
+      isValidLockCreationContractFieldInput({
+        projectId: 'p1',
+        fieldPath: '/premise',
+        expectedContractVersion: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('unlock 有效输入通过', () => {
+    expect(
+      isValidUnlockCreationContractFieldInput({
+        projectId: 'p1',
+        fieldPath: '/premise',
+        expectedContractVersion: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it('updateByUser 有效输入通过', () => {
+    expect(
+      isValidUpdateCreationContractByUserInput({
+        projectId: 'p1',
+        expectedContractVersion: 1,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: 'new' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('updateByUser 无效 operations 失败', () => {
+    expect(
+      isValidUpdateCreationContractByUserInput({
+        projectId: 'p1',
+        expectedContractVersion: 1,
+        operations: [{ kind: 'bad' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('requestProposal 有效输入通过', () => {
+    expect(
+      isValidRequestCreationContractProposalInput({
+        projectId: 'p1',
+        expectedGrillSessionVersion: 2,
+      }),
+    ).toBe(true);
+  });
+
+  it('requestProposal 缺少字段失败', () => {
+    expect(
+      isValidRequestCreationContractProposalInput({
+        projectId: 'p1',
       }),
     ).toBe(false);
   });

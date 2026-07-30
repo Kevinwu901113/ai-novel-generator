@@ -14,7 +14,7 @@ import type {
   CreationContractVersionData,
   CreationContractCurrentData,
 } from './creation-contract-types.js';
-import { ContractProposalNotFoundError } from './errors.js';
+import { ContractProposalNotFoundError, ContractDataCorruptionError } from './errors.js';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -131,12 +131,14 @@ describe('getCurrentCreationContract', () => {
     expect(result!.lockedFieldPaths).toEqual([]);
   });
 
-  it('returns null when version missing', () => {
+  it('throws ContractDataCorruptionError when current pointer references missing version', () => {
     const deps = makeMockDeps({
       current: { projectId: 'p1', currentVersionId: 'v999', updatedAt: '2026-01-01T00:00:00Z' },
       versions: [],
     });
-    expect(getCurrentCreationContract(deps, { projectId: 'p1' })).toBeNull();
+    expect(() => getCurrentCreationContract(deps, { projectId: 'p1' })).toThrow(
+      ContractDataCorruptionError,
+    );
   });
 });
 

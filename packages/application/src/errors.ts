@@ -316,3 +316,10 @@ export class ContractValidationError extends AppError {
     this.name = 'ContractValidationError';
   }
 }
+
+export class ContractDataCorruptionError extends AppError {
+  constructor(message: string) {
+    super('INTERNAL_ERROR', `数据完整性异常: ${message}`);
+    this.name = 'ContractDataCorruptionError';
+  }
+}

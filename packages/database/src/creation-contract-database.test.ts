@@ -1164,4 +1164,195 @@ describe('creation contract database', () => {
       });
     }).toThrow(/immutable/);
   });
+
+  // ── Proposal DELETE protection ──────────────────────────────
+
+  it('proposal cannot be deleted (append-only)', () => {
+    const taskRepo = db.getTaskRepository();
+    const invRepo = db.getModelInvocationRepository();
+    taskRepo.create({
+      id: 't1',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    invRepo.create({
+      id: 'inv1',
+      projectId: 'p1',
+      taskId: 't1',
+      providerProfileId: 'pp1',
+      model: 'm',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: HASH_A,
+      requestMetadataJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    proposalRepo.create({
+      id: 'prop1',
+      projectId: 'p1',
+      taskId: 't1',
+      invocationId: 'inv1',
+      baseGrillSessionId: 'gs1',
+      baseGrillSessionVersion: 1,
+      baseContractVersion: null,
+      schemaVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: HASH_A,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+
+    expect(() => {
+      db.transaction(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (db as any).db.prepare(`DELETE FROM creation_contract_proposals WHERE id = ?`).run('prop1');
+      });
+    }).toThrow(/append-only/);
+  });
+
+  // ── json_valid CHECK constraints ────────────────────────────
+
+  it('rejects invalid JSON in proposal sections_json', () => {
+    const taskRepo = db.getTaskRepository();
+    const invRepo = db.getModelInvocationRepository();
+    taskRepo.create({
+      id: 't1',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    invRepo.create({
+      id: 'inv1',
+      projectId: 'p1',
+      taskId: 't1',
+      providerProfileId: 'pp1',
+      model: 'm',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: HASH_A,
+      requestMetadataJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    expect(() =>
+      proposalRepo.create({
+        id: 'prop-bad',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: 'not valid json',
+        sectionsHash: HASH_A,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects invalid JSON in version sections_json', () => {
+    const versionRepo = db.getCreationContractVersionRepository();
+    expect(() =>
+      versionRepo.create({
+        id: 'v-bad',
+        projectId: 'p1',
+        version: 1,
+        schemaVersion: 1,
+        sourceProposalId: null,
+        basedOnGrillSessionId: null,
+        basedOnGrillSessionVersion: null,
+        sectionsJson: '{broken',
+        lockedFieldPathsJson: '[]',
+        contractSnapshotHash: HASH_A,
+        provenanceJson: '[]',
+        createdAt: '2026-01-01T00:00:00Z',
+        createdBy: 'user',
+      }),
+    ).toThrow();
+  });
+
+  it('rejects invalid JSON in version locked_field_paths_json', () => {
+    const versionRepo = db.getCreationContractVersionRepository();
+    expect(() =>
+      versionRepo.create({
+        id: 'v-bad2',
+        projectId: 'p1',
+        version: 1,
+        schemaVersion: 1,
+        sourceProposalId: null,
+        basedOnGrillSessionId: null,
+        basedOnGrillSessionVersion: null,
+        sectionsJson: makeSectionsJson(),
+        lockedFieldPathsJson: 'not json',
+        contractSnapshotHash: HASH_A,
+        provenanceJson: '[]',
+        createdAt: '2026-01-01T00:00:00Z',
+        createdBy: 'user',
+      }),
+    ).toThrow();
+  });
+
+  // ── Hash length CHECK ──────────────────────────────────────
+
+  it('rejects hash with wrong length in proposal', () => {
+    const taskRepo = db.getTaskRepository();
+    const invRepo = db.getModelInvocationRepository();
+    taskRepo.create({
+      id: 't1',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    invRepo.create({
+      id: 'inv1',
+      projectId: 'p1',
+      taskId: 't1',
+      providerProfileId: 'pp1',
+      model: 'm',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: HASH_A,
+      requestMetadataJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+
+    const proposalRepo = db.getCreationContractProposalRepository();
+    expect(() =>
+      proposalRepo.create({
+        id: 'prop-bad-hash',
+        projectId: 'p1',
+        taskId: 't1',
+        invocationId: 'inv1',
+        baseGrillSessionId: 'gs1',
+        baseGrillSessionVersion: 1,
+        baseContractVersion: null,
+        schemaVersion: 1,
+        sectionsJson: makeSectionsJson(),
+        sectionsHash: 'too-short',
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      }),
+    ).toThrow();
+  });
 });

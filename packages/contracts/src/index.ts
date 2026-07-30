@@ -933,9 +933,9 @@ export interface CreationContractSectionsPublicData {
   readonly tone: ReadonlyArray<string>;
   readonly themes?: ReadonlyArray<string>;
   readonly targetAudience: string;
-  readonly narrativePov: string;
-  readonly tense: string;
-  readonly targetLength?: { readonly unit: string; readonly value: number };
+  readonly narrativePov: 'FIRST' | 'THIRD_LIMITED' | 'THIRD_OMNISCIENT' | 'SECOND' | 'OTHER';
+  readonly tense: 'PAST' | 'PRESENT' | 'MIXED';
+  readonly targetLength?: { readonly unit: 'words' | 'chapters'; readonly value: number };
   readonly structure?: string;
   readonly protagonist: {
     readonly characterKey: string;
@@ -978,6 +978,8 @@ export interface ContractVersionPublicData {
   readonly version: number;
   readonly schemaVersion: number;
   readonly sourceProposalId: string | null;
+  readonly basedOnGrillSessionId: string | null;
+  readonly basedOnGrillSessionVersion: number | null;
   readonly sections: CreationContractSectionsPublicData;
   readonly lockedFieldPaths: ReadonlyArray<string>;
   readonly contractSnapshotHash: string;
@@ -1039,4 +1041,368 @@ export interface GetCreationContractProposalInput {
 /** 列出创作契约提案输入 */
 export interface ListCreationContractProposalsInput {
   readonly projectId: string;
+}
+
+// ── 创作契约 ContractPatchOperation DTO ─────────────────────────
+
+/** DTO 版 ContractPatchOperation —— IPC 传输用，无 branded type */
+export type ContractPatchOperationDTO =
+  | ContractPatchSetScalarDTO
+  | ContractPatchSetStringListDTO
+  | ContractPatchSetStructuredDTO
+  | ContractPatchRemoveFieldDTO
+  | ContractPatchUpsertProtagonistDTO
+  | ContractPatchUpsertSupportingCharacterDTO
+  | ContractPatchUpsertRelationshipDTO
+  | ContractPatchRemoveCharacterDTO
+  | ContractPatchRemoveRelationshipDTO;
+
+export interface ContractPatchSetScalarDTO {
+  readonly kind: 'set-scalar';
+  readonly path: string;
+  readonly value: string | number;
+}
+
+export interface ContractPatchSetStringListDTO {
+  readonly kind: 'set-string-list';
+  readonly path: string;
+  readonly value: ReadonlyArray<string>;
+}
+
+export interface ContractPatchSetStructuredDTO {
+  readonly kind: 'set-structured';
+  readonly path: '/targetLength' | '/contentBoundaries';
+  readonly value: unknown;
+}
+
+export interface ContractPatchRemoveFieldDTO {
+  readonly kind: 'remove-field';
+  readonly path: string;
+}
+
+export interface ContractPatchUpsertProtagonistDTO {
+  readonly kind: 'upsert-protagonist';
+  readonly value: unknown;
+}
+
+export interface ContractPatchUpsertSupportingCharacterDTO {
+  readonly kind: 'upsert-supporting-character';
+  readonly target: string;
+  readonly value: unknown;
+}
+
+export interface ContractPatchUpsertRelationshipDTO {
+  readonly kind: 'upsert-relationship';
+  readonly target: string;
+  readonly value: unknown;
+}
+
+export interface ContractPatchRemoveCharacterDTO {
+  readonly kind: 'remove-character';
+  readonly target: string;
+}
+
+export interface ContractPatchRemoveRelationshipDTO {
+  readonly kind: 'remove-relationship';
+  readonly target: string;
+}
+
+// ── 创作契约 Mutation DTO ───────────────────────────────────────
+
+/** 接受创作契约提案输入 */
+export interface AcceptCreationContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+  readonly expectedGrillSessionVersion: number;
+  readonly expectedContractVersion: number | null;
+  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
+}
+
+/** 拒绝创作契约提案输入 */
+export interface RejectCreationContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+}
+
+/** 锁定创作契约字段输入 */
+export interface LockCreationContractFieldInput {
+  readonly projectId: string;
+  readonly fieldPath: string;
+  readonly expectedContractVersion: number;
+}
+
+/** 解锁创作契约字段输入 */
+export interface UnlockCreationContractFieldInput {
+  readonly projectId: string;
+  readonly fieldPath: string;
+  readonly expectedContractVersion: number;
+}
+
+/** 用户直接编辑创作契约输入 */
+export interface UpdateCreationContractByUserInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
+}
+
+/** 请求创作契约提案输入（触发 AI task） */
+export interface RequestCreationContractProposalInput {
+  readonly projectId: string;
+  readonly expectedGrillSessionVersion: number;
+}
+
+// ── 创作契约 IPC 频道 ───────────────────────────────────────────
+
+export const CONTRACT_IPC_CHANNELS = {
+  GET_CURRENT: 'ipc:contract-get-current',
+  LIST_VERSIONS: 'ipc:contract-list-versions',
+  GET_PROPOSAL: 'ipc:contract-get-proposal',
+  LIST_PROPOSALS: 'ipc:contract-list-proposals',
+  ACCEPT_PROPOSAL: 'ipc:contract-accept-proposal',
+  REJECT_PROPOSAL: 'ipc:contract-reject-proposal',
+  LOCK_FIELD: 'ipc:contract-lock-field',
+  UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  UPDATE_BY_USER: 'ipc:contract-update-by-user',
+  REQUEST_PROPOSAL: 'ipc:contract-request-proposal',
+} as const;
+
+// ── 创作契约 ContractAPI ────────────────────────────────────────
+
+/** 创作契约 API —— 通过 contextBridge 暴露给 Renderer */
+export interface ContractAPI {
+  getCurrent(input: GetCurrentCreationContractInput): Promise<ContractVersionPublicData | null>;
+  listVersions(
+    input: ListCreationContractVersionsInput,
+  ): Promise<ReadonlyArray<ContractVersionSummary>>;
+  getProposal(input: GetCreationContractProposalInput): Promise<ProposalPublicData>;
+  listProposals(
+    input: ListCreationContractProposalsInput,
+  ): Promise<ReadonlyArray<ProposalPublicData>>;
+  acceptProposal(input: AcceptCreationContractProposalInput): Promise<ContractVersionPublicData>;
+  rejectProposal(input: RejectCreationContractProposalInput): Promise<ProposalPublicData>;
+  lockField(input: LockCreationContractFieldInput): Promise<ContractVersionPublicData>;
+  unlockField(input: UnlockCreationContractFieldInput): Promise<ContractVersionPublicData>;
+  updateByUser(input: UpdateCreationContractByUserInput): Promise<ContractVersionPublicData>;
+  requestProposal(
+    input: RequestCreationContractProposalInput,
+  ): Promise<{ readonly taskId: string }>;
+}
+
+// ── 创作契约 DTO 运行时验证 ─────────────────────────────────────
+
+const VALID_NARRATIVE_POV: ReadonlySet<string> = new Set([
+  'FIRST',
+  'THIRD_LIMITED',
+  'THIRD_OMNISCIENT',
+  'SECOND',
+  'OTHER',
+]);
+const VALID_TENSE: ReadonlySet<string> = new Set(['PAST', 'PRESENT', 'MIXED']);
+const VALID_TARGET_LENGTH_UNIT: ReadonlySet<string> = new Set(['words', 'chapters']);
+const VALID_PROPOSAL_STATUS: ReadonlySet<string> = new Set([
+  'PROPOSED',
+  'ACCEPTED',
+  'REJECTED',
+  'SUPERSEDED',
+  'STALE',
+]);
+const VALID_CREATED_BY: ReadonlySet<string> = new Set([
+  'user',
+  'ai-proposal-accepted',
+  'lock',
+  'unlock',
+]);
+const VALID_PATCH_KINDS: ReadonlySet<string> = new Set([
+  'set-scalar',
+  'set-string-list',
+  'set-structured',
+  'remove-field',
+  'upsert-protagonist',
+  'upsert-supporting-character',
+  'upsert-relationship',
+  'remove-character',
+  'remove-relationship',
+]);
+
+export function isValidContractPatchOperationDTO(data: unknown): data is ContractPatchOperationDTO {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (typeof obj.kind !== 'string' || !VALID_PATCH_KINDS.has(obj.kind)) return false;
+  switch (obj.kind) {
+    case 'set-scalar':
+      return (
+        typeof obj.path === 'string' &&
+        (typeof obj.value === 'string' || typeof obj.value === 'number')
+      );
+    case 'set-string-list':
+      return (
+        typeof obj.path === 'string' &&
+        Array.isArray(obj.value) &&
+        (obj.value as unknown[]).every((v) => typeof v === 'string')
+      );
+    case 'set-structured':
+      return (
+        (obj.path === '/targetLength' || obj.path === '/contentBoundaries') &&
+        obj.value !== null &&
+        typeof obj.value === 'object'
+      );
+    case 'remove-field':
+      return typeof obj.path === 'string';
+    case 'upsert-protagonist':
+      return typeof obj.value === 'object' && obj.value !== null;
+    case 'upsert-supporting-character':
+    case 'upsert-relationship':
+    case 'remove-character':
+    case 'remove-relationship':
+      return typeof obj.target === 'string';
+    default:
+      return false;
+  }
+}
+
+export function isValidContractPatchOperationsDTO(
+  data: unknown,
+): data is ReadonlyArray<ContractPatchOperationDTO> {
+  if (!Array.isArray(data)) return false;
+  return data.every(isValidContractPatchOperationDTO);
+}
+
+export function isValidAcceptCreationContractProposalInput(
+  data: unknown,
+): data is AcceptCreationContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.proposalId === 'string' &&
+    typeof obj.expectedProposalSectionsHash === 'string' &&
+    typeof obj.expectedGrillSessionVersion === 'number' &&
+    (obj.expectedContractVersion === null || typeof obj.expectedContractVersion === 'number') &&
+    isValidContractPatchOperationsDTO(obj.operations)
+  );
+}
+
+export function isValidRejectCreationContractProposalInput(
+  data: unknown,
+): data is RejectCreationContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.proposalId === 'string' &&
+    typeof obj.expectedProposalSectionsHash === 'string'
+  );
+}
+
+export function isValidLockCreationContractFieldInput(
+  data: unknown,
+): data is LockCreationContractFieldInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.fieldPath === 'string' &&
+    typeof obj.expectedContractVersion === 'number'
+  );
+}
+
+export function isValidUnlockCreationContractFieldInput(
+  data: unknown,
+): data is UnlockCreationContractFieldInput {
+  return isValidLockCreationContractFieldInput(data);
+}
+
+export function isValidUpdateCreationContractByUserInput(
+  data: unknown,
+): data is UpdateCreationContractByUserInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    typeof obj.expectedContractVersion === 'number' &&
+    isValidContractPatchOperationsDTO(obj.operations)
+  );
+}
+
+export function isValidRequestCreationContractProposalInput(
+  data: unknown,
+): data is RequestCreationContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' && typeof obj.expectedGrillSessionVersion === 'number'
+  );
+}
+
+export function isValidCreationContractSectionsPublicData(
+  data: unknown,
+): data is CreationContractSectionsPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (typeof obj.premise !== 'string') return false;
+  if (!Array.isArray(obj.genre) || !obj.genre.every((v: unknown) => typeof v === 'string'))
+    return false;
+  if (!Array.isArray(obj.tone) || !obj.tone.every((v: unknown) => typeof v === 'string'))
+    return false;
+  if (obj.themes !== undefined && !Array.isArray(obj.themes)) return false;
+  if (typeof obj.targetAudience !== 'string') return false;
+  if (typeof obj.narrativePov !== 'string' || !VALID_NARRATIVE_POV.has(obj.narrativePov))
+    return false;
+  if (typeof obj.tense !== 'string' || !VALID_TENSE.has(obj.tense)) return false;
+  if (obj.targetLength !== undefined) {
+    if (typeof obj.targetLength !== 'object' || obj.targetLength === null) return false;
+    const tl = obj.targetLength as Record<string, unknown>;
+    if (typeof tl.unit !== 'string' || !VALID_TARGET_LENGTH_UNIT.has(tl.unit)) return false;
+    if (typeof tl.value !== 'number') return false;
+  }
+  if (obj.structure !== undefined && typeof obj.structure !== 'string') return false;
+  if (typeof obj.protagonist !== 'object' || obj.protagonist === null) return false;
+  const prot = obj.protagonist as Record<string, unknown>;
+  if (typeof prot.characterKey !== 'string' || typeof prot.name !== 'string') return false;
+  return true;
+}
+
+export function isValidContractVersionPublicData(
+  data: unknown,
+): data is ContractVersionPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.version === 'number' &&
+    typeof obj.schemaVersion === 'number' &&
+    (obj.sourceProposalId === null || typeof obj.sourceProposalId === 'string') &&
+    (obj.basedOnGrillSessionId === null || typeof obj.basedOnGrillSessionId === 'string') &&
+    (obj.basedOnGrillSessionVersion === null || typeof obj.basedOnGrillSessionVersion === 'number') &&
+    isValidCreationContractSectionsPublicData(obj.sections) &&
+    Array.isArray(obj.lockedFieldPaths) &&
+    typeof obj.contractSnapshotHash === 'string' &&
+    typeof obj.createdAt === 'string' &&
+    typeof obj.createdBy === 'string' &&
+    VALID_CREATED_BY.has(obj.createdBy)
+  );
+}
+
+export function isValidProposalPublicData(data: unknown): data is ProposalPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.taskId === 'string' &&
+    typeof obj.invocationId === 'string' &&
+    typeof obj.status === 'string' &&
+    VALID_PROPOSAL_STATUS.has(obj.status) &&
+    typeof obj.baseGrillSessionId === 'string' &&
+    typeof obj.baseGrillSessionVersion === 'number' &&
+    (obj.baseContractVersion === null || typeof obj.baseContractVersion === 'number') &&
+    typeof obj.schemaVersion === 'number' &&
+    isValidCreationContractSectionsPublicData(obj.sections) &&
+    typeof obj.sectionsHash === 'string' &&
+    typeof obj.createdAt === 'string' &&
+    typeof obj.updatedAt === 'string'
+  );
 }

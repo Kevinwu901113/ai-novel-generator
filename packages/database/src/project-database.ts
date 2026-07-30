@@ -331,7 +331,7 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         base_grill_session_version INTEGER NOT NULL CHECK (base_grill_session_version > 0),
         base_contract_version INTEGER,
         schema_version INTEGER NOT NULL CHECK (schema_version > 0),
-        sections_json TEXT NOT NULL,
+        sections_json TEXT NOT NULL CHECK (json_valid(sections_json)),
         sections_hash TEXT NOT NULL CHECK (length(sections_hash) = 64),
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -354,10 +354,10 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         source_proposal_id TEXT,
         based_on_grill_session_id TEXT,
         based_on_grill_session_version INTEGER,
-        sections_json TEXT NOT NULL,
-        locked_field_paths_json TEXT NOT NULL DEFAULT '[]',
+        sections_json TEXT NOT NULL CHECK (json_valid(sections_json)),
+        locked_field_paths_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(locked_field_paths_json)),
         contract_snapshot_hash TEXT NOT NULL CHECK (length(contract_snapshot_hash) = 64),
-        provenance_json TEXT NOT NULL,
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
         created_at TEXT NOT NULL,
         created_by TEXT NOT NULL
           CHECK (created_by IN ('user','ai-proposal-accepted','lock','unlock')),
@@ -410,6 +410,12 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
                        created_at ON creation_contract_proposals
       BEGIN
         SELECT RAISE(ABORT, 'creation_contract_proposals identity fields are immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_no_delete
+      BEFORE DELETE ON creation_contract_proposals
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_proposals is append-only');
       END;
 
       -- Immutability triggers: prevent UPDATE/DELETE on versions

@@ -20,6 +20,65 @@ import type {
   CreateCreationContractLockEventData,
 } from './types.js';
 
+// ── 读取验证辅助 ────────────────────────────────────────────────
+
+function requireString(row: Record<string, unknown>, key: string, context: string): string {
+  const v = row[key];
+  if (typeof v !== 'string') throw new Error(`${context}: ${key} 应为 string，实际 ${typeof v}`);
+  return v;
+}
+
+function requireNumber(row: Record<string, unknown>, key: string, context: string): number {
+  const v = row[key];
+  if (typeof v !== 'number') throw new Error(`${context}: ${key} 应为 number，实际 ${typeof v}`);
+  return v;
+}
+
+function optionalString(row: Record<string, unknown>, key: string): string | null {
+  const v = row[key];
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'string') throw new Error(`${key} 应为 string | null，实际 ${typeof v}`);
+  return v;
+}
+
+function optionalNumber(row: Record<string, unknown>, key: string): number | null {
+  const v = row[key];
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'number') throw new Error(`${key} 应为 number | null，实际 ${typeof v}`);
+  return v;
+}
+
+const VALID_PROPOSAL_STATUSES: ReadonlySet<string> = new Set([
+  'PROPOSED',
+  'ACCEPTED',
+  'REJECTED',
+  'SUPERSEDED',
+  'STALE',
+]);
+
+const VALID_CREATED_BY: ReadonlySet<string> = new Set([
+  'user',
+  'ai-proposal-accepted',
+  'lock',
+  'unlock',
+]);
+
+function requireProposalStatus(row: Record<string, unknown>, context: string): import('./types.js').DbProposalStatus {
+  const v = row.status;
+  if (typeof v !== 'string' || !VALID_PROPOSAL_STATUSES.has(v)) {
+    throw new Error(`${context}: status 无效 "${String(v)}"`);
+  }
+  return v as import('./types.js').DbProposalStatus;
+}
+
+function requireCreatedBy(row: Record<string, unknown>, context: string): import('./types.js').DbContractVersionCreatedBy {
+  const v = row.created_by;
+  if (typeof v !== 'string' || !VALID_CREATED_BY.has(v)) {
+    throw new Error(`${context}: created_by 无效 "${String(v)}"`);
+  }
+  return v as import('./types.js').DbContractVersionCreatedBy;
+}
+
 // ── 创作契约提案仓库实现 ──────────────────────────────────────
 
 export class CreationContractProposalRepositoryImpl implements CreationContractProposalRepository {
@@ -97,8 +156,8 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
     id: string,
     expectedStatus: DbProposalStatus,
     newStatus: DbProposalStatus,
-    now: string,
   ): boolean {
+    const now = new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE creation_contract_proposals
@@ -109,7 +168,8 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
     return result.changes === 1;
   }
 
-  supersedeAllProposed(projectId: string, now: string): number {
+  supersedeAllProposed(projectId: string): number {
+    const now = new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE creation_contract_proposals
@@ -121,20 +181,21 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
   }
 
   private toRow(row: Record<string, unknown>): CreationContractProposalRow {
+    const ctx = 'creation_contract_proposals';
     return {
-      id: row.id as string,
-      projectId: row.project_id as string,
-      taskId: row.task_id as string,
-      invocationId: row.invocation_id as string,
-      status: row.status as DbProposalStatus,
-      baseGrillSessionId: row.base_grill_session_id as string,
-      baseGrillSessionVersion: row.base_grill_session_version as number,
-      baseContractVersion: (row.base_contract_version as number) ?? null,
-      schemaVersion: row.schema_version as number,
-      sectionsJson: row.sections_json as string,
-      sectionsHash: row.sections_hash as string,
-      createdAt: row.created_at as string,
-      updatedAt: row.updated_at as string,
+      id: requireString(row, 'id', ctx),
+      projectId: requireString(row, 'project_id', ctx),
+      taskId: requireString(row, 'task_id', ctx),
+      invocationId: requireString(row, 'invocation_id', ctx),
+      status: requireProposalStatus(row, ctx),
+      baseGrillSessionId: requireString(row, 'base_grill_session_id', ctx),
+      baseGrillSessionVersion: requireNumber(row, 'base_grill_session_version', ctx),
+      baseContractVersion: optionalNumber(row, 'base_contract_version'),
+      schemaVersion: requireNumber(row, 'schema_version', ctx),
+      sectionsJson: requireString(row, 'sections_json', ctx),
+      sectionsHash: requireString(row, 'sections_hash', ctx),
+      createdAt: requireString(row, 'created_at', ctx),
+      updatedAt: requireString(row, 'updated_at', ctx),
     };
   }
 }
@@ -227,21 +288,21 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
   }
 
   private toRow(row: Record<string, unknown>): CreationContractVersionRow {
+    const ctx = 'creation_contract_versions';
     return {
-      id: row.id as string,
-      projectId: row.project_id as string,
-      version: row.version as number,
-      schemaVersion: row.schema_version as number,
-      sourceProposalId: (row.source_proposal_id as string) ?? null,
-      basedOnGrillSessionId: (row.based_on_grill_session_id as string) ?? null,
-      basedOnGrillSessionVersion: (row.based_on_grill_session_version as number) ?? null,
-      sectionsJson: row.sections_json as string,
-      lockedFieldPathsJson: row.locked_field_paths_json as string,
-      contractSnapshotHash: row.contract_snapshot_hash as string,
-      provenanceJson: row.provenance_json as string,
-      createdAt: row.created_at as string,
-      createdBy: row.created_by as DbProposalStatus as unknown as
-        'user' | 'ai-proposal-accepted' | 'lock' | 'unlock',
+      id: requireString(row, 'id', ctx),
+      projectId: requireString(row, 'project_id', ctx),
+      version: requireNumber(row, 'version', ctx),
+      schemaVersion: requireNumber(row, 'schema_version', ctx),
+      sourceProposalId: optionalString(row, 'source_proposal_id'),
+      basedOnGrillSessionId: optionalString(row, 'based_on_grill_session_id'),
+      basedOnGrillSessionVersion: optionalNumber(row, 'based_on_grill_session_version'),
+      sectionsJson: requireString(row, 'sections_json', ctx),
+      lockedFieldPathsJson: requireString(row, 'locked_field_paths_json', ctx),
+      contractSnapshotHash: requireString(row, 'contract_snapshot_hash', ctx),
+      provenanceJson: requireString(row, 'provenance_json', ctx),
+      createdAt: requireString(row, 'created_at', ctx),
+      createdBy: requireCreatedBy(row, ctx),
     };
   }
 }
@@ -251,7 +312,8 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
 export class CreationContractCurrentRepositoryImpl implements CreationContractCurrentRepository {
   constructor(private readonly db: DatabaseSync) {}
 
-  insertFirst(projectId: string, versionId: string, now: string): boolean {
+  insertFirst(projectId: string, versionId: string): boolean {
+    const now = new Date().toISOString();
     try {
       this.db
         .prepare(
@@ -260,8 +322,12 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
         )
         .run(projectId, versionId, now);
       return true;
-    } catch {
-      return false;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes('UNIQUE constraint failed')) {
+        return false;
+      }
+      throw e;
     }
   }
 
@@ -269,8 +335,8 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
     projectId: string,
     expectedVersionId: string,
     newVersionId: string,
-    now: string,
   ): boolean {
+    const now = new Date().toISOString();
     const result = this.db
       .prepare(
         `UPDATE creation_contract_current
@@ -290,10 +356,11 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
       )
       .get(projectId) as Record<string, unknown> | undefined;
     if (!row) return null;
+    const ctx = 'creation_contract_current';
     return {
-      projectId: row.project_id as string,
-      currentVersionId: row.current_version_id as string,
-      updatedAt: row.updated_at as string,
+      projectId: requireString(row, 'project_id', ctx),
+      currentVersionId: requireString(row, 'current_version_id', ctx),
+      updatedAt: requireString(row, 'updated_at', ctx),
     };
   }
 }
@@ -349,14 +416,19 @@ export class CreationContractLockEventRepositoryImpl implements CreationContract
   }
 
   private toRow(row: Record<string, unknown>): CreationContractLockEventRow {
+    const ctx = 'creation_contract_lock_events';
+    const action = requireString(row, 'action', ctx);
+    if (action !== 'LOCK' && action !== 'UNLOCK') {
+      throw new Error(`${ctx}: action 无效 "${action}"`);
+    }
     return {
-      id: row.id as string,
-      projectId: row.project_id as string,
-      fieldPath: row.field_path as string,
-      action: row.action as 'LOCK' | 'UNLOCK',
-      versionId: row.version_id as string,
-      createdAt: row.created_at as string,
-      createdBy: row.created_by as string,
+      id: requireString(row, 'id', ctx),
+      projectId: requireString(row, 'project_id', ctx),
+      fieldPath: requireString(row, 'field_path', ctx),
+      action,
+      versionId: requireString(row, 'version_id', ctx),
+      createdAt: requireString(row, 'created_at', ctx),
+      createdBy: requireString(row, 'created_by', ctx),
     };
   }
 }

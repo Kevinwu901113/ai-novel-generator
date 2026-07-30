@@ -19,11 +19,14 @@ import {
   getCanonicalTargetPath,
   operationWriteSetConflictsWithLocks,
   applyContractPatchOperations,
+  parseContractPatchOperation,
+  codePointCompare,
   type CreationContractSections,
   type ProtagonistCharacter,
   type SupportingCharacter,
   type RelationshipEntry,
   type ContractPatchOperation,
+  type ContractPatchContext,
 } from './creation-contract.js';
 
 // ── 辅助 ──────────────────────────────────────────────────────
@@ -45,7 +48,12 @@ function makeSupporting(key: string, name: string): SupportingCharacter {
   };
 }
 
-function makeRelationship(key: string, from: string, to: string, type = 'ally'): RelationshipEntry {
+function makeRelationship(
+  key: string,
+  from: string,
+  to: string,
+  type = 'ally',
+): RelationshipEntry {
   return {
     relationshipKey: createRelationshipKey(key),
     fromCharacterKey: createCharacterKey(from),
@@ -64,6 +72,18 @@ function makeSections(overrides?: Partial<CreationContractSections>): CreationCo
     tense: 'PAST',
     protagonist: makeProtagonist(),
     ...overrides,
+  };
+}
+
+function makeContext(
+  snapshot: CreationContractSections,
+  lockedPaths: readonly string[] = [],
+  authBase: CreationContractSections | null = null,
+): ContractPatchContext {
+  return {
+    sourceSections: snapshot,
+    authoritativeBaseSections: authBase ?? snapshot,
+    lockedFieldPaths: lockedPaths,
   };
 }
 
@@ -237,19 +257,18 @@ describe('isLowercaseSha256Hex', () => {
 
 describe('canonical serialization', () => {
   it('same object different key order → same output', () => {
-    const a = { premise: 'hello', genre: ['fantasy'] };
-    const b = { genre: ['fantasy'], premise: 'hello' };
-    expect(JSON.stringify(a) === JSON.stringify(b)).toBe(false);
-    // Canonical should be the same
-    const sa = canonicalSerializeContractSections(a as unknown as CreationContractSections);
-    const sb = canonicalSerializeContractSections(b as unknown as CreationContractSections);
+    const base = makeSections();
+    const entries = Object.entries(base);
+    const reversed = Object.fromEntries([...entries].reverse());
+    expect(JSON.stringify(base) === JSON.stringify(reversed)).toBe(false);
+    const sa = canonicalSerializeContractSections(base);
+    const sb = canonicalSerializeContractSections(reversed as unknown as CreationContractSections);
     expect(sa).toBe(sb);
   });
 
   it('NFC normalization', () => {
-    // é as single code point vs combining
     const a = makeSections({ premise: 'é' });
-    const b = makeSections({ premise: 'é' });
+    const b = makeSections({ premise: 'é' });
     const sa = canonicalSerializeContractSections(a);
     const sb = canonicalSerializeContractSections(b);
     expect(sa).toBe(sb);
@@ -274,7 +293,9 @@ describe('canonical serialization', () => {
   it('business array order matters', () => {
     const a = makeSections({ genre: ['fantasy', 'adventure'] });
     const b = makeSections({ genre: ['adventure', 'fantasy'] });
-    expect(canonicalSerializeContractSections(a)).not.toBe(canonicalSerializeContractSections(b));
+    expect(canonicalSerializeContractSections(a)).not.toBe(
+      canonicalSerializeContractSections(b),
+    );
   });
 
   it('snapshot includes sections, locks, schemaVersion', () => {
@@ -302,6 +323,72 @@ describe('canonical serialization', () => {
       schemaVersion: 1,
     });
     expect(snap1).toBe(snap2);
+  });
+
+  it('rejects non-positive schemaVersion', () => {
+    expect(() =>
+      canonicalSerializeContractSnapshot({
+        sections: makeSections(),
+        lockedFieldPaths: [],
+        schemaVersion: 0,
+      }),
+    ).toThrow();
+    expect(() =>
+      canonicalSerializeContractSnapshot({
+        sections: makeSections(),
+        lockedFieldPaths: [],
+        schemaVersion: -1,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects non-integer schemaVersion', () => {
+    expect(() =>
+      canonicalSerializeContractSnapshot({
+        sections: makeSections(),
+        lockedFieldPaths: [],
+        schemaVersion: 1.5,
+      }),
+    ).toThrow();
+  });
+
+  it('rejects invalid lock path in serialization', () => {
+    expect(() =>
+      canonicalSerializeLockedFieldPaths(['/unknownSection']),
+    ).toThrow();
+  });
+
+  it('rejects invalid typed-cast sections', () => {
+    const bad = { ...makeSections(), narrativePov: 'INVALID' };
+    expect(() =>
+      canonicalSerializeContractSections(bad as unknown as CreationContractSections),
+    ).toThrow();
+  });
+});
+
+// ── Unicode Code-Point Comparator ─────────────────────────────
+
+describe('codePointCompare', () => {
+  it('sorts ASCII strings by code point', () => {
+    expect(codePointCompare('a', 'b')).toBeLessThan(0);
+    expect(codePointCompare('b', 'a')).toBeGreaterThan(0);
+    expect(codePointCompare('a', 'a')).toBe(0);
+  });
+
+  it('sorts astral code points correctly', () => {
+    const emoji1 = '😀';
+    const emoji2 = '😁';
+    expect(codePointCompare(emoji1, emoji2)).toBeLessThan(0);
+  });
+
+  it('sorts shorter string first when prefix', () => {
+    expect(codePointCompare('ab', 'abc')).toBeLessThan(0);
+  });
+
+  it('NFC normalizes before comparing', () => {
+    const e1 = 'é';
+    const e2 = 'é';
+    expect(codePointCompare(e1, e2)).toBe(0);
   });
 });
 
@@ -349,7 +436,9 @@ describe('validateCreationContractSections', () => {
 
   it('rejects targetLength.value = 0', () => {
     expect(() =>
-      validateCreationContractSections(makeSections({ targetLength: { unit: 'words', value: 0 } })),
+      validateCreationContractSections(
+        makeSections({ targetLength: { unit: 'words', value: 0 } }),
+      ),
     ).toThrow();
   });
 
@@ -433,7 +522,11 @@ describe('parseContractFieldPath', () => {
 
   it('parses collection entity child', () => {
     const p = parseContractFieldPath('/supportingCharacters/alice/name');
-    expect(p).toEqual({ section: 'supportingCharacters', entityKey: 'alice', field: 'name' });
+    expect(p).toEqual({
+      section: 'supportingCharacters',
+      entityKey: 'alice',
+      field: 'name',
+    });
   });
 
   it('rejects unknown section', () => {
@@ -508,9 +601,31 @@ describe('validateNewLockPath', () => {
   });
 
   it('rejects lock on non-existent entity descendant', () => {
-    expect(() => validateNewLockPath('/supportingCharacters/bob/role', [], snapshot)).toThrow(
-      '不存在',
-    );
+    expect(() =>
+      validateNewLockPath('/supportingCharacters/bob/role', [], snapshot),
+    ).toThrow('不存在');
+  });
+
+  it('rejects collection descendant when snapshot is null', () => {
+    expect(() =>
+      validateNewLockPath('/supportingCharacters/alice/role', [], null),
+    ).toThrow('snapshot 为空');
+  });
+
+  it('rejects lock on non-existent contentBoundaries child when section absent', () => {
+    expect(() =>
+      validateNewLockPath('/contentBoundaries/notes', [], snapshot),
+    ).toThrow('contentBoundaries 不存在');
+  });
+
+  it('allows lock on contentBoundaries when section absent (top-level)', () => {
+    expect(() => validateNewLockPath('/contentBoundaries', [], snapshot)).not.toThrow();
+  });
+
+  it('rejects lock on targetLength child when section absent', () => {
+    expect(() =>
+      validateNewLockPath('/targetLength/value', [], snapshot),
+    ).toThrow('targetLength 不存在');
   });
 });
 
@@ -527,14 +642,14 @@ describe('validateUnlockPath', () => {
 
 describe('getCanonicalTargetPath', () => {
   it('set-scalar', () => {
-    expect(getCanonicalTargetPath({ kind: 'set-scalar', path: '/premise', value: 'x' })).toBe(
-      '/premise',
-    );
+    expect(
+      getCanonicalTargetPath({ kind: 'set-scalar', path: '/premise', value: 'x' }),
+    ).toBe('/premise');
   });
   it('upsert-protagonist', () => {
-    expect(getCanonicalTargetPath({ kind: 'upsert-protagonist', value: makeProtagonist() })).toBe(
-      '/protagonist',
-    );
+    expect(
+      getCanonicalTargetPath({ kind: 'upsert-protagonist', value: makeProtagonist() }),
+    ).toBe('/protagonist');
   });
   it('upsert-supporting-character', () => {
     expect(
@@ -574,6 +689,192 @@ describe('operationWriteSetConflictsWithLocks', () => {
   });
 });
 
+// ── Runtime Operation Parser ──────────────────────────────────
+
+describe('parseContractPatchOperation', () => {
+  it('parses valid set-scalar', () => {
+    const op = parseContractPatchOperation({
+      kind: 'set-scalar',
+      path: '/premise',
+      value: 'New premise',
+    });
+    expect(op.kind).toBe('set-scalar');
+  });
+
+  it('rejects unknown kind', () => {
+    expect(() =>
+      parseContractPatchOperation({ kind: 'unknown-op', path: '/premise' }),
+    ).toThrow('未知 operation kind');
+  });
+
+  it('rejects unknown path for set-scalar', () => {
+    expect(() =>
+      parseContractPatchOperation({ kind: 'set-scalar', path: '/unknown', value: 'x' }),
+    ).toThrow('未知路径');
+  });
+
+  it('rejects forbidden scalar path: protagonist/characterKey', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/protagonist/characterKey',
+        value: 'newkey',
+      }),
+    ).toThrow('不允许修改');
+  });
+
+  it('rejects forbidden scalar path: relationships stable identity fields', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/relationships/r1/fromCharacterKey',
+        value: 'hero',
+      }),
+    ).toThrow('未知路径');
+  });
+
+  it('accepts targetLength/unit as valid scalar path', () => {
+    const op = parseContractPatchOperation({
+      kind: 'set-scalar',
+      path: '/targetLength/unit',
+      value: 'words',
+    });
+    expect(op.kind).toBe('set-scalar');
+  });
+
+  it('rejects path/value type mismatch', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/premise',
+        value: 42,
+      }),
+    ).toThrow('必须是字符串');
+  });
+
+  it('rejects extra keys', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/premise',
+        value: 'x',
+        extra: true,
+      }),
+    ).toThrow('未知字段');
+  });
+
+  it('rejects missing keys', () => {
+    expect(() =>
+      parseContractPatchOperation({ kind: 'set-scalar', path: '/premise' }),
+    ).toThrow('缺少必需字段');
+  });
+
+  it('parses valid set-string-list', () => {
+    const op = parseContractPatchOperation({
+      kind: 'set-string-list',
+      path: '/genre',
+      value: ['fantasy'],
+    });
+    expect(op.kind).toBe('set-string-list');
+  });
+
+  it('parses valid remove-field', () => {
+    const op = parseContractPatchOperation({
+      kind: 'remove-field',
+      path: '/themes',
+    });
+    expect(op.kind).toBe('remove-field');
+  });
+
+  it('rejects remove-field on required path', () => {
+    expect(() =>
+      parseContractPatchOperation({ kind: 'remove-field', path: '/premise' }),
+    ).toThrow('不允许');
+  });
+
+  it('rejects remove-field on targetLength/unit', () => {
+    expect(() =>
+      parseContractPatchOperation({ kind: 'remove-field', path: '/targetLength/unit' }),
+    ).toThrow('不允许');
+  });
+
+  it('parses valid upsert-protagonist', () => {
+    const op = parseContractPatchOperation({
+      kind: 'upsert-protagonist',
+      value: { characterKey: 'hero', name: 'Hero' },
+    });
+    expect(op.kind).toBe('upsert-protagonist');
+  });
+
+  it('parses valid set-structured for targetLength', () => {
+    const op = parseContractPatchOperation({
+      kind: 'set-structured',
+      path: '/targetLength',
+      value: { unit: 'words', value: 50000 },
+    });
+    expect(op.kind).toBe('set-structured');
+  });
+
+  it('rejects invalid nested structured value', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-structured',
+        path: '/targetLength',
+        value: { unit: 'invalid', value: 50000 },
+      }),
+    ).toThrow();
+  });
+
+  it('parses collection scalar path', () => {
+    const op = parseContractPatchOperation({
+      kind: 'set-scalar',
+      path: '/supportingCharacters/alice/name',
+      value: 'Alice Updated',
+    });
+    expect(op.kind).toBe('set-scalar');
+  });
+
+  it('rejects relationship endpoint scalar bypass: fromCharacterKey', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/relationships/r1/fromCharacterKey',
+        value: 'hero',
+      }),
+    ).toThrow('未知路径');
+  });
+
+  it('rejects relationship endpoint scalar bypass: toCharacterKey', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/relationships/r1/toCharacterKey',
+        value: 'hero',
+      }),
+    ).toThrow('未知路径');
+  });
+
+  it('rejects set-scalar on supporting characterKey', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/supportingCharacters/alice/characterKey',
+        value: 'bob',
+      }),
+    ).toThrow('未知路径');
+  });
+
+  it('rejects set-scalar on relationshipKey', () => {
+    expect(() =>
+      parseContractPatchOperation({
+        kind: 'set-scalar',
+        path: '/relationships/r1/relationshipKey',
+        value: 'r2',
+      }),
+    ).toThrow('未知路径');
+  });
+});
+
 // ── ChangeSet Engine ──────────────────────────────────────────
 
 describe('applyContractPatchOperations', () => {
@@ -583,7 +884,7 @@ describe('applyContractPatchOperations', () => {
     const result = applyContractPatchOperations(
       [{ kind: 'set-scalar', path: '/premise', value: 'New premise text' }],
       base,
-      [],
+      makeContext(base),
     );
     expect(result.premise).toBe('New premise text');
   });
@@ -592,7 +893,7 @@ describe('applyContractPatchOperations', () => {
     const result = applyContractPatchOperations(
       [{ kind: 'set-string-list', path: '/genre', value: ['scifi', 'thriller'] }],
       base,
-      [],
+      makeContext(base),
     );
     expect(result.genre).toEqual(['scifi', 'thriller']);
   });
@@ -601,7 +902,7 @@ describe('applyContractPatchOperations', () => {
     const result = applyContractPatchOperations(
       [{ kind: 'upsert-protagonist', value: makeProtagonist({ name: 'Updated Hero' }) }],
       base,
-      [],
+      makeContext(base),
     );
     expect(result.protagonist.name).toBe('Updated Hero');
   });
@@ -616,7 +917,7 @@ describe('applyContractPatchOperations', () => {
         },
       ],
       base,
-      [],
+      makeContext(base),
     );
     expect(result.supportingCharacters).toHaveLength(1);
     expect(result.supportingCharacters![0].name).toBe('Alice');
@@ -629,9 +930,9 @@ describe('applyContractPatchOperations', () => {
     const result = applyContractPatchOperations(
       [{ kind: 'remove-character', target: createCharacterKey('alice') }],
       withChar,
-      [],
+      makeContext(withChar),
     );
-    expect(result.supportingCharacters).toHaveLength(0);
+    expect(result.supportingCharacters).toBeUndefined();
   });
 
   it('rejects duplicate target', () => {
@@ -642,7 +943,7 @@ describe('applyContractPatchOperations', () => {
           { kind: 'set-scalar', path: '/premise', value: 'B' },
         ],
         base,
-        [],
+        makeContext(base),
       ),
     ).toThrow('重复');
   });
@@ -651,16 +952,20 @@ describe('applyContractPatchOperations', () => {
     expect(() =>
       applyContractPatchOperations(
         [
-          { kind: 'set-structured', path: '/targetLength', value: { unit: 'words', value: 50000 } },
+          {
+            kind: 'set-structured',
+            path: '/targetLength',
+            value: { unit: 'words', value: 50000 },
+          },
           { kind: 'set-scalar', path: '/targetLength/value', value: 60000 },
         ],
         makeSections({ targetLength: { unit: 'words', value: 50000 } }),
-        [],
+        makeContext(makeSections({ targetLength: { unit: 'words', value: 50000 } })),
       ),
     ).toThrow('重叠');
   });
 
-  it('rejects upsert-protagonist with characterKey change', () => {
+  it('rejects upsert-protagonist with characterKey change (existing contract)', () => {
     expect(() =>
       applyContractPatchOperations(
         [
@@ -670,9 +975,25 @@ describe('applyContractPatchOperations', () => {
           },
         ],
         base,
-        [],
+        makeContext(base, [], base),
       ),
     ).toThrow('不可修改');
+  });
+
+  it('first-contract: upsert-protagonist establishes initial key', () => {
+    const source = makeSections({
+      protagonist: makeProtagonist({ characterKey: createCharacterKey('newhero') }),
+    });
+    const result = applyContractPatchOperations(
+      [{ kind: 'upsert-protagonist', value: source.protagonist }],
+      source,
+      {
+        sourceSections: source,
+        authoritativeBaseSections: null,
+        lockedFieldPaths: [],
+      },
+    );
+    expect(result.protagonist.characterKey).toBe('newhero');
   });
 
   it('rejects supporting key conflict with protagonist', () => {
@@ -686,16 +1007,18 @@ describe('applyContractPatchOperations', () => {
           },
         ],
         base,
-        [],
+        makeContext(base),
       ),
     ).toThrow('冲突');
   });
 
   it('rejects lock conflict', () => {
     expect(() =>
-      applyContractPatchOperations([{ kind: 'set-scalar', path: '/premise', value: 'New' }], base, [
-        '/premise',
-      ]),
+      applyContractPatchOperations(
+        [{ kind: 'set-scalar', path: '/premise', value: 'New' }],
+        base,
+        makeContext(base, ['/premise']),
+      ),
     ).toThrow('锁定字段冲突');
   });
 
@@ -708,12 +1031,81 @@ describe('applyContractPatchOperations', () => {
       { kind: 'set-string-list', path: '/genre', value: ['g1'] },
       { kind: 'set-scalar', path: '/premise', value: 'P1' },
     ];
-    const r1 = applyContractPatchOperations(ops1, base, []);
-    const r2 = applyContractPatchOperations(ops2, base, []);
+    const r1 = applyContractPatchOperations(ops1, base, makeContext(base));
+    const r2 = applyContractPatchOperations(ops2, base, makeContext(base));
     expect(r1.premise).toBe(r2.premise);
     expect(r1.genre).toEqual(r2.genre);
-    // Canonical JSON should be identical
-    expect(canonicalSerializeContractSections(r1)).toBe(canonicalSerializeContractSections(r2));
+    expect(canonicalSerializeContractSections(r1)).toBe(
+      canonicalSerializeContractSections(r2),
+    );
+  });
+
+  it('two character inserts reversed → identical snapshot', () => {
+    const ops1: ReadonlyArray<ContractPatchOperation> = [
+      {
+        kind: 'upsert-supporting-character',
+        target: createCharacterKey('alice'),
+        value: makeSupporting('alice', 'Alice'),
+      },
+      {
+        kind: 'upsert-supporting-character',
+        target: createCharacterKey('bob'),
+        value: makeSupporting('bob', 'Bob'),
+      },
+    ];
+    const ops2 = [...ops1].reverse();
+    const r1 = applyContractPatchOperations(ops1, base, makeContext(base));
+    const r2 = applyContractPatchOperations(ops2, base, makeContext(base));
+    expect(canonicalSerializeContractSections(r1)).toBe(
+      canonicalSerializeContractSections(r2),
+    );
+  });
+
+  it('two relationship inserts reversed → identical snapshot', () => {
+    const withChars = makeSections({
+      supportingCharacters: [
+        makeSupporting('alice', 'Alice'),
+        makeSupporting('bob', 'Bob'),
+      ],
+    });
+    const ops1: ReadonlyArray<ContractPatchOperation> = [
+      {
+        kind: 'upsert-relationship',
+        target: createRelationshipKey('r1'),
+        value: makeRelationship('r1', 'hero', 'alice'),
+      },
+      {
+        kind: 'upsert-relationship',
+        target: createRelationshipKey('r2'),
+        value: makeRelationship('r2', 'hero', 'bob'),
+      },
+    ];
+    const ops2 = [...ops1].reverse();
+    const r1 = applyContractPatchOperations(ops1, withChars, makeContext(withChars));
+    const r2 = applyContractPatchOperations(ops2, withChars, makeContext(withChars));
+    expect(canonicalSerializeContractSections(r1)).toBe(
+      canonicalSerializeContractSections(r2),
+    );
+  });
+
+  it('insert + update mixed order → identical snapshot', () => {
+    const withChar = makeSections({
+      supportingCharacters: [makeSupporting('alice', 'Alice')],
+    });
+    const ops1: ReadonlyArray<ContractPatchOperation> = [
+      {
+        kind: 'upsert-supporting-character',
+        target: createCharacterKey('bob'),
+        value: makeSupporting('bob', 'Bob'),
+      },
+      { kind: 'set-scalar', path: '/supportingCharacters/alice/role', value: 'helper' },
+    ];
+    const ops2 = [...ops1].reverse();
+    const r1 = applyContractPatchOperations(ops1, withChar, makeContext(withChar));
+    const r2 = applyContractPatchOperations(ops2, withChar, makeContext(withChar));
+    expect(canonicalSerializeContractSections(r1)).toBe(
+      canonicalSerializeContractSections(r2),
+    );
   });
 
   it('remove entire targetLength succeeds', () => {
@@ -721,9 +1113,19 @@ describe('applyContractPatchOperations', () => {
     const result = applyContractPatchOperations(
       [{ kind: 'remove-field', path: '/targetLength' }],
       withTarget,
-      [],
+      makeContext(withTarget),
     );
     expect(result.targetLength).toBeUndefined();
+  });
+
+  it('remove nonexistent field rejected', () => {
+    expect(() =>
+      applyContractPatchOperations(
+        [{ kind: 'remove-field', path: '/themes' }],
+        base,
+        makeContext(base),
+      ),
+    ).toThrow('不存在');
   });
 
   it('relationship integrity based on final snapshot', () => {
@@ -731,12 +1133,11 @@ describe('applyContractPatchOperations', () => {
       supportingCharacters: [makeSupporting('alice', 'Alice')],
       relationships: [makeRelationship('r1', 'hero', 'alice')],
     });
-    // Remove alice but keep relationship → should fail
     expect(() =>
       applyContractPatchOperations(
         [{ kind: 'remove-character', target: createCharacterKey('alice') }],
         withBoth,
-        [],
+        makeContext(withBoth),
       ),
     ).toThrow('引用未知角色');
   });
@@ -752,10 +1153,10 @@ describe('applyContractPatchOperations', () => {
         { kind: 'remove-relationship', target: createRelationshipKey('r1') },
       ],
       withBoth,
-      [],
+      makeContext(withBoth),
     );
-    expect(result.supportingCharacters).toHaveLength(0);
-    expect(result.relationships).toHaveLength(0);
+    expect(result.supportingCharacters).toBeUndefined();
+    expect(result.relationships).toBeUndefined();
   });
 
   it('does not mutate input snapshot', () => {
@@ -764,7 +1165,7 @@ describe('applyContractPatchOperations', () => {
     applyContractPatchOperations(
       [{ kind: 'set-scalar', path: '/premise', value: 'Changed' }],
       original,
-      [],
+      makeContext(original),
     );
     expect(original.premise).toBe(copy.premise);
   });
