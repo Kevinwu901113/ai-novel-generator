@@ -10,6 +10,7 @@ import {
   canonicalSerializeContractSections,
   canonicalSerializeLockedFieldPaths,
   canonicalSerializeContractSnapshot,
+  canonicalSerializeContractFieldValue,
   validateCreationContractSections,
   parseContractFieldPath,
   canonicalizeContractFieldPath,
@@ -1316,5 +1317,39 @@ describe('applyContractPatchOperations', () => {
       makeContext(original),
     );
     expect(original.premise).toBe(copy.premise);
+  });
+});
+
+// ── canonicalSerializeContractFieldValue ──────────────────────
+
+describe('canonicalSerializeContractFieldValue', () => {
+  it('serializes strings with NFC normalization', () => {
+    const nfd = '\u0065\u0301'; // e + combining accent
+    const nfc = '\u00e9'; // precomposed é
+    expect(canonicalSerializeContractFieldValue(nfd)).toBe(
+      canonicalSerializeContractFieldValue(nfc),
+    );
+  });
+
+  it('sorts object keys by code point', () => {
+    const a = { b: 2, a: 1 };
+    const b = { a: 1, b: 2 };
+    expect(canonicalSerializeContractFieldValue(a)).toBe(canonicalSerializeContractFieldValue(b));
+  });
+
+  it('preserves array order', () => {
+    expect(canonicalSerializeContractFieldValue([1, 2, 3])).toBe('[1,2,3]');
+    expect(canonicalSerializeContractFieldValue([3, 2, 1])).toBe('[3,2,1]');
+  });
+
+  it('distinguishes absent (throws on undefined) from null', () => {
+    expect(() => canonicalSerializeContractFieldValue(undefined)).toThrow();
+    expect(canonicalSerializeContractFieldValue(null)).toBe('null');
+  });
+
+  it('handles nested objects recursively', () => {
+    const value = { z: { b: 2, a: 1 }, a: [1, 2] };
+    const result = canonicalSerializeContractFieldValue(value);
+    expect(result).toBe('{"a":[1,2],"z":{"a":1,"b":2}}');
   });
 });

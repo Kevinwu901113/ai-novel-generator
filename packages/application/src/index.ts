@@ -169,6 +169,8 @@ export {
   ContractSchemaUnsupportedError,
   ContractValidationError,
   ContractDataCorruptionError,
+  ContractTransactionBusyError,
+  ContractNestedTransactionError,
 } from './errors.js';
 
 export type {
@@ -188,6 +190,7 @@ export type {
   CreationContractTransactionPort,
   AcceptCreationContractProposalInput,
   RejectCreationContractProposalInput,
+  Sha256Port,
 } from './creation-contract-types.js';
 
 export {

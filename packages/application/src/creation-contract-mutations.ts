@@ -2,7 +2,7 @@
  * 创作契约 mutation 用例：Accept / Reject。
  *
  * 通过 CreationContractTransactionPort 在同一事务内执行所有读写，
- * 不直接依赖 node:sqlite 或具体 ProjectDatabase。
+ * 不依赖 node:sqlite、node:crypto 或具体 ProjectDatabase。
  */
 
 import {
@@ -10,7 +10,12 @@ import {
   canonicalSerializeContractSections,
   canonicalSerializeLockedFieldPaths,
   canonicalSerializeContractSnapshot,
+  canonicalSerializeContractFieldValue,
   applyContractPatchOperations,
+  parseContractPatchOperation,
+  getCanonicalTargetPath,
+  operationWriteSetConflictsWithLocks,
+  pathsOverlap,
   isLowercaseSha256Hex,
   parseContractFieldPath,
   canonicalizeContractFieldPath,
@@ -22,12 +27,13 @@ import {
   type ProvenanceSource,
 } from '@ai-novel/domain';
 import type { ContractVersionPublicData, ProposalPublicData } from '@ai-novel/contracts';
-import { createHash } from 'node:crypto';
 import type {
   CreationContractTransactionPort,
   AcceptCreationContractProposalInput,
   RejectCreationContractProposalInput,
   CreationContractProposalData,
+  CreationContractVersionData,
+  Sha256Port,
 } from './creation-contract-types.js';
 import {
   ContractProposalNotFoundError,
@@ -36,6 +42,9 @@ import {
   ContractVersionConflictError,
   ContractSchemaUnsupportedError,
   ContractDataCorruptionError,
+  ContractModelLockViolationError,
+  ContractLockConflictError,
+  ContractValidationError,
   ValidationError,
 } from './errors.js';
 
@@ -43,12 +52,25 @@ import {
 
 export interface CreationContractMutationDeps {
   readonly transactionPort: CreationContractTransactionPort;
+  readonly sha256Port: Sha256Port;
 }
 
-// ── SHA-256 辅助 ──────────────────────────────────────────────
+// ── ISO-8601 验证 ─────────────────────────────────────────────
 
-function sha256Hex(input: string): string {
-  return createHash('sha256').update(input, 'utf8').digest('hex');
+const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+function validateIso8601Timestamp(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new ValidationError(`${field} 必须是非空字符串`);
+  }
+  if (!ISO_8601_RE.test(value)) {
+    throw new ValidationError(`${field} 必须是有效 ISO-8601 时间戳`);
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new ValidationError(`${field} 必须是有效 ISO-8601 时间戳`);
+  }
+  return value;
 }
 
 // ── 内部辅助 ──────────────────────────────────────────────────
@@ -199,144 +221,7 @@ function sectionsToPublicData(
   };
 }
 
-// ── Provenance 生成 ──────────────────────────────────────────
-
-function computeFieldHash(value: unknown): string {
-  const canonical = JSON.stringify(value);
-  return sha256Hex(canonical);
-}
-
-function generateProvenance(
-  proposal: CreationContractProposalData,
-  sourceSections: CreationContractSections,
-  resultSections: CreationContractSections,
-  previousSections: CreationContractSections | null,
-  operations: ReadonlyArray<ContractPatchOperation>,
-): ReadonlyArray<ContractFieldProvenance> {
-  const result: ContractFieldProvenance[] = [];
-
-  // 收集 operations 涉及的 canonical paths
-  const operatedPaths = new Set<string>();
-  for (const op of operations) {
-    const parsed = parseOperationTargetPath(op);
-    if (parsed) operatedPaths.add(parsed);
-  }
-
-  // 遍历 result sections 的所有 canonical field paths
-  const allPaths = collectAllFieldPaths(resultSections);
-
-  for (const path of allPaths) {
-    const source = determineProvenanceSource(path, operatedPaths, previousSections, sourceSections);
-    const previousFieldHash = computePreviousFieldHash(path, previousSections);
-
-    result.push({
-      sectionKey: path,
-      source,
-      grillAnswerIds: [],
-      grillProposalIds: [],
-      aiTaskId: proposal.taskId,
-      modelInvocationId: proposal.invocationId,
-      sourceProposalId: proposal.id,
-      previousFieldHash,
-      rationale: null,
-    });
-  }
-
-  // 按 sectionKey code-point 排序
-  result.sort((a, b) => codePointCompare(a.sectionKey, b.sectionKey));
-  return result;
-}
-
-function parseOperationTargetPath(op: ContractPatchOperation): string | null {
-  switch (op.kind) {
-    case 'set-scalar':
-    case 'set-string-list':
-    case 'set-structured':
-    case 'remove-field':
-      return canonicalizeContractFieldPath(op.path);
-    case 'upsert-protagonist':
-      return '/protagonist';
-    case 'upsert-supporting-character':
-    case 'remove-character':
-      return `/supportingCharacters/${op.target}`;
-    case 'upsert-relationship':
-    case 'remove-relationship':
-      return `/relationships/${op.target}`;
-    default:
-      return null;
-  }
-}
-
-function collectAllFieldPaths(sections: CreationContractSections): string[] {
-  const paths: string[] = [];
-  const rec = sections as unknown as Record<string, unknown>;
-
-  for (const key of Object.keys(rec)) {
-    const value = rec[key];
-    if (value === undefined) continue;
-
-    if (Array.isArray(value)) {
-      // collection: protagonist is not array, but supportingCharacters/relationships are
-      paths.push(`/${key}`);
-      for (const item of value) {
-        if (typeof item === 'object' && item !== null) {
-          const itemRec = item as Record<string, unknown>;
-          // find the stable key
-          const stableKey = itemRec.characterKey || itemRec.relationshipKey;
-          if (typeof stableKey === 'string') {
-            for (const field of Object.keys(itemRec)) {
-              if (field !== 'characterKey' && field !== 'relationshipKey') {
-                paths.push(`/${key}/${stableKey}/${field}`);
-              }
-            }
-          }
-        }
-      }
-    } else if (typeof value === 'object' && value !== null) {
-      // structured
-      paths.push(`/${key}`);
-      for (const child of Object.keys(value as Record<string, unknown>)) {
-        paths.push(`/${key}/${child}`);
-      }
-    } else {
-      // scalar
-      paths.push(`/${key}`);
-    }
-  }
-
-  return paths;
-}
-
-function determineProvenanceSource(
-  path: string,
-  operatedPaths: Set<string>,
-  previousSections: CreationContractSections | null,
-  _sourceSections: CreationContractSections,
-): ProvenanceSource {
-  // 如果该路径被 operations 修改过，来源是 AI_PROPOSAL
-  // （因为 Accept 的 operations 是 review patch，但最终来源是 proposal）
-  if (operatedPaths.has(path)) {
-    return 'AI_PROPOSAL';
-  }
-
-  // 如果有 previousSections 且字段存在于 previous 中，来源是 PREVIOUS_VERSION
-  if (previousSections && getFieldValueByPath(previousSections, path) !== undefined) {
-    return 'PREVIOUS_VERSION';
-  }
-
-  // 否则来源于 AI proposal
-  return 'AI_PROPOSAL';
-}
-
-function computePreviousFieldHash(
-  path: string,
-  previousSections: CreationContractSections | null,
-): string | null {
-  if (!previousSections) return null;
-  const value = getFieldValueByPath(previousSections, path);
-  if (value === undefined) return null;
-  return computeFieldHash(value);
-}
+// ── Field value access ────────────────────────────────────────
 
 function getFieldValueByPath(sections: CreationContractSections, path: string): unknown {
   const parsed = parseContractFieldPath(path);
@@ -371,6 +256,196 @@ function getFieldValueByPath(sections: CreationContractSections, path: string): 
   return rec[parsed.section];
 }
 
+// ── Locked proposal source validation ─────────────────────────
+
+function validateProposalAgainstLocks(
+  proposalSections: CreationContractSections,
+  baselineSections: CreationContractSections | null,
+  lockedFieldPaths: readonly string[],
+): void {
+  for (const lockedPath of lockedFieldPaths) {
+    const baselineValue = baselineSections
+      ? getFieldValueByPath(baselineSections, lockedPath)
+      : undefined;
+    const proposalValue = getFieldValueByPath(proposalSections, lockedPath);
+
+    const baselineAbsent = baselineValue === undefined;
+    const proposalAbsent = proposalValue === undefined;
+
+    if (baselineAbsent && proposalAbsent) continue;
+
+    if (baselineAbsent !== proposalAbsent) {
+      throw new ContractModelLockViolationError(
+        `proposal 违反锁定字段 "${lockedPath}": 存在性变更`,
+      );
+    }
+
+    const baselineCanonical = canonicalSerializeContractFieldValue(baselineValue);
+    const proposalCanonical = canonicalSerializeContractFieldValue(proposalValue);
+
+    if (baselineCanonical !== proposalCanonical) {
+      throw new ContractModelLockViolationError(`proposal 违反锁定字段 "${lockedPath}": 值已变更`);
+    }
+  }
+}
+
+// ── Provenance 生成 ──────────────────────────────────────────
+
+function collectAllFieldPaths(sections: CreationContractSections): string[] {
+  const paths: string[] = [];
+  const rec = sections as unknown as Record<string, unknown>;
+
+  for (const key of Object.keys(rec)) {
+    const value = rec[key];
+    if (value === undefined) continue;
+
+    if (Array.isArray(value)) {
+      paths.push(`/${key}`);
+      for (const item of value) {
+        if (typeof item === 'object' && item !== null) {
+          const itemRec = item as Record<string, unknown>;
+          const stableKey = itemRec.characterKey || itemRec.relationshipKey;
+          if (typeof stableKey === 'string') {
+            for (const field of Object.keys(itemRec)) {
+              if (field !== 'characterKey' && field !== 'relationshipKey') {
+                paths.push(`/${key}/${stableKey}/${field}`);
+              }
+            }
+          }
+        }
+      }
+    } else if (typeof value === 'object' && value !== null) {
+      paths.push(`/${key}`);
+      for (const child of Object.keys(value as Record<string, unknown>)) {
+        paths.push(`/${key}/${child}`);
+      }
+    } else {
+      paths.push(`/${key}`);
+    }
+  }
+
+  return paths;
+}
+
+function isPathInOperationWriteSet(
+  fieldPath: string,
+  operations: ReadonlyArray<ContractPatchOperation>,
+): boolean {
+  for (const op of operations) {
+    const targetPath = getCanonicalTargetPath(op);
+    if (pathsOverlap(targetPath, fieldPath)) return true;
+  }
+  return false;
+}
+
+function generateProvenance(
+  proposal: CreationContractProposalData,
+  sourceSections: CreationContractSections,
+  resultSections: CreationContractSections,
+  baselineSections: CreationContractSections | null,
+  previousVersion: CreationContractVersionData | null,
+  operations: ReadonlyArray<ContractPatchOperation>,
+  sha256Port: Sha256Port,
+): ReadonlyArray<ContractFieldProvenance> {
+  const result: ContractFieldProvenance[] = [];
+
+  const previousProvenanceMap = loadPreviousProvenanceMap(previousVersion);
+  const allPaths = collectAllFieldPaths(resultSections);
+
+  for (const path of allPaths) {
+    const isUserEdit = isPathInOperationWriteSet(path, operations);
+
+    if (isUserEdit) {
+      const proposalValue = getFieldValueByPath(sourceSections, path);
+      const previousFieldHash =
+        proposalValue !== undefined
+          ? sha256Port.digestUtf8(canonicalSerializeContractFieldValue(proposalValue))
+          : null;
+
+      result.push({
+        sectionKey: path,
+        source: 'USER_EDIT',
+        grillAnswerIds: [],
+        grillProposalIds: [],
+        aiTaskId: proposal.taskId,
+        modelInvocationId: proposal.invocationId,
+        sourceProposalId: proposal.id,
+        previousFieldHash,
+        rationale: null,
+      });
+      continue;
+    }
+
+    const proposalValue = getFieldValueByPath(sourceSections, path);
+    const baselineValue = baselineSections
+      ? getFieldValueByPath(baselineSections, path)
+      : undefined;
+
+    const isFirstContract = baselineSections === null;
+    const proposalAbsent = proposalValue === undefined;
+    const baselineAbsent = baselineValue === undefined;
+
+    let isUnchanged = false;
+    if (!isFirstContract && !proposalAbsent && !baselineAbsent) {
+      const proposalCanonical = canonicalSerializeContractFieldValue(proposalValue);
+      const baselineCanonical = canonicalSerializeContractFieldValue(baselineValue);
+      isUnchanged = proposalCanonical === baselineCanonical;
+    } else if (!isFirstContract && proposalAbsent && baselineAbsent) {
+      isUnchanged = true;
+    }
+
+    if (isFirstContract || !isUnchanged) {
+      result.push({
+        sectionKey: path,
+        source: 'AI_PROPOSAL',
+        grillAnswerIds: [],
+        grillProposalIds: [],
+        aiTaskId: proposal.taskId,
+        modelInvocationId: proposal.invocationId,
+        sourceProposalId: proposal.id,
+        previousFieldHash: null,
+        rationale: null,
+      });
+    } else {
+      const prevEntry = previousProvenanceMap?.get(path);
+      result.push({
+        sectionKey: path,
+        source: 'PREVIOUS_VERSION' as ProvenanceSource,
+        grillAnswerIds: prevEntry?.grillAnswerIds ?? [],
+        grillProposalIds: prevEntry?.grillProposalIds ?? [],
+        aiTaskId: prevEntry?.aiTaskId ?? null,
+        modelInvocationId: prevEntry?.modelInvocationId ?? null,
+        sourceProposalId: prevEntry?.sourceProposalId ?? null,
+        previousFieldHash: null,
+        rationale: null,
+      });
+    }
+  }
+
+  result.sort((a, b) => codePointCompare(a.sectionKey, b.sectionKey));
+  return result;
+}
+
+function loadPreviousProvenanceMap(
+  previousVersion: CreationContractVersionData | null,
+): Map<string, ContractFieldProvenance> | null {
+  if (!previousVersion) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(previousVersion.provenanceJson);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const map = new Map<string, ContractFieldProvenance>();
+  for (const item of parsed) {
+    if (typeof item === 'object' && item !== null && typeof item.sectionKey === 'string') {
+      map.set(item.sectionKey, item as ContractFieldProvenance);
+    }
+  }
+  return map;
+}
+
 // ── 输入验证 ──────────────────────────────────────────────────
 
 function validateAcceptInput(input: AcceptCreationContractProposalInput): void {
@@ -397,13 +472,10 @@ function validateAcceptInput(input: AcceptCreationContractProposalInput): void {
       throw new ValidationError('expectedContractVersion 必须是 null 或正安全整数');
     }
   }
-  if (typeof input.now !== 'string' || input.now.trim().length === 0) {
-    throw new ValidationError('now 必须是非空字符串');
-  }
+  validateIso8601Timestamp(input.now, 'now');
   if (!Array.isArray(input.operations)) {
     throw new ValidationError('operations 必须是数组');
   }
-  // operations 可以为空数组 — 表示原样接受 proposal
 }
 
 function validateRejectInput(input: RejectCreationContractProposalInput): void {
@@ -416,9 +488,23 @@ function validateRejectInput(input: RejectCreationContractProposalInput): void {
   if (!isLowercaseSha256Hex(input.expectedProposalSectionsHash)) {
     throw new ValidationError('expectedProposalSectionsHash 必须是 lowercase SHA-256 hex');
   }
-  if (typeof input.now !== 'string' || input.now.trim().length === 0) {
-    throw new ValidationError('now 必须是非空字符串');
+  validateIso8601Timestamp(input.now, 'now');
+}
+
+function parseOperations(
+  rawOperations: ReadonlyArray<unknown>,
+): ReadonlyArray<ContractPatchOperation> {
+  const result: ContractPatchOperation[] = [];
+  for (let i = 0; i < rawOperations.length; i++) {
+    try {
+      result.push(parseContractPatchOperation(rawOperations[i]));
+    } catch (e) {
+      throw new ContractValidationError(
+        `operation[${i}] 解析失败: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
+  return result;
 }
 
 // ── AcceptCreationContractProposal ───────────────────────────
@@ -429,8 +515,12 @@ export function acceptCreationContractProposal(
 ): ContractVersionPublicData {
   validateAcceptInput(input);
 
+  const normalizedOperations = parseOperations(input.operations as ReadonlyArray<unknown>);
+
   return deps.transactionPort.runInTransaction((repos) => {
     const ctx = 'acceptCreationContractProposal';
+
+    // ── Phase 1: precondition reads ──
 
     // 1. Project 存在性
     if (!repos.projectExistsReadPort.exists(input.projectId)) {
@@ -476,9 +566,7 @@ export function acceptCreationContractProposal(
       );
     }
     if (currentGrillVersion !== input.expectedGrillSessionVersion) {
-      throw new ContractProposalStaleError(
-        `${ctx}: grill session version mismatch: expected ${input.expectedGrillSessionVersion}, actual ${currentGrillVersion}`,
-      );
+      throw new ContractProposalStaleError(`${ctx}: grill session version mismatch`);
     }
     if (proposal.baseGrillSessionVersion !== input.expectedGrillSessionVersion) {
       throw new ContractProposalStaleError(`${ctx}: proposal baseGrillSessionVersion mismatch`);
@@ -487,6 +575,8 @@ export function acceptCreationContractProposal(
     // 7. 当前 contract version 与 expectedContractVersion 一致
     const currentPointer = repos.currentRepo.get(input.projectId);
     const isFirstContract = currentPointer === null;
+
+    let currentVersionData: CreationContractVersionData | null = null;
 
     if (isFirstContract) {
       if (input.expectedContractVersion !== null) {
@@ -505,100 +595,141 @@ export function acceptCreationContractProposal(
           `${ctx}: contract exists but expectedContractVersion is null`,
         );
       }
-      // 读取当前 version 获取 version number
-      const currentVersion = repos.versionRepo.getById(
+      currentVersionData = repos.versionRepo.getById(
         input.projectId,
         currentPointer!.currentVersionId,
       );
-      if (!currentVersion) {
+      if (!currentVersionData) {
         throw new ContractDataCorruptionError(
-          `${ctx}: current pointer references non-existent version ${currentPointer!.currentVersionId}`,
+          `${ctx}: current pointer references non-existent version`,
         );
       }
-      if (currentVersion.version !== input.expectedContractVersion) {
-        throw new ContractVersionConflictError(
-          `${ctx}: contract version mismatch: expected ${input.expectedContractVersion}, actual ${currentVersion.version}`,
-        );
+      if (currentVersionData.version !== input.expectedContractVersion) {
+        throw new ContractVersionConflictError(`${ctx}: contract version mismatch`);
       }
       if (proposal.baseContractVersion !== input.expectedContractVersion) {
         throw new ContractProposalStaleError(`${ctx}: proposal baseContractVersion mismatch`);
       }
     }
 
-    // 8. 读取 authoritative baseline (current version sections)
+    // 8. 读取 authoritative baseline
     let authoritativeBaseSections: CreationContractSections | null = null;
     let currentLockedFieldPaths: readonly string[] = [];
-    if (!isFirstContract && currentPointer) {
-      const currentVersion = repos.versionRepo.getById(
-        input.projectId,
-        currentPointer.currentVersionId,
+    if (currentVersionData) {
+      authoritativeBaseSections = parseSectionsJson(currentVersionData.sectionsJson, ctx);
+      currentLockedFieldPaths = parseLockedFieldPathsJson(
+        currentVersionData.lockedFieldPathsJson,
+        ctx,
       );
-      if (currentVersion) {
-        authoritativeBaseSections = parseSectionsJson(currentVersion.sectionsJson, ctx);
-        currentLockedFieldPaths = parseLockedFieldPathsJson(
-          currentVersion.lockedFieldPathsJson,
-          ctx,
-        );
-      }
     }
 
     // 9. 构造 source sections from proposal
     const sourceSections = parseSectionsJson(proposal.sectionsJson, ctx);
 
-    // 10. 应用 operations
-    let resultSections: CreationContractSections;
-    if (input.operations.length === 0) {
-      // 空 operations = 原样接受 proposal sections
-      resultSections = validateCreationContractSections(sourceSections);
-    } else {
-      resultSections = applyContractPatchOperations(input.operations, sourceSections, {
-        sourceSections,
-        authoritativeBaseSections,
-        lockedFieldPaths: currentLockedFieldPaths,
-      });
+    // ── Phase 2: locked proposal source validation ──
+
+    validateProposalAgainstLocks(
+      sourceSections,
+      authoritativeBaseSections,
+      currentLockedFieldPaths,
+    );
+
+    // 10. protagonist.characterKey 一致性检查（即使没有 upsert-protagonist operation）
+    if (authoritativeBaseSections !== null) {
+      if (
+        sourceSections.protagonist.characterKey !==
+        authoritativeBaseSections.protagonist.characterKey
+      ) {
+        throw new ContractValidationError(
+          `${ctx}: proposal protagonist.characterKey 与 authoritative baseline 不一致`,
+        );
+      }
     }
 
-    // 11. 生成 provenance
+    // ── Phase 3: proposal CAS (PROPOSED → ACCEPTED) ──
+
+    const transitioned = repos.proposalRepo.transitionStatusWithHash(
+      input.projectId,
+      input.proposalId,
+      'PROPOSED',
+      input.expectedProposalSectionsHash,
+      'ACCEPTED',
+      input.now,
+    );
+    if (!transitioned) {
+      throw new ContractProposalStaleError(`${ctx}: proposal status CAS failed`);
+    }
+
+    // ── Phase 4: parse/apply operations ──
+
+    // Pre-check: user review operations vs locks
+    for (const op of normalizedOperations) {
+      if (operationWriteSetConflictsWithLocks(op, currentLockedFieldPaths)) {
+        throw new ContractLockConflictError(
+          `review operation "${getCanonicalTargetPath(op)}" 与锁定字段冲突`,
+        );
+      }
+    }
+
+    let resultSections: CreationContractSections;
+    try {
+      if (normalizedOperations.length === 0) {
+        resultSections = validateCreationContractSections(sourceSections);
+      } else {
+        resultSections = applyContractPatchOperations(normalizedOperations, sourceSections, {
+          sourceSections,
+          authoritativeBaseSections,
+          lockedFieldPaths: currentLockedFieldPaths,
+        });
+      }
+    } catch (e) {
+      if (
+        e instanceof ContractLockConflictError ||
+        e instanceof ContractModelLockViolationError ||
+        e instanceof ContractValidationError
+      ) {
+        throw e;
+      }
+      throw new ContractValidationError(
+        `operation 应用失败: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+
+    // ── Phase 5: provenance ──
+
     const provenance = generateProvenance(
       proposal,
       sourceSections,
       resultSections,
       authoritativeBaseSections,
-      input.operations,
+      currentVersionData,
+      normalizedOperations,
+      deps.sha256Port,
     );
 
-    // 12. 计算新 version number
-    const newVersionNumber = isFirstContract
-      ? 1
-      : (() => {
-          const currentVersion = repos.versionRepo.getById(
-            input.projectId,
-            currentPointer!.currentVersionId,
-          );
-          if (!currentVersion) {
-            throw new ContractDataCorruptionError(
-              `${ctx}: current pointer references non-existent version`,
-            );
-          }
-          return currentVersion.version + 1;
-        })();
+    // ── Phase 6: snapshot hash ──
 
-    // 13. 计算 snapshot hash
     const canonicalSnapshot = canonicalSerializeContractSnapshot({
       sections: resultSections,
       lockedFieldPaths: currentLockedFieldPaths,
       schemaVersion: CREATION_CONTRACT_SCHEMA_VERSION,
     });
-    const snapshotHash = sha256Hex(canonicalSnapshot);
+    const snapshotHash = deps.sha256Port.digestUtf8(canonicalSnapshot);
 
-    // 14. 序列化 sections
+    // ── Phase 7: serialize ──
+
     const sectionsJson = canonicalSerializeContractSections(resultSections);
     const lockedFieldPathsJson = canonicalSerializeLockedFieldPaths(
       currentLockedFieldPaths as string[],
     );
     const provenanceJson = JSON.stringify(provenance);
 
-    // 15. 插入 version
+    // ── Phase 8: compute version number ──
+
+    const newVersionNumber = isFirstContract ? 1 : currentVersionData!.version + 1;
+
+    // ── Phase 9: insert version ──
+
     repos.versionRepo.create({
       id: input.newVersionId,
       projectId: input.projectId,
@@ -615,7 +746,8 @@ export function acceptCreationContractProposal(
       createdBy: 'ai-proposal-accepted',
     });
 
-    // 16. 更新 current pointer (CAS)
+    // ── Phase 10: insertFirst / current CAS ──
+
     if (isFirstContract) {
       const inserted = repos.currentRepo.insertFirst(
         input.projectId,
@@ -639,20 +771,8 @@ export function acceptCreationContractProposal(
       }
     }
 
-    // 17. Transition proposal status
-    const transitioned = repos.proposalRepo.transitionStatusWithHash(
-      input.projectId,
-      input.proposalId,
-      'PROPOSED',
-      input.expectedProposalSectionsHash,
-      'ACCEPTED',
-      input.now,
-    );
-    if (!transitioned) {
-      throw new ContractProposalStaleError(`${ctx}: proposal status CAS failed`);
-    }
+    // ── Phase 11: return result ──
 
-    // 18. 返回 result
     return {
       id: input.newVersionId,
       projectId: input.projectId,

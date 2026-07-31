@@ -332,6 +332,11 @@ export function canonicalSerializeLockedFieldPaths(paths: readonly string[]): st
   return JSON.stringify(sorted);
 }
 
+export function canonicalSerializeContractFieldValue(value: unknown): string {
+  if (value === undefined) throw new Error('field value 不能是 undefined');
+  return JSON.stringify(canonicalize(value));
+}
+
 export function canonicalSerializeContractSnapshot(input: {
   sections: CreationContractSections;
   lockedFieldPaths: readonly string[];

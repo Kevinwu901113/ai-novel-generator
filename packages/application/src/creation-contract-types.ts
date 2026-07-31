@@ -147,6 +147,13 @@ export interface CreationContractLockEventRepositoryPort {
   listByProject(projectId: string): ReadonlyArray<CreationContractLockEventData>;
 }
 
+// ── Hash 端口 ──────────────────────────────────────────────────
+
+/** SHA-256 端口 — application 不直接依赖 node:crypto */
+export interface Sha256Port {
+  digestUtf8(input: string): string;
+}
+
 // ── 事务端口 ──────────────────────────────────────────────────
 
 /** Grill session 版本读取端口（只读，用于 CAS 验证） */

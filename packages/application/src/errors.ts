@@ -323,3 +323,19 @@ export class ContractDataCorruptionError extends AppError {
     this.name = 'ContractDataCorruptionError';
   }
 }
+
+/** SQLite busy/locked — 由事务适配器抛出，应用层映射为稳定错误码 */
+export class ContractTransactionBusyError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_VERSION_CONFLICT', message);
+    this.name = 'ContractTransactionBusyError';
+  }
+}
+
+/** 嵌套事务检测 — 由事务适配器抛出，应用层映射为稳定错误码 */
+export class ContractNestedTransactionError extends AppError {
+  constructor(message: string) {
+    super('INTERNAL_ERROR', message);
+    this.name = 'ContractNestedTransactionError';
+  }
+}
