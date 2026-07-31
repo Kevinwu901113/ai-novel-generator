@@ -23,6 +23,9 @@ import {
   ContractProposalNotAcceptableError,
   ContractProposalStaleError,
   ContractVersionConflictError,
+  ContractModelLockViolationError,
+  ContractLockConflictError,
+  ContractValidationError,
   ValidationError,
   type CreationContractMutationDeps,
 } from '@ai-novel/application';
@@ -100,9 +103,10 @@ function setupProposal(
     sectionsHash?: string;
     baseGrillSessionVersion?: number;
     baseContractVersion?: number | null;
+    sections?: CreationContractSections;
   },
 ) {
-  const sections = makeSections();
+  const sections = overrides?.sections ?? makeSections();
   const sectionsJson = makeSectionsJson(sections);
   const sectionsHash = overrides?.sectionsHash ?? makeSectionsHash(sections);
 
@@ -197,7 +201,7 @@ describe('acceptCreationContractProposal', () => {
     dir = mkdtempSync(join(tmpdir(), 'contract-accept-'));
     db = new ProjectDatabase(join(dir, 'project.sqlite'));
     const txPort = new CreationContractTransactionPortImpl(db.database);
-    deps = { transactionPort: txPort };
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
     setupProject(db, 'p1');
   });
 
@@ -630,7 +634,7 @@ describe('rejectCreationContractProposal', () => {
     dir = mkdtempSync(join(tmpdir(), 'contract-reject-'));
     db = new ProjectDatabase(join(dir, 'project.sqlite'));
     const txPort = new CreationContractTransactionPortImpl(db.database);
-    deps = { transactionPort: txPort };
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
     setupProject(db, 'p1');
   });
 
@@ -746,7 +750,7 @@ describe('concurrent accept/reject', () => {
     dir = mkdtempSync(join(tmpdir(), 'contract-concurrent-'));
     db = new ProjectDatabase(join(dir, 'project.sqlite'));
     const txPort = new CreationContractTransactionPortImpl(db.database);
-    deps = { transactionPort: txPort };
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
     setupProject(db, 'p1');
   });
 
@@ -912,5 +916,561 @@ describe('concurrent accept/reject', () => {
     });
 
     expect(result.version).toBe(2);
+  });
+});
+
+// ── 辅助：在已有版本上篡改锁定字段 ──────────────────────────
+
+function tamperWithLocks(db: ProjectDatabase, versionId: string, lockedPaths: string[]) {
+  const version = db.getCreationContractVersionRepository().getById('p1', versionId);
+  const newSnapshotHash = sha256Utf8(
+    canonicalSerializeContractSnapshot({
+      sections: validateCreationContractSections(JSON.parse(version!.sectionsJson)),
+      lockedFieldPaths: lockedPaths,
+      schemaVersion: 1,
+    }),
+  );
+
+  db.database.exec('DROP TRIGGER IF EXISTS trg_cc_versions_no_update');
+  db.database
+    .prepare(
+      `UPDATE creation_contract_versions
+       SET locked_field_paths_json = ?,
+           contract_snapshot_hash = ?
+       WHERE id = ?`,
+    )
+    .run(JSON.stringify(lockedPaths), newSnapshotHash, versionId);
+  db.database.exec(`
+    CREATE TRIGGER IF NOT EXISTS trg_cc_versions_no_update
+    BEFORE UPDATE ON creation_contract_versions
+    BEGIN
+      SELECT RAISE(ABORT, 'creation_contract_versions is append-only');
+    END;
+  `);
+}
+
+// ── Lock bypass: proposal source vs locks ──────────────────────
+
+describe('lock bypass: proposal source validation', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-lock-bypass-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('empty ops + proposal source violates locked scalar → MODEL_LOCK_VIOLATION', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    const modifiedSections = makeSections({ premise: 'AI changed premise' });
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: modifiedSections,
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractModelLockViolationError);
+  });
+
+  it('unrelated op + proposal source violates locked scalar → MODEL_LOCK_VIOLATION', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    const modifiedSections = makeSections({ premise: 'AI changed premise' });
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: modifiedSections,
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [{ kind: 'set-scalar', path: '/targetAudience', value: 'young adults' }],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractModelLockViolationError);
+  });
+
+  it('locked absent optional added by proposal → MODEL_LOCK_VIOLATION', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/themes']);
+
+    const modifiedSections = makeSections({ themes: ['redemption'] });
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: modifiedSections,
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractModelLockViolationError);
+  });
+
+  it('explicit op on locked path → LOCK_CONFLICT', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: 'User override' }],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractLockConflictError);
+  });
+
+  it('lock violation has no side effects', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    const modifiedSections = makeSections({ premise: 'AI changed premise' });
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: modifiedSections,
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractModelLockViolationError);
+
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop2')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
+    const current = db.getCreationContractCurrentRepository().get('p1');
+    expect(current?.currentVersionId).toBe('v1');
+  });
+});
+
+// ── Runtime validation ─────────────────────────────────────────
+
+describe('runtime operation parsing', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-runtime-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('unknown operation kind → ContractValidationError', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [
+          { kind: 'unknown-op', path: '/premise', value: 'x' },
+        ] as unknown as ContractPatchOperation[],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      }),
+    ).toThrow(ContractValidationError);
+  });
+
+  it('invalid ISO-8601 now → ValidationError', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: 'not-a-timestamp',
+        newVersionId: 'v1',
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('reject with invalid now → ValidationError', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    expect(() =>
+      rejectCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        now: 'Jan 2026',
+      }),
+    ).toThrow(ValidationError);
+  });
+});
+
+// ── Provenance correctness ─────────────────────────────────────
+
+describe('provenance correctness', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-prov-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('first contract: all fields are AI_PROPOSAL', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    const result = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    expect(result.provenance.length).toBeGreaterThan(0);
+    for (const entry of result.provenance) {
+      expect(entry.source).toBe('AI_PROPOSAL');
+      expect(entry.sourceProposalId).toBe('prop1');
+      expect(entry.aiTaskId).toBeTruthy();
+    }
+  });
+
+  it('scalar USER_EDIT via set-scalar operation', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    const result = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [{ kind: 'set-scalar', path: '/premise', value: 'User edited premise' }],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    const premiseEntry = result.provenance.find((p) => p.sectionKey === '/premise');
+    expect(premiseEntry).toBeDefined();
+    expect(premiseEntry!.source).toBe('USER_EDIT');
+
+    const genreEntry = result.provenance.find((p) => p.sectionKey === '/genre');
+    expect(genreEntry).toBeDefined();
+    expect(genreEntry!.source).toBe('AI_PROPOSAL');
+  });
+
+  it('structured parent USER_EDIT propagates to descendants', () => {
+    setupProposal(db, 'p1', 'prop1', {
+      sections: makeSections({ contentBoundaries: { rating: 'PG' } }),
+    });
+
+    const result = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(
+        makeSections({ contentBoundaries: { rating: 'PG' } }),
+      ),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [{ kind: 'set-structured', path: '/contentBoundaries', value: { rating: 'R' } }],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    const parentEntry = result.provenance.find((p) => p.sectionKey === '/contentBoundaries');
+    expect(parentEntry?.source).toBe('USER_EDIT');
+
+    const childEntry = result.provenance.find((p) => p.sectionKey === '/contentBoundaries/rating');
+    expect(childEntry?.source).toBe('USER_EDIT');
+  });
+
+  it('unchanged fields are PREVIOUS_VERSION with carried-forward IDs', () => {
+    setupProposal(db, 'p1', 'prop1');
+    const v1 = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: makeSections({ premise: 'Changed by AI' }),
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    const v2 = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop2',
+      expectedProposalSectionsHash: prop2.sectionsHash,
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: 1,
+      operations: [],
+      now: '2026-01-01T00:03:00Z',
+      newVersionId: 'v2',
+    });
+
+    const premiseEntry = v2.provenance.find((p) => p.sectionKey === '/premise');
+    expect(premiseEntry?.source).toBe('AI_PROPOSAL');
+
+    const genreEntry = v2.provenance.find((p) => p.sectionKey === '/genre');
+    expect(genreEntry?.source).toBe('PREVIOUS_VERSION');
+    expect(genreEntry?.aiTaskId).toBeTruthy();
+    expect(genreEntry?.sourceProposalId).toBeTruthy();
+
+    const v1Genre = v1.provenance.find((p) => p.sectionKey === '/genre');
+    expect(genreEntry?.aiTaskId).toBe(v1Genre?.aiTaskId);
+    expect(genreEntry?.sourceProposalId).toBe(v1Genre?.sourceProposalId);
+  });
+
+  it('first contract with operations: USER_EDIT + AI_PROPOSAL mix', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    const result = acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [
+        { kind: 'set-scalar', path: '/premise', value: 'User edited' },
+        { kind: 'set-string-list', path: '/genre', value: ['fantasy'] },
+      ],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    const sources = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(sources.get('/premise')).toBe('USER_EDIT');
+    expect(sources.get('/genre')).toBe('USER_EDIT');
+    expect(sources.get('/tone')).toBe('AI_PROPOSAL');
+    expect(sources.get('/protagonist')).toBe('AI_PROPOSAL');
+  });
+});
+
+// ── Atomicity rollback ─────────────────────────────────────────
+
+describe('atomicity: rollback after proposal CAS', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-atomic-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('lock conflict after CAS: proposal status rolled back', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: 'Override' }],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      }),
+    ).toThrow(ContractLockConflictError);
+
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop2')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
+  });
+
+  it('duplicate version ID: full rollback after proposal CAS', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    expect(() =>
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v1',
+      }),
+    ).toThrow();
+
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop2')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
+    expect(db.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('v1');
   });
 });
