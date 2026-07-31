@@ -934,11 +934,7 @@ export type NarrativePov = 'FIRST' | 'THIRD_LIMITED' | 'THIRD_OMNISCIENT' | 'SEC
 export type Tense = 'PAST' | 'PRESENT' | 'MIXED';
 export type TargetLengthUnit = 'words' | 'chapters';
 export type ProvenanceSource =
-  | 'GRILL_ANSWER'
-  | 'AI_PROPOSAL'
-  | 'USER_EDIT'
-  | 'PREVIOUS_VERSION'
-  | 'DEFAULT';
+  'GRILL_ANSWER' | 'AI_PROPOSAL' | 'USER_EDIT' | 'PREVIOUS_VERSION' | 'DEFAULT';
 
 // ── Sections public DTO (closed, typed) ───────────────────────────
 
@@ -1097,7 +1093,8 @@ export interface ContractPatchSetScalarTopLevelDTO {
 /** set-scalar: protagonist child fields */
 export interface ContractPatchSetProtagonistScalarDTO {
   readonly kind: 'set-scalar';
-  readonly path: '/protagonist/name' | '/protagonist/role' | '/protagonist/motivation' | '/protagonist/arc';
+  readonly path:
+    '/protagonist/name' | '/protagonist/role' | '/protagonist/motivation' | '/protagonist/arc';
   readonly value: string;
 }
 
@@ -1465,8 +1462,7 @@ function isValidStructuredDTO(obj: Record<string, unknown>): boolean {
     for (const k of Object.keys(v)) {
       if (!allowed.includes(k)) return false;
     }
-    if (v.rating !== undefined && (typeof v.rating !== 'string' || v.rating === null))
-      return false;
+    if (v.rating !== undefined && (typeof v.rating !== 'string' || v.rating === null)) return false;
     if (v.allowedContent !== undefined && !isStringArray(v.allowedContent)) return false;
     if (v.prohibitedContent !== undefined && !isStringArray(v.prohibitedContent)) return false;
     if (v.notes !== undefined && (typeof v.notes !== 'string' || v.notes === null)) return false;
@@ -1666,8 +1662,7 @@ export function isValidCreationContractSectionsPublicData(
 
   if (typeof obj.protagonist !== 'object' || obj.protagonist === null) return false;
   const prot = obj.protagonist as Record<string, unknown>;
-  if (typeof prot.characterKey !== 'string' || !STABLE_KEY_RE.test(prot.characterKey))
-    return false;
+  if (typeof prot.characterKey !== 'string' || !STABLE_KEY_RE.test(prot.characterKey)) return false;
   if (typeof prot.name !== 'string') return false;
   const protAllowed = ['characterKey', 'name', 'role', 'motivation', 'arc', 'traits'];
   for (const k of Object.keys(prot)) {
@@ -1679,8 +1674,7 @@ export function isValidCreationContractSectionsPublicData(
     for (const c of obj.supportingCharacters) {
       if (typeof c !== 'object' || c === null) return false;
       const ch = c as Record<string, unknown>;
-      if (typeof ch.characterKey !== 'string' || !STABLE_KEY_RE.test(ch.characterKey))
-        return false;
+      if (typeof ch.characterKey !== 'string' || !STABLE_KEY_RE.test(ch.characterKey)) return false;
       if (typeof ch.name !== 'string') return false;
       const chAllowed = ['characterKey', 'name', 'role', 'relationship', 'traits'];
       for (const k of Object.keys(ch)) {
@@ -1699,7 +1693,13 @@ export function isValidCreationContractSectionsPublicData(
       if (typeof rel.fromCharacterKey !== 'string') return false;
       if (typeof rel.toCharacterKey !== 'string') return false;
       if (typeof rel.type !== 'string') return false;
-      const relAllowed = ['relationshipKey', 'fromCharacterKey', 'toCharacterKey', 'type', 'dynamic'];
+      const relAllowed = [
+        'relationshipKey',
+        'fromCharacterKey',
+        'toCharacterKey',
+        'type',
+        'dynamic',
+      ];
       for (const k of Object.keys(rel)) {
         if (!relAllowed.includes(k)) return false;
       }

@@ -170,7 +170,10 @@ function parseLockedFieldPathsJson(json: string, context: string): ReadonlyArray
   return result;
 }
 
-function parseProvenanceJson(json: string, context: string): ReadonlyArray<ContractFieldProvenanceDTO> {
+function parseProvenanceJson(
+  json: string,
+  context: string,
+): ReadonlyArray<ContractFieldProvenanceDTO> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -214,10 +217,16 @@ function parseProvenanceJson(json: string, context: string): ReadonlyArray<Contr
     if (typeof obj.source !== 'string' || !VALID_PROVENANCE_SOURCES.has(obj.source)) {
       throw new ContractDataCorruptionError(`${context}: provenance source invalid`);
     }
-    if (!Array.isArray(obj.grillAnswerIds) || !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')) {
+    if (
+      !Array.isArray(obj.grillAnswerIds) ||
+      !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')
+    ) {
       throw new ContractDataCorruptionError(`${context}: provenance grillAnswerIds invalid`);
     }
-    if (!Array.isArray(obj.grillProposalIds) || !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')) {
+    if (
+      !Array.isArray(obj.grillProposalIds) ||
+      !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')
+    ) {
       throw new ContractDataCorruptionError(`${context}: provenance grillProposalIds invalid`);
     }
     if (obj.aiTaskId !== null && typeof obj.aiTaskId !== 'string') {
@@ -230,7 +239,10 @@ function parseProvenanceJson(json: string, context: string): ReadonlyArray<Contr
       throw new ContractDataCorruptionError(`${context}: provenance sourceProposalId invalid`);
     }
     if (obj.previousFieldHash !== null) {
-      if (typeof obj.previousFieldHash !== 'string' || !isLowercaseSha256Hex(obj.previousFieldHash)) {
+      if (
+        typeof obj.previousFieldHash !== 'string' ||
+        !isLowercaseSha256Hex(obj.previousFieldHash)
+      ) {
         throw new ContractDataCorruptionError(`${context}: provenance previousFieldHash invalid`);
       }
     }
@@ -292,14 +304,19 @@ function validateProposalData(
       `${context}: unsupported schemaVersion ${proposal.schemaVersion}`,
     );
   }
-  if (!Number.isSafeInteger(proposal.baseGrillSessionVersion) || proposal.baseGrillSessionVersion < 1) {
+  if (
+    !Number.isSafeInteger(proposal.baseGrillSessionVersion) ||
+    proposal.baseGrillSessionVersion < 1
+  ) {
     throw new ContractDataCorruptionError(`${context}: baseGrillSessionVersion must be positive`);
   }
   if (
     proposal.baseContractVersion !== null &&
     (!Number.isSafeInteger(proposal.baseContractVersion) || proposal.baseContractVersion < 1)
   ) {
-    throw new ContractDataCorruptionError(`${context}: baseContractVersion must be null or positive`);
+    throw new ContractDataCorruptionError(
+      `${context}: baseContractVersion must be null or positive`,
+    );
   }
 }
 

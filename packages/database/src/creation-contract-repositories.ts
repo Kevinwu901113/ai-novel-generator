@@ -121,8 +121,15 @@ function validateProvenanceArray(provenanceJson: string, context: string): void 
     }
     const obj = item as Record<string, unknown>;
     const expectedKeys = [
-      'sectionKey', 'source', 'grillAnswerIds', 'grillProposalIds',
-      'aiTaskId', 'modelInvocationId', 'sourceProposalId', 'previousFieldHash', 'rationale',
+      'sectionKey',
+      'source',
+      'grillAnswerIds',
+      'grillProposalIds',
+      'aiTaskId',
+      'modelInvocationId',
+      'sourceProposalId',
+      'previousFieldHash',
+      'rationale',
     ];
     const objKeys = Object.keys(obj);
     if (objKeys.length !== expectedKeys.length || !expectedKeys.every((k) => k in obj)) {
@@ -138,10 +145,16 @@ function validateProvenanceArray(provenanceJson: string, context: string): void 
     if (typeof obj.source !== 'string' || !VALID_PROVENANCE_SOURCES.has(obj.source)) {
       throw new ContractDataCorruptionError(`${context}: provenance source invalid`);
     }
-    if (!Array.isArray(obj.grillAnswerIds) || !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')) {
+    if (
+      !Array.isArray(obj.grillAnswerIds) ||
+      !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')
+    ) {
       throw new ContractDataCorruptionError(`${context}: provenance grillAnswerIds invalid`);
     }
-    if (!Array.isArray(obj.grillProposalIds) || !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')) {
+    if (
+      !Array.isArray(obj.grillProposalIds) ||
+      !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')
+    ) {
       throw new ContractDataCorruptionError(`${context}: provenance grillProposalIds invalid`);
     }
     if (obj.aiTaskId !== null && typeof obj.aiTaskId !== 'string') {
@@ -154,7 +167,10 @@ function validateProvenanceArray(provenanceJson: string, context: string): void 
       throw new ContractDataCorruptionError(`${context}: provenance sourceProposalId invalid`);
     }
     if (obj.previousFieldHash !== null) {
-      if (typeof obj.previousFieldHash !== 'string' || !isLowercaseSha256Hex(obj.previousFieldHash)) {
+      if (
+        typeof obj.previousFieldHash !== 'string' ||
+        !isLowercaseSha256Hex(obj.previousFieldHash)
+      ) {
         throw new ContractDataCorruptionError(`${context}: provenance previousFieldHash invalid`);
       }
     }
@@ -176,10 +192,17 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
       );
     }
     if (!Number.isSafeInteger(data.baseGrillSessionVersion) || data.baseGrillSessionVersion < 1) {
-      throw new ContractDataCorruptionError('proposal create: baseGrillSessionVersion must be positive');
+      throw new ContractDataCorruptionError(
+        'proposal create: baseGrillSessionVersion must be positive',
+      );
     }
-    if (data.baseContractVersion !== null && (!Number.isSafeInteger(data.baseContractVersion) || data.baseContractVersion < 1)) {
-      throw new ContractDataCorruptionError('proposal create: baseContractVersion must be null or positive');
+    if (
+      data.baseContractVersion !== null &&
+      (!Number.isSafeInteger(data.baseContractVersion) || data.baseContractVersion < 1)
+    ) {
+      throw new ContractDataCorruptionError(
+        'proposal create: baseContractVersion must be null or positive',
+      );
     }
     let parsed: unknown;
     try {
@@ -315,7 +338,9 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
     const ctx = 'creation_contract_proposals';
     const schemaVersion = requireNumber(row, 'schema_version', ctx);
     if (schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
-      throw new ContractSchemaUnsupportedError(`${ctx}: unsupported schemaVersion ${schemaVersion}`);
+      throw new ContractSchemaUnsupportedError(
+        `${ctx}: unsupported schemaVersion ${schemaVersion}`,
+      );
     }
     const sectionsHash = requireString(row, 'sections_hash', ctx);
     if (!isLowercaseSha256Hex(sectionsHash)) {
@@ -343,8 +368,13 @@ export class CreationContractProposalRepositoryImpl implements CreationContractP
       throw new ContractDataCorruptionError(`${ctx}: base_grill_session_version must be positive`);
     }
     const baseContractVersion = optionalNumber(row, 'base_contract_version');
-    if (baseContractVersion !== null && (!Number.isSafeInteger(baseContractVersion) || baseContractVersion < 1)) {
-      throw new ContractDataCorruptionError(`${ctx}: base_contract_version must be null or positive`);
+    if (
+      baseContractVersion !== null &&
+      (!Number.isSafeInteger(baseContractVersion) || baseContractVersion < 1)
+    ) {
+      throw new ContractDataCorruptionError(
+        `${ctx}: base_contract_version must be null or positive`,
+      );
     }
     return {
       id: requireString(row, 'id', ctx),
@@ -393,7 +423,9 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
     try {
       parsedPaths = JSON.parse(data.lockedFieldPathsJson);
     } catch {
-      throw new ContractDataCorruptionError('version create: lockedFieldPathsJson is not valid JSON');
+      throw new ContractDataCorruptionError(
+        'version create: lockedFieldPathsJson is not valid JSON',
+      );
     }
     if (!Array.isArray(parsedPaths) || !parsedPaths.every((p: unknown) => typeof p === 'string')) {
       throw new ContractDataCorruptionError('version create: lockedFieldPathsJson is not string[]');
@@ -404,14 +436,18 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
     }
     const canonicalPathsJson = canonicalSerializeLockedFieldPaths(canonicalPaths);
     if (canonicalPathsJson !== data.lockedFieldPathsJson) {
-      throw new ContractDataCorruptionError('version create: lockedFieldPathsJson is not canonical');
+      throw new ContractDataCorruptionError(
+        'version create: lockedFieldPathsJson is not canonical',
+      );
     }
     if ((data.basedOnGrillSessionId === null) !== (data.basedOnGrillSessionVersion === null)) {
       throw new ContractDataCorruptionError('version create: based_on null-pair mismatch');
     }
     validateProvenanceArray(data.provenanceJson, 'version create');
     if (!isLowercaseSha256Hex(data.contractSnapshotHash)) {
-      throw new ContractDataCorruptionError('version create: contractSnapshotHash is not lowercase hex');
+      throw new ContractDataCorruptionError(
+        'version create: contractSnapshotHash is not lowercase hex',
+      );
     }
     const canonicalSnapshot = canonicalSerializeContractSnapshot({
       sections: validatedSections,
@@ -507,7 +543,9 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
     const ctx = 'creation_contract_versions';
     const schemaVersion = requireNumber(row, 'schema_version', ctx);
     if (schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
-      throw new ContractSchemaUnsupportedError(`${ctx}: unsupported schemaVersion ${schemaVersion}`);
+      throw new ContractSchemaUnsupportedError(
+        `${ctx}: unsupported schemaVersion ${schemaVersion}`,
+      );
     }
     const version = requireNumber(row, 'version', ctx);
     if (!Number.isSafeInteger(version) || version < 1) {
@@ -564,7 +602,9 @@ export class CreationContractVersionRepositoryImpl implements CreationContractVe
       });
       const expectedHash = sha256Utf8(canonicalSnapshot);
       if (expectedHash !== contractSnapshotHash) {
-        throw new ContractDataCorruptionError(`${ctx}: contract_snapshot_hash mismatch (corruption detected)`);
+        throw new ContractDataCorruptionError(
+          `${ctx}: contract_snapshot_hash mismatch (corruption detected)`,
+        );
       }
     } catch (e) {
       if (e instanceof ContractDataCorruptionError || e instanceof ContractSchemaUnsupportedError)
