@@ -130,9 +130,10 @@ interface LoadedCurrentVersion {
 /**
  * 在事务内加载并严格验证 current version。
  *
- * 验证：project 存在 / current pointer / version 属于本项目 /
+ * 验证：project 存在 / current pointer / current 与 version 归属及 id 一致性 /
  * version 号与 expectedContractVersion 一致 / schemaVersion 支持 /
- * createdBy 合法 / sectionsJson / lockedFieldPathsJson / provenanceJson /
+ * createdBy 合法 / sectionsJson 与 lockedFieldPathsJson 为 canonical bytes /
+ * basedOnGrill null pair / provenanceJson /
  * contractSnapshotHash 完整性（用 Sha256Port 重算并比对）。
  *
  * - 不存在 current 或版本号不匹配 → CONTRACT_VERSION_CONFLICT
@@ -159,6 +160,18 @@ function loadAndValidateCurrentVersion(
     throw new ContractDataCorruptionError(`${context}: current pointer references missing version`);
   }
 
+  // Identity / ownership：current 与 version 必须属于本项目，且 pointer 与 version id 一致。
+  // 归属不匹配是权威数据损坏（INTERNAL_ERROR），不得当作普通 stale conflict。
+  if (current.projectId !== projectId) {
+    throw new ContractDataCorruptionError(`${context}: current pointer 不属于该项目`);
+  }
+  if (versionData.projectId !== projectId) {
+    throw new ContractDataCorruptionError(`${context}: version 不属于该项目`);
+  }
+  if (versionData.id !== current.currentVersionId) {
+    throw new ContractDataCorruptionError(`${context}: version id 与 current pointer 不一致`);
+  }
+
   if (versionData.version !== expectedContractVersion) {
     throw new ContractVersionConflictError(`${context}: version mismatch`);
   }
@@ -176,6 +189,54 @@ function loadAndValidateCurrentVersion(
   const sections = parseSectionsJson(versionData.sectionsJson, context);
   const lockedFieldPaths = parseLockedFieldPathsJson(versionData.lockedFieldPathsJson, context);
   const provenance = parseProvenanceArray(versionData.provenanceJson, context);
+
+  // canonical bytes：不允许静默修复 object key 顺序 / Unicode NFC / 多余空白 /
+  // 非 canonical representation。当前快照必须是原始 canonical JSON。
+  let canonicalSectionsJson: string;
+  try {
+    canonicalSectionsJson = canonicalSerializeContractSections(sections);
+  } catch (e) {
+    throw new ContractDataCorruptionError(`${context}: sectionsJson canonical 序列化失败`, e);
+  }
+  if (versionData.sectionsJson !== canonicalSectionsJson) {
+    throw new ContractDataCorruptionError(`${context}: sectionsJson 不是 canonical bytes`);
+  }
+  let canonicalLocksJson: string;
+  try {
+    canonicalLocksJson = canonicalSerializeLockedFieldPaths([...lockedFieldPaths]);
+  } catch (e) {
+    throw new ContractDataCorruptionError(
+      `${context}: lockedFieldPathsJson canonical 序列化失败`,
+      e,
+    );
+  }
+  if (versionData.lockedFieldPathsJson !== canonicalLocksJson) {
+    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson 不是 canonical bytes`);
+  }
+
+  // basedOnGrill null pair：两个字段必须同时为 null 或同时非 null；
+  // 非 null version 必须是正安全整数；非 null id 必须是非空字符串。
+  if (
+    (versionData.basedOnGrillSessionId === null) !==
+    (versionData.basedOnGrillSessionVersion === null)
+  ) {
+    throw new ContractDataCorruptionError(`${context}: basedOnGrill 空值对不一致`);
+  }
+  if (
+    versionData.basedOnGrillSessionId !== null &&
+    versionData.basedOnGrillSessionId.trim().length === 0
+  ) {
+    throw new ContractDataCorruptionError(`${context}: basedOnGrillSessionId 必须是非空字符串`);
+  }
+  if (
+    versionData.basedOnGrillSessionVersion !== null &&
+    (!Number.isSafeInteger(versionData.basedOnGrillSessionVersion) ||
+      versionData.basedOnGrillSessionVersion < 1)
+  ) {
+    throw new ContractDataCorruptionError(
+      `${context}: basedOnGrillSessionVersion 必须是正安全整数`,
+    );
+  }
 
   if (!isLowercaseSha256Hex(versionData.contractSnapshotHash)) {
     throw new ContractDataCorruptionError(
@@ -206,18 +267,20 @@ function loadAndValidateCurrentVersion(
 }
 
 /**
- * 校验当前活跃 lock set 完整性：重复路径 / 相互 overlap / 未排序
- * 都视为权威数据损坏（INTERNAL_ERROR）。lock 集合是版本快照的一部分，
- * 损坏时不得静默修复。
+ * 校验当前活跃 lock set 快照语义：对 canonical sorted 的每个路径逐项验证
+ * grammar / schema path / entity 存在性 / structured parent 存在性 /
+ * absent optional child 规则 / fixed optional top-level absent 规则 /
+ * duplicate / symmetric overlap。
+ *
+ * Domain 验证错误在 Application current-data 边界映射为
+ * ContractDataCorruptionError（INTERNAL_ERROR），不映射为
+ * CONTRACT_VALIDATION_FAILED 或 CONTRACT_LOCK_CONFLICT；
+ * 也不静默修复（lock 集合是版本快照的一部分）。
  */
-function assertValidExistingLockSet(lockedFieldPaths: readonly string[]): void {
-  const seen = new Set<string>();
-  for (const p of lockedFieldPaths) {
-    if (seen.has(p)) {
-      throw new ContractDataCorruptionError('lockedFieldPaths 存在重复路径');
-    }
-    seen.add(p);
-  }
+function assertValidExistingLockSet(
+  lockedFieldPaths: readonly string[],
+  sections: CreationContractSections,
+): void {
   const arr = [...lockedFieldPaths];
   for (let i = 1; i < arr.length; i++) {
     if (codePointCompare(arr[i - 1], arr[i]) >= 0) {
@@ -225,12 +288,27 @@ function assertValidExistingLockSet(lockedFieldPaths: readonly string[]): void {
     }
   }
   for (let i = 0; i < arr.length; i++) {
-    for (let j = i + 1; j < arr.length; j++) {
-      if (pathsOverlap(arr[i], arr[j])) {
-        throw new ContractDataCorruptionError('lockedFieldPaths 存在重叠路径');
-      }
+    try {
+      validateNewLockPath(arr[i], arr.slice(0, i), sections);
+    } catch (e) {
+      throw new ContractDataCorruptionError('lockedFieldPaths 存在非法、重复或重叠路径', e);
     }
   }
+}
+
+/**
+ * 安全生成下一版本号：当前版本号非法或 +1 超出安全整数范围时，
+ * 抛出安全 INTERNAL_ERROR，绝不构造 unsafe version number。
+ */
+function nextContractVersionNumber(current: number, context: string): number {
+  if (!Number.isSafeInteger(current) || current < 1) {
+    throw new ContractDataCorruptionError(`${context}: 当前版本号非法`);
+  }
+  const next = current + 1;
+  if (!Number.isSafeInteger(next)) {
+    throw new ContractDataCorruptionError(`${context}: 无法生成下一版本号（超出安全整数范围）`);
+  }
+  return next;
 }
 
 // ── 返回值构造 ────────────────────────────────────────────────
@@ -277,22 +355,44 @@ function buildVersionPublicData(
 
 // ── User Update provenance ────────────────────────────────────
 
-function isPathInOperationWriteSet(
-  fieldPath: string,
+/**
+ * 方向性 provenance write-set 判定（与设计文档第 9 节 operation write-set 定义一致）：
+ *
+ * - scalar / list child operation（set-scalar、set-string-list）：
+ *   write-set = 精确目标路径，仅 finalFieldPath === canonicalTargetPath 是 USER_EDIT。
+ * - structured / entity 完整替换（set-structured、remove-field、upsert-*、remove-*）：
+ *   write-set = 目标路径及其所有 descendant，不含 target 的 ancestor。
+ *
+ * ancestor 路径不得因子字段被编辑而标为 USER_EDIT；remove 后已删除字段
+ * 不产生 tombstone，也不得为补偿删除而把 ancestor 标为 USER_EDIT。
+ */
+function operationAffectsProvenancePath(
+  operation: ContractPatchOperation,
+  finalFieldPath: string,
+): boolean {
+  const targetPath = getCanonicalTargetPath(operation);
+  switch (operation.kind) {
+    case 'set-scalar':
+    case 'set-string-list':
+      return finalFieldPath === targetPath;
+    default:
+      return finalFieldPath === targetPath || finalFieldPath.startsWith(targetPath + '/');
+  }
+}
+
+function isFieldUserEdited(
+  finalFieldPath: string,
   operations: ReadonlyArray<ContractPatchOperation>,
 ): boolean {
-  for (const op of operations) {
-    const targetPath = getCanonicalTargetPath(op);
-    if (pathsOverlap(targetPath, fieldPath)) return true;
-  }
-  return false;
+  return operations.some((op) => operationAffectsProvenancePath(op, finalFieldPath));
 }
 
 /**
  * 生成 User Update 的确定性 provenance。
  *
  * 对最终仍存在的每个 canonical field path：
- * - 位于 operation write-set 内（write-set = target + descendants）：
+ * - 位于 operation 的方向性 write-set 内（见 operationAffectsProvenancePath：
+ *   scalar/list 仅精确目标路径；structured/entity 为目标 + descendants）：
  *   source = USER_EDIT，previousFieldHash = 应用前 current authoritative value
  *   的 canonical hash（此前缺失为 null）；sourceProposalId / aiTaskId /
  *   modelInvocationId / grillAnswerIds / grillProposalIds 从 previous provenance
@@ -314,7 +414,7 @@ function generateUserUpdateProvenance(
   const result: ContractFieldProvenance[] = [];
 
   for (const path of collectAllFieldPaths(resultSections)) {
-    if (isPathInOperationWriteSet(path, operations)) {
+    if (isFieldUserEdited(path, operations)) {
       const currentValue = getFieldValueByPath(currentSections, path);
       const previousFieldHash =
         currentValue !== undefined
@@ -378,7 +478,7 @@ export function updateCreationContractByUser(
     );
     const currentSections = loaded.sections;
     const currentLocks = loaded.lockedFieldPaths;
-    assertValidExistingLockSet(currentLocks);
+    assertValidExistingLockSet(currentLocks, loaded.sections);
 
     // write-set 与 active lock overlap → CONTRACT_LOCK_CONFLICT
     for (const op of normalizedOperations) {
@@ -428,7 +528,7 @@ export function updateCreationContractByUser(
     const sectionsJson = canonicalSerializeContractSections(resultSections);
     const lockedFieldPathsJson = canonicalSerializeLockedFieldPaths(currentLocks as string[]);
     const provenanceJson = JSON.stringify(provenance);
-    const newVersionNumber = loaded.versionData.version + 1;
+    const newVersionNumber = nextContractVersionNumber(loaded.versionData.version, ctx);
 
     repos.versionRepo.create({
       id: input.newVersionId,
@@ -512,7 +612,7 @@ export function lockCreationContractField(
       ctx,
       deps.sha256Port,
     );
-    assertValidExistingLockSet(loaded.lockedFieldPaths);
+    assertValidExistingLockSet(loaded.lockedFieldPaths, loaded.sections);
 
     const canonicalPath = parseCanonicalLockPath(input.fieldPath, ctx);
 
@@ -543,7 +643,7 @@ export function lockCreationContractField(
       schemaVersion: CREATION_CONTRACT_SCHEMA_VERSION,
     });
     const snapshotHash = requireSha256Digest(deps.sha256Port, canonicalSnapshot, 'snapshot hash');
-    const newVersionNumber = loaded.versionData.version + 1;
+    const newVersionNumber = nextContractVersionNumber(loaded.versionData.version, ctx);
 
     repos.versionRepo.create({
       id: input.newVersionId,
@@ -615,7 +715,7 @@ export function unlockCreationContractField(
       ctx,
       deps.sha256Port,
     );
-    assertValidExistingLockSet(loaded.lockedFieldPaths);
+    assertValidExistingLockSet(loaded.lockedFieldPaths, loaded.sections);
 
     const canonicalPath = parseCanonicalLockPath(input.fieldPath, ctx);
 
@@ -638,7 +738,7 @@ export function unlockCreationContractField(
       schemaVersion: CREATION_CONTRACT_SCHEMA_VERSION,
     });
     const snapshotHash = requireSha256Digest(deps.sha256Port, canonicalSnapshot, 'snapshot hash');
-    const newVersionNumber = loaded.versionData.version + 1;
+    const newVersionNumber = nextContractVersionNumber(loaded.versionData.version, ctx);
 
     repos.versionRepo.create({
       id: input.newVersionId,

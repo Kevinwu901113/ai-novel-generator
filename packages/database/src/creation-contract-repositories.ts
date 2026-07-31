@@ -713,6 +713,55 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
   }
 }
 
+// ── 创作契约锁定事件数据验证（append 与 read 共用）─────────────
+
+/**
+ * Lock event 数据验证（append 与 read/toRow 共用）：
+ * - id / projectId / versionId / createdBy trim 后非空
+ * - action 仅 LOCK/UNLOCK
+ * - fieldPath grammar 合法且等于 canonical path
+ * - createdAt 通过 strict ISO-8601 validator
+ *
+ * validateIso8601Timestamp 抛出的 ValidationError 在 repository 边界
+ * 包装为 ContractDataCorruptionError（public message 固定安全，
+ * 内部细节在 cause），保证读路径损坏数据不泄漏原始校验消息。
+ */
+function validateLockEventData(data: CreationContractLockEventData, context: string): void {
+  if (typeof data.id !== 'string' || data.id.trim().length === 0) {
+    throw new ContractDataCorruptionError(`${context}: id must be non-empty string`);
+  }
+  if (typeof data.projectId !== 'string' || data.projectId.trim().length === 0) {
+    throw new ContractDataCorruptionError(`${context}: projectId must be non-empty string`);
+  }
+  if (typeof data.versionId !== 'string' || data.versionId.trim().length === 0) {
+    throw new ContractDataCorruptionError(`${context}: versionId must be non-empty string`);
+  }
+  if (typeof data.createdBy !== 'string' || data.createdBy.trim().length === 0) {
+    throw new ContractDataCorruptionError(`${context}: createdBy must be non-empty string`);
+  }
+  if (typeof data.fieldPath !== 'string' || data.fieldPath.trim().length === 0) {
+    throw new ContractDataCorruptionError(`${context}: fieldPath must be non-empty string`);
+  }
+  if (data.action !== 'LOCK' && data.action !== 'UNLOCK') {
+    throw new ContractDataCorruptionError(`${context}: invalid action`);
+  }
+  let canonicalPath: string;
+  try {
+    canonicalPath = canonicalizeContractFieldPath(data.fieldPath);
+    parseContractFieldPath(canonicalPath);
+  } catch (e) {
+    throw new ContractDataCorruptionError(`${context}: invalid field path`, e);
+  }
+  if (canonicalPath !== data.fieldPath) {
+    throw new ContractDataCorruptionError(`${context}: fieldPath must be canonical`);
+  }
+  try {
+    validateIso8601Timestamp(data.createdAt, `${context}.createdAt`);
+  } catch (e) {
+    throw new ContractDataCorruptionError(`${context}: createdAt invalid`, e);
+  }
+}
+
 // ── 创作契约锁定事件仓库实现 ──────────────────────────────────
 
 export class CreationContractLockEventRepositoryImpl implements CreationContractLockEventRepositoryPort {
@@ -727,32 +776,7 @@ export class CreationContractLockEventRepositoryImpl implements CreationContract
    * 只提供 create/list，不提供 update/delete（append-only，DB trigger 兜底）。
    */
   append(data: CreationContractLockEventData): void {
-    if (typeof data.id !== 'string' || data.id.trim().length === 0) {
-      throw new ContractDataCorruptionError('lock event: id must be non-empty string');
-    }
-    if (typeof data.projectId !== 'string' || data.projectId.trim().length === 0) {
-      throw new ContractDataCorruptionError('lock event: projectId must be non-empty string');
-    }
-    if (typeof data.versionId !== 'string' || data.versionId.trim().length === 0) {
-      throw new ContractDataCorruptionError('lock event: versionId must be non-empty string');
-    }
-    if (typeof data.createdBy !== 'string' || data.createdBy.trim().length === 0) {
-      throw new ContractDataCorruptionError('lock event: createdBy must be non-empty string');
-    }
-    if (data.action !== 'LOCK' && data.action !== 'UNLOCK') {
-      throw new ContractDataCorruptionError(`lock event: invalid action "${data.action}"`);
-    }
-    let canonicalPath: string;
-    try {
-      canonicalPath = canonicalizeContractFieldPath(data.fieldPath);
-      parseContractFieldPath(canonicalPath);
-    } catch (e) {
-      throw new ContractDataCorruptionError('lock event: invalid field path', e);
-    }
-    if (canonicalPath !== data.fieldPath) {
-      throw new ContractDataCorruptionError('lock event: fieldPath must be canonical');
-    }
-    validateIso8601Timestamp(data.createdAt, 'lock event.createdAt');
+    validateLockEventData(data, 'lock event');
     this.db
       .prepare(
         `INSERT INTO creation_contract_lock_events
@@ -762,7 +786,7 @@ export class CreationContractLockEventRepositoryImpl implements CreationContract
       .run(
         data.id,
         data.projectId,
-        canonicalPath,
+        data.fieldPath,
         data.action,
         data.versionId,
         data.createdAt,
@@ -799,24 +823,18 @@ export class CreationContractLockEventRepositoryImpl implements CreationContract
 
   private toRow(row: Record<string, unknown>): CreationContractLockEventData {
     const ctx = 'creation_contract_lock_events';
-    const action = requireString(row, 'action', ctx);
-    if (action !== 'LOCK' && action !== 'UNLOCK') {
-      throw new ContractDataCorruptionError(`${ctx}: action 无效 "${action}"`);
-    }
-    const fieldPath = requireString(row, 'field_path', ctx);
-    try {
-      parseContractFieldPath(fieldPath);
-    } catch {
-      throw new ContractDataCorruptionError(`${ctx}: invalid field_path "${fieldPath}"`);
-    }
-    return {
+    const data: CreationContractLockEventData = {
       id: requireString(row, 'id', ctx),
       projectId: requireString(row, 'project_id', ctx),
-      fieldPath,
-      action,
+      fieldPath: requireString(row, 'field_path', ctx),
+      action: requireString(row, 'action', ctx) as 'LOCK' | 'UNLOCK',
       versionId: requireString(row, 'version_id', ctx),
       createdAt: requireString(row, 'created_at', ctx),
       createdBy: requireString(row, 'created_by', ctx),
     };
+    // 读取路径与 append 使用同一验证：trim 非空 / action / canonical fieldPath /
+    // strict ISO createdAt。损坏行抛 ContractDataCorruptionError，不静默修复。
+    validateLockEventData(data, ctx);
+    return data;
   }
 }
