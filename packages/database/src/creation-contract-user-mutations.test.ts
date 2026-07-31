@@ -349,6 +349,161 @@ describe('creation contract user mutations (real SQLite)', () => {
     });
   });
 
+  describe('lock event read corruption validation', () => {
+    /** 直接通过 SQL 插入一行 lock event（绕过 append 验证），模拟损坏行。 */
+    function insertRawLockEvent(row: {
+      id: string;
+      projectId: string;
+      fieldPath: string;
+      action: string;
+      versionId: string;
+      createdAt: string;
+      createdBy: string;
+    }): void {
+      db.database
+        .prepare(
+          `INSERT INTO creation_contract_lock_events
+             (id, project_id, field_path, action, version_id, created_at, created_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          row.id,
+          row.projectId,
+          row.fieldPath,
+          row.action,
+          row.versionId,
+          row.createdAt,
+          row.createdBy,
+        );
+    }
+
+    /** 断言读路径抛出 ContractDataCorruptionError（INTERNAL_ERROR，fixed safe message）。 */
+    function expectReadCorruption(fn: () => unknown): void {
+      let error: unknown;
+      try {
+        fn();
+        expect.unreachable('expected ContractDataCorruptionError');
+      } catch (e) {
+        error = e;
+      }
+      expect(error).toBeInstanceOf(ContractDataCorruptionError);
+      expect((error as AppError).code).toBe('INTERNAL_ERROR');
+      expect((error as Error).message).toBe('创作契约数据完整性异常');
+    }
+
+    it('throws ContractDataCorruptionError on read for invalid createdAt', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      insertRawLockEvent({
+        id: 'le1',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: 'not-a-timestamp',
+        createdBy: 'user',
+      });
+      expectReadCorruption(() => db.getCreationContractLockEventRepository().listByProject('p1'));
+    });
+
+    it('throws on read for whitespace createdBy', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      insertRawLockEvent({
+        id: 'le1',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: NOW,
+        createdBy: '  ',
+      });
+      expectReadCorruption(() => db.getCreationContractLockEventRepository().listByProject('p1'));
+    });
+
+    it('throws on read for non-canonical fieldPath', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      insertRawLockEvent({
+        id: 'le1',
+        projectId: 'p1',
+        fieldPath: '/Premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: NOW,
+        createdBy: 'user',
+      });
+      expectReadCorruption(() => db.getCreationContractLockEventRepository().listByProject('p1'));
+    });
+
+    it('throws on read for whitespace event id', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      insertRawLockEvent({
+        id: '  ',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: NOW,
+        createdBy: 'user',
+      });
+      expectReadCorruption(() => db.getCreationContractLockEventRepository().listByProject('p1'));
+    });
+
+    it('throws on read for whitespace versionId (schema allows the raw id)', () => {
+      // 直接插入一个 id 为空白字符的 version（schema 允许），再插入引用它的 event
+      insertVersionDirect(db, { id: '  ', version: 99 });
+      insertRawLockEvent({
+        id: 'le1',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: '  ',
+        createdAt: NOW,
+        createdBy: 'user',
+      });
+      expectReadCorruption(() => db.getCreationContractLockEventRepository().listByProject('p1'));
+    });
+
+    it('returns legal rows normally through both list methods', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      const repo = db.getCreationContractLockEventRepository();
+      repo.append({
+        id: 'le-a',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: NOW,
+        createdBy: 'user',
+      });
+      repo.append({
+        id: 'le-b',
+        projectId: 'p1',
+        fieldPath: '/genre',
+        action: 'UNLOCK',
+        versionId: 'v1',
+        createdAt: NOW,
+        createdBy: 'user',
+      });
+      expect(repo.listByProject('p1').map((e) => e.id)).toEqual(['le-a', 'le-b']);
+      expect(repo.listByVersionId('p1', 'v1').map((e) => e.id)).toEqual(['le-a', 'le-b']);
+    });
+
+    it('validates both listByProject and listByVersionId on a corrupt row', () => {
+      insertVersionDirect(db, { id: 'v1', version: 1 });
+      insertRawLockEvent({
+        id: 'le-bad',
+        projectId: 'p1',
+        fieldPath: '/premise',
+        action: 'LOCK',
+        versionId: 'v1',
+        createdAt: 'garbage',
+        createdBy: 'user',
+      });
+      const repo = db.getCreationContractLockEventRepository();
+      expectReadCorruption(() => repo.listByProject('p1'));
+      expectReadCorruption(() => repo.listByVersionId('p1', 'v1'));
+    });
+  });
+
   describe('updateCreationContractByUser', () => {
     it('updates sections and keeps locks; stale version conflict rolls back', () => {
       seedBaseline(db, { lockedFieldPaths: ['/genre'] });

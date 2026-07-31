@@ -123,7 +123,7 @@ function makeVersionData(
     );
   return {
     id: overrides?.id ?? 'v1',
-    projectId: 'p1',
+    projectId: overrides?.projectId ?? 'p1',
     version: overrides?.version ?? 1,
     schemaVersion: 1,
     sourceProposalId: overrides?.sourceProposalId ?? null,
@@ -245,13 +245,41 @@ function makeDeps(fake: FakeTransactionRepos): CreationContractMutationDeps {
 function seedCurrent(
   fake: FakeTransactionRepos,
   versionOverrides?: Parameters<typeof makeVersionData>[0],
+  currentOverrides?: Partial<CreationContractCurrentData>,
 ): void {
-  fake.versions.set('v1', makeVersionData(versionOverrides));
+  const version = makeVersionData(versionOverrides);
+  fake.versions.set(version.id, version);
   fake.current = {
-    projectId: 'p1',
-    currentVersionId: 'v1',
-    updatedAt: '2026-01-01T00:00:00Z',
+    projectId: currentOverrides?.projectId ?? 'p1',
+    currentVersionId: currentOverrides?.currentVersionId ?? version.id,
+    updatedAt: currentOverrides?.updatedAt ?? '2026-01-01T00:00:00Z',
   };
+}
+
+/**
+ * 运行一次必然失败为 ContractDataCorruptionError 的 User Update，
+ * 并断言错误 class / code / safe message 与无副作用。
+ */
+function expectUpdateCorruption(
+  fake: FakeTransactionRepos,
+  inputOverrides?: Partial<Parameters<typeof updateCreationContractByUser>[1]>,
+): void {
+  let error: unknown;
+  try {
+    updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/premise', value: 'changed' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+      ...inputOverrides,
+    } as Parameters<typeof updateCreationContractByUser>[1]);
+    expect.unreachable('expected ContractDataCorruptionError');
+  } catch (e) {
+    error = e;
+  }
+  expectCorruptionError(error);
+  expectNoSideEffects(fake);
 }
 
 // ── 错误断言 ─────────────────────────────────────────────────
@@ -900,6 +928,372 @@ describe('updateCreationContractByUser', () => {
     // current pointer 更新到新版本，旧版本历史仍在
     expect(fake.current?.currentVersionId).toBe('v2');
     expect(fake.versions.has('v1')).toBe(true);
+  });
+
+  // ── 方向性 provenance write-set ─────────────────────────────
+
+  it('does not mark a structured parent as USER_EDIT for a scalar child edit', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {
+      sections: makeSections({
+        protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+      }),
+    });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/protagonist/name', value: 'Hero v2' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/protagonist/name')).toBe('USER_EDIT');
+    // ancestor / sibling 不得标为 USER_EDIT
+    expect(entries.get('/protagonist')).toBe('PREVIOUS_VERSION');
+    expect(entries.get('/protagonist/role')).toBe('PREVIOUS_VERSION');
+    expect(entries.get('/protagonist/characterKey')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('does not mark entity or collection parent as USER_EDIT for a supporting-character child edit', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {
+      sections: makeSections({
+        supportingCharacters: [{ characterKey: 'alice', name: 'Alice', role: 'Sidekick' }],
+      }),
+    });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [
+        { kind: 'set-scalar', path: '/supportingCharacters/alice/name', value: 'Alice v2' },
+      ],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/supportingCharacters/alice/name')).toBe('USER_EDIT');
+    expect(entries.get('/supportingCharacters/alice/role')).toBe('PREVIOUS_VERSION');
+    // collection 容器（ancestor）不得标为 USER_EDIT
+    expect(entries.get('/supportingCharacters')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('marks target and descendants as USER_EDIT for set-structured', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake);
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [
+        { kind: 'set-structured', path: '/targetLength', value: { unit: 'words', value: 50000 } },
+      ],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/targetLength')).toBe('USER_EDIT');
+    expect(entries.get('/targetLength/unit')).toBe('USER_EDIT');
+    expect(entries.get('/targetLength/value')).toBe('USER_EDIT');
+    // 不受影响的顶层标量仍为 PREVIOUS_VERSION
+    expect(entries.get('/premise')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('marks protagonist target and descendants as USER_EDIT for upsert-protagonist', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake);
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [
+        {
+          kind: 'upsert-protagonist',
+          value: { characterKey: createCharacterKey('hero'), name: 'Hero v2' },
+        },
+      ],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/protagonist')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/name')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/characterKey')).toBe('USER_EDIT');
+  });
+
+  it('marks entity target and descendants, not the collection parent, for upsert-supporting-character', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { sections: SECTIONS_WITH_ALICE });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [
+        {
+          kind: 'upsert-supporting-character',
+          target: createCharacterKey('alice'),
+          value: { characterKey: createCharacterKey('alice'), name: 'Alice v2', role: 'Sidekick' },
+        },
+      ],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/supportingCharacters/alice/name')).toBe('USER_EDIT');
+    expect(entries.get('/supportingCharacters/alice/role')).toBe('USER_EDIT');
+    // collection 容器（ancestor）不得标为 USER_EDIT
+    expect(entries.get('/supportingCharacters')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('produces identical provenance JSON regardless of mixed operation order', () => {
+    function runUpdate(operations: ContractPatchOperation[], versionId: string): string {
+      const fake = new FakeTransactionRepos();
+      seedCurrent(fake);
+      const result = updateCreationContractByUser(makeDeps(fake), {
+        projectId: 'p1',
+        expectedContractVersion: 1,
+        operations,
+        now: '2026-01-02T00:00:00Z',
+        newVersionId: versionId,
+      });
+      return JSON.stringify(result.provenance);
+    }
+
+    const scalarOp: ContractPatchOperation = {
+      kind: 'set-scalar',
+      path: '/premise',
+      value: 'new premise',
+    };
+    const listOp: ContractPatchOperation = {
+      kind: 'set-string-list',
+      path: '/genre',
+      value: ['fantasy', 'romance'],
+    };
+
+    expect(runUpdate([scalarOp, listOp], 'v2')).toBe(runUpdate([listOp, scalarOp], 'v2'));
+  });
+
+  it('produces no provenance tombstone for a removed field and does not mark ancestors', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {
+      sections: makeSections({
+        protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+      }),
+    });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'remove-field', path: '/protagonist/role' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+
+    expect(result.sections.protagonist.role).toBeUndefined();
+    // 已删除字段不产生 tombstone entry
+    expect(result.provenance.some((p) => p.sectionKey === '/protagonist/role')).toBe(false);
+    // 也不得为补偿删除把 ancestor 标为 USER_EDIT
+    const protagonistEntry = result.provenance.find((p) => p.sectionKey === '/protagonist');
+    expect(protagonistEntry?.source).toBe('PREVIOUS_VERSION');
+  });
+});
+
+// ── 严格 current snapshot 验证（fake-port，不依赖真实 SQLite 仓库）────
+
+describe('current snapshot strict validation', () => {
+  it('rejects current.projectId mismatch as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {}, { projectId: 'other' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects version.projectId mismatch as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { projectId: 'other' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects version id vs current pointer mismatch as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake);
+    // 篡改 stored version 的 id 字段（port 返回损坏数据）
+    const stored = fake.versions.get('v1')!;
+    fake.versions.set('v1', { ...stored, id: 'v0' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects non-canonical sectionsJson (whitespace) as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { sectionsJson: JSON.stringify(makeSections(), null, 2) });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects non-canonical lockedFieldPathsJson (unsorted) as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPathsJson: '["/premise", "/genre"]' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects basedOnGrill partial-null as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { basedOnGrillSessionId: 's1' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects invalid basedOnGrill session version as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { basedOnGrillSessionId: 's1', basedOnGrillSessionVersion: 0 });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects unsafe version increment as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { version: Number.MAX_SAFE_INTEGER });
+    expectUpdateCorruption(fake, { expectedContractVersion: Number.MAX_SAFE_INTEGER });
+  });
+});
+
+// ── 当前活跃 lock set 快照语义验证（映射为 corruption）─────────
+
+describe('active lock snapshot semantic validation', () => {
+  it('accepts an active lock on absent fixed optional top-level section (/themes)', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/themes'] });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/premise', value: 'changed' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+    expect(result.version).toBe(2);
+  });
+
+  it('accepts an active lock on absent protagonist optional child (/protagonist/role)', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/protagonist/role'] });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/premise', value: 'changed' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+    expect(result.version).toBe(2);
+  });
+
+  it('accepts an active lock on absent optional child of existing entity', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {
+      sections: SECTIONS_WITH_ALICE,
+      lockedFieldPaths: ['/supportingCharacters/alice/role'],
+    });
+
+    const result = updateCreationContractByUser(makeDeps(fake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/premise', value: 'changed' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+    expect(result.version).toBe(2);
+  });
+
+  it('rejects an active lock on a missing entity descendant as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/supportingCharacters/bob/role'] });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects an active lock on a missing relationship descendant as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, {
+      sections: SECTIONS_WITH_ALICE,
+      lockedFieldPaths: ['/relationships/rel1/dynamic'],
+    });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects an active lock child of a missing structured parent (/targetLength/value) as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/targetLength/value'] });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects an active lock child of a missing structured parent (/contentBoundaries/rating) as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/contentBoundaries/rating'] });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects overlapping active locks as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/protagonist', '/protagonist/name'] });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects duplicate active locks as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPathsJson: '["/premise","/premise"]' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('rejects a non-canonical active lock as corruption', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPathsJson: '["/Premise"]' });
+    expectUpdateCorruption(fake);
+  });
+
+  it('Lock goes through the same active lock validation (overlap → corruption, not lock conflict)', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/protagonist', '/protagonist/name'] });
+
+    let error: unknown;
+    try {
+      lockCreationContractField(makeDeps(fake), {
+        projectId: 'p1',
+        expectedContractVersion: 1,
+        fieldPath: '/premise',
+        now: '2026-01-02T00:00:00Z',
+        newVersionId: 'v2',
+        lockEventId: 'le1',
+      });
+      expect.unreachable('expected ContractDataCorruptionError');
+    } catch (e) {
+      error = e;
+    }
+    expectCorruptionError(error);
+    expectNoSideEffects(fake);
+  });
+
+  it('Unlock goes through the same active lock validation (missing entity descendant → corruption)', () => {
+    const fake = new FakeTransactionRepos();
+    seedCurrent(fake, { lockedFieldPaths: ['/supportingCharacters/bob/role'] });
+
+    let error: unknown;
+    try {
+      unlockCreationContractField(makeDeps(fake), {
+        projectId: 'p1',
+        expectedContractVersion: 1,
+        fieldPath: '/premise',
+        now: '2026-01-02T00:00:00Z',
+        newVersionId: 'v2',
+        lockEventId: 'le1',
+      });
+      expect.unreachable('expected ContractDataCorruptionError');
+    } catch (e) {
+      error = e;
+    }
+    expectCorruptionError(error);
+    expectNoSideEffects(fake);
   });
 });
 
