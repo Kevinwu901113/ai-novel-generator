@@ -265,7 +265,11 @@ function diagnostic(detail: string, cause?: unknown): Error {
 /** 契约版本冲突（乐观并发控制失败）。public message 固定，内部细节在 cause。 */
 export class ContractVersionConflictError extends AppError {
   constructor(message: string, cause?: unknown) {
-    super('CONTRACT_VERSION_CONFLICT', '创作契约版本已变化，请刷新后重试', diagnostic(message, cause));
+    super(
+      'CONTRACT_VERSION_CONFLICT',
+      '创作契约版本已变化，请刷新后重试',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractVersionConflictError';
   }
 }
@@ -294,7 +298,11 @@ export class ContractProposalNotFoundError extends AppError {
 /** 契约提案不可接受。public message 固定，不暴露原始 status。 */
 export class ContractProposalNotAcceptableError extends AppError {
   constructor(message: string, cause?: unknown) {
-    super('CONTRACT_PROPOSAL_NOT_ACCEPTABLE', '创作契约提案当前状态不允许此操作', diagnostic(message, cause));
+    super(
+      'CONTRACT_PROPOSAL_NOT_ACCEPTABLE',
+      '创作契约提案当前状态不允许此操作',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractProposalNotAcceptableError';
   }
 }
@@ -310,7 +318,11 @@ export class ContractLockConflictError extends AppError {
 /** 模型输出违反锁定字段。public message 固定，不暴露 locked path。 */
 export class ContractModelLockViolationError extends AppError {
   constructor(message: string, cause?: unknown) {
-    super('CONTRACT_MODEL_LOCK_VIOLATION', '模型输出修改了受保护的契约字段', diagnostic(message, cause));
+    super(
+      'CONTRACT_MODEL_LOCK_VIOLATION',
+      '模型输出修改了受保护的契约字段',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractModelLockViolationError';
   }
 }
@@ -318,7 +330,11 @@ export class ContractModelLockViolationError extends AppError {
 /** 契约 schema 版本不支持。public message 固定，不暴露 schemaVersion。 */
 export class ContractSchemaUnsupportedError extends AppError {
   constructor(message: string, cause?: unknown) {
-    super('CONTRACT_SCHEMA_UNSUPPORTED', '创作契约 schema 版本不受支持', diagnostic(message, cause));
+    super(
+      'CONTRACT_SCHEMA_UNSUPPORTED',
+      '创作契约 schema 版本不受支持',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractSchemaUnsupportedError';
   }
 }

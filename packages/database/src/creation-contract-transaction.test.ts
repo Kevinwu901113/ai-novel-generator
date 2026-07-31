@@ -41,9 +41,12 @@ class FakeDatabaseSync {
 
   exec(sql: string): void {
     this.execCalls.push(sql);
-    if (sql === 'BEGIN IMMEDIATE' && this.beginError) throw sqliteError(this.beginError.message, this.beginError.errcode);
-    if (sql === 'COMMIT' && this.commitError) throw sqliteError(this.commitError.message, this.commitError.errcode);
-    if (sql === 'ROLLBACK' && this.rollbackError) throw sqliteError(this.rollbackError.message, this.rollbackError.errcode);
+    if (sql === 'BEGIN IMMEDIATE' && this.beginError)
+      throw sqliteError(this.beginError.message, this.beginError.errcode);
+    if (sql === 'COMMIT' && this.commitError)
+      throw sqliteError(this.commitError.message, this.commitError.errcode);
+    if (sql === 'ROLLBACK' && this.rollbackError)
+      throw sqliteError(this.rollbackError.message, this.rollbackError.errcode);
   }
 
   asDatabaseSync(): DatabaseSync {
@@ -223,7 +226,12 @@ describe('CreationContractTransactionPortImpl fault injection', () => {
       });
       expect.unreachable('BEGIN busy should throw');
     } catch (e) {
-      expectSafeContractError(e, ContractTransactionBusyError, 'CONTRACT_VERSION_CONFLICT', BUSY_MESSAGE);
+      expectSafeContractError(
+        e,
+        ContractTransactionBusyError,
+        'CONTRACT_VERSION_CONFLICT',
+        BUSY_MESSAGE,
+      );
       // 内部诊断保留在 cause
       expect((e as AppError).cause).toBeDefined();
     }
@@ -267,7 +275,12 @@ describe('CreationContractTransactionPortImpl fault injection', () => {
       port.runInTransaction(() => 1);
       expect.unreachable('BEGIN busy should throw');
     } catch (e) {
-      expectSafeContractError(e, ContractTransactionBusyError, 'CONTRACT_VERSION_CONFLICT', BUSY_MESSAGE);
+      expectSafeContractError(
+        e,
+        ContractTransactionBusyError,
+        'CONTRACT_VERSION_CONFLICT',
+        BUSY_MESSAGE,
+      );
     }
   });
 
@@ -280,7 +293,12 @@ describe('CreationContractTransactionPortImpl fault injection', () => {
       port.runInTransaction(() => 42);
       expect.unreachable('COMMIT busy should throw');
     } catch (e) {
-      expectSafeContractError(e, ContractTransactionBusyError, 'CONTRACT_VERSION_CONFLICT', BUSY_MESSAGE);
+      expectSafeContractError(
+        e,
+        ContractTransactionBusyError,
+        'CONTRACT_VERSION_CONFLICT',
+        BUSY_MESSAGE,
+      );
     }
     // COMMIT 失败后尝试 ROLLBACK
     expect(fake.execCalls).toEqual(['BEGIN IMMEDIATE', 'COMMIT', 'ROLLBACK']);
@@ -338,7 +356,12 @@ describe('CreationContractTransactionPortImpl fault injection', () => {
       port.runInTransaction(() => 1);
       expect.unreachable('COMMIT failure should throw');
     } catch (e) {
-      expectSafeContractError(e, ContractTransactionBusyError, 'CONTRACT_VERSION_CONFLICT', BUSY_MESSAGE);
+      expectSafeContractError(
+        e,
+        ContractTransactionBusyError,
+        'CONTRACT_VERSION_CONFLICT',
+        BUSY_MESSAGE,
+      );
       // cause 是 COMMIT 的 busy 错误，不是 rollback 错误
       expect(((e as AppError).cause as Error).message).toBe('database is locked');
     }

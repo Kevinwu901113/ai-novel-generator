@@ -1646,13 +1646,20 @@ describe('safe error messages', () => {
         expectedProposalSectionsHash: makeSectionsHash(),
         expectedGrillSessionVersion: 1,
         expectedContractVersion: null,
-        operations: [{ kind: 'unknown-op', path: '/premise', value: 'x' }] as unknown as ContractPatchOperation[],
+        operations: [
+          { kind: 'unknown-op', path: '/premise', value: 'x' },
+        ] as unknown as ContractPatchOperation[],
         now: '2026-01-01T00:02:00Z',
         newVersionId: 'v1',
       });
       expect.unreachable('expected ContractValidationError');
     } catch (e) {
-      expectSafeError(e, ContractValidationError, 'CONTRACT_VALIDATION_FAILED', '创作契约内容验证失败');
+      expectSafeError(
+        e,
+        ContractValidationError,
+        'CONTRACT_VALIDATION_FAILED',
+        '创作契约内容验证失败',
+      );
       expectCauseDetail(e, 'operation[0] 解析失败');
       expectCauseDetail(e, '未知 operation kind');
     }
@@ -1674,7 +1681,12 @@ describe('safe error messages', () => {
       });
       expect.unreachable('expected ContractValidationError');
     } catch (e) {
-      expectSafeError(e, ContractValidationError, 'CONTRACT_VALIDATION_FAILED', '创作契约内容验证失败');
+      expectSafeError(
+        e,
+        ContractValidationError,
+        'CONTRACT_VALIDATION_FAILED',
+        '创作契约内容验证失败',
+      );
       expectCauseDetail(e, 'operation 应用失败');
     }
   });
@@ -1721,7 +1733,12 @@ describe('safe error messages', () => {
       });
       expect.unreachable('expected ContractProposalStaleError');
     } catch (e) {
-      expectSafeError(e, ContractProposalStaleError, 'CONTRACT_PROPOSAL_STALE', '创作契约提案已过期，请重新生成');
+      expectSafeError(
+        e,
+        ContractProposalStaleError,
+        'CONTRACT_PROPOSAL_STALE',
+        '创作契约提案已过期，请重新生成',
+      );
       expect((e as Error).message).not.toContain('f'.repeat(64));
       expectCauseDetail(e, 'sectionsHash mismatch');
     }
@@ -1754,7 +1771,12 @@ describe('safe error messages', () => {
       });
       expect.unreachable('expected ContractVersionConflictError');
     } catch (e) {
-      expectSafeError(e, ContractVersionConflictError, 'CONTRACT_VERSION_CONFLICT', '创作契约版本已变化，请刷新后重试');
+      expectSafeError(
+        e,
+        ContractVersionConflictError,
+        'CONTRACT_VERSION_CONFLICT',
+        '创作契约版本已变化，请刷新后重试',
+      );
       expect((e as Error).message).not.toContain('999');
       expectCauseDetail(e, 'contract version mismatch');
     }
@@ -1800,7 +1822,12 @@ describe('safe error messages', () => {
       });
       expect.unreachable('expected ContractSchemaUnsupportedError');
     } catch (e) {
-      expectSafeError(e, ContractSchemaUnsupportedError, 'CONTRACT_SCHEMA_UNSUPPORTED', '创作契约 schema 版本不受支持');
+      expectSafeError(
+        e,
+        ContractSchemaUnsupportedError,
+        'CONTRACT_SCHEMA_UNSUPPORTED',
+        '创作契约 schema 版本不受支持',
+      );
       expect((e as Error).message).not.toContain('2');
       expectCauseDetail(e, 'schemaVersion 2');
     }
@@ -2052,8 +2079,12 @@ describe('real two-connection contention', () => {
 
     setupProposal(dbA, 'p1', 'prop2a', { baseContractVersion: 1 });
     setupProposal(dbA, 'p1', 'prop2b', { baseContractVersion: 1 });
-    const hash2a = dbA.getCreationContractProposalRepository().getById('p1', 'prop2a')!.sectionsHash;
-    const hash2b = dbA.getCreationContractProposalRepository().getById('p1', 'prop2b')!.sectionsHash;
+    const hash2a = dbA
+      .getCreationContractProposalRepository()
+      .getById('p1', 'prop2a')!.sectionsHash;
+    const hash2b = dbA
+      .getCreationContractProposalRepository()
+      .getById('p1', 'prop2b')!.sectionsHash;
 
     holdWriteLock(dbA, 'holder-3');
     try {
@@ -2412,7 +2443,9 @@ describe('provenance corruption handling', () => {
       projectExistsReadPort: { exists: () => true },
       proposalRepo: { getById: () => fakeProposal, transitionStatusWithHash: () => true },
       versionRepo: { getById: () => corruptVersion },
-      currentRepo: { get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }) },
+      currentRepo: {
+        get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }),
+      },
       grillSessionVersionReadPort: { getVersion: () => 1 },
     } as unknown as CreationContractTransactionRepositories;
     const fakeDeps: CreationContractMutationDeps = {
@@ -2476,7 +2509,9 @@ describe('provenance corruption handling', () => {
       projectExistsReadPort: { exists: () => true },
       proposalRepo: { getById: () => fakeProposal, transitionStatusWithHash: () => true },
       versionRepo: { getById: () => corruptVersion },
-      currentRepo: { get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }) },
+      currentRepo: {
+        get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }),
+      },
       grillSessionVersionReadPort: { getVersion: () => 1 },
     } as unknown as CreationContractTransactionRepositories;
     const fakeDeps: CreationContractMutationDeps = {

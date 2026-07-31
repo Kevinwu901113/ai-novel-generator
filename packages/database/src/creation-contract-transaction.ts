@@ -85,7 +85,9 @@ function sqlitePrimaryErrorCode(err: unknown): number | null {
 function hasBusyOrLockedMessage(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (
-    msg.includes('SQLITE_BUSY') || msg.includes('SQLITE_LOCKED') || msg.includes('database is locked')
+    msg.includes('SQLITE_BUSY') ||
+    msg.includes('SQLITE_LOCKED') ||
+    msg.includes('database is locked')
   );
 }
 
