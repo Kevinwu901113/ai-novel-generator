@@ -7,8 +7,26 @@ import {
   canonicalSerializeContractSnapshot,
   validateCreationContractSections,
 } from '@ai-novel/domain';
+import { AppError, ContractDataCorruptionError } from '@ai-novel/application';
 import { ProjectDatabase } from './project-database.js';
 import { sha256Utf8 } from './creation-contract-repositories.js';
+
+/**
+ * 断言抛出 ContractDataCorruptionError：
+ * public message 固定，内部细节在 cause 中。
+ */
+function expectCorruptionWithDetail(fn: () => void, detailFragment: RegExp): void {
+  try {
+    fn();
+    expect.unreachable('expected ContractDataCorruptionError');
+  } catch (e) {
+    expect(e).toBeInstanceOf(ContractDataCorruptionError);
+    expect((e as AppError).code).toBe('INTERNAL_ERROR');
+    expect((e as Error).message).toBe('创作契约数据完整性异常');
+    expect((e as AppError).cause).toBeDefined();
+    expect(String(((e as AppError).cause as Error).message)).toMatch(detailFragment);
+  }
+}
 
 function makeSections() {
   return {
@@ -651,46 +669,50 @@ describe('creation contract database', () => {
     setupFks();
     createProposal();
 
-    expect(() =>
-      db.getCreationContractVersionRepository().create({
-        id: 'v-bad-pair',
-        projectId: 'p1',
-        version: 2,
-        schemaVersion: 1,
-        sourceProposalId: null,
-        basedOnGrillSessionId: 'gs1',
-        basedOnGrillSessionVersion: null,
-        sectionsJson: makeSectionsJson(),
-        lockedFieldPathsJson: '[]',
-        contractSnapshotHash: makeSnapshotHash(),
-        provenanceJson: VALID_PROV,
-        createdAt: '2026-01-01T00:00:00Z',
-        createdBy: 'user',
-      }),
-    ).toThrow(/null-pair/);
+    expectCorruptionWithDetail(
+      () =>
+        db.getCreationContractVersionRepository().create({
+          id: 'v-bad-pair',
+          projectId: 'p1',
+          version: 2,
+          schemaVersion: 1,
+          sourceProposalId: null,
+          basedOnGrillSessionId: 'gs1',
+          basedOnGrillSessionVersion: null,
+          sectionsJson: makeSectionsJson(),
+          lockedFieldPathsJson: '[]',
+          contractSnapshotHash: makeSnapshotHash(),
+          provenanceJson: VALID_PROV,
+          createdAt: '2026-01-01T00:00:00Z',
+          createdBy: 'user',
+        }),
+      /null-pair/,
+    );
   });
 
   it('rejects version with based_on version but no session id', () => {
     setupFks();
     createProposal();
 
-    expect(() =>
-      db.getCreationContractVersionRepository().create({
-        id: 'v-bad-pair2',
-        projectId: 'p1',
-        version: 2,
-        schemaVersion: 1,
-        sourceProposalId: null,
-        basedOnGrillSessionId: null,
-        basedOnGrillSessionVersion: 1,
-        sectionsJson: makeSectionsJson(),
-        lockedFieldPathsJson: '[]',
-        contractSnapshotHash: makeSnapshotHash(),
-        provenanceJson: VALID_PROV,
-        createdAt: '2026-01-01T00:00:00Z',
-        createdBy: 'user',
-      }),
-    ).toThrow(/null-pair/);
+    expectCorruptionWithDetail(
+      () =>
+        db.getCreationContractVersionRepository().create({
+          id: 'v-bad-pair2',
+          projectId: 'p1',
+          version: 2,
+          schemaVersion: 1,
+          sourceProposalId: null,
+          basedOnGrillSessionId: null,
+          basedOnGrillSessionVersion: 1,
+          sectionsJson: makeSectionsJson(),
+          lockedFieldPathsJson: '[]',
+          contractSnapshotHash: makeSnapshotHash(),
+          provenanceJson: VALID_PROV,
+          createdAt: '2026-01-01T00:00:00Z',
+          createdBy: 'user',
+        }),
+      /null-pair/,
+    );
   });
 
   // ── Composite FK ───────────────────────────────────────────
@@ -765,64 +787,70 @@ describe('creation contract database', () => {
       tense: 'PAST',
     });
 
-    expect(() =>
-      db.getCreationContractProposalRepository().create({
-        id: 'prop-noncanon',
-        projectId: 'p1',
-        taskId: 't1',
-        invocationId: 'inv1',
-        baseGrillSessionId: 'gs1',
-        baseGrillSessionVersion: 1,
-        baseContractVersion: null,
-        schemaVersion: 1,
-        sectionsJson: nonCanonical,
-        sectionsHash: sha256Utf8(nonCanonical),
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      }),
-    ).toThrow(/canonical/);
+    expectCorruptionWithDetail(
+      () =>
+        db.getCreationContractProposalRepository().create({
+          id: 'prop-noncanon',
+          projectId: 'p1',
+          taskId: 't1',
+          invocationId: 'inv1',
+          baseGrillSessionId: 'gs1',
+          baseGrillSessionVersion: 1,
+          baseContractVersion: null,
+          schemaVersion: 1,
+          sectionsJson: nonCanonical,
+          sectionsHash: sha256Utf8(nonCanonical),
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        }),
+      /canonical/,
+    );
   });
 
   it('rejects hash mismatch on proposal create', () => {
     setupFks();
 
-    expect(() =>
-      db.getCreationContractProposalRepository().create({
-        id: 'prop-hashmismatch',
-        projectId: 'p1',
-        taskId: 't1',
-        invocationId: 'inv1',
-        baseGrillSessionId: 'gs1',
-        baseGrillSessionVersion: 1,
-        baseContractVersion: null,
-        schemaVersion: 1,
-        sectionsJson: makeSectionsJson(),
-        sectionsHash: 'b'.repeat(64),
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      }),
-    ).toThrow(/mismatch/);
+    expectCorruptionWithDetail(
+      () =>
+        db.getCreationContractProposalRepository().create({
+          id: 'prop-hashmismatch',
+          projectId: 'p1',
+          taskId: 't1',
+          invocationId: 'inv1',
+          baseGrillSessionId: 'gs1',
+          baseGrillSessionVersion: 1,
+          baseContractVersion: null,
+          schemaVersion: 1,
+          sectionsJson: makeSectionsJson(),
+          sectionsHash: 'b'.repeat(64),
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        }),
+      /mismatch/,
+    );
   });
 
   it('rejects non-lowercase hash on proposal create', () => {
     setupFks();
 
-    expect(() =>
-      db.getCreationContractProposalRepository().create({
-        id: 'prop-uppercase',
-        projectId: 'p1',
-        taskId: 't1',
-        invocationId: 'inv1',
-        baseGrillSessionId: 'gs1',
-        baseGrillSessionVersion: 1,
-        baseContractVersion: null,
-        schemaVersion: 1,
-        sectionsJson: makeSectionsJson(),
-        sectionsHash: 'A'.repeat(64),
-        createdAt: '2026-01-01T00:00:00Z',
-        updatedAt: '2026-01-01T00:00:00Z',
-      }),
-    ).toThrow(/lowercase hex/);
+    expectCorruptionWithDetail(
+      () =>
+        db.getCreationContractProposalRepository().create({
+          id: 'prop-uppercase',
+          projectId: 'p1',
+          taskId: 't1',
+          invocationId: 'inv1',
+          baseGrillSessionId: 'gs1',
+          baseGrillSessionVersion: 1,
+          baseContractVersion: null,
+          schemaVersion: 1,
+          sectionsJson: makeSectionsJson(),
+          sectionsHash: 'A'.repeat(64),
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        }),
+      /lowercase hex/,
+    );
   });
 
   // ── list排序 ──────────────────────────────────────────────

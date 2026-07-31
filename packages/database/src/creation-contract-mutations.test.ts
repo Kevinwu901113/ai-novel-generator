@@ -19,15 +19,20 @@ import {
 import {
   acceptCreationContractProposal,
   rejectCreationContractProposal,
+  AppError,
   ContractProposalNotFoundError,
   ContractProposalNotAcceptableError,
   ContractProposalStaleError,
   ContractVersionConflictError,
   ContractModelLockViolationError,
   ContractLockConflictError,
+  ContractSchemaUnsupportedError,
+  ContractDataCorruptionError,
   ContractValidationError,
   ValidationError,
   type CreationContractMutationDeps,
+  type CreationContractTransactionRepositories,
+  type CreationContractProposalData,
 } from '@ai-novel/application';
 import { ProjectDatabase } from './project-database.js';
 import { CreationContractTransactionPortImpl } from './creation-contract-transaction.js';
@@ -1472,5 +1477,397 @@ describe('atomicity: rollback after proposal CAS', () => {
     );
     expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
     expect(db.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('v1');
+  });
+});
+
+// ── 安全错误消息 ──────────────────────────────────────────────
+
+const SENSITIVE_FRAGMENTS = [
+  '/Users/',
+  '/home/',
+  '.sqlite',
+  'SQLITE_BUSY',
+  'SQLITE_LOCKED',
+  'database is locked',
+  'BEGIN IMMEDIATE',
+  'creation_contract_',
+  'sections_json',
+  'provenance_json',
+  'UNIQUE constraint',
+  'at ',
+];
+
+function expectSafeError(
+  e: unknown,
+  expectedClass: new (...args: never[]) => Error,
+  code: string,
+  expectedMessage: string,
+): void {
+  expect(e).toBeInstanceOf(expectedClass);
+  expect(e).toBeInstanceOf(AppError);
+  expect((e as AppError).code).toBe(code);
+  expect((e as Error).message).toBe(expectedMessage);
+  for (const fragment of SENSITIVE_FRAGMENTS) {
+    expect((e as Error).message).not.toContain(fragment);
+  }
+  // public message 不含堆栈
+  expect((e as Error).message).not.toContain('\n');
+}
+
+function expectCauseDetail(e: unknown, detailFragment: string): void {
+  // 沿 cause 链逐层查找（diagnostic wrapper → 原始 cause）
+  let current: unknown = (e as AppError).cause;
+  expect(current).toBeDefined();
+  for (let depth = 0; depth < 4 && current !== undefined; depth++) {
+    if (current instanceof Error) {
+      if (current.message.includes(detailFragment)) return;
+      current = current.cause;
+    } else {
+      if (String(current).includes(detailFragment)) return;
+      current = undefined;
+    }
+  }
+  expect.unreachable(`cause 链中未找到细节: ${detailFragment}`);
+}
+
+describe('safe error messages', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-safe-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('model lock violation: fixed message, no locked path, cause preserves path', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    const modifiedSections = makeSections({ premise: 'AI changed premise' });
+    setupProposal(db, 'p1', 'prop2', {
+      baseContractVersion: 1,
+      sections: modifiedSections,
+    });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('expected ContractModelLockViolationError');
+    } catch (e) {
+      expectSafeError(
+        e,
+        ContractModelLockViolationError,
+        'CONTRACT_MODEL_LOCK_VIOLATION',
+        '模型输出修改了受保护的契约字段',
+      );
+      expectCauseDetail(e, '/premise');
+    }
+  });
+
+  it('lock conflict: fixed message, no operation path, cause preserves path', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    tamperWithLocks(db, 'v1', ['/premise']);
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: 'User override' }],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('expected ContractLockConflictError');
+    } catch (e) {
+      expectSafeError(
+        e,
+        ContractLockConflictError,
+        'CONTRACT_LOCK_CONFLICT',
+        '操作与受保护的契约字段冲突',
+      );
+      expectCauseDetail(e, '/premise');
+    }
+  });
+
+  it('runtime operation parse failure: fixed message, no index/raw error, cause preserves detail', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [{ kind: 'unknown-op', path: '/premise', value: 'x' }] as unknown as ContractPatchOperation[],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractValidationError');
+    } catch (e) {
+      expectSafeError(e, ContractValidationError, 'CONTRACT_VALIDATION_FAILED', '创作契约内容验证失败');
+      expectCauseDetail(e, 'operation[0] 解析失败');
+      expectCauseDetail(e, '未知 operation kind');
+    }
+  });
+
+  it('operation apply failure: fixed message, no raw validator message in public text', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: '' }],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractValidationError');
+    } catch (e) {
+      expectSafeError(e, ContractValidationError, 'CONTRACT_VALIDATION_FAILED', '创作契约内容验证失败');
+      expectCauseDetail(e, 'operation 应用失败');
+    }
+  });
+
+  it('not acceptable: fixed message, no raw status, cause preserves status', () => {
+    setupProposal(db, 'p1', 'prop1', { status: 'ACCEPTED' });
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractProposalNotAcceptableError');
+    } catch (e) {
+      expectSafeError(
+        e,
+        ContractProposalNotAcceptableError,
+        'CONTRACT_PROPOSAL_NOT_ACCEPTABLE',
+        '创作契约提案当前状态不允许此操作',
+      );
+      expectCauseDetail(e, 'ACCEPTED');
+    }
+  });
+
+  it('stale: fixed message, no hash leak, cause preserves detail', () => {
+    setupProposal(db, 'p1', 'prop1');
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: 'f'.repeat(64),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractProposalStaleError');
+    } catch (e) {
+      expectSafeError(e, ContractProposalStaleError, 'CONTRACT_PROPOSAL_STALE', '创作契约提案已过期，请重新生成');
+      expect((e as Error).message).not.toContain('f'.repeat(64));
+      expectCauseDetail(e, 'sectionsHash mismatch');
+    }
+  });
+
+  it('version conflict: fixed message, no version number, cause preserves detail', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    setupProposal(db, 'p1', 'prop2');
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 999,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('expected ContractVersionConflictError');
+    } catch (e) {
+      expectSafeError(e, ContractVersionConflictError, 'CONTRACT_VERSION_CONFLICT', '创作契约版本已变化，请刷新后重试');
+      expect((e as Error).message).not.toContain('999');
+      expectCauseDetail(e, 'contract version mismatch');
+    }
+  });
+
+  it('schema unsupported: fixed message, no schemaVersion leak', () => {
+    // 真实 DB 有 CHECK (schema_version = 1) 挡住非法行，用 fake transaction port
+    // 模拟一个 schemaVersion 不支持的 proposal（不可变约束下该状态只能来自损坏/升级）
+    const fakeProposal: CreationContractProposalData = {
+      id: 'prop1',
+      projectId: 'p1',
+      taskId: 'task-prop1',
+      invocationId: 'inv-prop1',
+      status: 'PROPOSED',
+      baseGrillSessionId: 'gs-p1',
+      baseGrillSessionVersion: 1,
+      baseContractVersion: null,
+      schemaVersion: 2,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: makeSectionsHash(),
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const fakeRepos = {
+      projectExistsReadPort: { exists: () => true },
+      proposalRepo: { getById: () => fakeProposal },
+    } as unknown as CreationContractTransactionRepositories;
+    const fakeDeps: CreationContractMutationDeps = {
+      transactionPort: { runInTransaction: (op) => op(fakeRepos) },
+      sha256Port: { digestUtf8: sha256Utf8 },
+    };
+
+    try {
+      acceptCreationContractProposal(fakeDeps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractSchemaUnsupportedError');
+    } catch (e) {
+      expectSafeError(e, ContractSchemaUnsupportedError, 'CONTRACT_SCHEMA_UNSUPPORTED', '创作契约 schema 版本不受支持');
+      expect((e as Error).message).not.toContain('2');
+      expectCauseDetail(e, 'schemaVersion 2');
+    }
+  });
+
+  it('data corruption: fixed message, no SQL/column/absolute path, cause preserves detail', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    // 篡改权威版本 sections_json 使其非 canonical（模拟损坏）
+    db.database.exec('DROP TRIGGER IF EXISTS trg_cc_versions_no_update');
+    db.database
+      .prepare(`UPDATE creation_contract_versions SET sections_json = ? WHERE id = 'v1'`)
+      .run(JSON.stringify({ premise: 'not canonical ordering' }));
+    db.database.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cc_versions_no_update
+      BEFORE UPDATE ON creation_contract_versions
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_versions is append-only');
+      END;
+    `);
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('expected ContractDataCorruptionError');
+    } catch (e) {
+      expectSafeError(e, ContractDataCorruptionError, 'INTERNAL_ERROR', '创作契约数据完整性异常');
+      expectCauseDetail(e, 'sections_json');
+    }
+  });
+
+  it('proposal not found keeps project-convention proposalId in public message', () => {
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'missing-prop',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('expected ContractProposalNotFoundError');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractProposalNotFoundError);
+      expect((e as AppError).code).toBe('CONTRACT_PROPOSAL_NOT_FOUND');
+      expect((e as Error).message).toBe('创作契约提案 missing-prop 不存在');
+    }
   });
 });

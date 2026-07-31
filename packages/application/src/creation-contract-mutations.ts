@@ -79,15 +79,13 @@ function parseSectionsJson(json: string, context: string): CreationContractSecti
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
-  } catch {
-    throw new ContractDataCorruptionError(`${context}: sectionsJson is not valid JSON`);
+  } catch (e) {
+    throw new ContractDataCorruptionError(`${context}: sectionsJson is not valid JSON`, e);
   }
   try {
     return validateCreationContractSections(parsed);
   } catch (e) {
-    throw new ContractDataCorruptionError(
-      `${context}: sectionsJson validation failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    throw new ContractDataCorruptionError(`${context}: sectionsJson validation failed`, e);
   }
 }
 
@@ -95,8 +93,8 @@ function parseLockedFieldPathsJson(json: string, context: string): readonly stri
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
-  } catch {
-    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson is not valid JSON`);
+  } catch (e) {
+    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson is not valid JSON`, e);
   }
   if (!Array.isArray(parsed)) {
     throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson must be an array`);
@@ -359,7 +357,11 @@ function generateProvenance(
       const proposalValue = getFieldValueByPath(sourceSections, path);
       const previousFieldHash =
         proposalValue !== undefined
-          ? sha256Port.digestUtf8(canonicalSerializeContractFieldValue(proposalValue))
+          ? requireSha256Digest(
+              sha256Port,
+              canonicalSerializeContractFieldValue(proposalValue),
+              `previousFieldHash for ${path}`,
+            )
           : null;
 
       result.push({
@@ -433,15 +435,26 @@ function loadPreviousProvenanceMap(
   let parsed: unknown;
   try {
     parsed = JSON.parse(previousVersion.provenanceJson);
-  } catch {
-    return null;
+  } catch (e) {
+    // 权威 version provenance 损坏必须抛出，不能降级成空 provenance
+    throw new ContractDataCorruptionError('previous version provenanceJson is not valid JSON', e);
   }
-  if (!Array.isArray(parsed)) return null;
+  if (!Array.isArray(parsed)) {
+    throw new ContractDataCorruptionError('previous version provenanceJson must be an array');
+  }
   const map = new Map<string, ContractFieldProvenance>();
   for (const item of parsed) {
-    if (typeof item === 'object' && item !== null && typeof item.sectionKey === 'string') {
-      map.set(item.sectionKey, item as ContractFieldProvenance);
+    if (typeof item !== 'object' || item === null) {
+      throw new ContractDataCorruptionError('previous version provenance item is not an object');
     }
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.sectionKey !== 'string' || entry.sectionKey.length === 0) {
+      throw new ContractDataCorruptionError('previous version provenance sectionKey invalid');
+    }
+    if (map.has(entry.sectionKey)) {
+      throw new ContractDataCorruptionError('previous version provenance duplicate sectionKey');
+    }
+    map.set(entry.sectionKey, entry as unknown as ContractFieldProvenance);
   }
   return map;
 }
@@ -499,12 +512,23 @@ function parseOperations(
     try {
       result.push(parseContractPatchOperation(rawOperations[i]));
     } catch (e) {
-      throw new ContractValidationError(
-        `operation[${i}] 解析失败: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      throw new ContractValidationError(`operation[${i}] 解析失败`, e);
     }
   }
   return result;
+}
+
+/**
+ * Sha256Port 输出验证：version create 前必须确保 adapter 返回
+ * lowercase SHA-256 hex。adapter 输出无效时抛出稳定 INTERNAL_ERROR，
+ * 由外层事务回滚 proposal CAS。
+ */
+function requireSha256Digest(port: Sha256Port, input: string, detail: string): string {
+  const digest = port.digestUtf8(input);
+  if (!isLowercaseSha256Hex(digest)) {
+    throw new ContractDataCorruptionError(`sha256 port 返回无效输出 (${detail})`);
+  }
+  return digest;
 }
 
 // ── AcceptCreationContractProposal ───────────────────────────
@@ -690,9 +714,7 @@ export function acceptCreationContractProposal(
       ) {
         throw e;
       }
-      throw new ContractValidationError(
-        `operation 应用失败: ${e instanceof Error ? e.message : String(e)}`,
-      );
+      throw new ContractValidationError('operation 应用失败', e);
     }
 
     // ── Phase 5: provenance ──
@@ -714,7 +736,7 @@ export function acceptCreationContractProposal(
       lockedFieldPaths: currentLockedFieldPaths,
       schemaVersion: CREATION_CONTRACT_SCHEMA_VERSION,
     });
-    const snapshotHash = deps.sha256Port.digestUtf8(canonicalSnapshot);
+    const snapshotHash = requireSha256Digest(deps.sha256Port, canonicalSnapshot, 'snapshot hash');
 
     // ── Phase 7: serialize ──
 
