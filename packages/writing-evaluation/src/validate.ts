@@ -23,7 +23,7 @@ import type {
   WritingEvaluationSuiteV1,
 } from './schema.js';
 import { METRIC_IDS } from './schema.js';
-import { normalizeText } from './text.js';
+import { hasSubstantiveContent, normalizeText } from './text.js';
 
 // ── 长度上限 ──────────────────────────────────────────────────────
 
@@ -93,7 +93,10 @@ function expectString(value: unknown, path: string): string {
 function normalizeId(value: unknown, path: string): string {
   const raw = expectString(value, path);
   const trimmed = raw.trim().normalize('NFC');
-  if (trimmed.length === 0) fail(path, 'trim 后不能为空');
+  // 同时拒绝仅由零宽字符 / 纯标点组成的“看似非空”的 ID
+  if (trimmed.length === 0 || !hasSubstantiveContent(trimmed)) {
+    fail(path, 'trim 后不能为空');
+  }
   if (Array.from(trimmed).length > MAX_ID_LENGTH) {
     fail(path, `不能超过 ${MAX_ID_LENGTH} 个 code points`);
   }

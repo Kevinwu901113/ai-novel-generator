@@ -154,6 +154,17 @@ describe('segmentText — 对话统计', () => {
     expect(seg.dialogueCodePointCount).toBe(0);
   });
 
+  it('嵌套引号对话不重复计数（ratio 不超过 1）', () => {
+    const seg = segmentText('“他说『好』。”');
+    expect(seg.dialogueCodePointCount).toBe(seg.codePointCount);
+    expect(seg.dialogueCodePointRatio).toBe(1);
+  });
+
+  it('嵌套引号后仍正确切句', () => {
+    const seg = segmentText('“他说『好』。”她点头。');
+    expect(seg.sentences).toEqual(['“他说『好』。”', '她点头。']);
+  });
+
   it('无对话时 ratio 为 0', () => {
     const seg = segmentText('他转身走了。');
     expect(seg.dialogueCodePointRatio).toBe(0);
@@ -169,6 +180,11 @@ describe('segmentText — 边界', () => {
   it('连续句末后紧跟普通内容正常切句', () => {
     const seg = segmentText('他走了。！她又说。');
     expect(seg.sentences).toEqual(['他走了。！', '她又说。']);
+  });
+
+  it('ASCII 句点后的连续句末归入当前句', () => {
+    expect(segmentText('你好.!').sentences).toEqual(['你好.!']);
+    expect(segmentText('你好.。').sentences).toEqual(['你好.。']);
   });
 
   it('纯标点文本过滤为 0 句', () => {

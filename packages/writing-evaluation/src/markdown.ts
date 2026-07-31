@@ -280,11 +280,11 @@ export function renderMarkdownRatingAggregation(agg: RatingAggregationReport): s
   if (agg.pairwiseWins.length > 0) {
     lines.push('## 两两对比（preferredRank wins）');
     lines.push('');
-    lines.push('| caseId | winner | loser | wins | losses | ties |');
+    lines.push('| caseId | aliasA | aliasB | A wins | B wins | ties |');
     lines.push('| --- | --- | --- | --- | --- | --- |');
     for (const pw of agg.pairwiseWins) {
       lines.push(
-        `| ${pw.caseId} | ${pw.winnerAlias} | ${pw.loserAlias} | ${pw.wins} | ${pw.losses} | ${pw.ties} |`,
+        `| ${pw.caseId} | ${pw.aliasA} | ${pw.aliasB} | ${pw.aliasAWins} | ${pw.aliasBWins} | ${pw.ties} |`,
       );
     }
     lines.push('');

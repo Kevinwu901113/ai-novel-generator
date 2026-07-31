@@ -425,10 +425,13 @@ export interface CandidateRatingAggregate {
 
 export interface PairwiseWin {
   readonly caseId: string;
-  readonly winnerAlias: string;
-  readonly loserAlias: string;
-  readonly wins: number;
-  readonly losses: number;
+  /** 对局双方 alias（按 code-point 排序，稳定） */
+  readonly aliasA: string;
+  readonly aliasB: string;
+  /** aliasA 胜过 aliasB 的次数 */
+  readonly aliasAWins: number;
+  /** aliasB 胜过 aliasA 的次数 */
+  readonly aliasBWins: number;
   readonly ties: number;
 }
 

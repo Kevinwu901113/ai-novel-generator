@@ -67,6 +67,7 @@ function validateSingleRating(
   value: unknown,
   path: string,
   caseIndex: Map<string, CaseAliasIndex>,
+  expectedSuiteId: string,
 ): HumanRatingV1 {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new RatingValidationError(path, '必须是对象');
@@ -91,6 +92,12 @@ function validateSingleRating(
   }
 
   const suiteId = requireNonEmptyString(obj.suiteId, `${path}.suiteId`);
+  if (suiteId !== expectedSuiteId) {
+    throw new RatingValidationError(
+      `${path}.suiteId`,
+      `与 blind packet 的 suiteId "${expectedSuiteId}" 不一致`,
+    );
+  }
   const caseId = requireNonEmptyString(obj.caseId, `${path}.caseId`);
   const candidateAlias = requireNonEmptyString(obj.candidateAlias, `${path}.candidateAlias`);
   const raterId = requireNonEmptyString(obj.raterId, `${path}.raterId`);
@@ -194,7 +201,9 @@ export function validateRatings(input: unknown, options: ValidateRatingsOptions)
   }
   const caseIndex = buildCaseIndex(options.packet);
 
-  const ratings = input.map((r, i) => validateSingleRating(r, `ratings[${i}]`, caseIndex));
+  const ratings = input.map((r, i) =>
+    validateSingleRating(r, `ratings[${i}]`, caseIndex, options.packet.suiteId),
+  );
 
   const seen = new Set<string>();
   for (const r of ratings) {
@@ -252,6 +261,7 @@ function dimensionAggregate(values: number[]): DimensionAggregate {
 
 /**
  * 聚合人工评分。不计算默认 overall score。
+ * 约定：调用方必须先通过 validateRatings 校验（aggregateRatings 不再重复校验）。
  */
 export function aggregateRatings(options: AggregateRatingsOptions): RatingAggregationReport {
   const { packet, ratings, clock } = options;
@@ -342,7 +352,14 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
           else if (rec.aRank > rec.bRank) losses += 1;
           else ties += 1;
         }
-        pairwiseWins.push({ caseId: c.caseId, winnerAlias: a, loserAlias: b, wins, losses, ties });
+        pairwiseWins.push({
+          caseId: c.caseId,
+          aliasA: a,
+          aliasB: b,
+          aliasAWins: wins,
+          aliasBWins: losses,
+          ties,
+        });
       }
     }
   }

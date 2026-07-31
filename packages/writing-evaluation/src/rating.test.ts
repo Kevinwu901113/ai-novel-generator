@@ -149,6 +149,12 @@ describe('validateRatings — 非法输入', () => {
     expectRatingError([r], packet, /raterId/);
   });
 
+  it('拒绝 suiteId 与 blind packet 不一致的 rating', () => {
+    const packet = makePacket();
+    const r = makeRating(packet, { suiteId: 'completely-different-suite' });
+    expectRatingError([r], packet, /suiteId/);
+  });
+
   it('拒绝带 inherited keys 的对象', () => {
     const packet = makePacket();
     const proto = { inherited: 1 };
@@ -239,7 +245,7 @@ describe('aggregateRatings', () => {
     expect(ca!.rankDistribution[1]).toBe(2);
   });
 
-  it('pairwise wins', () => {
+  it('pairwise wins：A 胜 B', () => {
     const packet = makePacket();
     const agg = aggregateRatings({
       packet,
@@ -250,9 +256,23 @@ describe('aggregateRatings', () => {
     const pw = agg.pairwiseWins.find((x) => x.caseId === 'restrained-reunion');
     expect(pw).toBeDefined();
     // A 被 2 位 rater 排第 1，B 排第 2 → A 赢 B
-    expect(pw!.winnerAlias).toBe('A');
-    expect(pw!.wins).toBe(2);
-    expect(pw!.losses).toBe(0);
+    expect(pw!.aliasA).toBe('A');
+    expect(pw!.aliasB).toBe('B');
+    expect(pw!.aliasAWins).toBe(2);
+    expect(pw!.aliasBWins).toBe(0);
+  });
+
+  it('pairwise wins：B 胜 A 时方向正确', () => {
+    const packet = makePacket();
+    const [a, b] = aliasesOf(packet, 'restrained-reunion');
+    const ratings = [
+      makeRating(packet, { candidateAlias: a, raterId: 'r1', preferredRank: 2 }),
+      makeRating(packet, { candidateAlias: b, raterId: 'r1', preferredRank: 1 }),
+    ];
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    const pw = agg.pairwiseWins.find((x) => x.caseId === 'restrained-reunion');
+    expect(pw!.aliasAWins).toBe(0);
+    expect(pw!.aliasBWins).toBe(1);
   });
 
   it('mapping 解析 candidateId', () => {

@@ -166,6 +166,18 @@ describe('validateSuite — ID / 文本规范', () => {
     expectValidationError(input, /不能超过/);
   });
 
+  it('拒绝仅由零宽字符组成的 ID', () => {
+    const input = cloneJson(makeSuite());
+    input.cases[0].candidates[0].candidateId = '​​';
+    expectValidationError(input, /不能为空/);
+  });
+
+  it('拒绝仅由纯标点组成的 ID', () => {
+    const input = cloneJson(makeSuite());
+    input.cases[0].candidates[0].candidateId = '!!!';
+    expectValidationError(input, /不能为空/);
+  });
+
   it('文本进行 NFC 规范化', () => {
     const input = cloneJson(makeSuite());
     input.cases[0].candidates[0].text = 'ä'; // a + combining diaeresis

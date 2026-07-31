@@ -108,7 +108,16 @@ const PUNCTUATION_CHARS = [
 const PUNCTUATION_SET = new Set(PUNCTUATION_CHARS);
 
 function isWhitespaceChar(c: string): boolean {
-  return c === ' ' || c === '\t' || c === '\n' || c === '\r' || c === '　';
+  return (
+    c === ' ' ||
+    c === '\t' ||
+    c === '\n' ||
+    c === '\r' ||
+    c === '　' ||
+    c === '​' || // zero-width space
+    c === '﻿' || // BOM / zero-width no-break space
+    c === '⁠' // word joiner
+  );
 }
 
 function isSubstantiveChar(c: string): boolean {
@@ -304,6 +313,7 @@ function segmentParagraph(paragraph: string): string[] {
       appendChar(c);
       i += 1;
       if (!isDecimal) {
+        consumeFollowingEnders();
         consumeTrailingClosingQuotes();
         finalizeSentence();
       }
@@ -393,7 +403,8 @@ function countDialogueCodePoints(text: string): {
         inAsciiQuote = true;
       } else {
         const frame = stack.pop();
-        if (frame) dialogue += i - frame.startIndex + 1;
+        // 嵌套引号只统计最外层区域，避免重复计数
+        if (frame && stack.length === 0) dialogue += i - frame.startIndex + 1;
         inAsciiQuote = false;
       }
       continue;
@@ -404,9 +415,10 @@ function countDialogueCodePoints(text: string): {
     }
     if (isCjkClosingQuote(c)) {
       const frame = stack.pop();
-      if (frame) {
+      // 嵌套引号只统计最外层区域，避免重复计数
+      if (frame && stack.length === 0) {
         dialogue += i - frame.startIndex + 1;
-      } else {
+      } else if (!frame) {
         warnings.push(`发现没有对应开引号的闭合引号 "${c}"`);
       }
       continue;
