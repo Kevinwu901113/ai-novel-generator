@@ -90,6 +90,26 @@ function checkAsarContents(appPath) {
       return false;
     }
     console.log('[smoke-test] grill API presence check passed');
+
+    // Verify contract API channels and object are present in preload
+    // （只验证 surface，不执行真实模型调用）
+    const contractChannels = [
+      'ipc:contract-get-current',
+      'ipc:contract-list-versions',
+      'ipc:contract-request-draft',
+      'ipc:contract-accept-proposal',
+      'ipc:contract-lock-field',
+    ];
+    const missingContractChannels = contractChannels.filter((ch) => !preloadContent.includes(ch));
+    if (missingContractChannels.length > 0) {
+      console.error('[smoke-test] preload missing contract channels:', missingContractChannels);
+      return false;
+    }
+    if (!preloadContent.includes('contract:')) {
+      console.error('[smoke-test] preload does not expose contract API');
+      return false;
+    }
+    console.log('[smoke-test] contract API presence check passed');
   }
 
   // Verify no workspace runtime packages in preload
