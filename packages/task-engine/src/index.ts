@@ -282,3 +282,9 @@ export {
   type ContractDraftEngineDeps,
   type ContractDraftExecutionResult,
 } from './creation-contract-draft.js';
+
+export { validateContractDraftContext } from './contract-draft-context.js';
+export type {
+  ContractDraftContextDeps,
+  ValidatedContractDraftContext,
+} from './contract-draft-context.js';

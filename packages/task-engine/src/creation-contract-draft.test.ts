@@ -17,6 +17,7 @@ import type { ContractDraftEngineDeps } from './creation-contract-draft.js';
 import {
   canonicalSerializeContractSections,
   canonicalSerializeLockedFieldPaths,
+  canonicalSerializeContractSnapshot,
   validateCreationContractSections,
   type CreationContractSections,
 } from '@ai-novel/domain';
@@ -48,7 +49,6 @@ import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
 import type { ErrorCode } from '@ai-novel/contracts';
 
 const NOW = '2024-06-15T12:00:00.000Z';
-const HEX64 = 'a'.repeat(64);
 const OTHER_HEX64 = 'b'.repeat(64);
 
 function makeSections(overrides: Record<string, unknown> = {}): CreationContractSections {
@@ -72,6 +72,15 @@ function modelText(sections: unknown = makeSections()): string {
   return JSON.stringify({ schemaVersion: 1, sections });
 }
 
+/** 默认权威 snapshot（无 locks）的真实 hash。 */
+const EXISTING_HASH = sha256Hex(
+  canonicalSerializeContractSnapshot({
+    sections: makeSections(),
+    lockedFieldPaths: [],
+    schemaVersion: 1,
+  }),
+);
+
 const FIRST_INPUT = JSON.stringify({
   grillSessionId: 'gs-1',
   baseGrillSessionVersion: 3,
@@ -90,11 +99,26 @@ const EXISTING_INPUT = JSON.stringify({
   contractBaseline: {
     contractVersionId: 'ver-2',
     contractVersion: 2,
-    contractSnapshotHash: HEX64,
+    contractSnapshotHash: EXISTING_HASH,
   },
   schemaVersion: 1,
   providerProfileId: 'provider-1',
 });
+
+/** 为指定 version 构造任务输入：baseline hash 与 version 的真实 hash 一致。 */
+function existingInputFor(version: CreationContractVersionData): string {
+  return JSON.stringify({
+    grillSessionId: 'gs-1',
+    baseGrillSessionVersion: 3,
+    contractBaseline: {
+      contractVersionId: version.id,
+      contractVersion: version.version,
+      contractSnapshotHash: version.contractSnapshotHash,
+    },
+    schemaVersion: 1,
+    providerProfileId: 'provider-1',
+  });
+}
 
 function makeTask(inputVersionJson: string = FIRST_INPUT): TaskData {
   return {
@@ -174,6 +198,33 @@ function makeSession(overrides: Partial<GrillSessionData> = {}): GrillSessionDat
 function makeVersion(
   overrides: Partial<CreationContractVersionData> = {},
 ): CreationContractVersionData {
+  const defaultSections = makeSections();
+  const sectionsJsonValue = overrides.sectionsJson ?? sectionsJson();
+  const lockedFieldPathsJsonValue =
+    overrides.lockedFieldPathsJson ?? canonicalSerializeLockedFieldPaths([]);
+  let sections: CreationContractSections = defaultSections;
+  try {
+    sections = JSON.parse(sectionsJsonValue) as unknown as CreationContractSections;
+  } catch {
+    sections = defaultSections;
+  }
+  const lockedFieldPaths: readonly string[] =
+    lockedFieldPathsJsonValue === '[]' ? [] : (JSON.parse(lockedFieldPathsJsonValue) as string[]);
+  let contractSnapshotHash = overrides.contractSnapshotHash;
+  if (contractSnapshotHash === undefined) {
+    try {
+      contractSnapshotHash = sha256Hex(
+        canonicalSerializeContractSnapshot({
+          sections,
+          lockedFieldPaths,
+          schemaVersion: overrides.schemaVersion ?? 1,
+        }),
+      );
+    } catch {
+      // 损坏输入（非 canonical / 无效 sections）：使用占位 hash，验证器在解析阶段即抛错。
+      contractSnapshotHash = sha256Hex('invalid-snapshot-placeholder');
+    }
+  }
   return {
     id: 'ver-2',
     projectId: 'proj-1',
@@ -182,10 +233,10 @@ function makeVersion(
     sourceProposalId: 'prop-1',
     basedOnGrillSessionId: 'gs-1',
     basedOnGrillSessionVersion: 3,
-    sectionsJson: sectionsJson(),
-    lockedFieldPathsJson: canonicalSerializeLockedFieldPaths([]),
-    contractSnapshotHash: HEX64,
-    provenanceJson: '[]',
+    sectionsJson: sectionsJsonValue,
+    lockedFieldPathsJson: lockedFieldPathsJsonValue,
+    contractSnapshotHash,
+    provenanceJson: overrides.provenanceJson ?? '[]',
     createdAt: NOW,
     createdBy: 'ai-proposal-accepted',
     ...overrides,
@@ -209,6 +260,8 @@ interface MockState {
   secretError: boolean;
   questions: GrillQuestionData[];
   answers: GrillAnswerData[];
+  /** 完整答案集（含历史/跨 session 答案），模拟 answerRepo.getById 的全局查找 */
+  answersById: Map<string, GrillAnswerData>;
   grillProposals: GrillProposalData[];
   completeRunningResult: boolean;
   markSucceededResult: boolean;
@@ -415,7 +468,7 @@ function buildDeps(overrides: Partial<ContractDraftEngineDeps> = {}): ContractDr
 
   const answerRepo: GrillAnswerRepositoryPort = {
     create: () => {},
-    getById: () => null,
+    getById: (id: string) => state.answersById.get(id) ?? null,
     getCurrentByQuestion: () => null,
     listByQuestion: () => [],
     listCurrentBySession: () => state.answers,
@@ -520,6 +573,7 @@ function freshState(inputVersionJson: string = FIRST_INPUT): MockState {
     secretError: false,
     questions: [makeQuestion()],
     answers: [makeAnswer()],
+    answersById: new Map([['a-1', makeAnswer()]]),
     grillProposals: [makeGrillProposal()],
     completeRunningResult: true,
     markSucceededResult: true,
@@ -642,12 +696,22 @@ describe('executeCreationContractDraft: stale-before-call', () => {
     expect(result.task.status).toBe('STALE');
   });
 
-  it('已有契约但 snapshot hash 变化 → task STALE', async () => {
+  it('已有契约但 snapshot hash 变化（真实但不同的权威 snapshot）→ task STALE', async () => {
+    // 数据库 version 自洽（hash 与自身 sections 一致），但不同于任务输入的 baseline hash。
+    state.task = makeTask(EXISTING_INPUT); // baseline hash = EXISTING_HASH（默认快照）
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
+    state.defaultVersion = makeVersion({ sectionsJson: sectionsJson({ premise: '另一个前提' }) });
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('STALE');
+  });
+
+  it('已有契约但数据库 hash 与自身 sections 不一致（内部不完整）→ 数据损坏 FAILED，不是 STALE', async () => {
     state.task = makeTask(EXISTING_INPUT);
     state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
     state.defaultVersion = makeVersion({ contractSnapshotHash: OTHER_HEX64 });
-    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
-    expect(result.task.status).toBe('STALE');
+    await expect(executeCreationContractDraft(buildDeps(), 'task-1')).rejects.toThrow(
+      /契约数据完整性异常/,
+    );
   });
 
   it('current pointer 引用缺失版本 → ContractDataCorruptionError（数据损坏不是 STALE）', async () => {
@@ -741,13 +805,13 @@ describe('executeCreationContractDraft: 首次契约成功', () => {
 
 describe('executeCreationContractDraft: 已有契约成功', () => {
   it('保留 baseline 的 locked 字段与 protagonist key', async () => {
-    state.task = makeTask(EXISTING_INPUT);
     const baselineSections = makeSections();
-    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
     state.defaultVersion = makeVersion({
       sectionsJson: sectionsJson(),
       lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/protagonist/name']),
     });
+    state.task = makeTask(existingInputFor(state.defaultVersion));
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
     // 模型输出与 baseline 一致（locked name 相同）
     state.modelOutput = makeOutput(modelText(makeSections()));
 
@@ -785,6 +849,91 @@ describe('executeCreationContractDraft: 模型/Provider 错误', () => {
     expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
     expect(state.invocation?.status).toBe('FAILED');
     expect(state.invocation?.errorMessage).toBe('模型调用异常');
+    expect(state.proposal).toBeNull();
+  });
+
+  it('adapter errorMessage 含敏感内容：绝不持久化，使用固定安全消息', async () => {
+    // errorCode 在白名单内；errorMessage 含 Bearer token / API Key / URL / response body
+    state.modelOutput = makeOutput('', 'PROVIDER_RATE_LIMITED');
+    state.modelOutput = {
+      ...state.modelOutput,
+      errorMessage:
+        'Bearer sk-test-secret-key https://provider.example/v1/messages {"error":{"type":"rate_limit"}}',
+    };
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_RATE_LIMITED');
+    // 固定安全消息（本地映射），忽略 adapter errorMessage
+    expect(result.task.errorMessage).toBe('请求频率超限');
+    expect(state.invocation?.errorMessage).toBe('请求频率超限');
+    // 任何持久化字段不含敏感内容
+    const persisted = JSON.stringify({
+      task: result.task.errorMessage,
+      inv: state.invocation?.errorMessage,
+    });
+    expect(persisted).not.toContain('Bearer');
+    expect(persisted).not.toContain('sk-test-secret-key');
+    expect(persisted).not.toContain('provider.example');
+    expect(persisted).not.toContain('rate_limit');
+  });
+
+  it('未知/非 provider errorCode → 安全 PROVIDER_RESPONSE_INVALID 固定消息', async () => {
+    state.modelOutput = makeOutput('', 'PROVIDER_RATE_LIMITED');
+    state.modelOutput = {
+      ...state.modelOutput,
+      errorCode: 'SOME_RANDOM_CODE' as ErrorCode,
+      errorMessage: 'weird adapter message',
+    };
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_RESPONSE_INVALID');
+    expect(result.task.errorMessage).toBe('响应格式异常');
+    expect(state.invocation?.errorMessage).toBe('响应格式异常');
+  });
+
+  it('latencyMs 为 NaN → 安全 provider-response failure，不污染数据库', async () => {
+    state.modelOutput = {
+      ...makeOutput(modelText()),
+      latencyMs: Number.NaN,
+    };
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_RESPONSE_INVALID');
+    expect(state.invocation?.status).toBe('FAILED');
+    expect(state.invocation?.latencyMs).toBeNull();
+    expect(state.proposal).toBeNull();
+  });
+
+  it('token counts 为负数/Infinity → 安全 provider-response failure，不污染数据库', async () => {
+    state.modelOutput = {
+      ...makeOutput(modelText()),
+      usage: {
+        inputTokens: -5,
+        outputTokens: 3,
+        cacheReadTokens: Infinity,
+        cacheWriteTokens: null,
+        totalTokens: Number.NaN,
+      },
+    };
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_RESPONSE_INVALID');
+    expect(state.invocation?.status).toBe('FAILED');
+    expect(state.invocation?.totalTokens).toBeNull();
+    expect(state.invocation?.inputTokens).toBeNull();
+    expect(state.proposal).toBeNull();
+  });
+
+  it('providerRequestId / finishReason 错误类型 → 安全 provider-response failure', async () => {
+    state.modelOutput = {
+      ...makeOutput(modelText()),
+      providerRequestId: 123 as unknown as string,
+      finishReason: { bogus: true } as unknown as string,
+    };
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('PROVIDER_RESPONSE_INVALID');
+    expect(state.invocation?.status).toBe('FAILED');
     expect(state.proposal).toBeNull();
   });
 });
@@ -849,17 +998,17 @@ describe('executeCreationContractDraft: 严格输出解析', () => {
 });
 
 describe('executeCreationContractDraft: 锁保护', () => {
-  function setupLockedBaseline(): void {
-    state.task = makeTask(EXISTING_INPUT);
-    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
+  function setupLockedBaseline(lockedFieldPathsJson: string): void {
     state.defaultVersion = makeVersion({
       sectionsJson: sectionsJson(),
-      lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/protagonist/name']),
+      lockedFieldPathsJson,
     });
+    state.task = makeTask(existingInputFor(state.defaultVersion));
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
   }
 
   it('locked scalar 值变化 → CONTRACT_MODEL_LOCK_VIOLATION，不创建 proposal', async () => {
-    setupLockedBaseline();
+    setupLockedBaseline(canonicalSerializeLockedFieldPaths(['/protagonist/name']));
     state.modelOutput = makeOutput(
       modelText(makeSections({ protagonist: { characterKey: 'protag', name: '改名' } })),
     );
@@ -871,13 +1020,7 @@ describe('executeCreationContractDraft: 锁保护', () => {
   });
 
   it('locked absent 字段被新增 → CONTRACT_MODEL_LOCK_VIOLATION', async () => {
-    state.task = makeTask(EXISTING_INPUT);
-    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
-    state.defaultVersion = makeVersion({
-      sectionsJson: sectionsJson(),
-      // /themes 在 baseline 中缺失，被锁定为缺失
-      lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/themes']),
-    });
+    setupLockedBaseline(canonicalSerializeLockedFieldPaths(['/themes']));
     state.modelOutput = makeOutput(modelText(makeSections({ themes: ['成长'] })));
     const result = await executeCreationContractDraft(buildDeps(), 'task-1');
     expect(result.task.errorCode).toBe('CONTRACT_MODEL_LOCK_VIOLATION');
@@ -885,13 +1028,7 @@ describe('executeCreationContractDraft: 锁保护', () => {
   });
 
   it('locked parent（entity）被整体替换 → CONTRACT_MODEL_LOCK_VIOLATION', async () => {
-    state.task = makeTask(EXISTING_INPUT);
-    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
-    state.defaultVersion = makeVersion({
-      sectionsJson: sectionsJson(),
-      // 锁定整个 protagonist（entity 父路径）
-      lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/protagonist']),
-    });
+    setupLockedBaseline(canonicalSerializeLockedFieldPaths(['/protagonist']));
     state.modelOutput = makeOutput(
       modelText(makeSections({ protagonist: { characterKey: 'protag', name: '完全不同' } })),
     );
@@ -901,7 +1038,7 @@ describe('executeCreationContractDraft: 锁保护', () => {
   });
 
   it('锁定字段保持不变 → 成功', async () => {
-    setupLockedBaseline();
+    setupLockedBaseline(canonicalSerializeLockedFieldPaths(['/protagonist/name']));
     state.modelOutput = makeOutput(modelText(makeSections()));
     const result = await executeCreationContractDraft(buildDeps(), 'task-1');
     expect(result.task.status).toBe('SUCCEEDED');
@@ -911,12 +1048,12 @@ describe('executeCreationContractDraft: 锁保护', () => {
 
 describe('executeCreationContractDraft: stable identity', () => {
   it('protagonist.characterKey 变化 → MODEL_RESPONSE_INVALID', async () => {
-    state.task = makeTask(EXISTING_INPUT);
-    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
     state.defaultVersion = makeVersion({
       sectionsJson: sectionsJson(),
       lockedFieldPathsJson: canonicalSerializeLockedFieldPaths([]),
     });
+    state.task = makeTask(existingInputFor(state.defaultVersion));
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
     state.modelOutput = makeOutput(
       modelText(makeSections({ protagonist: { characterKey: 'renamed', name: '主角' } })),
     );
@@ -983,5 +1120,176 @@ describe('executeCreationContractDraft: 无重试与调用次数', () => {
       TaskExecutionError,
     );
     expect(state.invokeCalls).toHaveLength(1);
+  });
+});
+
+describe('executeCreationContractDraft: 权威 snapshot 严格验证（调用前发现 → 不调用模型）', () => {
+  /** 设置已有契约 + 指定 version 覆盖；断言调用前 corruption：不调用模型、无 proposal。 */
+  async function expectBeforeCallCorruption(
+    versionOverrides: Partial<CreationContractVersionData>,
+  ): Promise<void> {
+    state.task = makeTask(EXISTING_INPUT);
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
+    state.defaultVersion = makeVersion(versionOverrides);
+    await expect(executeCreationContractDraft(buildDeps(), 'task-1')).rejects.toThrow(
+      /契约数据完整性异常/,
+    );
+    expect(state.invokeCalls).toHaveLength(0);
+    expect(state.proposal).toBeNull();
+    expect(state.task.status).not.toBe('STALE');
+  }
+
+  it('hash 字符串未变化但 sections 被篡改 → 数据损坏，不调用模型', async () => {
+    // 存储 hash = EXISTING_HASH（与 baseline 输入一致），但 sections 已篡改。
+    await expectBeforeCallCorruption({
+      sectionsJson: sectionsJson({ premise: '被篡改的前提' }),
+      contractSnapshotHash: EXISTING_HASH,
+    });
+  });
+
+  it('hash 字符串未变化但 lockedFieldPaths 被篡改 → 数据损坏，不调用模型', async () => {
+    // 存储 hash = EXISTING_HASH（无 lock 时的 hash），但 lock 集合已变化。
+    await expectBeforeCallCorruption({
+      lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/protagonist/name']),
+      contractSnapshotHash: EXISTING_HASH,
+    });
+  });
+
+  it('sectionsJson 非 canonical bytes → 数据损坏，不调用模型', async () => {
+    await expectBeforeCallCorruption({
+      sectionsJson: canonicalSerializeContractSections(makeSections()).replace('{', '{ '),
+    });
+  });
+
+  it('lockedFieldPathsJson 非 canonical bytes → 数据损坏，不调用模型', async () => {
+    await expectBeforeCallCorruption({ lockedFieldPathsJson: '["/premise", "/genre"]' });
+  });
+
+  it('provenanceJson 损坏 → 数据损坏，不调用模型', async () => {
+    await expectBeforeCallCorruption({ provenanceJson: '[{"sectionKey":"/premise"}]' });
+  });
+
+  it('basedOnGrill 空值对不一致 → 数据损坏，不调用模型', async () => {
+    await expectBeforeCallCorruption({
+      basedOnGrillSessionId: null,
+      basedOnGrillSessionVersion: 3,
+    });
+  });
+
+  it('active lock 引用缺失的 optional 实体 → 数据损坏，不调用模型', async () => {
+    await expectBeforeCallCorruption({
+      lockedFieldPathsJson: canonicalSerializeLockedFieldPaths(['/contentBoundaries/rating']),
+    });
+  });
+});
+
+describe('executeCreationContractDraft: 调用后/final 阶段 corruption → 按 corruption 终结，不标记 STALE', () => {
+  it('after-call 读取到内部不一致 version → 数据损坏，不标记 STALE', async () => {
+    state.task = makeTask(EXISTING_INPUT);
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
+    state.currentQueue = [
+      { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW },
+      { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW },
+    ];
+    // before-call 自洽；after-call 读取到存储 hash 与自身 sections 不一致的 version
+    state.versionQueue = [
+      makeVersion(),
+      makeVersion({ contractSnapshotHash: OTHER_HEX64, sectionsJson: sectionsJson() }),
+    ];
+    await expect(executeCreationContractDraft(buildDeps(), 'task-1')).rejects.toThrow(
+      /契约数据完整性异常/,
+    );
+    expect(state.proposal).toBeNull();
+    expect(state.task.status).not.toBe('STALE');
+    expect(state.invocation?.status).not.toBe('SUCCEEDED');
+  });
+
+  it('final 事务读取到内部不一致 version → 数据损坏，不标记 STALE', async () => {
+    state.task = makeTask(EXISTING_INPUT);
+    state.defaultCurrent = { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW };
+    state.currentQueue = [
+      { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW },
+      { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW },
+      { projectId: 'proj-1', currentVersionId: 'ver-2', updatedAt: NOW },
+    ];
+    state.versionQueue = [
+      makeVersion(),
+      makeVersion(),
+      makeVersion({ contractSnapshotHash: OTHER_HEX64, sectionsJson: sectionsJson() }),
+    ];
+    await expect(executeCreationContractDraft(buildDeps(), 'task-1')).rejects.toThrow(
+      /契约数据完整性异常/,
+    );
+    expect(state.proposal).toBeNull();
+    expect(state.task.status).not.toBe('STALE');
+  });
+});
+
+describe('executeCreationContractDraft: prompt source-of-truth 严格验证', () => {
+  /** 断言上下文损坏 → task FAILED、不调用模型、无 proposal。 */
+  async function expectContextCorruption(mutate: () => void): Promise<void> {
+    mutate();
+    const result = await executeCreationContractDraft(buildDeps(), 'task-1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
+    expect(result.task.errorMessage).not.toContain('主角是一个勇敢的少年');
+    expect(state.invokeCalls).toHaveLength(0);
+    expect(state.proposal).toBeNull();
+  }
+
+  it('cross-session question → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.questions = [makeQuestion({ sessionId: 'other-session' })];
+    });
+  });
+
+  it('dangling dependency → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.questions = [makeQuestion({ dependsOnQuestionIds: ['ghost-q'] })];
+    });
+  });
+
+  it('cross-session answer → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.answers = [makeAnswer({ sessionId: 'other-session' })];
+    });
+  });
+
+  it('dangling answer question → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.answers = [makeAnswer({ questionId: 'ghost-q' })];
+    });
+  });
+
+  it('同一 question 多个 current answer → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.answers = [makeAnswer(), makeAnswer({ id: 'a-2' })];
+    });
+  });
+
+  it('cross-session proposal → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.grillProposals = [makeGrillProposal({ sessionId: 'other-session' })];
+    });
+  });
+
+  it('invalid proposedValueJson → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.grillProposals = [makeGrillProposal({ proposedValueJson: 'not-json' })];
+    });
+  });
+
+  it('dangling basedOnAnswerId → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      state.grillProposals = [makeGrillProposal({ basedOnAnswerIds: ['ghost-answer'] })];
+    });
+  });
+
+  it('cross-session based answer → FAILED，不调用模型', async () => {
+    await expectContextCorruption(() => {
+      // current answers 仍合法；proposal 引用的 answer 存在但属于其他 session
+      state.answersById.set('a-cross', makeAnswer({ id: 'a-cross', sessionId: 'other-session' }));
+      state.grillProposals = [makeGrillProposal({ basedOnAnswerIds: ['a-cross'] })];
+    });
   });
 });

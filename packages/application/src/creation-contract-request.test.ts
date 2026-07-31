@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import { requestCreationContractProposal } from './creation-contract-request.js';
 import type { RequestCreationContractProposalDeps } from './creation-contract-request.js';
 import {
@@ -30,9 +31,50 @@ import type {
   CreationContractVersionData,
 } from './creation-contract-types.js';
 import type { TaskRepositoryPort, CreateTaskInput, TaskData } from './types.js';
+import {
+  canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
+  validateCreationContractSections,
+  codePointCompare,
+  type CreationContractSections,
+} from '@ai-novel/domain';
+import { collectAllFieldPaths } from './creation-contract-mutations.js';
 
 const NOW = '2024-06-15T12:00:00.000Z';
-const HEX64 = 'a'.repeat(64);
+
+function realSha256(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+function makeSections(overrides: Record<string, unknown> = {}): CreationContractSections {
+  return validateCreationContractSections({
+    premise: 'A story about a contract',
+    genre: ['sci-fi'],
+    tone: ['dark'],
+    targetAudience: 'adults',
+    narrativePov: 'FIRST',
+    tense: 'PRESENT',
+    protagonist: { characterKey: 'protag', name: '主角' },
+    ...overrides,
+  });
+}
+
+function makeCanonicalProvenanceJson(sections: CreationContractSections): string {
+  const paths = collectAllFieldPaths(sections).sort(codePointCompare);
+  return JSON.stringify(
+    paths.map((p) => ({
+      sectionKey: p,
+      source: 'DEFAULT',
+      grillAnswerIds: [],
+      grillProposalIds: [],
+      aiTaskId: null,
+      modelInvocationId: null,
+      sourceProposalId: null,
+      previousFieldHash: null,
+      rationale: null,
+    })),
+  );
+}
 
 function makeSession(overrides: Partial<GrillSessionData> = {}): GrillSessionData {
   return {
@@ -52,7 +94,24 @@ function makeSession(overrides: Partial<GrillSessionData> = {}): GrillSessionDat
 
 function makeVersion(
   overrides: Partial<CreationContractVersionData> = {},
+  opts: { sections?: CreationContractSections } = {},
 ): CreationContractVersionData {
+  const sections = opts.sections ?? makeSections();
+  const sectionsJson = overrides.sectionsJson ?? canonicalSerializeContractSections(sections);
+  const lockedFieldPathsJson = overrides.lockedFieldPathsJson ?? '[]';
+  const lockedFieldPaths: readonly string[] =
+    overrides.lockedFieldPathsJson === undefined
+      ? []
+      : (JSON.parse(overrides.lockedFieldPathsJson) as string[]);
+  const contractSnapshotHash =
+    overrides.contractSnapshotHash ??
+    realSha256(
+      canonicalSerializeContractSnapshot({
+        sections,
+        lockedFieldPaths,
+        schemaVersion: overrides.schemaVersion ?? 1,
+      }),
+    );
   return {
     id: 'ver-2',
     projectId: 'proj-1',
@@ -61,10 +120,10 @@ function makeVersion(
     sourceProposalId: 'prop-1',
     basedOnGrillSessionId: 'gs-1',
     basedOnGrillSessionVersion: 3,
-    sectionsJson: '{}',
-    lockedFieldPathsJson: '[]',
-    contractSnapshotHash: HEX64,
-    provenanceJson: '[]',
+    sectionsJson,
+    lockedFieldPathsJson,
+    contractSnapshotHash,
+    provenanceJson: overrides.provenanceJson ?? makeCanonicalProvenanceJson(sections),
     createdAt: NOW,
     createdBy: 'ai-proposal-accepted',
     ...overrides,
@@ -90,13 +149,24 @@ interface MockRepos {
   createdTasks: CreateTaskInput[];
 }
 
-function buildDeps(repos: MockRepos): {
+function buildDeps(
+  repos: MockRepos,
+  opts: {
+    /** 每个读操作发生时回调（用于断言读取在事务内） */
+    onRead?: (kind: 'session' | 'current' | 'version') => void;
+    beforeTx?: () => void;
+    afterTx?: () => void;
+  } = {},
+): {
   deps: RequestCreationContractProposalDeps;
   repos: MockRepos;
 } {
   const sessionRepo: GrillSessionRepositoryPort = {
     create: () => {},
-    getById: (id: string) => repos.sessions.get(id) ?? null,
+    getById: (id: string) => {
+      opts.onRead?.('session');
+      return repos.sessions.get(id) ?? null;
+    },
     listByProject: () => [],
     transitionStatus: () => false,
     bumpVersion: () => false,
@@ -104,11 +174,15 @@ function buildDeps(repos: MockRepos): {
   const currentRepo: CreationContractCurrentRepositoryPort = {
     insertFirst: () => false,
     casUpdate: () => false,
-    get: (projectId: string) => repos.currents.get(projectId) ?? null,
+    get: (projectId: string) => {
+      opts.onRead?.('current');
+      return repos.currents.get(projectId) ?? null;
+    },
   };
   const versionRepo: CreationContractVersionRepositoryPort = {
     create: () => {},
     getById: (projectId: string, id: string) => {
+      opts.onRead?.('version');
       const v = repos.versions.get(id);
       return v && v.projectId === projectId ? v : null;
     },
@@ -159,7 +233,15 @@ function buildDeps(repos: MockRepos): {
     currentRepo,
     versionRepo,
     taskRepo,
-    transaction: <T>(fn: () => T) => fn(),
+    sha256Port: { digestUtf8: realSha256 },
+    transaction: <T>(fn: () => T) => {
+      opts.beforeTx?.();
+      try {
+        return fn();
+      } finally {
+        opts.afterTx?.();
+      }
+    },
   };
   return { deps, repos };
 }
@@ -225,7 +307,8 @@ describe('requestCreationContractProposal', () => {
     const repos = freshRepos();
     repos.sessions.set('gs-1', makeSession());
     repos.currents.set('proj-1', makeCurrent());
-    repos.versions.set('ver-2', makeVersion());
+    const version = makeVersion();
+    repos.versions.set('ver-2', version);
     const { deps } = buildDeps(repos);
 
     const result = requestCreationContractProposal(deps, {
@@ -238,14 +321,14 @@ describe('requestCreationContractProposal', () => {
 
     expect(result.baseContractVersion).toBe(2);
     const task = repos.createdTasks[0];
-    expect(task.dedupeKey).toBe(`creation_contract_draft:gs-1:3:2:${HEX64}`);
+    expect(task.dedupeKey).toBe(`creation_contract_draft:gs-1:3:2:${version.contractSnapshotHash}`);
     assertCanonicalInputJson(task.inputVersionJson, {
       grillSessionId: 'gs-1',
       baseGrillSessionVersion: 3,
       contractBaseline: {
         contractVersionId: 'ver-2',
         contractVersion: 2,
-        contractSnapshotHash: HEX64,
+        contractSnapshotHash: version.contractSnapshotHash,
       },
       schemaVersion: 1,
       providerProfileId: 'mimo-token-plan-cn',
@@ -511,5 +594,165 @@ describe('requestCreationContractProposal', () => {
     const keys = repos.createdTasks.map((t) => t.dedupeKey);
     expect(keys[0]).toBe(keys[1]);
     expect(new Set(keys).size).toBe(1);
+  });
+
+  it('整个用例在单个事务内完成：session/current/version 读取均不发生在事务外', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set('ver-2', makeVersion());
+    let inTx = false;
+    const readsOutside: string[] = [];
+    const { deps } = buildDeps(repos, {
+      beforeTx: () => {
+        inTx = true;
+      },
+      afterTx: () => {
+        inTx = false;
+      },
+      onRead: (kind) => {
+        if (!inTx) readsOutside.push(kind);
+      },
+    });
+    let txCount = 0;
+    const originalTx = deps.transaction;
+    // 计数事务回调次数
+    const counted = {
+      ...deps,
+      transaction: <T>(fn: () => T) =>
+        originalTx(() => {
+          txCount++;
+          return fn();
+        }),
+    };
+
+    const result = requestCreationContractProposal(counted, {
+      projectId: 'proj-1',
+      grillSessionId: 'gs-1',
+      expectedGrillSessionVersion: 3,
+      expectedContractVersion: 2,
+      providerProfileId: 'p',
+    });
+    expect(result.taskId).toBeTruthy();
+    expect(txCount).toBe(1);
+    expect(readsOutside).toEqual([]);
+  });
+
+  it('sectionsJson 非 canonical bytes → ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    const canonical = canonicalSerializeContractSections(makeSections());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set('ver-2', makeVersion({ sectionsJson: canonical.replace('{', '{ ') }));
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
+  });
+
+  it('lockedFieldPathsJson 非 canonical bytes → ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set('ver-2', makeVersion({ lockedFieldPathsJson: '["/premise", "/genre"]' }));
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
+  });
+
+  it('provenanceJson 损坏 → ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set(
+      'ver-2',
+      makeVersion({ provenanceJson: '[{"sectionKey":"/premise","source":"UNKNOWN"}]' }),
+    );
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
+  });
+
+  it('basedOnGrill 空值对不一致（partial-null）→ ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set(
+      'ver-2',
+      makeVersion({ basedOnGrillSessionId: null, basedOnGrillSessionVersion: 3 }),
+    );
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
+  });
+
+  it('active lock 引用不存在的实体 → ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set(
+      'ver-2',
+      makeVersion({ lockedFieldPathsJson: '["/supportingCharacters/nonexistent/name"]' }),
+    );
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
+  });
+
+  it('snapshot hash 与重算不一致 → ContractDataCorruptionError，无任务副作用', () => {
+    const repos = freshRepos();
+    repos.sessions.set('gs-1', makeSession());
+    repos.currents.set('proj-1', makeCurrent());
+    repos.versions.set('ver-2', makeVersion({ contractSnapshotHash: 'b'.repeat(64) }));
+    const { deps } = buildDeps(repos);
+    expect(() =>
+      requestCreationContractProposal(deps, {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-1',
+        expectedGrillSessionVersion: 3,
+        expectedContractVersion: 2,
+        providerProfileId: 'p',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+    expect(repos.createdTasks).toHaveLength(0);
   });
 });

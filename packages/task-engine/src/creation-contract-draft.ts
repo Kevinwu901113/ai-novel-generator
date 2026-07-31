@@ -43,12 +43,14 @@ import type {
 } from '@ai-novel/application';
 import {
   validateProposalAgainstLocks,
-  parseSectionsJson,
-  parseLockedFieldPathsJson,
+  validateAuthoritativeContractVersionSnapshot,
   ContractModelLockViolationError,
   ContractDataCorruptionError,
-  ContractSchemaUnsupportedError,
 } from '@ai-novel/application';
+import {
+  validateContractDraftContext,
+  type ValidatedContractDraftContext,
+} from './contract-draft-context.js';
 import type { ErrorCode } from '@ai-novel/contracts';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
 import {
@@ -221,13 +223,21 @@ interface BaselineContext {
 /**
  * 重新读取并验证 Grill session + current contract baseline 与任务输入一致。
  *
- * - Grill session：存在 / 属于 project / version 匹配 / 状态仍允许生成（COMPLETED）。
- * - Contract baseline：
- *   - 首次（baseline 三字段 null）：current pointer 必须仍不存在；
- *   - 已有基线：current pointer ID、version ID、version 号、snapshot hash 全部匹配。
+ * 正确顺序（stale-before-call / stale-after-call / final transaction 三次调用
+ * 使用同一验证路径）：
+ * 1. Grill session：存在 / 属于 project / version 匹配 / 状态仍允许生成（COMPLETED）。
+ * 2. Contract baseline：
+ *    - 首次（baseline 三字段 null）：current pointer 必须仍不存在，否则 STALE；
+ *    - 已有基线：
+ *      a. 读取 current；pointer ID 不同 → STALE；
+ *      b. 读取对应 version；缺失或 ownership/identity 损坏 → INTERNAL_ERROR；
+ *      c. 调用共享严格 snapshot validator（canonical bytes / provenance /
+ *         lineage / active locks / recomputed hash）；
+ *      d. 严格验证成功后再比较 version number / contractSnapshotHash：
+ *         真实但不同的权威 snapshot → STALE；数据库自身不完整 → FAILED / INTERNAL_ERROR。
  *
  * source of truth 变化 → 抛 StaleBaselineError（调用方转为 task STALE）。
- * 数据损坏（pointer 引用缺失版本等）→ 抛 ContractDataCorruptionError（FAILED）。
+ * 数据损坏 → 抛 ContractDataCorruptionError（FAILED）。
  */
 function readBaselineForExecution(
   deps: ContractDraftEngineDeps,
@@ -269,31 +279,32 @@ function readBaselineForExecution(
   }
 
   const version = deps.ccVersionRepo.getById(task.projectId, baseline.contractVersionId);
-  if (!version) {
-    throw new ContractDataCorruptionError('current pointer 引用不存在的版本');
-  }
-  if (version.projectId !== task.projectId) {
-    throw new ContractDataCorruptionError('version 不属于该项目');
-  }
-  if (version.version !== baseline.contractVersion) {
-    throw new StaleBaselineError('contract version number changed');
-  }
-  if (version.contractSnapshotHash !== baseline.contractSnapshotHash) {
-    throw new StaleBaselineError('contract snapshot hash changed');
-  }
-  if (version.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
-    throw new ContractSchemaUnsupportedError('current contract schema 不受支持');
+  const validated = validateAuthoritativeContractVersionSnapshot({
+    requestedProjectId: task.projectId,
+    current,
+    version,
+    sha256Port: deps.sha256Port,
+    context: 'creation_contract_draft baseline',
+  });
+  if (!validated.hasCurrent || validated.version === null || validated.sections === null) {
+    throw new ContractDataCorruptionError(
+      'creation_contract_draft baseline: 权威 snapshot 验证失败',
+    );
   }
 
-  const ctx = 'creation_contract_draft baseline';
-  const baselineSections = parseSectionsJson(version.sectionsJson, ctx);
-  const lockedFieldPaths = parseLockedFieldPathsJson(version.lockedFieldPathsJson, ctx);
+  // 严格验证成功后再比较 baseline（真实但不同的权威 snapshot → STALE）
+  if (validated.version.version !== baseline.contractVersion) {
+    throw new StaleBaselineError('contract version number changed');
+  }
+  if (validated.version.contractSnapshotHash !== baseline.contractSnapshotHash) {
+    throw new StaleBaselineError('contract snapshot hash changed');
+  }
 
   return {
     session: { goal: session.goal, status: session.status, version: session.version },
-    baselineSections,
-    lockedFieldPaths,
-    baselineVersion: version,
+    baselineSections: validated.sections,
+    lockedFieldPaths: validated.lockedFieldPaths,
+    baselineVersion: validated.version,
   };
 }
 
@@ -347,10 +358,13 @@ export function buildContractDraftPrompt(context: {
     text: a.text,
     revision: a.revision,
   }));
+  // accepted proposals 已通过 validateContractDraftContext 严格验证：
+  // proposedValueJson 必为有效 JSON、basedOnAnswerIds 可解析且引用合法。
+  // 此处直接解析，不允许静默降级为 null。
   const acceptedProposals = deterministicSort(context.acceptedProposals, (p) => p.id).map((p) => ({
     id: p.id,
     key: p.key,
-    confirmedValue: safeParseJson(p.proposedValueJson),
+    confirmedValue: JSON.parse(p.proposedValueJson),
   }));
 
   const payload = {
@@ -376,12 +390,97 @@ export function buildContractDraftPrompt(context: {
   ].join('\n');
 }
 
-function safeParseJson(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
+// ── Provider 输出安全边界 ─────────────────────────────────────────
+
+/**
+ * Provider 错误码白名单与固定安全映射。
+ *
+ * errorCode 来自可替换 adapter，不能信任其 errorMessage。
+ * - errorCode 在 whitelist 内：使用本地固定消息；
+ * - 未知或非 provider error code：映射为安全 PROVIDER_RESPONSE_INVALID；
+ * - 绝不持久化 adapter 的原始 errorMessage（可能包含 Bearer token / API Key /
+ *   URL / response body）。
+ */
+const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  PROVIDER_AUTH_FAILED: 'API Key 认证失败',
+  PROVIDER_ACCESS_DENIED: '访问被拒绝',
+  PROVIDER_MODEL_UNAVAILABLE: '模型不可用',
+  PROVIDER_RATE_LIMITED: '请求频率超限',
+  PROVIDER_TIMEOUT: '连接超时',
+  NETWORK_UNAVAILABLE: '网络连接失败',
+  PROVIDER_CONNECTION_FAILED: '连接失败',
+  PROVIDER_RESPONSE_INVALID: '响应格式异常',
+};
+
+function safeProviderError(errorCode: unknown): { code: ErrorCode; message: string } {
+  if (
+    typeof errorCode === 'string' &&
+    Object.prototype.hasOwnProperty.call(PROVIDER_ERROR_MESSAGES, errorCode)
+  ) {
+    return { code: errorCode as ErrorCode, message: PROVIDER_ERROR_MESSAGES[errorCode] };
   }
+  return {
+    code: 'PROVIDER_RESPONSE_INVALID',
+    message: PROVIDER_ERROR_MESSAGES.PROVIDER_RESPONSE_INVALID,
+  };
+}
+
+/** 非负有限安全数值（拒绝 NaN/Infinity/负数/非数值） */
+function isSafeNonNegativeFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+/** null 或非负安全整数（token counts 必须为整数） */
+function isSafeTokenCount(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
+}
+
+/** null 或非负有限数值（latencyMs 允许小数） */
+function isSafeLatencyMs(value: unknown): value is number | null {
+  return value === null || isSafeNonNegativeFinite(value);
+}
+
+/** null 或 string */
+function isSafeStringOrNull(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
+}
+
+/**
+ * 将模型输出元数据映射为安全的 invocation 成功结果。
+ *
+ * 任何字段为 NaN / Infinity / 负数 / 错误类型 → 返回 null（调用方映射为
+ * 安全 provider-response failure，不污染数据库）。
+ */
+function sanitizeInvocationSuccess(result: ModelInvocationOutput): {
+  readonly responseMetadataJson: string;
+  readonly inputTokens: number | null;
+  readonly outputTokens: number | null;
+  readonly cacheReadTokens: number | null;
+  readonly cacheWriteTokens: number | null;
+  readonly totalTokens: number | null;
+  readonly latencyMs: number | null;
+  readonly finishReason: string | null;
+  readonly providerRequestId: string | null;
+} | null {
+  if (!isSafeStringOrNull(result.providerRequestId)) return null;
+  if (!isSafeStringOrNull(result.finishReason)) return null;
+  if (!isSafeTokenCount(result.usage.inputTokens)) return null;
+  if (!isSafeTokenCount(result.usage.outputTokens)) return null;
+  if (!isSafeTokenCount(result.usage.cacheReadTokens)) return null;
+  if (!isSafeTokenCount(result.usage.cacheWriteTokens)) return null;
+  if (!isSafeTokenCount(result.usage.totalTokens)) return null;
+  if (!isSafeLatencyMs(result.latencyMs)) return null;
+  return {
+    responseMetadataJson: JSON.stringify({ textLength: result.text.length }),
+    inputTokens: result.usage.inputTokens,
+    outputTokens: result.usage.outputTokens,
+    cacheReadTokens: result.usage.cacheReadTokens,
+    cacheWriteTokens: result.usage.cacheWriteTokens,
+    totalTokens: result.usage.totalTokens,
+    latencyMs: result.latencyMs,
+    finishReason: result.finishReason,
+    providerRequestId: result.providerRequestId,
+  };
 }
 
 // ── 模型输出严格解析 ─────────────────────────────────────────────
@@ -512,12 +611,32 @@ export async function executeCreationContractDraft(
     throw e;
   }
 
-  // 7. 加载上下文并构建 prompt（不持久化）
+  // 7. 加载上下文并严格验证 source-of-truth（损坏 → task 安全 FAILED，不调用模型）
   const questions = deps.questionRepo.listBySession(input.grillSessionId);
   const answers = deps.answerRepo.listCurrentBySession(input.grillSessionId);
   const grillProposals = deps.grillProposalRepo.listBySession(input.grillSessionId);
-  // 仅使用设计允许的已接受 proposal；REJECTED/SUPERSEDED 不使用。
-  const acceptedProposals = grillProposals.filter((p) => p.status === 'ACCEPTED');
+  let validatedContext: ValidatedContractDraftContext;
+  try {
+    validatedContext = validateContractDraftContext({
+      sessionId: input.grillSessionId,
+      questions,
+      answers,
+      proposals: grillProposals,
+      answerRepo: deps.answerRepo,
+    });
+  } catch (e) {
+    if (e instanceof ContractDataCorruptionError) {
+      transaction(() => {
+        requireCas(
+          taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', '创作契约草案数据完整性异常'),
+          '无法标记任务失败',
+        );
+      });
+      return { task: taskRepo.getById(taskId)!, invocation: null, proposalId: null };
+    }
+    throw e;
+  }
+  const acceptedProposals = validatedContext.acceptedProposals;
   const prompt = buildContractDraftPrompt({
     sessionGoal: baselineCtx.session.goal,
     questions,
@@ -593,22 +712,17 @@ export async function executeCreationContractDraft(
     };
   }
 
-  // Provider 返回稳定错误码：完整映射，不保存 response body，不泄露原始 provider message
+  // Provider 返回稳定错误码：白名单 + 固定安全映射。绝不持久化 adapter 的
+  // errorMessage（可能包含 Bearer token / API Key / URL / response body）。
   if (result.errorCode) {
-    const errorCode: ErrorCode = result.errorCode;
-    const errorMessage = result.errorMessage ?? '模型调用失败';
+    const { code, message } = safeProviderError(result.errorCode);
+    const latencyMs = isSafeLatencyMs(result.latencyMs) ? result.latencyMs : null;
     transaction(() => {
       requireCas(
-        invocationRepo.markFailed(
-          invocationId,
-          ['RUNNING'],
-          errorCode,
-          errorMessage,
-          result.latencyMs,
-        ),
+        invocationRepo.markFailed(invocationId, ['RUNNING'], code, message, latencyMs),
         '无法标记调用失败',
       );
-      requireCas(taskRepo.failRunning(taskId, errorCode, errorMessage), '无法标记任务失败');
+      requireCas(taskRepo.failRunning(taskId, code, message), '无法标记任务失败');
     });
     return {
       task: taskRepo.getById(taskId)!,
@@ -617,17 +731,24 @@ export async function executeCreationContractDraft(
     };
   }
 
-  const invocationSuccess = {
-    responseMetadataJson: JSON.stringify({ textLength: result.text.length }),
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
-    cacheReadTokens: result.usage.cacheReadTokens,
-    cacheWriteTokens: result.usage.cacheWriteTokens,
-    totalTokens: result.usage.totalTokens,
-    latencyMs: result.latencyMs,
-    finishReason: result.finishReason,
-    providerRequestId: result.providerRequestId,
-  };
+  // 元数据安全边界：NaN/Infinity/负数/错误类型 → 安全 provider-response failure，
+  // 不得污染数据库。
+  const invocationSuccess = sanitizeInvocationSuccess(result);
+  if (invocationSuccess === null) {
+    const { code, message } = safeProviderError('PROVIDER_RESPONSE_INVALID');
+    transaction(() => {
+      requireCas(
+        invocationRepo.markFailed(invocationId, ['RUNNING'], code, message, null),
+        '无法标记调用失败',
+      );
+      requireCas(taskRepo.failRunning(taskId, code, message), '无法标记任务失败');
+    });
+    return {
+      task: taskRepo.getById(taskId)!,
+      invocation: invocationRepo.getById(invocationId),
+      proposalId: null,
+    };
+  }
 
   // 10. stale-after-call：再次校验；变化则丢弃模型 text，不创建 proposal
   try {

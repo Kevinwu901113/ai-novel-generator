@@ -202,6 +202,12 @@ export type {
 export { parseProvenanceArray, validateIso8601Timestamp } from './creation-contract-validation.js';
 
 export {
+  validateAuthoritativeContractVersionSnapshot,
+  assertValidExistingLockSet,
+} from './creation-contract-snapshot-validation.js';
+export type { ValidatedAuthoritativeContractSnapshot } from './creation-contract-snapshot-validation.js';
+
+export {
   getCurrentCreationContract,
   listCreationContractVersions,
   getCreationContractProposal,

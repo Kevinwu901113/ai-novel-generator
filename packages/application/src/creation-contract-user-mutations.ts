@@ -22,7 +22,6 @@ import {
   applyContractPatchOperations,
   operationWriteSetConflictsWithLocks,
   pathsOverlap,
-  isLowercaseSha256Hex,
   canonicalizeContractFieldPath,
   codePointCompare,
   validateNewLockPath,
@@ -43,16 +42,13 @@ import type {
 } from './creation-contract-types.js';
 import {
   ContractVersionConflictError,
-  ContractSchemaUnsupportedError,
   ContractDataCorruptionError,
   ContractLockConflictError,
   ContractValidationError,
   ValidationError,
 } from './errors.js';
-import { parseProvenanceArray, validateIso8601Timestamp } from './creation-contract-validation.js';
+import { validateIso8601Timestamp } from './creation-contract-validation.js';
 import {
-  parseSectionsJson,
-  parseLockedFieldPathsJson,
   sectionsToPublicData,
   getFieldValueByPath,
   collectAllFieldPaths,
@@ -62,15 +58,12 @@ import {
   operationAffectsProvenancePath,
   type CreationContractMutationDeps,
 } from './creation-contract-mutations.js';
+import {
+  assertValidExistingLockSet,
+  validateAuthoritativeContractVersionSnapshot,
+} from './creation-contract-snapshot-validation.js';
 
 // ── 依赖 ──────────────────────────────────────────────────────
-
-const VALID_CREATED_BY: ReadonlySet<string> = new Set([
-  'user',
-  'ai-proposal-accepted',
-  'lock',
-  'unlock',
-]);
 
 // ── 输入验证 ──────────────────────────────────────────────────
 
@@ -130,14 +123,13 @@ interface LoadedCurrentVersion {
 /**
  * 在事务内加载并严格验证 current version。
  *
- * 验证：project 存在 / current pointer / current 与 version 归属及 id 一致性 /
- * version 号与 expectedContractVersion 一致 / schemaVersion 支持 /
- * createdBy 合法 / sectionsJson 与 lockedFieldPathsJson 为 canonical bytes /
- * basedOnGrill null pair / provenanceJson /
- * contractSnapshotHash 完整性（用 Sha256Port 重算并比对）。
+ * 复用共享权威 snapshot validator（creation-contract-snapshot-validation.ts）：
+ * identity/ownership/lineage/version 号/schema/createdBy/canonical bytes/
+ * basedOnGrill null pair/provenance/hash 重算/active locks 全部由共享验证器执行，
+ * 与 Request 用例和任务引擎使用同一套强度。
  *
  * - 不存在 current 或版本号不匹配 → CONTRACT_VERSION_CONFLICT
- * - 任意解析/哈希不一致 → ContractDataCorruptionError（INTERNAL_ERROR）
+ * - 任意解析/哈希/一致性损坏 → ContractDataCorruptionError（INTERNAL_ERROR）
  */
 function loadAndValidateCurrentVersion(
   repos: CreationContractTransactionRepositories,
@@ -156,144 +148,29 @@ function loadAndValidateCurrentVersion(
   }
 
   const versionData = repos.versionRepo.getById(projectId, current.currentVersionId);
-  if (!versionData) {
-    throw new ContractDataCorruptionError(`${context}: current pointer references missing version`);
+  const validated = validateAuthoritativeContractVersionSnapshot({
+    requestedProjectId: projectId,
+    current,
+    version: versionData,
+    sha256Port,
+    context,
+  });
+  if (!validated.hasCurrent || validated.version === null || validated.sections === null) {
+    throw new ContractDataCorruptionError(`${context}: 权威 snapshot 验证失败`);
   }
 
-  // Identity / ownership：current 与 version 必须属于本项目，且 pointer 与 version id 一致。
-  // 归属不匹配是权威数据损坏（INTERNAL_ERROR），不得当作普通 stale conflict。
-  if (current.projectId !== projectId) {
-    throw new ContractDataCorruptionError(`${context}: current pointer 不属于该项目`);
-  }
-  if (versionData.projectId !== projectId) {
-    throw new ContractDataCorruptionError(`${context}: version 不属于该项目`);
-  }
-  if (versionData.id !== current.currentVersionId) {
-    throw new ContractDataCorruptionError(`${context}: version id 与 current pointer 不一致`);
-  }
-
-  if (versionData.version !== expectedContractVersion) {
+  // 严格验证成功后再比较版本号（真实但不同的权威 snapshot → CONTRACT_VERSION_CONFLICT）
+  if (validated.version.version !== expectedContractVersion) {
     throw new ContractVersionConflictError(`${context}: version mismatch`);
   }
 
-  if (versionData.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
-    throw new ContractSchemaUnsupportedError(
-      `${context}: unsupported schemaVersion ${versionData.schemaVersion}`,
-    );
-  }
-
-  if (!VALID_CREATED_BY.has(versionData.createdBy)) {
-    throw new ContractDataCorruptionError(`${context}: invalid createdBy`);
-  }
-
-  const sections = parseSectionsJson(versionData.sectionsJson, context);
-  const lockedFieldPaths = parseLockedFieldPathsJson(versionData.lockedFieldPathsJson, context);
-  const provenance = parseProvenanceArray(versionData.provenanceJson, context);
-
-  // canonical bytes：不允许静默修复 object key 顺序 / Unicode NFC / 多余空白 /
-  // 非 canonical representation。当前快照必须是原始 canonical JSON。
-  let canonicalSectionsJson: string;
-  try {
-    canonicalSectionsJson = canonicalSerializeContractSections(sections);
-  } catch (e) {
-    throw new ContractDataCorruptionError(`${context}: sectionsJson canonical 序列化失败`, e);
-  }
-  if (versionData.sectionsJson !== canonicalSectionsJson) {
-    throw new ContractDataCorruptionError(`${context}: sectionsJson 不是 canonical bytes`);
-  }
-  let canonicalLocksJson: string;
-  try {
-    canonicalLocksJson = canonicalSerializeLockedFieldPaths([...lockedFieldPaths]);
-  } catch (e) {
-    throw new ContractDataCorruptionError(
-      `${context}: lockedFieldPathsJson canonical 序列化失败`,
-      e,
-    );
-  }
-  if (versionData.lockedFieldPathsJson !== canonicalLocksJson) {
-    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson 不是 canonical bytes`);
-  }
-
-  // basedOnGrill null pair：两个字段必须同时为 null 或同时非 null；
-  // 非 null version 必须是正安全整数；非 null id 必须是非空字符串。
-  if (
-    (versionData.basedOnGrillSessionId === null) !==
-    (versionData.basedOnGrillSessionVersion === null)
-  ) {
-    throw new ContractDataCorruptionError(`${context}: basedOnGrill 空值对不一致`);
-  }
-  if (
-    versionData.basedOnGrillSessionId !== null &&
-    versionData.basedOnGrillSessionId.trim().length === 0
-  ) {
-    throw new ContractDataCorruptionError(`${context}: basedOnGrillSessionId 必须是非空字符串`);
-  }
-  if (
-    versionData.basedOnGrillSessionVersion !== null &&
-    (!Number.isSafeInteger(versionData.basedOnGrillSessionVersion) ||
-      versionData.basedOnGrillSessionVersion < 1)
-  ) {
-    throw new ContractDataCorruptionError(
-      `${context}: basedOnGrillSessionVersion 必须是正安全整数`,
-    );
-  }
-
-  if (!isLowercaseSha256Hex(versionData.contractSnapshotHash)) {
-    throw new ContractDataCorruptionError(
-      `${context}: contractSnapshotHash is not lowercase SHA-256`,
-    );
-  }
-  const canonicalSnapshot = canonicalSerializeContractSnapshot({
-    sections,
-    lockedFieldPaths,
-    schemaVersion: versionData.schemaVersion,
-  });
-  const recomputed = requireSha256Digest(
-    sha256Port,
-    canonicalSnapshot,
-    'snapshot hash verification',
-  );
-  if (recomputed !== versionData.contractSnapshotHash) {
-    throw new ContractDataCorruptionError(`${context}: contractSnapshotHash mismatch`);
-  }
-
   return {
-    currentVersionId: current.currentVersionId,
-    versionData,
-    sections,
-    lockedFieldPaths,
-    provenance,
+    currentVersionId: validated.currentVersionId!,
+    versionData: validated.version,
+    sections: validated.sections,
+    lockedFieldPaths: validated.lockedFieldPaths,
+    provenance: validated.provenance,
   };
-}
-
-/**
- * 校验当前活跃 lock set 快照语义：对 canonical sorted 的每个路径逐项验证
- * grammar / schema path / entity 存在性 / structured parent 存在性 /
- * absent optional child 规则 / fixed optional top-level absent 规则 /
- * duplicate / symmetric overlap。
- *
- * Domain 验证错误在 Application current-data 边界映射为
- * ContractDataCorruptionError（INTERNAL_ERROR），不映射为
- * CONTRACT_VALIDATION_FAILED 或 CONTRACT_LOCK_CONFLICT；
- * 也不静默修复（lock 集合是版本快照的一部分）。
- */
-function assertValidExistingLockSet(
-  lockedFieldPaths: readonly string[],
-  sections: CreationContractSections,
-): void {
-  const arr = [...lockedFieldPaths];
-  for (let i = 1; i < arr.length; i++) {
-    if (codePointCompare(arr[i - 1], arr[i]) >= 0) {
-      throw new ContractDataCorruptionError('lockedFieldPaths 未按 code-point 排序');
-    }
-  }
-  for (let i = 0; i < arr.length; i++) {
-    try {
-      validateNewLockPath(arr[i], arr.slice(0, i), sections);
-    } catch (e) {
-      throw new ContractDataCorruptionError('lockedFieldPaths 存在非法、重复或重叠路径', e);
-    }
-  }
 }
 
 /**
