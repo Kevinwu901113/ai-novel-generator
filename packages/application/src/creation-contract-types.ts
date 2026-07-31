@@ -5,7 +5,11 @@
  * 不依赖 Electron、React 或 node:sqlite。
  */
 
-import type { ProposalStatus, ContractVersionCreatedBy } from '@ai-novel/domain';
+import type {
+  ProposalStatus,
+  ContractVersionCreatedBy,
+  ContractPatchOperation,
+} from '@ai-novel/domain';
 
 // ── 数据接口 ──────────────────────────────────────────────────
 
@@ -141,4 +145,51 @@ export interface CreationContractLockEventRepositoryPort {
     versionId: string,
   ): ReadonlyArray<CreationContractLockEventData>;
   listByProject(projectId: string): ReadonlyArray<CreationContractLockEventData>;
+}
+
+// ── 事务端口 ──────────────────────────────────────────────────
+
+/** Grill session 版本读取端口（只读，用于 CAS 验证） */
+export interface GrillSessionVersionReadPort {
+  getVersion(projectId: string, sessionId: string): number | null;
+}
+
+/** 项目存在性读取端口（只读，用于归属验证） */
+export interface ProjectExistsReadPort {
+  exists(projectId: string): boolean;
+}
+
+/** 事务内可用的仓库集合 */
+export interface CreationContractTransactionRepositories {
+  readonly proposalRepo: CreationContractProposalRepositoryPort;
+  readonly versionRepo: CreationContractVersionRepositoryPort;
+  readonly currentRepo: CreationContractCurrentRepositoryPort;
+  readonly lockEventRepo: CreationContractLockEventRepositoryPort;
+  readonly grillSessionVersionReadPort: GrillSessionVersionReadPort;
+  readonly projectExistsReadPort: ProjectExistsReadPort;
+}
+
+/** 事务端口 — database adapter 实现，application 依赖此接口 */
+export interface CreationContractTransactionPort {
+  runInTransaction<T>(operation: (repositories: CreationContractTransactionRepositories) => T): T;
+}
+
+// ── Accept/Reject 输入 ───────────────────────────────────────
+
+export interface AcceptCreationContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+  readonly expectedGrillSessionVersion: number;
+  readonly expectedContractVersion: number | null;
+  readonly operations: ReadonlyArray<ContractPatchOperation>;
+  readonly now: string;
+  readonly newVersionId: string;
+}
+
+export interface RejectCreationContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+  readonly now: string;
 }

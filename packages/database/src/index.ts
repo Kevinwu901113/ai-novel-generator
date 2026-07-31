@@ -76,3 +76,5 @@ export type {
 export { AppDatabase, FIXED_PROVIDER_PROFILE } from './app-database.js';
 export { ProjectDatabase, checkProjectDatabaseVersion } from './project-database.js';
 export { SQLiteMigrator } from './migrator.js';
+export { CreationContractTransactionPortImpl } from './creation-contract-transaction.js';
+export { sha256Utf8 } from './creation-contract-repositories.js';

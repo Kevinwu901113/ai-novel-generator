@@ -182,6 +182,12 @@ export type {
   CreationContractVersionRepositoryPort,
   CreationContractCurrentRepositoryPort,
   CreationContractLockEventRepositoryPort,
+  GrillSessionVersionReadPort,
+  ProjectExistsReadPort,
+  CreationContractTransactionRepositories,
+  CreationContractTransactionPort,
+  AcceptCreationContractProposalInput,
+  RejectCreationContractProposalInput,
 } from './creation-contract-types.js';
 
 export {
@@ -197,3 +203,9 @@ export type {
   GetCreationContractProposalInput,
   ListCreationContractProposalsInput,
 } from './creation-contract.js';
+
+export {
+  acceptCreationContractProposal,
+  rejectCreationContractProposal,
+} from './creation-contract-mutations.js';
+export type { CreationContractMutationDeps } from './creation-contract-mutations.js';
