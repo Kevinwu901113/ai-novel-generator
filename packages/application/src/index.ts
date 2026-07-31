@@ -192,8 +192,13 @@ export type {
   CreationContractTransactionPort,
   AcceptCreationContractProposalInput,
   RejectCreationContractProposalInput,
+  UpdateCreationContractByUserInput,
+  LockCreationContractFieldInput,
+  UnlockCreationContractFieldInput,
   Sha256Port,
 } from './creation-contract-types.js';
+
+export { parseProvenanceArray, validateIso8601Timestamp } from './creation-contract-validation.js';
 
 export {
   getCurrentCreationContract,
@@ -214,3 +219,9 @@ export {
   rejectCreationContractProposal,
 } from './creation-contract-mutations.js';
 export type { CreationContractMutationDeps } from './creation-contract-mutations.js';
+
+export {
+  updateCreationContractByUser,
+  lockCreationContractField,
+  unlockCreationContractField,
+} from './creation-contract-user-mutations.js';

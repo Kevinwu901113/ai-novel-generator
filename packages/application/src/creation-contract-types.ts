@@ -200,3 +200,31 @@ export interface RejectCreationContractProposalInput {
   readonly expectedProposalSectionsHash: string;
   readonly now: string;
 }
+
+// ── User Update / Lock / Unlock 输入 ─────────────────────────
+
+export interface UpdateCreationContractByUserInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly operations: ReadonlyArray<ContractPatchOperation>;
+  readonly now: string;
+  readonly newVersionId: string;
+}
+
+export interface LockCreationContractFieldInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly fieldPath: string;
+  readonly now: string;
+  readonly newVersionId: string;
+  readonly lockEventId: string;
+}
+
+export interface UnlockCreationContractFieldInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly fieldPath: string;
+  readonly now: string;
+  readonly newVersionId: string;
+  readonly lockEventId: string;
+}

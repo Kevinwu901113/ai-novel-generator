@@ -9,15 +9,23 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   validateCreationContractSections,
   canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
+  codePointCompare,
+  createCharacterKey,
+  type CreationContractSections,
+  type ContractPatchOperation,
 } from '@ai-novel/domain';
 import {
   acceptCreationContractProposal,
   rejectCreationContractProposal,
+  collectAllFieldPaths,
   type CreationContractMutationDeps,
 } from './creation-contract-mutations.js';
+import { updateCreationContractByUser } from './creation-contract-user-mutations.js';
 import type {
   CreationContractTransactionRepositories,
   AcceptCreationContractProposalInput,
@@ -470,5 +478,277 @@ describe('validateIso8601Timestamp (shared strict validator)', () => {
 
   it.each(VALID_TIMESTAMPS)('accepts %s', (value) => {
     expect(validateIso8601Timestamp(value, 'now')).toBe(value);
+  });
+});
+
+// ── Directional provenance write-set（Accept review 回归）──────
+
+describe('acceptCreationContractProposal directional provenance write-set', () => {
+  const realSha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
+
+  function makeSections(overrides?: Record<string, unknown>): CreationContractSections {
+    return validateCreationContractSections({
+      premise: 'A story about a hero',
+      genre: ['fantasy'],
+      tone: ['epic'],
+      targetAudience: 'adults',
+      narrativePov: 'THIRD_LIMITED',
+      tense: 'PAST',
+      protagonist: { characterKey: 'hero', name: 'Hero' },
+      ...overrides,
+    });
+  }
+
+  function makeCanonicalProvenanceJson(sections: CreationContractSections): string {
+    const paths = collectAllFieldPaths(sections).sort(codePointCompare);
+    return JSON.stringify(
+      paths.map((p) => ({
+        sectionKey: p,
+        source: 'DEFAULT',
+        grillAnswerIds: [],
+        grillProposalIds: [],
+        aiTaskId: null,
+        modelInvocationId: null,
+        sourceProposalId: null,
+        previousFieldHash: null,
+        rationale: null,
+      })),
+    );
+  }
+
+  function makeBaselineVersion(sections: CreationContractSections): CreationContractVersionData {
+    return {
+      id: 'v1',
+      projectId: 'p1',
+      version: 1,
+      schemaVersion: 1,
+      sourceProposalId: 'prop1',
+      basedOnGrillSessionId: 'gs1',
+      basedOnGrillSessionVersion: 1,
+      sectionsJson: canonicalSerializeContractSections(sections),
+      lockedFieldPathsJson: '[]',
+      contractSnapshotHash: realSha256(
+        canonicalSerializeContractSnapshot({ sections, lockedFieldPaths: [], schemaVersion: 1 }),
+      ),
+      provenanceJson: makeCanonicalProvenanceJson(sections),
+      createdAt: '2026-01-01T00:00:00Z',
+      createdBy: 'ai-proposal-accepted',
+    };
+  }
+
+  function makeRealDeps(fake: FakeTransactionRepos): CreationContractMutationDeps {
+    return { transactionPort: fake, sha256Port: { digestUtf8: realSha256 } };
+  }
+
+  function runAcceptProvenance(opts: {
+    baselineSections: CreationContractSections;
+    proposalSections: CreationContractSections;
+    operations: ReadonlyArray<ContractPatchOperation>;
+  }): ReturnType<typeof acceptCreationContractProposal> {
+    const fake = new FakeTransactionRepos();
+    const proposalSectionsJson = canonicalSerializeContractSections(opts.proposalSections);
+    fake.versions.set('v1', makeBaselineVersion(opts.baselineSections));
+    fake.current = { projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' };
+    fake.proposal = makeProposal({
+      sectionsJson: proposalSectionsJson,
+      sectionsHash: realSha256(proposalSectionsJson),
+    });
+    return acceptCreationContractProposal(makeRealDeps(fake), {
+      ...makeAcceptInput(),
+      expectedProposalSectionsHash: realSha256(proposalSectionsJson),
+      operations: opts.operations,
+    });
+  }
+
+  it('scalar child review does not mark the structured parent as USER_EDIT', () => {
+    const sections = makeSections({
+      protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+    });
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [{ kind: 'set-scalar', path: '/protagonist/name', value: 'Hero v2' }],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/protagonist/name')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist')).toBe('PREVIOUS_VERSION');
+    expect(entries.get('/protagonist/role')).toBe('PREVIOUS_VERSION');
+    expect(entries.get('/protagonist/characterKey')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('supporting-character child review does not mark entity or collection parent as USER_EDIT', () => {
+    const sections = makeSections({
+      supportingCharacters: [{ characterKey: 'alice', name: 'Alice', role: 'Sidekick' }],
+    });
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [
+        { kind: 'set-scalar', path: '/supportingCharacters/alice/name', value: 'Alice v2' },
+      ],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/supportingCharacters/alice/name')).toBe('USER_EDIT');
+    expect(entries.get('/supportingCharacters/alice/role')).toBe('PREVIOUS_VERSION');
+    expect(entries.get('/supportingCharacters')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('set-structured review marks target and descendants as USER_EDIT', () => {
+    const sections = makeSections();
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [
+        { kind: 'set-structured', path: '/targetLength', value: { unit: 'words', value: 50000 } },
+      ],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/targetLength')).toBe('USER_EDIT');
+    expect(entries.get('/targetLength/unit')).toBe('USER_EDIT');
+    expect(entries.get('/targetLength/value')).toBe('USER_EDIT');
+    // 无关 ancestor/sibling 不变
+    expect(entries.get('/premise')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('upsert-protagonist review marks target and emitted descendants as USER_EDIT', () => {
+    const sections = makeSections({
+      protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+    });
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [
+        {
+          kind: 'upsert-protagonist',
+          value: { characterKey: createCharacterKey('hero'), name: 'Hero v2', role: 'Chosen' },
+        },
+      ],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/protagonist')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/name')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/role')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/characterKey')).toBe('USER_EDIT');
+    expect(entries.get('/premise')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('upsert-supporting-character review marks entity descendants, not the collection parent', () => {
+    const sections = makeSections({
+      supportingCharacters: [{ characterKey: 'alice', name: 'Alice', role: 'Sidekick' }],
+    });
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [
+        {
+          kind: 'upsert-supporting-character',
+          target: createCharacterKey('alice'),
+          value: {
+            characterKey: createCharacterKey('alice'),
+            name: 'Alice v2',
+            role: 'Sidekick v2',
+          },
+        },
+      ],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/supportingCharacters/alice/name')).toBe('USER_EDIT');
+    expect(entries.get('/supportingCharacters/alice/role')).toBe('USER_EDIT');
+    // collection parent 不得标为 USER_EDIT；
+    // 不断言 entity-container entry（当前 collectAllFieldPaths 不生成该 entry，模型不扩）
+    expect(entries.get('/supportingCharacters')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('AI_PROPOSAL and USER_EDIT mix without mislabeling the ancestor', () => {
+    const baseline = makeSections(); // protagonist {key:'hero', name:'Hero'}，无 role
+    const proposal = makeSections({
+      protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+    }); // AI 改了 role
+    const result = runAcceptProvenance({
+      baselineSections: baseline,
+      proposalSections: proposal,
+      operations: [{ kind: 'set-scalar', path: '/protagonist/name', value: 'Hero v2' }],
+    });
+    const entries = new Map(result.provenance.map((p) => [p.sectionKey, p.source]));
+    expect(entries.get('/protagonist/name')).toBe('USER_EDIT');
+    expect(entries.get('/protagonist/role')).toBe('AI_PROPOSAL');
+    // /protagonist 是 ancestor，不得因 name review 被误标为 USER_EDIT
+    expect(entries.get('/protagonist')).toBe('AI_PROPOSAL');
+    expect(entries.get('/protagonist/characterKey')).toBe('PREVIOUS_VERSION');
+  });
+
+  it('remove review produces no tombstone and does not mark ancestors as USER_EDIT', () => {
+    const sections = makeSections({
+      protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+    });
+    const result = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [{ kind: 'remove-field', path: '/protagonist/role' }],
+    });
+    expect(result.provenance.some((p) => p.sectionKey === '/protagonist/role')).toBe(false);
+    const protagonistEntry = result.provenance.find((p) => p.sectionKey === '/protagonist');
+    expect(protagonistEntry?.source).toBe('PREVIOUS_VERSION');
+  });
+
+  it('identical provenance JSON regardless of review operation input order', () => {
+    function run(operations: ReadonlyArray<ContractPatchOperation>): string {
+      const sections = makeSections();
+      const result = runAcceptProvenance({
+        baselineSections: sections,
+        proposalSections: sections,
+        operations,
+      });
+      return JSON.stringify(result.provenance);
+    }
+    const opA: ContractPatchOperation = {
+      kind: 'set-scalar',
+      path: '/premise',
+      value: 'new premise',
+    };
+    const opB: ContractPatchOperation = {
+      kind: 'set-string-list',
+      path: '/genre',
+      value: ['fantasy', 'romance'],
+    };
+    expect(run([opA, opB])).toBe(run([opB, opA]));
+  });
+
+  it('Accept review and User Update mark the same USER_EDIT paths for the same operation', () => {
+    const sections = makeSections({
+      protagonist: { characterKey: 'hero', name: 'Hero', role: 'Chosen' },
+    });
+
+    const acceptResult = runAcceptProvenance({
+      baselineSections: sections,
+      proposalSections: sections,
+      operations: [{ kind: 'set-scalar', path: '/protagonist/name', value: 'Hero v2' }],
+    });
+    const acceptUserEdit = acceptResult.provenance
+      .filter((p) => p.source === 'USER_EDIT')
+      .map((p) => p.sectionKey)
+      .sort();
+
+    const updateFake = new FakeTransactionRepos();
+    updateFake.versions.set('v1', makeBaselineVersion(sections));
+    updateFake.current = {
+      projectId: 'p1',
+      currentVersionId: 'v1',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const updateResult = updateCreationContractByUser(makeRealDeps(updateFake), {
+      projectId: 'p1',
+      expectedContractVersion: 1,
+      operations: [{ kind: 'set-scalar', path: '/protagonist/name', value: 'Hero v2' }],
+      now: '2026-01-02T00:00:00Z',
+      newVersionId: 'v2',
+    });
+    const updateUserEdit = updateResult.provenance
+      .filter((p) => p.source === 'USER_EDIT')
+      .map((p) => p.sectionKey)
+      .sort();
+
+    expect(updateUserEdit).toEqual(acceptUserEdit);
+    expect(updateUserEdit).toEqual(['/protagonist/name']);
   });
 });
