@@ -1000,6 +1000,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.ccLockEventRepo = new CreationContractLockEventRepositoryImpl(this.db);
   }
 
+  get database(): DatabaseSync {
+    return this.db;
+  }
+
   getProjectMetadataRepository(): ProjectMetadataRepository {
     return this.metadataRepo;
   }

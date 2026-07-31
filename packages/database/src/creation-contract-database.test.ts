@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { mkdtempSync, rmSync } from 'node:fs';
 import {
   canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
   validateCreationContractSections,
 } from '@ai-novel/domain';
 import { ProjectDatabase } from './project-database.js';
@@ -29,6 +30,15 @@ function makeSectionsHash(): string {
   return sha256Utf8(makeSectionsJson());
 }
 
+function makeSnapshotHash(lockedPaths: string[] = [], schemaVersion = 1): string {
+  const canonical = canonicalSerializeContractSnapshot({
+    sections: validateCreationContractSections(makeSections()),
+    lockedFieldPaths: lockedPaths,
+    schemaVersion,
+  });
+  return sha256Utf8(canonical);
+}
+
 function makeHashB(): string {
   return sha256Utf8(
     canonicalSerializeContractSections(
@@ -37,7 +47,19 @@ function makeHashB(): string {
   );
 }
 
-const VALID_PROV = JSON.stringify({ source: 'user' });
+const VALID_PROV = JSON.stringify([
+  {
+    sectionKey: '/premise',
+    source: 'DEFAULT',
+    grillAnswerIds: [],
+    grillProposalIds: [],
+    aiTaskId: null,
+    modelInvocationId: null,
+    sourceProposalId: null,
+    previousFieldHash: null,
+    rationale: null,
+  },
+]);
 
 describe('creation contract database', () => {
   let dir: string;
@@ -113,7 +135,7 @@ describe('creation contract database', () => {
       basedOnGrillSessionVersion: 1,
       sectionsJson: makeSectionsJson(),
       lockedFieldPathsJson: '[]',
-      contractSnapshotHash: makeSectionsHash(),
+      contractSnapshotHash: makeSnapshotHash(),
       provenanceJson: VALID_PROV,
       createdAt: '2026-01-01T00:00:00Z',
       createdBy: 'user',
@@ -152,8 +174,21 @@ describe('creation contract database', () => {
   });
 
   it('tables are STRICT', () => {
-    const proposalRepo = db.getCreationContractProposalRepository();
-    expect(proposalRepo.listByProject('p1')).toEqual([]);
+    const rows = db.database
+      .prepare(
+        `SELECT name, strict FROM pragma_table_list WHERE name LIKE 'creation_contract%' AND type = 'table'`,
+      )
+      .all() as Array<{ name: string; strict: number }>;
+    const tableNames = rows.map((r) => r.name).sort();
+    expect(tableNames).toEqual([
+      'creation_contract_current',
+      'creation_contract_lock_events',
+      'creation_contract_proposals',
+      'creation_contract_versions',
+    ]);
+    for (const row of rows) {
+      expect(row.strict, `${row.name} should be STRICT`).toBe(1);
+    }
   });
 
   // ── Proposal ──────────────────────────────────────────────
@@ -367,7 +402,6 @@ describe('creation contract database', () => {
     createVersion({
       id: 'v2',
       version: 2,
-      contractSnapshotHash: makeHashB(),
       sourceProposalId: null,
       basedOnGrillSessionId: null,
       basedOnGrillSessionVersion: null,
@@ -560,7 +594,7 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: '{broken',
         lockedFieldPathsJson: '[]',
-        contractSnapshotHash: makeSectionsHash(),
+        contractSnapshotHash: makeSnapshotHash(),
         provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
@@ -580,7 +614,7 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: makeSectionsJson(),
         lockedFieldPathsJson: 'not json',
-        contractSnapshotHash: makeSectionsHash(),
+        contractSnapshotHash: makeSnapshotHash(),
         provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
@@ -628,7 +662,7 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: null,
         sectionsJson: makeSectionsJson(),
         lockedFieldPathsJson: '[]',
-        contractSnapshotHash: makeSectionsHash(),
+        contractSnapshotHash: makeSnapshotHash(),
         provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
@@ -651,7 +685,7 @@ describe('creation contract database', () => {
         basedOnGrillSessionVersion: 1,
         sectionsJson: makeSectionsJson(),
         lockedFieldPathsJson: '[]',
-        contractSnapshotHash: makeSectionsHash(),
+        contractSnapshotHash: makeSnapshotHash(),
         provenanceJson: VALID_PROV,
         createdAt: '2026-01-01T00:00:00Z',
         createdBy: 'user',
@@ -839,7 +873,7 @@ describe('creation contract database', () => {
           basedOnGrillSessionVersion: null,
           sectionsJson: makeSectionsJson(),
           lockedFieldPathsJson: '[]',
-          contractSnapshotHash: makeSectionsHash(),
+          contractSnapshotHash: makeSnapshotHash(),
           provenanceJson: VALID_PROV,
           createdAt: '2026-01-01T00:00:00Z',
           createdBy: 'user',
@@ -928,9 +962,14 @@ describe('creation contract database', () => {
   // ── PRAGMA table_list strict ──────────────────────────────
 
   it('creation_contract tables are STRICT mode', () => {
-    // Verify by checking that the tables exist and work correctly with strict typing
-    // The STRICT keyword was in the migration DDL
-    const proposalRepo = db.getCreationContractProposalRepository();
-    expect(proposalRepo.listByProject('p1')).toEqual([]);
+    const rows = db.database
+      .prepare(
+        `SELECT name, strict FROM pragma_table_list WHERE name LIKE 'creation_contract%' AND type = 'table'`,
+      )
+      .all() as Array<{ name: string; strict: number }>;
+    expect(rows.length).toBe(4);
+    for (const row of rows) {
+      expect(row.strict, `${row.name} should be STRICT`).toBe(1);
+    }
   });
 });

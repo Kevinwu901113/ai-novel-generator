@@ -589,157 +589,35 @@ export interface GrillQuestionPlanProposalRepository {
 }
 
 // ── 创作契约（project.sqlite）──────────────────────────────────
+// Canonical types live in @ai-novel/application; these are aliases.
 
-/** 创作契约提案状态 */
-export type DbProposalStatus = 'PROPOSED' | 'ACCEPTED' | 'REJECTED' | 'SUPERSEDED' | 'STALE';
+import type {
+  ProposalStatus,
+  ContractVersionCreatedBy,
+  CreationContractProposalData,
+  CreationContractVersionData,
+  CreationContractCurrentData,
+  CreationContractLockEventData,
+  CreateCreationContractProposalInput,
+  CreateCreationContractVersionInput,
+  CreationContractProposalRepositoryPort,
+  CreationContractVersionRepositoryPort,
+  CreationContractCurrentRepositoryPort,
+  CreationContractLockEventRepositoryPort,
+} from '@ai-novel/application';
 
-/** 创作契约版本创建者 */
-export type DbContractVersionCreatedBy = 'user' | 'ai-proposal-accepted' | 'lock' | 'unlock';
+export type DbProposalStatus = ProposalStatus;
+export type DbContractVersionCreatedBy = ContractVersionCreatedBy;
 
-/** 创作契约提案行 */
-export interface CreationContractProposalRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly taskId: string;
-  readonly invocationId: string;
-  readonly status: DbProposalStatus;
-  readonly baseGrillSessionId: string;
-  readonly baseGrillSessionVersion: number;
-  readonly baseContractVersion: number | null;
-  readonly schemaVersion: number;
-  readonly sectionsJson: string;
-  readonly sectionsHash: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+export type CreationContractProposalRow = CreationContractProposalData;
+export type CreateCreationContractProposalData = CreateCreationContractProposalInput;
+export type CreationContractVersionRow = CreationContractVersionData;
+export type CreateCreationContractVersionData = CreateCreationContractVersionInput;
+export type CreationContractCurrentRow = CreationContractCurrentData;
+export type CreationContractLockEventRow = CreationContractLockEventData;
+export type CreateCreationContractLockEventData = CreationContractLockEventData;
 
-/** 创建创作契约提案数据 */
-export interface CreateCreationContractProposalData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly taskId: string;
-  readonly invocationId: string;
-  readonly baseGrillSessionId: string;
-  readonly baseGrillSessionVersion: number;
-  readonly baseContractVersion: number | null;
-  readonly schemaVersion: number;
-  readonly sectionsJson: string;
-  readonly sectionsHash: string;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-/** 创作契约版本行 */
-export interface CreationContractVersionRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly version: number;
-  readonly schemaVersion: number;
-  readonly sourceProposalId: string | null;
-  readonly basedOnGrillSessionId: string | null;
-  readonly basedOnGrillSessionVersion: number | null;
-  readonly sectionsJson: string;
-  readonly lockedFieldPathsJson: string;
-  readonly contractSnapshotHash: string;
-  readonly provenanceJson: string;
-  readonly createdAt: string;
-  readonly createdBy: DbContractVersionCreatedBy;
-}
-
-/** 创建创作契约版本数据 */
-export interface CreateCreationContractVersionData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly version: number;
-  readonly schemaVersion: number;
-  readonly sourceProposalId: string | null;
-  readonly basedOnGrillSessionId: string | null;
-  readonly basedOnGrillSessionVersion: number | null;
-  readonly sectionsJson: string;
-  readonly lockedFieldPathsJson: string;
-  readonly contractSnapshotHash: string;
-  readonly provenanceJson: string;
-  readonly createdAt: string;
-  readonly createdBy: DbContractVersionCreatedBy;
-}
-
-/** 创作契约当前指针行 */
-export interface CreationContractCurrentRow {
-  readonly projectId: string;
-  readonly currentVersionId: string;
-  readonly updatedAt: string;
-}
-
-/** 创作契约锁定事件行 */
-export interface CreationContractLockEventRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly fieldPath: string;
-  readonly action: 'LOCK' | 'UNLOCK';
-  readonly versionId: string;
-  readonly createdAt: string;
-  readonly createdBy: string;
-}
-
-/** 创建锁定事件数据 */
-export interface CreateCreationContractLockEventData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly fieldPath: string;
-  readonly action: 'LOCK' | 'UNLOCK';
-  readonly versionId: string;
-  readonly createdAt: string;
-  readonly createdBy: string;
-}
-
-/** 创作契约提案仓库 */
-export interface CreationContractProposalRepository {
-  create(data: CreateCreationContractProposalData): void;
-  getById(projectId: string, id: string): CreationContractProposalRow | null;
-  listByProject(projectId: string): ReadonlyArray<CreationContractProposalRow>;
-  listByGrillSession(grillSessionId: string): ReadonlyArray<CreationContractProposalRow>;
-  /** CAS 状态转换 */
-  transitionStatus(
-    projectId: string,
-    id: string,
-    expectedStatus: DbProposalStatus,
-    newStatus: DbProposalStatus,
-    now: string,
-  ): boolean;
-  /** 废弃所有 PROPOSED 提案 */
-  supersedeAllProposed(projectId: string, now: string): number;
-}
-
-/** 创作契约版本仓库 */
-export interface CreationContractVersionRepository {
-  create(data: CreateCreationContractVersionData): void;
-  getById(projectId: string, id: string): CreationContractVersionRow | null;
-  getByVersion(projectId: string, version: number): CreationContractVersionRow | null;
-  listSummaries(projectId: string): ReadonlyArray<CreationContractVersionRow>;
-  /** 解析 expectedVersion → version ID */
-  resolveVersionId(projectId: string, expectedVersion: number): string | null;
-}
-
-/** 创作契约当前指针仓库 */
-export interface CreationContractCurrentRepository {
-  /** 插入首个指针（PK 冲突 → false） */
-  insertFirst(projectId: string, versionId: string, now: string): boolean;
-  /** CAS 更新指针 */
-  casUpdate(
-    projectId: string,
-    expectedVersionId: string,
-    newVersionId: string,
-    now: string,
-  ): boolean;
-  get(projectId: string): CreationContractCurrentRow | null;
-}
-
-/** 创作契约锁定事件仓库 */
-export interface CreationContractLockEventRepository {
-  append(data: CreateCreationContractLockEventData): void;
-  listByVersionId(
-    projectId: string,
-    versionId: string,
-  ): ReadonlyArray<CreationContractLockEventRow>;
-  listByProject(projectId: string): ReadonlyArray<CreationContractLockEventRow>;
-}
+export type CreationContractProposalRepository = CreationContractProposalRepositoryPort;
+export type CreationContractVersionRepository = CreationContractVersionRepositoryPort;
+export type CreationContractCurrentRepository = CreationContractCurrentRepositoryPort;
+export type CreationContractLockEventRepository = CreationContractLockEventRepositoryPort;
