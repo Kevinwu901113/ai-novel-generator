@@ -14,6 +14,12 @@ import {
   GrillProposalRepositoryImpl,
   GrillQuestionPlanProposalRepositoryImpl,
 } from './grill-repositories.js';
+import {
+  CreationContractProposalRepositoryImpl,
+  CreationContractVersionRepositoryImpl,
+  CreationContractCurrentRepositoryImpl,
+  CreationContractLockEventRepositoryImpl,
+} from './creation-contract-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -34,6 +40,10 @@ import type {
   GrillAnswerRepository,
   GrillProposalRepository,
   GrillQuestionPlanProposalRepository,
+  CreationContractProposalRepository,
+  CreationContractVersionRepository,
+  CreationContractCurrentRepository,
+  CreationContractLockEventRepository,
   Migration,
 } from './types.js';
 
@@ -304,6 +314,190 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
 
       CREATE INDEX idx_grill_plan_proposals_session
         ON grill_question_plan_proposals(session_id);
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      -- ── Composite UNIQUE indexes on parent tables (for composite FK references) ──
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_id
+        ON tasks(project_id, id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_model_invocations_project_id
+        ON model_invocations(project_id, id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_model_invocations_project_task_id
+        ON model_invocations(project_id, task_id, id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_grill_sessions_project_id
+        ON grill_sessions(project_id, id);
+
+      -- ── 创作契约提案 ──────────────────────────────────────────
+
+      CREATE TABLE IF NOT EXISTS creation_contract_proposals (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        invocation_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PROPOSED'
+          CHECK (status IN ('PROPOSED','ACCEPTED','REJECTED','SUPERSEDED','STALE')),
+        base_grill_session_id TEXT NOT NULL,
+        base_grill_session_version INTEGER NOT NULL CHECK (base_grill_session_version > 0),
+        base_contract_version INTEGER
+          CHECK (base_contract_version IS NULL OR base_contract_version > 0),
+        schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+        sections_json TEXT NOT NULL CHECK (json_valid(sections_json)),
+        sections_hash TEXT NOT NULL CHECK (length(sections_hash) = 64),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, task_id) REFERENCES tasks(project_id, id),
+        FOREIGN KEY (project_id, invocation_id) REFERENCES model_invocations(project_id, id),
+        FOREIGN KEY (project_id, task_id, invocation_id)
+          REFERENCES model_invocations(project_id, task_id, id),
+        FOREIGN KEY (project_id, base_grill_session_id)
+          REFERENCES grill_sessions(project_id, id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_cc_proposals_project_status
+        ON creation_contract_proposals(project_id, status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_cc_proposals_grill_session
+        ON creation_contract_proposals(base_grill_session_id);
+
+      -- ── 创作契约版本 ──────────────────────────────────────────
+
+      CREATE TABLE IF NOT EXISTS creation_contract_versions (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version > 0),
+        schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+        source_proposal_id TEXT,
+        based_on_grill_session_id TEXT,
+        based_on_grill_session_version INTEGER,
+        sections_json TEXT NOT NULL CHECK (json_valid(sections_json)),
+        locked_field_paths_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(locked_field_paths_json)),
+        contract_snapshot_hash TEXT NOT NULL CHECK (length(contract_snapshot_hash) = 64),
+        provenance_json TEXT NOT NULL CHECK (json_valid(provenance_json)),
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL
+          CHECK (created_by IN ('user','ai-proposal-accepted','lock','unlock')),
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, version),
+        FOREIGN KEY (project_id, source_proposal_id)
+          REFERENCES creation_contract_proposals(project_id, id),
+        FOREIGN KEY (project_id, based_on_grill_session_id)
+          REFERENCES grill_sessions(project_id, id),
+        CHECK (
+          (based_on_grill_session_id IS NULL AND based_on_grill_session_version IS NULL)
+          OR
+          (based_on_grill_session_id IS NOT NULL AND based_on_grill_session_version > 0)
+        )
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_cc_versions_project_version
+        ON creation_contract_versions(project_id, version DESC);
+
+      -- ── 创作契约当前指针 ──────────────────────────────────────
+
+      CREATE TABLE IF NOT EXISTS creation_contract_current (
+        project_id TEXT NOT NULL PRIMARY KEY,
+        current_version_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id, current_version_id)
+          REFERENCES creation_contract_versions(project_id, id)
+      ) STRICT;
+
+      -- ── 创作契约锁定事件（append-only 审计日志）────────────────
+
+      CREATE TABLE IF NOT EXISTS creation_contract_lock_events (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        field_path TEXT NOT NULL,
+        action TEXT NOT NULL CHECK (action IN ('LOCK','UNLOCK')),
+        version_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, version_id)
+          REFERENCES creation_contract_versions(project_id, id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_cc_lock_events_version
+        ON creation_contract_lock_events(project_id, version_id, created_at);
+
+      -- ── Status transition trigger ──────────────────────────────
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_status_transition
+      BEFORE UPDATE OF status ON creation_contract_proposals
+      BEGIN
+        -- Must change updated_at when changing status
+        SELECT RAISE(ABORT, 'updated_at must change when status changes')
+        WHERE NEW.updated_at = OLD.updated_at;
+
+        -- Only allow from PROPOSED to terminal states
+        SELECT RAISE(ABORT, 'can only transition from PROPOSED')
+        WHERE OLD.status != 'PROPOSED';
+
+        -- Reject same-status update
+        SELECT RAISE(ABORT, 'cannot update to same status')
+        WHERE NEW.status = OLD.status;
+      END;
+
+      -- ── Immutability triggers ──────────────────────────────────
+
+      -- updated_at cannot be changed without a status change (status trigger handles that)
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_immutable_updated_at
+      BEFORE UPDATE OF updated_at ON creation_contract_proposals
+      WHEN NEW.status = OLD.status
+      BEGIN
+        SELECT RAISE(ABORT, 'updated_at cannot be changed without status change');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_immutable_sections
+      BEFORE UPDATE OF sections_json, sections_hash ON creation_contract_proposals
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_proposals sections_json and sections_hash are immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_immutable_identity
+      BEFORE UPDATE OF id, project_id, task_id, invocation_id,
+                       base_grill_session_id, base_grill_session_version,
+                       base_contract_version, schema_version,
+                       created_at ON creation_contract_proposals
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_proposals identity fields are immutable');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_proposals_no_delete
+      BEFORE DELETE ON creation_contract_proposals
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_proposals is append-only');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_versions_no_update
+      BEFORE UPDATE ON creation_contract_versions
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_versions is append-only');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_versions_no_delete
+      BEFORE DELETE ON creation_contract_versions
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_versions is append-only');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_lock_events_no_update
+      BEFORE UPDATE ON creation_contract_lock_events
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_lock_events is append-only');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_cc_lock_events_no_delete
+      BEFORE DELETE ON creation_contract_lock_events
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_lock_events is append-only');
+      END;
     `,
   },
 ];
@@ -775,6 +969,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly grillAnswerRepo: GrillAnswerRepositoryImpl;
   private readonly grillProposalRepo: GrillProposalRepositoryImpl;
   private readonly grillQuestionPlanProposalRepo: GrillQuestionPlanProposalRepositoryImpl;
+  private readonly ccProposalRepo: CreationContractProposalRepositoryImpl;
+  private readonly ccVersionRepo: CreationContractVersionRepositoryImpl;
+  private readonly ccCurrentRepo: CreationContractCurrentRepositoryImpl;
+  private readonly ccLockEventRepo: CreationContractLockEventRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -796,6 +994,14 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.grillAnswerRepo = new GrillAnswerRepositoryImpl(this.db);
     this.grillProposalRepo = new GrillProposalRepositoryImpl(this.db);
     this.grillQuestionPlanProposalRepo = new GrillQuestionPlanProposalRepositoryImpl(this.db);
+    this.ccProposalRepo = new CreationContractProposalRepositoryImpl(this.db);
+    this.ccVersionRepo = new CreationContractVersionRepositoryImpl(this.db);
+    this.ccCurrentRepo = new CreationContractCurrentRepositoryImpl(this.db);
+    this.ccLockEventRepo = new CreationContractLockEventRepositoryImpl(this.db);
+  }
+
+  get database(): DatabaseSync {
+    return this.db;
   }
 
   getProjectMetadataRepository(): ProjectMetadataRepository {
@@ -828,6 +1034,22 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getGrillQuestionPlanProposalRepository(): GrillQuestionPlanProposalRepository {
     return this.grillQuestionPlanProposalRepo;
+  }
+
+  getCreationContractProposalRepository(): CreationContractProposalRepository {
+    return this.ccProposalRepo;
+  }
+
+  getCreationContractVersionRepository(): CreationContractVersionRepository {
+    return this.ccVersionRepo;
+  }
+
+  getCreationContractCurrentRepository(): CreationContractCurrentRepository {
+    return this.ccCurrentRepo;
+  }
+
+  getCreationContractLockEventRepository(): CreationContractLockEventRepository {
+    return this.ccLockEventRepo;
   }
 
   transaction<T>(fn: () => T): T {

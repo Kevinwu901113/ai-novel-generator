@@ -191,6 +191,14 @@ export interface ProjectDatabaseManager {
   getGrillProposalRepository(): GrillProposalRepository;
   /** 获取问题规划提案仓库 */
   getGrillQuestionPlanProposalRepository(): GrillQuestionPlanProposalRepository;
+  /** 获取创作契约提案仓库 */
+  getCreationContractProposalRepository(): CreationContractProposalRepository;
+  /** 获取创作契约版本仓库 */
+  getCreationContractVersionRepository(): CreationContractVersionRepository;
+  /** 获取创作契约当前指针仓库 */
+  getCreationContractCurrentRepository(): CreationContractCurrentRepository;
+  /** 获取创作契约锁定事件仓库 */
+  getCreationContractLockEventRepository(): CreationContractLockEventRepository;
   /** 执行事务 */
   transaction<T>(fn: () => T): T;
   /** 关闭数据库连接 */
@@ -579,3 +587,37 @@ export interface GrillQuestionPlanProposalRepository {
     now: string,
   ): boolean;
 }
+
+// ── 创作契约（project.sqlite）──────────────────────────────────
+// Canonical types live in @ai-novel/application; these are aliases.
+
+import type {
+  ProposalStatus,
+  ContractVersionCreatedBy,
+  CreationContractProposalData,
+  CreationContractVersionData,
+  CreationContractCurrentData,
+  CreationContractLockEventData,
+  CreateCreationContractProposalInput,
+  CreateCreationContractVersionInput,
+  CreationContractProposalRepositoryPort,
+  CreationContractVersionRepositoryPort,
+  CreationContractCurrentRepositoryPort,
+  CreationContractLockEventRepositoryPort,
+} from '@ai-novel/application';
+
+export type DbProposalStatus = ProposalStatus;
+export type DbContractVersionCreatedBy = ContractVersionCreatedBy;
+
+export type CreationContractProposalRow = CreationContractProposalData;
+export type CreateCreationContractProposalData = CreateCreationContractProposalInput;
+export type CreationContractVersionRow = CreationContractVersionData;
+export type CreateCreationContractVersionData = CreateCreationContractVersionInput;
+export type CreationContractCurrentRow = CreationContractCurrentData;
+export type CreationContractLockEventRow = CreationContractLockEventData;
+export type CreateCreationContractLockEventData = CreationContractLockEventData;
+
+export type CreationContractProposalRepository = CreationContractProposalRepositoryPort;
+export type CreationContractVersionRepository = CreationContractVersionRepositoryPort;
+export type CreationContractCurrentRepository = CreationContractCurrentRepositoryPort;
+export type CreationContractLockEventRepository = CreationContractLockEventRepositoryPort;

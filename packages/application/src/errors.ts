@@ -250,3 +250,76 @@ export class TaskDedupeConflictError extends AppError {
     this.name = 'TaskDedupeConflictError';
   }
 }
+
+// ── 创作契约错误 ───────────────────────────────────────────────
+
+/** 契约版本冲突（乐观并发控制失败） */
+export class ContractVersionConflictError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_VERSION_CONFLICT', message);
+    this.name = 'ContractVersionConflictError';
+  }
+}
+
+/** 契约提案已过期 */
+export class ContractProposalStaleError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_PROPOSAL_STALE', message);
+    this.name = 'ContractProposalStaleError';
+  }
+}
+
+/** 契约提案未找到 */
+export class ContractProposalNotFoundError extends AppError {
+  constructor(proposalId: string) {
+    super('CONTRACT_PROPOSAL_NOT_FOUND', `创作契约提案 ${proposalId} 不存在`);
+    this.name = 'ContractProposalNotFoundError';
+  }
+}
+
+/** 契约提案不可接受 */
+export class ContractProposalNotAcceptableError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_PROPOSAL_NOT_ACCEPTABLE', message);
+    this.name = 'ContractProposalNotAcceptableError';
+  }
+}
+
+/** 契约锁冲突 */
+export class ContractLockConflictError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_LOCK_CONFLICT', message);
+    this.name = 'ContractLockConflictError';
+  }
+}
+
+/** 模型输出违反锁定字段 */
+export class ContractModelLockViolationError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_MODEL_LOCK_VIOLATION', message);
+    this.name = 'ContractModelLockViolationError';
+  }
+}
+
+/** 契约 schema 版本不支持 */
+export class ContractSchemaUnsupportedError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_SCHEMA_UNSUPPORTED', message);
+    this.name = 'ContractSchemaUnsupportedError';
+  }
+}
+
+/** 契约验证失败 */
+export class ContractValidationError extends AppError {
+  constructor(message: string) {
+    super('CONTRACT_VALIDATION_FAILED', message);
+    this.name = 'ContractValidationError';
+  }
+}
+
+export class ContractDataCorruptionError extends AppError {
+  constructor(message: string) {
+    super('INTERNAL_ERROR', `数据完整性异常: ${message}`);
+    this.name = 'ContractDataCorruptionError';
+  }
+}

@@ -261,3 +261,7 @@ export function createChangeSet(
 
 export * from './grill.js';
 export * from './grill-question-plan.js';
+
+// ── 创作契约领域模型 ─────────────────────────────────────────────
+
+export * from './creation-contract.js';
