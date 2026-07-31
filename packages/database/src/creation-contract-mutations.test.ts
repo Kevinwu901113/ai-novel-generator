@@ -29,6 +29,8 @@ import {
   ContractSchemaUnsupportedError,
   ContractDataCorruptionError,
   ContractValidationError,
+  ContractTransactionBusyError,
+  ContractTransactionError,
   ValidationError,
   type CreationContractMutationDeps,
   type CreationContractTransactionRepositories,
@@ -429,7 +431,7 @@ describe('acceptCreationContractProposal', () => {
         now: '2026-01-01T00:02:00Z',
         newVersionId: 'v1',
       }),
-    ).toThrow();
+    ).toThrow(ContractValidationError);
 
     // Verify no side effects
     const proposal = db.getCreationContractProposalRepository().getById('p1', 'prop1');
@@ -492,7 +494,7 @@ describe('acceptCreationContractProposal', () => {
         now: '2026-01-01T00:03:00Z',
         newVersionId: 'v2',
       }),
-    ).toThrow();
+    ).toThrow(ContractLockConflictError);
 
     // Verify no side effects
     const proposal = db.getCreationContractProposalRepository().getById('p1', 'prop2');
@@ -866,7 +868,7 @@ describe('concurrent accept/reject', () => {
       newVersionId: 'v1',
     });
 
-    setupProposal(db, 'p1', 'prop2');
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
     const hash2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!.sectionsHash;
 
     // Try to use duplicate version ID
@@ -881,7 +883,7 @@ describe('concurrent accept/reject', () => {
         now: '2026-01-01T00:03:00Z',
         newVersionId: 'v1', // duplicate!
       }),
-    ).toThrow();
+    ).toThrow(ContractTransactionError);
 
     // Verify proposal still PROPOSED (rollback)
     const proposal = db.getCreationContractProposalRepository().getById('p1', 'prop2');
@@ -1470,7 +1472,7 @@ describe('atomicity: rollback after proposal CAS', () => {
         now: '2026-01-01T00:03:00Z',
         newVersionId: 'v1',
       }),
-    ).toThrow();
+    ).toThrow(ContractTransactionError);
 
     expect(db.getCreationContractProposalRepository().getById('p1', 'prop2')?.status).toBe(
       'PROPOSED',
@@ -1868,6 +1870,636 @@ describe('safe error messages', () => {
       expect(e).toBeInstanceOf(ContractProposalNotFoundError);
       expect((e as AppError).code).toBe('CONTRACT_PROPOSAL_NOT_FOUND');
       expect((e as Error).message).toBe('创作契约提案 missing-prop 不存在');
+    }
+  });
+});
+
+// ── 真实双连接并发 ────────────────────────────────────────────
+
+describe('real two-connection contention', () => {
+  let dir: string;
+  let dbA: ProjectDatabase;
+  let dbB: ProjectDatabase;
+  let depsA: CreationContractMutationDeps;
+  let depsB: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-2conn-'));
+    const path = join(dir, 'project.sqlite');
+    dbA = new ProjectDatabase(path);
+    dbB = new ProjectDatabase(path);
+    // B 的 busy_timeout 设为 0：BEGIN IMMEDIATE 立即失败，不等待 5s
+    dbB.database.exec('PRAGMA busy_timeout = 0');
+    depsA = {
+      transactionPort: new CreationContractTransactionPortImpl(dbA.database),
+      sha256Port: { digestUtf8: sha256Utf8 },
+    };
+    depsB = {
+      transactionPort: new CreationContractTransactionPortImpl(dbB.database),
+      sha256Port: { digestUtf8: sha256Utf8 },
+    };
+    setupProject(dbA, 'p1');
+  });
+
+  afterEach(() => {
+    dbA.close();
+    dbB.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function holdWriteLock(db: ProjectDatabase, holderId: string): void {
+    db.database.exec('BEGIN IMMEDIATE');
+    db.database
+      .prepare(
+        `INSERT INTO project_metadata (id, name, initial_idea, status, created_at, updated_at)
+         VALUES (?, 'holder', 'x', 'active', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+      )
+      .run(holderId);
+  }
+
+  function expectBusyConflict(e: unknown): void {
+    expect(e).toBeInstanceOf(ContractTransactionBusyError);
+    expect((e as AppError).code).toBe('CONTRACT_VERSION_CONFLICT');
+    expect((e as Error).message).toBe('创作契约正在被其他操作修改，请重试');
+    expect((e as Error).message).not.toContain('SQLITE_BUSY');
+    expect((e as Error).message).not.toContain('database is locked');
+  }
+
+  it('B BEGIN IMMEDIATE busy while A holds write lock: stable busy error, no side effects, no auto retry', () => {
+    setupProposal(dbA, 'p1', 'prop1');
+    holdWriteLock(dbA, 'holder-1');
+
+    try {
+      acceptCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('B should fail with busy');
+    } catch (e) {
+      expectBusyConflict(e);
+    }
+
+    // B 无任何副作用：proposal 未 CAS、无 version、无 pointer
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'prop1')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(dbA.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(0);
+    expect(dbA.getCreationContractCurrentRepository().get('p1')).toBeNull();
+
+    // A 释放后 B 手动重试成功（adapter 不自动 retry，单次调用立即失败）
+    dbA.database.exec('COMMIT');
+    const result = acceptCreationContractProposal(depsB, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:03:00Z',
+      newVersionId: 'v1',
+    });
+    expect(result.version).toBe(1);
+  });
+
+  it('first contract contention: both based on expectedContractVersion=null, only one version 1', () => {
+    setupProposal(dbA, 'p1', 'propA');
+    setupProposal(dbA, 'p1', 'propB');
+    const hashA = dbA.getCreationContractProposalRepository().getById('p1', 'propA')!.sectionsHash;
+    const hashB = dbA.getCreationContractProposalRepository().getById('p1', 'propB')!.sectionsHash;
+
+    holdWriteLock(dbA, 'holder-2');
+    try {
+      acceptCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'propB',
+        expectedProposalSectionsHash: hashB,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1b',
+      });
+      expect.unreachable('B should fail with busy');
+    } catch (e) {
+      expectBusyConflict(e);
+    }
+    // B 失败期间没有错误提交任何状态
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'propB')?.status).toBe(
+      'PROPOSED',
+    );
+    dbA.database.exec('COMMIT');
+
+    // A 成功创建 version 1
+    const r = acceptCreationContractProposal(depsA, {
+      projectId: 'p1',
+      proposalId: 'propA',
+      expectedProposalSectionsHash: hashA,
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:03:00Z',
+      newVersionId: 'v1a',
+    });
+    expect(r.version).toBe(1);
+
+    // B 重试（仍基于 null）→ 稳定 precondition conflict（非 busy）
+    try {
+      acceptCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'propB',
+        expectedProposalSectionsHash: hashB,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:04:00Z',
+        newVersionId: 'v1b',
+      });
+      expect.unreachable('B should fail with version conflict');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractVersionConflictError);
+      expect((e as AppError).code).toBe('CONTRACT_VERSION_CONFLICT');
+    }
+
+    // 最终状态：只有一个 version 1，pointer 指向成功版本，无孤立版本
+    const versions = dbA.getCreationContractVersionRepository().listSummaries('p1');
+    expect(versions).toHaveLength(1);
+    expect(versions[0].id).toBe('v1a');
+    expect(versions[0].version).toBe(1);
+    expect(dbA.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('v1a');
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'propB')?.status).toBe(
+      'PROPOSED',
+    );
+  });
+
+  it('existing version contention: both based on version 1, only one version 2', () => {
+    setupProposal(dbA, 'p1', 'prop1');
+    acceptCreationContractProposal(depsA, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    setupProposal(dbA, 'p1', 'prop2a', { baseContractVersion: 1 });
+    setupProposal(dbA, 'p1', 'prop2b', { baseContractVersion: 1 });
+    const hash2a = dbA.getCreationContractProposalRepository().getById('p1', 'prop2a')!.sectionsHash;
+    const hash2b = dbA.getCreationContractProposalRepository().getById('p1', 'prop2b')!.sectionsHash;
+
+    holdWriteLock(dbA, 'holder-3');
+    try {
+      acceptCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'prop2b',
+        expectedProposalSectionsHash: hash2b,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2b',
+      });
+      expect.unreachable('B should fail with busy');
+    } catch (e) {
+      expectBusyConflict(e);
+    }
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'prop2b')?.status).toBe(
+      'PROPOSED',
+    );
+    dbA.database.exec('COMMIT');
+
+    // A 成功创建 version 2
+    const r = acceptCreationContractProposal(depsA, {
+      projectId: 'p1',
+      proposalId: 'prop2a',
+      expectedProposalSectionsHash: hash2a,
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: 1,
+      operations: [],
+      now: '2026-01-01T00:04:00Z',
+      newVersionId: 'v2a',
+    });
+    expect(r.version).toBe(2);
+
+    // B 重试（仍基于 version 1）→ 稳定 precondition conflict
+    try {
+      acceptCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'prop2b',
+        expectedProposalSectionsHash: hash2b,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:05:00Z',
+        newVersionId: 'v2b',
+      });
+      expect.unreachable('B should fail with version conflict');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractVersionConflictError);
+    }
+
+    // 不存在两个 version 2、不存在孤立版本
+    const versions = dbA.getCreationContractVersionRepository().listSummaries('p1');
+    expect(versions).toHaveLength(2);
+    expect(versions.map((v) => v.id).sort()).toEqual(['v1', 'v2a']);
+    expect(versions.filter((v) => v.version === 2)).toHaveLength(1);
+    expect(dbA.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('v2a');
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'prop2b')?.status).toBe(
+      'PROPOSED',
+    );
+  });
+
+  it('accept/reject contention: B reject busy while A holds lock; single status CAS after release', () => {
+    setupProposal(dbA, 'p1', 'prop1');
+    const hash = dbA.getCreationContractProposalRepository().getById('p1', 'prop1')!.sectionsHash;
+
+    holdWriteLock(dbA, 'holder-4');
+    try {
+      rejectCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: hash,
+        now: '2026-01-01T00:02:00Z',
+      });
+      expect.unreachable('B reject should fail with busy');
+    } catch (e) {
+      expectBusyConflict(e);
+    }
+    // B 失败方无 version/current/lock-event 副作用
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'prop1')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(dbA.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(0);
+    expect(dbA.getCreationContractCurrentRepository().get('p1')).toBeNull();
+    expect(dbA.getCreationContractLockEventRepository().listByProject('p1')).toHaveLength(0);
+    dbA.database.exec('COMMIT');
+
+    // A 接受成功
+    const r = acceptCreationContractProposal(depsA, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: hash,
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:03:00Z',
+      newVersionId: 'v1',
+    });
+    expect(r.version).toBe(1);
+
+    // B 重试 reject → 已 ACCEPTED → 稳定 not-acceptable
+    try {
+      rejectCreationContractProposal(depsB, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: hash,
+        now: '2026-01-01T00:04:00Z',
+      });
+      expect.unreachable('B reject should fail with not-acceptable');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractProposalNotAcceptableError);
+      expect((e as AppError).code).toBe('CONTRACT_PROPOSAL_NOT_ACCEPTABLE');
+    }
+
+    // 最终状态：proposal ACCEPTED，一个 version，无 lock events
+    expect(dbA.getCreationContractProposalRepository().getById('p1', 'prop1')?.status).toBe(
+      'ACCEPTED',
+    );
+    expect(dbA.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
+    expect(dbA.getCreationContractLockEventRepository().listByProject('p1')).toHaveLength(0);
+  });
+});
+
+// ── Sha256Port 输出验证 ───────────────────────────────────────
+
+describe('sha256 port output validation', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let txPort: CreationContractTransactionPortImpl;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-sha-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    txPort = new CreationContractTransactionPortImpl(db.database);
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function expectHashPortRejection(deps: CreationContractMutationDeps, versionId: string): void {
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: versionId,
+      });
+      expect.unreachable('invalid sha256 port output should be rejected');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractDataCorruptionError);
+      expect((e as AppError).code).toBe('INTERNAL_ERROR');
+      expect((e as Error).message).toBe('创作契约数据完整性异常');
+      expectCauseDetail(e, 'sha256 port');
+    }
+    // 失败后完整回滚：proposal CAS 撤销、无 version、无 pointer
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop1')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(0);
+    expect(db.getCreationContractCurrentRepository().get('p1')).toBeNull();
+  }
+
+  it('adapter returning non-hex snapshot hash fails before version create and rolls back', () => {
+    setupProposal(db, 'p1', 'prop1');
+    expectHashPortRejection(
+      { transactionPort: txPort, sha256Port: { digestUtf8: () => 'not-a-hash' } },
+      'v1',
+    );
+  });
+
+  it('adapter returning uppercase hash fails and rolls back', () => {
+    setupProposal(db, 'p1', 'prop1');
+    expectHashPortRejection(
+      { transactionPort: txPort, sha256Port: { digestUtf8: () => 'A'.repeat(64) } },
+      'v1',
+    );
+  });
+
+  it('adapter returning wrong-length hash fails and rolls back', () => {
+    setupProposal(db, 'p1', 'prop1');
+    expectHashPortRejection(
+      { transactionPort: txPort, sha256Port: { digestUtf8: () => 'ab' } },
+      'v1',
+    );
+  });
+
+  it('adapter returning empty string fails and rolls back', () => {
+    setupProposal(db, 'p1', 'prop1');
+    expectHashPortRejection(
+      { transactionPort: txPort, sha256Port: { digestUtf8: () => '' } },
+      'v1',
+    );
+  });
+
+  it('invalid previousFieldHash adapter output fails and rolls back (USER_EDIT path)', () => {
+    setupProposal(db, 'p1', 'prop1');
+    // 第一次 digest（previousFieldHash）返回非法值，后续（snapshot hash）正常
+    let calls = 0;
+    const badDeps: CreationContractMutationDeps = {
+      transactionPort: txPort,
+      sha256Port: {
+        digestUtf8: (input) => {
+          calls += 1;
+          return calls === 1 ? 'bad-previous-field-hash' : sha256Utf8(input);
+        },
+      },
+    };
+
+    try {
+      acceptCreationContractProposal(badDeps, {
+        projectId: 'p1',
+        proposalId: 'prop1',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: null,
+        operations: [{ kind: 'set-scalar', path: '/premise', value: 'User edited premise' }],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v1',
+      });
+      expect.unreachable('invalid previousFieldHash should be rejected');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractDataCorruptionError);
+      expect((e as AppError).code).toBe('INTERNAL_ERROR');
+      expectCauseDetail(e, 'previousFieldHash');
+    }
+    // 完整回滚
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop1')?.status).toBe(
+      'PROPOSED',
+    );
+    expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(0);
+    expect(db.getCreationContractCurrentRepository().get('p1')).toBeNull();
+  });
+});
+
+// ── Provenance 损坏处理 ───────────────────────────────────────
+
+describe('provenance corruption handling', () => {
+  let dir: string;
+  let db: ProjectDatabase;
+  let deps: CreationContractMutationDeps;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'contract-provcorr-'));
+    db = new ProjectDatabase(join(dir, 'project.sqlite'));
+    const txPort = new CreationContractTransactionPortImpl(db.database);
+    deps = { transactionPort: txPort, sha256Port: { digestUtf8: sha256Utf8 } };
+    setupProject(db, 'p1');
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('authoritative version with corrupt provenance_json → ContractDataCorruptionError, no side effects', () => {
+    setupProposal(db, 'p1', 'prop1');
+    acceptCreationContractProposal(deps, {
+      projectId: 'p1',
+      proposalId: 'prop1',
+      expectedProposalSectionsHash: makeSectionsHash(),
+      expectedGrillSessionVersion: 1,
+      expectedContractVersion: null,
+      operations: [],
+      now: '2026-01-01T00:02:00Z',
+      newVersionId: 'v1',
+    });
+
+    // 篡改权威版本 provenance_json 为合法 JSON 但结构非法（模拟损坏；
+    // 完全非 JSON 的值会被表级 json_valid CHECK 拦截，非 JSON 路径由 fake-port 测试覆盖）
+    db.database.exec('DROP TRIGGER IF EXISTS trg_cc_versions_no_update');
+    db.database
+      .prepare(`UPDATE creation_contract_versions SET provenance_json = '{}' WHERE id = 'v1'`)
+      .run();
+    db.database.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_cc_versions_no_update
+      BEFORE UPDATE ON creation_contract_versions
+      BEGIN
+        SELECT RAISE(ABORT, 'creation_contract_versions is append-only');
+      END;
+    `);
+
+    setupProposal(db, 'p1', 'prop2', { baseContractVersion: 1 });
+    const prop2 = db.getCreationContractProposalRepository().getById('p1', 'prop2')!;
+
+    try {
+      acceptCreationContractProposal(deps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: prop2.sectionsHash,
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:03:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('corrupt provenance should throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractDataCorruptionError);
+      expect((e as AppError).code).toBe('INTERNAL_ERROR');
+      expect((e as Error).message).toBe('创作契约数据完整性异常');
+      expectCauseDetail(e, 'provenance');
+    }
+
+    // 无副作用（v1 行本身已损坏，用原始 SQL 计数而不是走读取校验路径）
+    expect(db.getCreationContractProposalRepository().getById('p1', 'prop2')?.status).toBe(
+      'PROPOSED',
+    );
+    const versionCount = db.database
+      .prepare('SELECT COUNT(*) AS n FROM creation_contract_versions WHERE project_id = ?')
+      .get('p1') as { n: number };
+    expect(versionCount.n).toBe(1);
+    expect(db.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('v1');
+  });
+
+  it('use case must not silently degrade corrupt previous provenance to empty (fake port)', () => {
+    // 通过 fake transaction port 模拟一个绕过了 repository 校验的损坏 provenance
+    const fakeProposal: CreationContractProposalData = {
+      id: 'prop2',
+      projectId: 'p1',
+      taskId: 'task-prop2',
+      invocationId: 'inv-prop2',
+      status: 'PROPOSED',
+      baseGrillSessionId: 'gs-p1',
+      baseGrillSessionVersion: 1,
+      baseContractVersion: 1,
+      schemaVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: makeSectionsHash(),
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const corruptVersion = {
+      id: 'v1',
+      projectId: 'p1',
+      version: 1,
+      schemaVersion: 1,
+      sourceProposalId: 'prop1',
+      basedOnGrillSessionId: 'gs-p1',
+      basedOnGrillSessionVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      lockedFieldPathsJson: '[]',
+      contractSnapshotHash: makeSnapshotHash(),
+      provenanceJson: 'corrupt-{',
+      createdAt: '2026-01-01T00:00:00Z',
+      createdBy: 'ai-proposal-accepted',
+    };
+    const fakeRepos = {
+      projectExistsReadPort: { exists: () => true },
+      proposalRepo: { getById: () => fakeProposal, transitionStatusWithHash: () => true },
+      versionRepo: { getById: () => corruptVersion },
+      currentRepo: { get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }) },
+      grillSessionVersionReadPort: { getVersion: () => 1 },
+    } as unknown as CreationContractTransactionRepositories;
+    const fakeDeps: CreationContractMutationDeps = {
+      transactionPort: { runInTransaction: (op) => op(fakeRepos) },
+      sha256Port: { digestUtf8: sha256Utf8 },
+    };
+
+    try {
+      acceptCreationContractProposal(fakeDeps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('corrupt previous provenance must throw, not degrade');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractDataCorruptionError);
+      expect((e as AppError).code).toBe('INTERNAL_ERROR');
+      expect((e as Error).message).toBe('创作契约数据完整性异常');
+      expectCauseDetail(e, 'provenanceJson');
+    }
+  });
+
+  it('previous provenance entry with invalid source is rejected, not carried forward', () => {
+    // fake port：previous provenance 数组结构存在但 entry 非法
+    const fakeProposal: CreationContractProposalData = {
+      id: 'prop2',
+      projectId: 'p1',
+      taskId: 'task-prop2',
+      invocationId: 'inv-prop2',
+      status: 'PROPOSED',
+      baseGrillSessionId: 'gs-p1',
+      baseGrillSessionVersion: 1,
+      baseContractVersion: 1,
+      schemaVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      sectionsHash: makeSectionsHash(),
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    };
+    const corruptVersion = {
+      id: 'v1',
+      projectId: 'p1',
+      version: 1,
+      schemaVersion: 1,
+      sourceProposalId: 'prop1',
+      basedOnGrillSessionId: 'gs-p1',
+      basedOnGrillSessionVersion: 1,
+      sectionsJson: makeSectionsJson(),
+      lockedFieldPathsJson: '[]',
+      contractSnapshotHash: makeSnapshotHash(),
+      provenanceJson: JSON.stringify([{ sectionKey: 42 }]),
+      createdAt: '2026-01-01T00:00:00Z',
+      createdBy: 'ai-proposal-accepted',
+    };
+    const fakeRepos = {
+      projectExistsReadPort: { exists: () => true },
+      proposalRepo: { getById: () => fakeProposal, transitionStatusWithHash: () => true },
+      versionRepo: { getById: () => corruptVersion },
+      currentRepo: { get: () => ({ projectId: 'p1', currentVersionId: 'v1', updatedAt: '2026-01-01T00:00:00Z' }) },
+      grillSessionVersionReadPort: { getVersion: () => 1 },
+    } as unknown as CreationContractTransactionRepositories;
+    const fakeDeps: CreationContractMutationDeps = {
+      transactionPort: { runInTransaction: (op) => op(fakeRepos) },
+      sha256Port: { digestUtf8: sha256Utf8 },
+    };
+
+    try {
+      acceptCreationContractProposal(fakeDeps, {
+        projectId: 'p1',
+        proposalId: 'prop2',
+        expectedProposalSectionsHash: makeSectionsHash(),
+        expectedGrillSessionVersion: 1,
+        expectedContractVersion: 1,
+        operations: [],
+        now: '2026-01-01T00:02:00Z',
+        newVersionId: 'v2',
+      });
+      expect.unreachable('invalid provenance entry must throw');
+    } catch (e) {
+      expect(e).toBeInstanceOf(ContractDataCorruptionError);
+      expect((e as AppError).code).toBe('INTERNAL_ERROR');
+      expectCauseDetail(e, 'sectionKey');
     }
   });
 });
