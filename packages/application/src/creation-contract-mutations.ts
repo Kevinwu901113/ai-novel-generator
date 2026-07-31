@@ -47,30 +47,13 @@ import {
   ContractValidationError,
   ValidationError,
 } from './errors.js';
+import { parseProvenanceArray, validateIso8601Timestamp } from './creation-contract-validation.js';
 
 // ── 依赖 ──────────────────────────────────────────────────────
 
 export interface CreationContractMutationDeps {
   readonly transactionPort: CreationContractTransactionPort;
   readonly sha256Port: Sha256Port;
-}
-
-// ── ISO-8601 验证 ─────────────────────────────────────────────
-
-const ISO_8601_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
-
-function validateIso8601Timestamp(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new ValidationError(`${field} 必须是非空字符串`);
-  }
-  if (!ISO_8601_RE.test(value)) {
-    throw new ValidationError(`${field} 必须是有效 ISO-8601 时间戳`);
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new ValidationError(`${field} 必须是有效 ISO-8601 时间戳`);
-  }
-  return value;
 }
 
 // ── 内部辅助 ──────────────────────────────────────────────────
@@ -432,29 +415,13 @@ function loadPreviousProvenanceMap(
   previousVersion: CreationContractVersionData | null,
 ): Map<string, ContractFieldProvenance> | null {
   if (!previousVersion) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(previousVersion.provenanceJson);
-  } catch (e) {
-    // 权威 version provenance 损坏必须抛出，不能降级成空 provenance
-    throw new ContractDataCorruptionError('previous version provenanceJson is not valid JSON', e);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new ContractDataCorruptionError('previous version provenanceJson must be an array');
-  }
+  // 权威 version provenance 损坏必须抛出，不能降级成空 provenance。
+  // 共享严格 parser 校验 key 集合/canonical sectionKey/source/ID 数组/
+  // nullable 字段/previousFieldHash/排序，损坏时抛 ContractDataCorruptionError。
+  const parsed = parseProvenanceArray(previousVersion.provenanceJson, 'loadPreviousProvenanceMap');
   const map = new Map<string, ContractFieldProvenance>();
-  for (const item of parsed) {
-    if (typeof item !== 'object' || item === null) {
-      throw new ContractDataCorruptionError('previous version provenance item is not an object');
-    }
-    const entry = item as Record<string, unknown>;
-    if (typeof entry.sectionKey !== 'string' || entry.sectionKey.length === 0) {
-      throw new ContractDataCorruptionError('previous version provenance sectionKey invalid');
-    }
-    if (map.has(entry.sectionKey)) {
-      throw new ContractDataCorruptionError('previous version provenance duplicate sectionKey');
-    }
-    map.set(entry.sectionKey, entry as unknown as ContractFieldProvenance);
+  for (const entry of parsed) {
+    map.set(entry.sectionKey, entry);
   }
   return map;
 }
