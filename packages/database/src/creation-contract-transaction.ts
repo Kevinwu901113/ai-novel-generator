@@ -3,6 +3,12 @@
  *
  * 实现 CreationContractTransactionPort，在同一 SQLite 事务内
  * 提供所有创作契约仓库和读取端口。
+ *
+ * 加固：
+ * - BEGIN IMMEDIATE 失败分类（SQLITE_BUSY/LOCKED）
+ * - 嵌套事务检测
+ * - COMMIT 失败后尝试 rollback
+ * - rollback 失败不覆盖原始错误
  */
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -11,6 +17,10 @@ import type {
   CreationContractTransactionRepositories,
   GrillSessionVersionReadPort,
   ProjectExistsReadPort,
+} from '@ai-novel/application';
+import {
+  ContractTransactionBusyError,
+  ContractNestedTransactionError,
 } from '@ai-novel/application';
 import {
   CreationContractProposalRepositoryImpl,
@@ -47,6 +57,25 @@ class ProjectExistsReadPortImpl implements ProjectExistsReadPort {
   }
 }
 
+// ── SQLite 错误分类 ────────────────────────────────────────────
+
+function isSqliteBusyError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('SQLITE_BUSY') || msg.includes('database is locked');
+}
+
+function isSqliteLockedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('SQLITE_LOCKED');
+}
+
+function classifySqliteError(err: unknown, phase: string): never {
+  if (isSqliteBusyError(err) || isSqliteLockedError(err)) {
+    throw new ContractTransactionBusyError(`事务 ${phase} 冲突，请重试`);
+  }
+  throw err;
+}
+
 // ── 事务适配器实现 ──────────────────────────────────────────────
 
 export class CreationContractTransactionPortImpl implements CreationContractTransactionPort {
@@ -56,6 +85,7 @@ export class CreationContractTransactionPortImpl implements CreationContractTran
   private readonly lockEventRepo: CreationContractLockEventRepositoryImpl;
   private readonly grillSessionVersionPort: GrillSessionVersionReadPortImpl;
   private readonly projectExistsPort: ProjectExistsReadPortImpl;
+  private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
     this.proposalRepo = new CreationContractProposalRepositoryImpl(db);
@@ -67,26 +97,51 @@ export class CreationContractTransactionPortImpl implements CreationContractTran
   }
 
   runInTransaction<T>(operation: (repositories: CreationContractTransactionRepositories) => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
+    if (this.inTransaction) {
+      throw new ContractNestedTransactionError(
+        '检测到嵌套创作契约事务 — 不允许在同一连接上嵌套 BEGIN IMMEDIATE',
+      );
+    }
+
+    this.inTransaction = true;
     try {
-      const repositories: CreationContractTransactionRepositories = {
-        proposalRepo: this.proposalRepo,
-        versionRepo: this.versionRepo,
-        currentRepo: this.currentRepo,
-        lockEventRepo: this.lockEventRepo,
-        grillSessionVersionReadPort: this.grillSessionVersionPort,
-        projectExistsReadPort: this.projectExistsPort,
-      };
+      this.db.exec('BEGIN IMMEDIATE');
+    } catch (err) {
+      this.inTransaction = false;
+      classifySqliteError(err, 'BEGIN');
+    }
+
+    const repositories: CreationContractTransactionRepositories = {
+      proposalRepo: this.proposalRepo,
+      versionRepo: this.versionRepo,
+      currentRepo: this.currentRepo,
+      lockEventRepo: this.lockEventRepo,
+      grillSessionVersionReadPort: this.grillSessionVersionPort,
+      projectExistsReadPort: this.projectExistsPort,
+    };
+
+    try {
       const result = operation(repositories);
-      this.db.exec('COMMIT');
+      try {
+        this.db.exec('COMMIT');
+      } catch (commitErr) {
+        try {
+          this.db.exec('ROLLBACK');
+        } catch {
+          // rollback 失败不覆盖原始 COMMIT 错误
+        }
+        this.inTransaction = false;
+        classifySqliteError(commitErr, 'COMMIT');
+      }
+      this.inTransaction = false;
       return result;
     } catch (err) {
-      // rollback 自身失败不得覆盖原始错误
       try {
         this.db.exec('ROLLBACK');
       } catch {
-        // rollback 失败时忽略，原始错误仍然抛出
+        // rollback 失败不覆盖原始错误
       }
+      this.inTransaction = false;
       throw err;
     }
   }
