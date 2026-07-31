@@ -249,14 +249,16 @@ export function validateIso8601Timestamp(value: unknown, field: string): string 
     if (offsetMinute > 59) {
       throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
     }
-    if (sign === '+' && offsetHour > 14) {
-      throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
-    }
-    if (sign === '-' && offsetHour > 12) {
-      throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
-    }
-    if (offsetHour === 14 && offsetMinute !== 0) {
-      throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
+    // ISO-8601 合法 offset 范围：-12:00..+14:00（含边界）。
+    // 正 offset：hour=14 时 minute 必须为 00；负 offset：hour=12 时 minute 必须为 00。
+    if (sign === '+') {
+      if (offsetHour > 14 || (offsetHour === 14 && offsetMinute !== 0)) {
+        throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
+      }
+    } else {
+      if (offsetHour > 12 || (offsetHour === 12 && offsetMinute !== 0)) {
+        throw new ValidationError(`${field} ${ISO_TIMESTAMP_INVALID_MESSAGE}`);
+      }
     }
   }
 
