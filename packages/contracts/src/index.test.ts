@@ -688,7 +688,19 @@ describe('isValidContractVersionPublicData', () => {
     sections: VALID_SECTIONS_PUBLIC,
     lockedFieldPaths: [],
     contractSnapshotHash: 'a'.repeat(64),
-    provenance: { source: 'user' },
+    provenance: [
+      {
+        sectionKey: '/premise',
+        source: 'DEFAULT',
+        grillAnswerIds: [],
+        grillProposalIds: [],
+        aiTaskId: null,
+        modelInvocationId: null,
+        sourceProposalId: null,
+        previousFieldHash: null,
+        rationale: null,
+      },
+    ],
     createdAt: '2026-01-01T00:00:00Z',
     createdBy: 'user',
   };

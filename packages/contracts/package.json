@@ -16,7 +16,6 @@
     "build": "tsc"
   },
   "devDependencies": {
-    "@ai-novel/domain": "workspace:*",
     "typescript": "^5.8.0"
   }
 }
