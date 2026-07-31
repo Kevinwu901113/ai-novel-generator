@@ -5,10 +5,12 @@
  * 提供所有创作契约仓库和读取端口。
  *
  * 加固：
- * - BEGIN IMMEDIATE 失败分类（SQLITE_BUSY/LOCKED）
+ * - BEGIN IMMEDIATE 失败分类（SQLITE_BUSY/LOCKED，优先使用稳定 errcode）
  * - 嵌套事务检测
  * - COMMIT 失败后尝试 rollback
  * - rollback 失败不覆盖原始错误
+ * - 非 AppError（如 SQLite 约束错误）转换为安全基础设施错误
+ * - Promise/thenable 回调拒绝（同步事务不允许异步回调）
  */
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -19,8 +21,11 @@ import type {
   ProjectExistsReadPort,
 } from '@ai-novel/application';
 import {
+  AppError,
   ContractTransactionBusyError,
   ContractNestedTransactionError,
+  ContractTransactionError,
+  ContractAsyncTransactionCallbackError,
 } from '@ai-novel/application';
 import {
   CreationContractProposalRepositoryImpl,
@@ -59,21 +64,62 @@ class ProjectExistsReadPortImpl implements ProjectExistsReadPort {
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
-function isSqliteBusyError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('SQLITE_BUSY') || msg.includes('database is locked');
-}
+const SQLITE_BUSY = 5;
+const SQLITE_LOCKED = 6;
 
-function isSqliteLockedError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('SQLITE_LOCKED');
-}
-
-function classifySqliteError(err: unknown, phase: string): never {
-  if (isSqliteBusyError(err) || isSqliteLockedError(err)) {
-    throw new ContractTransactionBusyError(`事务 ${phase} 冲突，请重试`);
+/**
+ * node:sqlite 错误对象提供稳定 `errcode`（SQLite primary/extended result code）。
+ * 优先使用 errcode，只有属性不可用（如非 node:sqlite 的 fake adapter）时
+ * 才回退到受控的 message 文本匹配。
+ */
+function sqlitePrimaryErrorCode(err: unknown): number | null {
+  if (err !== null && typeof err === 'object' && 'errcode' in err) {
+    const code = (err as { errcode?: unknown }).errcode;
+    if (typeof code === 'number' && Number.isInteger(code)) {
+      return code & 0xff;
+    }
   }
-  throw err;
+  return null;
+}
+
+function hasBusyOrLockedMessage(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('SQLITE_BUSY') || msg.includes('SQLITE_LOCKED') || msg.includes('database is locked')
+  );
+}
+
+function isBusyOrLockedError(err: unknown): boolean {
+  const primary = sqlitePrimaryErrorCode(err);
+  if (primary !== null) return primary === SQLITE_BUSY || primary === SQLITE_LOCKED;
+  return hasBusyOrLockedMessage(err);
+}
+
+/**
+ * 把事务边界上的任意错误转换为安全错误：
+ * - AppError 原样透传（应用层已定义自己的错误语义）
+ * - busy/locked → ContractTransactionBusyError
+ * - 其他（SQLite 约束、磁盘错误等）→ ContractTransactionError
+ * 内部诊断均保存在 cause，不进入 public message。
+ */
+function toSafeTransactionError(err: unknown): Error {
+  if (err instanceof AppError) return err;
+  if (isBusyOrLockedError(err)) return new ContractTransactionBusyError(err);
+  return new ContractTransactionError(err);
+}
+
+/**
+ * 同步事务不允许回调返回 Promise/thenable：
+ * 否则 adapter 会在 Promise 完成前 COMMIT，破坏事务生命周期。
+ */
+function assertSyncCallbackResult<T>(result: T): void {
+  if (
+    result !== null &&
+    (typeof result === 'object' || typeof result === 'function') &&
+    typeof (result as { then?: unknown }).then === 'function'
+  ) {
+    throw new ContractAsyncTransactionCallbackError();
+  }
 }
 
 // ── 事务适配器实现 ──────────────────────────────────────────────
@@ -98,9 +144,7 @@ export class CreationContractTransactionPortImpl implements CreationContractTran
 
   runInTransaction<T>(operation: (repositories: CreationContractTransactionRepositories) => T): T {
     if (this.inTransaction) {
-      throw new ContractNestedTransactionError(
-        '检测到嵌套创作契约事务 — 不允许在同一连接上嵌套 BEGIN IMMEDIATE',
-      );
+      throw new ContractNestedTransactionError();
     }
 
     this.inTransaction = true;
@@ -108,7 +152,7 @@ export class CreationContractTransactionPortImpl implements CreationContractTran
       this.db.exec('BEGIN IMMEDIATE');
     } catch (err) {
       this.inTransaction = false;
-      classifySqliteError(err, 'BEGIN');
+      throw toSafeTransactionError(err);
     }
 
     const repositories: CreationContractTransactionRepositories = {
@@ -122,27 +166,32 @@ export class CreationContractTransactionPortImpl implements CreationContractTran
 
     try {
       const result = operation(repositories);
+      assertSyncCallbackResult(result);
       try {
         this.db.exec('COMMIT');
       } catch (commitErr) {
+        // COMMIT 失败：尝试 ROLLBACK（失败不覆盖原始 COMMIT 错误），
+        // 并标记事务已结束，外层 catch 不再重复 ROLLBACK
+        this.inTransaction = false;
         try {
           this.db.exec('ROLLBACK');
         } catch {
           // rollback 失败不覆盖原始 COMMIT 错误
         }
-        this.inTransaction = false;
-        classifySqliteError(commitErr, 'COMMIT');
+        throw toSafeTransactionError(commitErr);
       }
       this.inTransaction = false;
       return result;
     } catch (err) {
-      try {
-        this.db.exec('ROLLBACK');
-      } catch {
-        // rollback 失败不覆盖原始错误
+      if (this.inTransaction) {
+        try {
+          this.db.exec('ROLLBACK');
+        } catch {
+          // rollback 失败不覆盖原始错误
+        }
+        this.inTransaction = false;
       }
-      this.inTransaction = false;
-      throw err;
+      throw toSafeTransactionError(err);
     }
   }
 }

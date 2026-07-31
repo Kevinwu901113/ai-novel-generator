@@ -35,6 +35,23 @@ export function sha256Utf8(input: string): string {
 
 // ── 读取验证辅助 ────────────────────────────────────────────────
 
+/**
+ * 判断错误是否为 UNIQUE/PRIMARY KEY 约束冲突。
+ *
+ * 优先使用 node:sqlite 的稳定 `errcode`（SQLITE_CONSTRAINT_PRIMARYKEY=1555，
+ * SQLITE_CONSTRAINT_UNIQUE=2067），属性不可用时回退到受控 message 文本。
+ */
+function isUniqueConstraintError(err: unknown): boolean {
+  if (err !== null && typeof err === 'object' && 'errcode' in err) {
+    const code = (err as { errcode?: unknown }).errcode;
+    if (typeof code === 'number' && Number.isInteger(code)) {
+      return code === 1555 || code === 2067;
+    }
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('UNIQUE constraint failed');
+}
+
 function requireString(row: Record<string, unknown>, key: string, context: string): string {
   const v = row[key];
   if (typeof v !== 'string')
@@ -653,8 +670,8 @@ export class CreationContractCurrentRepositoryImpl implements CreationContractCu
         .run(projectId, versionId, now);
       return true;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes('UNIQUE constraint failed')) {
+      if (isUniqueConstraintError(e)) {
+        // PK 冲突 = 并发 current pointer 创建 → 稳定 conflict
         return false;
       }
       throw e;

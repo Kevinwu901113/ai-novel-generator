@@ -171,6 +171,8 @@ export {
   ContractDataCorruptionError,
   ContractTransactionBusyError,
   ContractNestedTransactionError,
+  ContractTransactionError,
+  ContractAsyncTransactionCallbackError,
 } from './errors.js';
 
 export type {

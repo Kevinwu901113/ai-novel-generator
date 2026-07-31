@@ -12,8 +12,9 @@ export class AppError extends Error {
   constructor(
     public readonly code: ErrorCode,
     message: string,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'AppError';
   }
 }
@@ -324,18 +325,53 @@ export class ContractDataCorruptionError extends AppError {
   }
 }
 
-/** SQLite busy/locked — 由事务适配器抛出，应用层映射为稳定错误码 */
+/**
+ * SQLite busy/locked — 由事务适配器抛出。
+ *
+ * public message 固定，不包含 SQLite 实现细节（SQLITE_BUSY / database is locked 等）。
+ * 内部诊断保存在 cause。
+ */
 export class ContractTransactionBusyError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_VERSION_CONFLICT', message);
+  constructor(cause?: unknown) {
+    super('CONTRACT_VERSION_CONFLICT', '创作契约正在被其他操作修改，请重试', cause);
     this.name = 'ContractTransactionBusyError';
   }
 }
 
-/** 嵌套事务检测 — 由事务适配器抛出，应用层映射为稳定错误码 */
+/**
+ * 嵌套事务检测 — 由事务适配器抛出。
+ *
+ * public message 固定，不包含 BEGIN IMMEDIATE 等 SQLite 实现细节。
+ */
 export class ContractNestedTransactionError extends AppError {
-  constructor(message: string) {
-    super('INTERNAL_ERROR', message);
+  constructor() {
+    super('INTERNAL_ERROR', '检测到嵌套创作契约事务');
     this.name = 'ContractNestedTransactionError';
+  }
+}
+
+/**
+ * 创作契约事务基础设施失败（非 busy/locked）。
+ *
+ * 用于把 SQLite 约束错误、磁盘错误等原始错误转换为安全错误，
+ * 内部诊断保存在 cause。
+ */
+export class ContractTransactionError extends AppError {
+  constructor(cause?: unknown) {
+    super('INTERNAL_ERROR', '创作契约事务执行失败', cause);
+    this.name = 'ContractTransactionError';
+  }
+}
+
+/**
+ * 事务回调返回 Promise/thenable。
+ *
+ * 同步事务要求回调同步完成，否则 adapter 会在 Promise 完成前 COMMIT，
+ * 破坏事务生命周期。public message 固定，不暴露实现细节。
+ */
+export class ContractAsyncTransactionCallbackError extends AppError {
+  constructor() {
+    super('INTERNAL_ERROR', '创作契约事务回调必须同步执行');
+    this.name = 'ContractAsyncTransactionCallbackError';
   }
 }
