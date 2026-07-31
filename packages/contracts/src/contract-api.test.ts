@@ -203,6 +203,104 @@ describe('mutation validators', () => {
   });
 });
 
+describe('inherited-key / prototype pollution 边界', () => {
+  const validRequest: RequestContractDraftInput = {
+    projectId: 'proj-1',
+    grillSessionId: 'gs-1',
+    expectedGrillSessionVersion: 3,
+    expectedContractVersion: null,
+  };
+  const validAccept: AcceptContractProposalInput = {
+    projectId: 'proj-1',
+    proposalId: 'prop-1',
+    expectedProposalSectionsHash: HEX64,
+    expectedGrillSessionVersion: 3,
+    expectedContractVersion: null,
+    operations: [],
+  };
+  const validReject: RejectContractProposalInput = {
+    projectId: 'proj-1',
+    proposalId: 'prop-1',
+    expectedProposalSectionsHash: HEX64,
+  };
+  const validUpdate: UpdateContractByUserInput = {
+    projectId: 'proj-1',
+    expectedContractVersion: 1,
+    operations: [{ kind: 'set-scalar', path: '/premise', value: '新前提' }],
+  };
+  const validLock: LockContractFieldInput = {
+    projectId: 'proj-1',
+    expectedContractVersion: 1,
+    fieldPath: '/premise',
+  };
+
+  const cases: Array<{ name: string; valid: unknown; validator: (d: unknown) => boolean }> = [
+    { name: 'requestDraft', valid: validRequest, validator: isValidRequestContractDraftInput },
+    { name: 'acceptProposal', valid: validAccept, validator: isValidAcceptContractProposalInput },
+    { name: 'rejectProposal', valid: validReject, validator: isValidRejectContractProposalInput },
+    { name: 'updateByUser', valid: validUpdate, validator: isValidUpdateContractByUserInput },
+    { name: 'lockField', valid: validLock, validator: isValidLockContractFieldInput },
+    {
+      name: 'unlockField',
+      valid: { ...validLock, fieldPath: '/premise' },
+      validator: isValidUnlockContractFieldInput,
+    },
+    {
+      name: 'getCurrent',
+      valid: { projectId: 'proj-1' },
+      validator: isValidGetCurrentCreationContractInput,
+    },
+    {
+      name: 'getProposal',
+      valid: { projectId: 'proj-1', proposalId: 'prop-1' },
+      validator: isValidGetCreationContractProposalInput,
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}：继承的 allowed key 拒绝`, () => {
+      const polluted = Object.create({ projectId: 'inherited' });
+      Object.assign(polluted, c.valid as Record<string, unknown>);
+      expect(c.validator(polluted)).toBe(false);
+    });
+
+    it(`${c.name}：继承的 extra key（now）拒绝`, () => {
+      const polluted = Object.create({ now: '2024-01-01T00:00:00.000Z' });
+      Object.assign(polluted, c.valid as Record<string, unknown>);
+      expect(c.validator(polluted)).toBe(false);
+    });
+
+    it(`${c.name}：null prototype plain record 通过`, () => {
+      const plain: Record<string, unknown> = Object.create(null);
+      Object.assign(plain, c.valid as Record<string, unknown>);
+      expect(c.validator(plain)).toBe(true);
+    });
+
+    it(`${c.name}：class instance 拒绝`, () => {
+      class Input {
+        projectId = 'proj-1';
+        grillSessionId = 'gs-1';
+        expectedGrillSessionVersion = 3;
+        expectedContractVersion = null;
+        proposalId = 'prop-1';
+        expectedProposalSectionsHash = HEX64;
+        operations: unknown[] = [];
+        fieldPath = '/premise';
+      }
+      expect(c.validator(new Input())).toBe(false);
+    });
+
+    it(`${c.name}：array 拒绝`, () => {
+      expect(c.validator([c.valid])).toBe(false);
+    });
+  }
+
+  it('Object.assign 到普通对象（JSON.parse 等价）通过', () => {
+    expect(isValidRequestContractDraftInput({ ...validRequest })).toBe(true);
+    expect(isValidAcceptContractProposalInput({ ...validAccept })).toBe(true);
+  });
+});
+
 describe('DesktopAPI type parity', () => {
   it('ContractAPI 是 DesktopAPI 的属性且方法签名完整', () => {
     // 编译期校验：DesktopAPI 必须包含 contract: ContractAPI

@@ -505,6 +505,112 @@ describe('settleContractDraftRunnerFailure: 并发 CAS 语义（kernel 已由 Gr
   });
 });
 
+describe('settleContractDraftRunnerFailure: 明确 settlement outcome', () => {
+  interface OutcomeOpts {
+    initialStatus: string;
+    failPendingResult: boolean;
+    rereadStatus: string;
+  }
+
+  function outcomeDeps(state: MockState, opts: OutcomeOpts): ContractDraftRunnerDeps {
+    let current = makeTask({ status: opts.initialStatus as TaskData['status'] });
+    let failPendingCalled = false;
+    const taskRepo: TaskRepositoryPort = {
+      ...createMockTaskRepo(state),
+      getById: () => current,
+      failPending: (_id, errorCode, errorMessage) => {
+        if (failPendingCalled) return false;
+        failPendingCalled = true;
+        if (opts.failPendingResult) {
+          current = makeTask({ status: 'FAILED', errorCode, errorMessage });
+          return true;
+        }
+        current = makeTask({ status: opts.rereadStatus as TaskData['status'] });
+        return false;
+      },
+    };
+    return createRunnerDeps(state, { getTaskRepo: () => taskRepo });
+  }
+
+  it('PENDING failPending 成功 → FAILED', () => {
+    const outcome = settleContractDraftRunnerFailure(
+      outcomeDeps(state, {
+        initialStatus: 'PENDING',
+        failPendingResult: true,
+        rereadStatus: 'PENDING',
+      }),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('FAILED');
+  });
+
+  it('PENDING failPending 失败 + reread terminal → TERMINAL', () => {
+    const outcome = settleContractDraftRunnerFailure(
+      outcomeDeps(state, {
+        initialStatus: 'PENDING',
+        failPendingResult: false,
+        rereadStatus: 'STALE',
+      }),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('TERMINAL');
+  });
+
+  it('PENDING failPending 失败 + reread RUNNING → RUNNING_ELSEWHERE（不覆盖）', () => {
+    const outcome = settleContractDraftRunnerFailure(
+      outcomeDeps(state, {
+        initialStatus: 'PENDING',
+        failPendingResult: false,
+        rereadStatus: 'RUNNING',
+      }),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('RUNNING_ELSEWHERE');
+    expect(state.task.status).not.toBe('FAILED');
+  });
+
+  it('PENDING failPending 失败 + reread 仍 PENDING → UNRESOLVED（不静默忽略）', () => {
+    const outcome = settleContractDraftRunnerFailure(
+      outcomeDeps(state, {
+        initialStatus: 'PENDING',
+        failPendingResult: false,
+        rereadStatus: 'PENDING',
+      }),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('UNRESOLVED');
+    expect(state.task.status).not.toBe('FAILED');
+  });
+
+  it('已终态 task → TERMINAL（不覆盖）', () => {
+    state.task = makeTask({ status: 'SUCCEEDED' });
+    const outcome = settleContractDraftRunnerFailure(
+      createRunnerDeps(state),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('TERMINAL');
+    expect(state.task.status).toBe('SUCCEEDED');
+  });
+
+  it('RUNNING + invocation/task CAS 成功 → FAILED', () => {
+    state.task = makeTask({ status: 'RUNNING', attemptCount: 1 });
+    state.invocations = [makeInvocation({ status: 'RUNNING' })];
+    const outcome = settleContractDraftRunnerFailure(
+      createRunnerDeps(state),
+      createMockProjDb(state),
+      'task-1',
+    );
+    expect(outcome).toBe('FAILED');
+    expect(state.task.status).toBe('FAILED');
+    expect(state.invocations[0].status).toBe('FAILED');
+  });
+});
+
 describe('recoverPendingContractDrafts', () => {
   it('启动恢复：扫描 PENDING CREATION_CONTRACT_DRAFT 并调度', () => {
     const scheduled: string[] = [];
@@ -514,7 +620,9 @@ describe('recoverPendingContractDrafts', () => {
       getTaskRepo: () => createMockTaskRepo(state),
       schedule: (projectId, taskId) => {
         scheduled.push(`${projectId}:${taskId}`);
+        return { scheduled: true };
       },
+      settle: () => 'TERMINAL',
     };
     recoverPendingContractDrafts(recoveryDeps);
     expect(scheduled).toContain('proj-1:task-1');
@@ -527,7 +635,11 @@ describe('recoverPendingContractDrafts', () => {
     recoverPendingContractDrafts({
       listProjectDbs: () => [{ projectId: 'proj-1', projDb }],
       getTaskRepo: () => createMockTaskRepo(state),
-      schedule: (projectId, taskId) => scheduled.push(`${projectId}:${taskId}`),
+      schedule: (projectId, taskId) => {
+        scheduled.push(`${projectId}:${taskId}`);
+        return { scheduled: true };
+      },
+      settle: () => 'TERMINAL',
     });
     expect(scheduled).toHaveLength(0);
   });
@@ -545,10 +657,34 @@ describe('recoverPendingContractDrafts', () => {
         if (projDb === badDb) throw new Error('cannot read bad project');
         return createMockTaskRepo(state);
       },
-      schedule: (projectId, taskId) => scheduled.push(`${projectId}:${taskId}`),
+      schedule: (projectId, taskId) => {
+        scheduled.push(`${projectId}:${taskId}`);
+        return { scheduled: true };
+      },
+      settle: () => 'TERMINAL',
     });
     // bad 项目失败不阻塞 good 项目恢复
     expect(scheduled).toContain('good:task-1');
     expect(scheduled).not.toContain('bad:task-1');
+  });
+
+  it('startup recovery SETUP_FAILED：调度失败时安全终结，无永久 PENDING', () => {
+    const settled: string[] = [];
+    const projDb = createMockProjDb(state);
+    const scheduled: string[] = [];
+    recoverPendingContractDrafts({
+      listProjectDbs: () => [{ projectId: 'proj-1', projDb }],
+      getTaskRepo: () => createMockTaskRepo(state),
+      schedule: (projectId, taskId) => {
+        scheduled.push(`${projectId}:${taskId}`);
+        return { scheduled: false, reason: 'SETUP_FAILED' };
+      },
+      settle: (_db, taskId) => {
+        settled.push(taskId);
+        return 'FAILED';
+      },
+    });
+    expect(scheduled).toContain('proj-1:task-1');
+    expect(settled).toContain('task-1');
   });
 });

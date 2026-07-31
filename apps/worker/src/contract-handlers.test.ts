@@ -14,7 +14,12 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ProjectDatabase } from '@ai-novel/database';
-import { AppError } from '@ai-novel/application';
+import {
+  AppError,
+  type TaskData,
+  type TaskRepositoryPort,
+  type CreateTaskInput,
+} from '@ai-novel/application';
 import { executeCreationContractDraft } from '@ai-novel/task-engine';
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
 import { TaskRepoAdapter } from './contract-test-utils.js';
@@ -197,6 +202,114 @@ describe('dispatchContractCommand', () => {
     db.close();
     expect(task?.status).toBe('FAILED');
     expect(task?.errorCode).toBe('TASK_EXECUTION_FAILED');
+  });
+
+  /** 构造 failPending 恒为 false 的 task repo，reread 返回指定状态。 */
+  function makeFailPendingFalseTaskRepo(opts: { rereadStatus: string }) {
+    let taskId = '';
+    const rereadStatus = opts.rereadStatus;
+    const makeTask = (id: string): TaskData => ({
+      id,
+      projectId: 'proj-1',
+      taskType: 'CREATION_CONTRACT_DRAFT',
+      status: rereadStatus as TaskData['status'],
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      resultJson: null,
+      errorCode: null,
+      errorMessage: null,
+      dedupeKey: null,
+      attemptCount: 0,
+      createdAt: NOW,
+      updatedAt: NOW,
+      startedAt: null,
+      finishedAt: null,
+      staleAt: null,
+      cancelledAt: null,
+    });
+    const repo: TaskRepositoryPort = {
+      create: (data: CreateTaskInput) => {
+        taskId = data.id;
+      },
+      getById: () => (taskId ? makeTask(taskId) : null),
+      listByProject: () => [],
+      listByStatus: () => [],
+      claimPending: () => false,
+      completeRunning: () => false,
+      failRunning: () => false,
+      failPending: () => false,
+      markStale: () => false,
+      resetToPending: () => false,
+      listRunning: () => [],
+    };
+    return repo;
+  }
+
+  it('requestDraft：schedule false + failPending false + reread terminal → 接受终态并返回', () => {
+    const sessionVersion = seedCompletedGrillSession(openFreshDb(), {
+      sessionId: 'gs-h5',
+      projectId: 'proj-1',
+    });
+    const repo = makeFailPendingFalseTaskRepo({ rereadStatus: 'STALE' });
+    const result = dispatchContractCommand(
+      'contract.requestDraft',
+      {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-h5',
+        expectedGrillSessionVersion: sessionVersion,
+        expectedContractVersion: null,
+      },
+      makeCtx({
+        getTaskRepo: () => repo,
+        scheduleContractDraft: () => ({ scheduled: false, reason: 'OPEN_FAILED' }),
+      }),
+    ) as { taskId: string };
+    expect(result.taskId).toBeTruthy();
+  });
+
+  it('requestDraft：schedule false + failPending false + reread RUNNING → 接受 RUNNING_ELSEWHERE 并返回', () => {
+    const sessionVersion = seedCompletedGrillSession(openFreshDb(), {
+      sessionId: 'gs-h6',
+      projectId: 'proj-1',
+    });
+    const repo = makeFailPendingFalseTaskRepo({ rereadStatus: 'RUNNING' });
+    const result = dispatchContractCommand(
+      'contract.requestDraft',
+      {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-h6',
+        expectedGrillSessionVersion: sessionVersion,
+        expectedContractVersion: null,
+      },
+      makeCtx({
+        getTaskRepo: () => repo,
+        scheduleContractDraft: () => ({ scheduled: false, reason: 'SETUP_FAILED' }),
+      }),
+    ) as { taskId: string };
+    expect(result.taskId).toBeTruthy();
+  });
+
+  it('requestDraft：schedule false + failPending false + reread 仍 PENDING → 抛固定安全 INTERNAL_ERROR，不得静默返回', () => {
+    const sessionVersion = seedCompletedGrillSession(openFreshDb(), {
+      sessionId: 'gs-h7',
+      projectId: 'proj-1',
+    });
+    const repo = makeFailPendingFalseTaskRepo({ rereadStatus: 'PENDING' });
+    expect(() =>
+      dispatchContractCommand(
+        'contract.requestDraft',
+        {
+          projectId: 'proj-1',
+          grillSessionId: 'gs-h7',
+          expectedGrillSessionVersion: sessionVersion,
+          expectedContractVersion: null,
+        },
+        makeCtx({
+          getTaskRepo: () => repo,
+          scheduleContractDraft: () => ({ scheduled: false, reason: 'OPEN_FAILED' }),
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'INTERNAL_ERROR' }));
   });
 
   it('caller 注入 providerProfileId / now / newVersionId → VALIDATION_ERROR', () => {

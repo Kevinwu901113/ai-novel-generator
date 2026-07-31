@@ -21,6 +21,8 @@ import {
   acceptCreationContractProposal,
   lockCreationContractField,
   ContractDraftAlreadyRunningError,
+  ContractDataCorruptionError,
+  TaskDedupeConflictError,
   type RequestCreationContractProposalDeps,
 } from '@ai-novel/application';
 import { executeCreationContractDraft, TaskExecutionError } from '@ai-novel/task-engine';
@@ -29,6 +31,7 @@ import {
   buildRequestDeps,
   seedCompletedGrillSession,
   makeCanonicalSectionsJson,
+  TaskRepoAdapter,
   NOW,
   NOW2,
 } from './contract-test-utils.js';
@@ -334,6 +337,225 @@ describe('真实 SQLite 并发', () => {
     expect(proposals2).toHaveLength(1); // 只有第一轮 proposal
     dbA.close();
     dbB.close();
+  });
+
+  it('6. Request 使用 BEGIN IMMEDIATE：事务持有写锁期间另一连接无法写 session', () => {
+    const dbA = openDb();
+    const sessionVersion = seedCompletedGrillSession(dbA, {
+      sessionId: 'gs-lock-1',
+      projectId: 'proj-1',
+    });
+    const dbB = openDb();
+    dbB.database.exec('PRAGMA busy_timeout = 0');
+
+    let busy = false;
+    dbA.transactionImmediate(() => {
+      // A 持有 BEGIN IMMEDIATE；B 写 session 立即失败（busy_timeout=0）
+      try {
+        dbB.getGrillSessionRepository().bumpVersion('gs-lock-1', sessionVersion, NOW2);
+      } catch {
+        busy = true;
+      }
+    });
+    expect(busy).toBe(true);
+
+    // 事务提交后 B 可正常写
+    expect(dbB.getGrillSessionRepository().bumpVersion('gs-lock-1', sessionVersion, NOW2)).toBe(
+      true,
+    );
+    dbA.close();
+    dbB.close();
+  });
+
+  it('7. Request 在单个事务内捕获 session 与 contract 同一快照', async () => {
+    const dbA = openDb();
+    const sessionVersion = seedCompletedGrillSession(dbA, {
+      sessionId: 'gs-snap-1',
+      projectId: 'proj-1',
+    });
+    // 第一轮：首次契约 → proposal → accept 创建 version 1
+    const depsReq0 = buildRequestDeps(dbA, { generate: () => 'task-snap-0' });
+    const r0 = requestCreationContractProposal(depsReq0, {
+      projectId: 'proj-1',
+      grillSessionId: 'gs-snap-1',
+      expectedGrillSessionVersion: sessionVersion,
+      expectedContractVersion: null,
+      providerProfileId: 'provider-1',
+    });
+    const res0 = await executeCreationContractDraft(buildEngineDeps(dbA), r0.taskId);
+    const prop0 = dbA.getCreationContractProposalRepository().getById('proj-1', res0.proposalId!);
+    acceptCreationContractProposal(mutationDepsFor(dbA), {
+      projectId: 'proj-1',
+      proposalId: res0.proposalId!,
+      expectedProposalSectionsHash: prop0!.sectionsHash,
+      expectedGrillSessionVersion: sessionVersion,
+      expectedContractVersion: null,
+      operations: [],
+      now: NOW2,
+      newVersionId: 'ver-snap-1',
+    });
+
+    // 第二轮：已有契约，expectation 为 version 1
+    const depsReq2 = buildRequestDeps(dbA, { generate: () => 'task-snap-1' });
+    const r2 = requestCreationContractProposal(depsReq2, {
+      projectId: 'proj-1',
+      grillSessionId: 'gs-snap-1',
+      expectedGrillSessionVersion: sessionVersion,
+      expectedContractVersion: 1,
+      providerProfileId: 'provider-1',
+    });
+    const task = dbA.getTaskRepository().getById(r2.taskId);
+    const input = JSON.parse(task!.inputVersionJson) as Record<string, unknown>;
+    // 同一快照：baseGrillSessionVersion 与 baseline 引用一致，无混合状态
+    expect(input.grillSessionId).toBe('gs-snap-1');
+    expect(input.baseGrillSessionVersion).toBe(sessionVersion);
+    const baseline = input.contractBaseline as Record<string, unknown>;
+    expect(baseline.contractVersionId).toBe('ver-snap-1');
+    expect(baseline.contractVersion).toBe(1);
+    expect(typeof baseline.contractSnapshotHash).toBe('string');
+    expect(String(baseline.contractSnapshotHash).length).toBe(64);
+    dbA.close();
+  });
+
+  it('8. dedupe 冲突完整 rollback：loser 不留下任何 task', () => {
+    const dbA = openDb();
+    const sessionVersion = seedCompletedGrillSession(dbA, {
+      sessionId: 'gs-rollback-1',
+      projectId: 'proj-1',
+    });
+    const dbB = openDb();
+    const input = {
+      projectId: 'proj-1',
+      grillSessionId: 'gs-rollback-1',
+      expectedGrillSessionVersion: sessionVersion,
+      expectedContractVersion: null,
+      providerProfileId: 'provider-1',
+    };
+    requestCreationContractProposal(buildRequestDeps(dbA, { generate: () => 'task-rb-1' }), input);
+    expect(() =>
+      requestCreationContractProposal(
+        buildRequestDeps(dbB, { generate: () => 'task-rb-2' }),
+        input,
+      ),
+    ).toThrow(ContractDraftAlreadyRunningError);
+
+    const draftTasks = dbB
+      .getTaskRepository()
+      .listByProject('proj-1')
+      .filter((t) => t.taskType === 'CREATION_CONTRACT_DRAFT');
+    // 只有 winner 的 task，loser 事务完整回滚
+    expect(draftTasks).toHaveLength(1);
+    expect(draftTasks[0].id).toBe('task-rb-1');
+    dbA.close();
+    dbB.close();
+  });
+
+  it('9. corrupt canonical snapshot（hash 与自身 sections 不一致）→ request 抛数据损坏，不创建 task', () => {
+    const dbA = openDb();
+    const sessionVersion = seedCompletedGrillSession(dbA, {
+      sessionId: 'gs-corrupt-1',
+      projectId: 'proj-1',
+    });
+    // 绕过 version repo 的 hash 校验，用原始 SQL 写入 hash 与自身 sections 不一致的 version
+    dbA.database
+      .prepare(
+        `INSERT INTO creation_contract_versions
+           (id, project_id, version, schema_version, source_proposal_id,
+            based_on_grill_session_id, based_on_grill_session_version,
+            sections_json, locked_field_paths_json, contract_snapshot_hash,
+            provenance_json, created_at, created_by)
+         VALUES (?, ?, 1, 1, NULL, ?, ?, ?, '[]', ?, '[]', ?, 'ai-proposal-accepted')`,
+      )
+      .run(
+        'ver-corrupt-1',
+        'proj-1',
+        'gs-corrupt-1',
+        sessionVersion,
+        makeCanonicalSectionsJson(),
+        'b'.repeat(64), // 与自身 sections 不一致
+        NOW,
+      );
+    dbA.getCreationContractCurrentRepository().insertFirst('proj-1', 'ver-corrupt-1', NOW);
+
+    expect(() =>
+      requestCreationContractProposal(buildRequestDeps(dbA, { generate: () => 'task-corr-1' }), {
+        projectId: 'proj-1',
+        grillSessionId: 'gs-corrupt-1',
+        expectedGrillSessionVersion: sessionVersion,
+        expectedContractVersion: 1,
+        providerProfileId: 'provider-1',
+      }),
+    ).toThrow(ContractDataCorruptionError);
+
+    const draftTasks = dbA
+      .getTaskRepository()
+      .listByProject('proj-1')
+      .filter((t) => t.taskType === 'CREATION_CONTRACT_DRAFT');
+    expect(draftTasks).toHaveLength(0);
+    dbA.close();
+  });
+
+  it('10. 精确 dedupe 分类：duplicate task ID（PK 冲突）不得映射为 TaskDedupeConflictError', () => {
+    const dbA = openDb();
+    const adapter = new TaskRepoAdapter(dbA);
+    adapter.create({
+      id: 'dup-id-1',
+      projectId: 'proj-1',
+      taskType: 'CREATION_CONTRACT_DRAFT',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      dedupeKey: 'dedupe-key-1',
+    });
+    let thrown: unknown;
+    try {
+      adapter.create({
+        id: 'dup-id-1', // duplicate PK
+        projectId: 'proj-1',
+        taskType: 'CREATION_CONTRACT_DRAFT',
+        inputVersionJson: '{}',
+        payloadJson: '{}',
+        dedupeKey: 'dedupe-key-2', // 输入包含 dedupeKey 但冲突在 id
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown).not.toBeInstanceOf(TaskDedupeConflictError);
+    // 原始 SQLite 细节不进入 public 消息
+    expect(thrown instanceof Error ? thrown.message : '').not.toContain('已存在相同 dedupe key');
+    dbA.close();
+  });
+
+  it('11. 精确 dedupe 分类：相同 active dedupeKey → TaskDedupeConflictError', () => {
+    const dbA = openDb();
+    const adapter = new TaskRepoAdapter(dbA);
+    adapter.create({
+      id: 'dd-1',
+      projectId: 'proj-1',
+      taskType: 'CREATION_CONTRACT_DRAFT',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      dedupeKey: 'dedupe-key-same',
+    });
+    let thrown: unknown;
+    try {
+      adapter.create({
+        id: 'dd-2',
+        projectId: 'proj-1',
+        taskType: 'CREATION_CONTRACT_DRAFT',
+        inputVersionJson: '{}',
+        payloadJson: '{}',
+        dedupeKey: 'dedupe-key-same', // 同一 active dedupeKey
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(TaskDedupeConflictError);
+    // public message 固定，不含原始 SQLite message / dedupe key
+    const msg = thrown instanceof Error ? thrown.message : '';
+    expect(msg).not.toContain('dedupe-key-same');
+    expect(msg).not.toContain('UNIQUE constraint');
+    dbA.close();
   });
 
   it('5. proposal 最终提交：无 SUCCEEDED task + missing proposal、无 orphan invocation', async () => {
