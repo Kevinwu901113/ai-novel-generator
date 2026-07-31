@@ -58,7 +58,7 @@ export interface CreationContractMutationDeps {
 
 // ── 内部辅助 ──────────────────────────────────────────────────
 
-function parseSectionsJson(json: string, context: string): CreationContractSections {
+export function parseSectionsJson(json: string, context: string): CreationContractSections {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -72,7 +72,7 @@ function parseSectionsJson(json: string, context: string): CreationContractSecti
   }
 }
 
-function parseLockedFieldPathsJson(json: string, context: string): readonly string[] {
+export function parseLockedFieldPathsJson(json: string, context: string): readonly string[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -134,7 +134,7 @@ function validateProposalForMutation(
   return proposal;
 }
 
-function sectionsToPublicData(
+export function sectionsToPublicData(
   sections: CreationContractSections,
 ): import('@ai-novel/contracts').CreationContractSectionsPublicData {
   return {
@@ -204,7 +204,7 @@ function sectionsToPublicData(
 
 // ── Field value access ────────────────────────────────────────
 
-function getFieldValueByPath(sections: CreationContractSections, path: string): unknown {
+export function getFieldValueByPath(sections: CreationContractSections, path: string): unknown {
   const parsed = parseContractFieldPath(path);
   const rec = sections as unknown as Record<string, unknown>;
 
@@ -272,7 +272,7 @@ function validateProposalAgainstLocks(
 
 // ── Provenance 生成 ──────────────────────────────────────────
 
-function collectAllFieldPaths(sections: CreationContractSections): string[] {
+export function collectAllFieldPaths(sections: CreationContractSections): string[] {
   const paths: string[] = [];
   const rec = sections as unknown as Record<string, unknown>;
 
@@ -411,7 +411,7 @@ function generateProvenance(
   return result;
 }
 
-function loadPreviousProvenanceMap(
+export function loadPreviousProvenanceMap(
   previousVersion: CreationContractVersionData | null,
 ): Map<string, ContractFieldProvenance> | null {
   if (!previousVersion) return null;
@@ -471,7 +471,7 @@ function validateRejectInput(input: RejectCreationContractProposalInput): void {
   validateIso8601Timestamp(input.now, 'now');
 }
 
-function parseOperations(
+export function parseOperations(
   rawOperations: ReadonlyArray<unknown>,
 ): ReadonlyArray<ContractPatchOperation> {
   const result: ContractPatchOperation[] = [];
@@ -490,7 +490,7 @@ function parseOperations(
  * lowercase SHA-256 hex。adapter 输出无效时抛出稳定 INTERNAL_ERROR，
  * 由外层事务回滚 proposal CAS。
  */
-function requireSha256Digest(port: Sha256Port, input: string, detail: string): string {
+export function requireSha256Digest(port: Sha256Port, input: string, detail: string): string {
   const digest = port.digestUtf8(input);
   if (!isLowercaseSha256Hex(digest)) {
     throw new ContractDataCorruptionError(`sha256 port 返回无效输出 (${detail})`);
