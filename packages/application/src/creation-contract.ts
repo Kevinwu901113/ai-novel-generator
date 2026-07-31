@@ -1,30 +1,31 @@
-/**
- * 创作契约只读查询用例。
- *
- * 四个查询用例：
- * - GetCurrentCreationContract：获取当前版本
- * - ListCreationContractVersions：列出所有版本
- * - GetCreationContractProposal：获取单个提案
- * - ListCreationContractProposals：列出所有提案
- *
- * 不实现 mutation（Accept/Reject/Lock/Unlock）。
- * 不接 Worker/Main IPC。
- */
-
-import { validateCreationContractSections, type CreationContractSections } from '@ai-novel/domain';
+import {
+  validateCreationContractSections,
+  canonicalizeContractFieldPath,
+  parseContractFieldPath,
+  isLowercaseSha256Hex,
+  CREATION_CONTRACT_SCHEMA_VERSION,
+  type CreationContractSections,
+  type ProvenanceSource,
+  type ProposalStatus,
+  type ContractVersionCreatedBy,
+} from '@ai-novel/domain';
 import type {
   ContractVersionPublicData,
   ContractVersionSummary,
   ProposalPublicData,
   CreationContractSectionsPublicData,
-  ContractProvenancePublicData,
+  ContractFieldProvenanceDTO,
 } from '@ai-novel/contracts';
 import type {
   CreationContractProposalRepositoryPort,
   CreationContractVersionRepositoryPort,
   CreationContractCurrentRepositoryPort,
 } from './creation-contract-types.js';
-import { ContractProposalNotFoundError, ContractDataCorruptionError } from './errors.js';
+import {
+  ContractProposalNotFoundError,
+  ContractDataCorruptionError,
+  ContractSchemaUnsupportedError,
+} from './errors.js';
 
 // ── 依赖 ──────────────────────────────────────────────────────
 
@@ -35,6 +36,29 @@ export interface CreationContractQueryDeps {
 }
 
 // ── 辅助 ──────────────────────────────────────────────────────
+
+const VALID_PROVENANCE_SOURCES: ReadonlySet<string> = new Set([
+  'GRILL_ANSWER',
+  'AI_PROPOSAL',
+  'USER_EDIT',
+  'PREVIOUS_VERSION',
+  'DEFAULT',
+]);
+
+const VALID_PROPOSAL_STATUSES: ReadonlySet<string> = new Set([
+  'PROPOSED',
+  'ACCEPTED',
+  'REJECTED',
+  'SUPERSEDED',
+  'STALE',
+]);
+
+const VALID_CREATED_BY: ReadonlySet<string> = new Set([
+  'user',
+  'ai-proposal-accepted',
+  'lock',
+  'unlock',
+]);
 
 function sectionsToPublicData(
   sections: CreationContractSections,
@@ -104,34 +128,179 @@ function sectionsToPublicData(
   };
 }
 
-function parseSectionsJson(json: string): CreationContractSections {
-  const parsed: unknown = JSON.parse(json);
-  return validateCreationContractSections(parsed);
+function parseSectionsJson(json: string, context: string): CreationContractSections {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new ContractDataCorruptionError(`${context}: sectionsJson is not valid JSON`);
+  }
+  try {
+    return validateCreationContractSections(parsed);
+  } catch (e) {
+    throw new ContractDataCorruptionError(
+      `${context}: sectionsJson validation failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
 }
 
-function parseLockedFieldPathsJson(json: string): ReadonlyArray<string> {
-  const parsed: unknown = JSON.parse(json);
-  if (!Array.isArray(parsed)) throw new Error('lockedFieldPathsJson must be an array');
-  return parsed as ReadonlyArray<string>;
+function parseLockedFieldPathsJson(json: string, context: string): ReadonlyArray<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson is not valid JSON`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ContractDataCorruptionError(`${context}: lockedFieldPathsJson must be an array`);
+  }
+  const result: string[] = [];
+  for (const item of parsed) {
+    if (typeof item !== 'string') {
+      throw new ContractDataCorruptionError(`${context}: lockedFieldPaths item is not a string`);
+    }
+    try {
+      const canonical = canonicalizeContractFieldPath(item);
+      parseContractFieldPath(canonical);
+      result.push(canonical);
+    } catch {
+      throw new ContractDataCorruptionError(`${context}: invalid locked field path "${item}"`);
+    }
+  }
+  return result;
 }
 
-function parseProvenanceJson(json: string): ContractProvenancePublicData {
-  const parsed: unknown = JSON.parse(json);
-  if (typeof parsed !== 'object' || parsed === null) {
-    throw new ContractDataCorruptionError('provenanceJson is not an object');
+function parseProvenanceJson(json: string, context: string): ReadonlyArray<ContractFieldProvenanceDTO> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new ContractDataCorruptionError(`${context}: provenanceJson is not valid JSON`);
   }
-  const obj = parsed as Record<string, unknown>;
-  if (typeof obj.source !== 'string') {
-    throw new ContractDataCorruptionError('provenanceJson.source is not a string');
+  if (!Array.isArray(parsed)) {
+    throw new ContractDataCorruptionError(`${context}: provenanceJson must be an array`);
   }
-  return {
-    source: obj.source as ContractProvenancePublicData['source'],
-    ...(obj.proposalId !== undefined && { proposalId: obj.proposalId as string }),
-    ...(obj.grillSessionId !== undefined && { grillSessionId: obj.grillSessionId as string }),
-    ...(obj.grillSessionVersion !== undefined && {
-      grillSessionVersion: obj.grillSessionVersion as number,
-    }),
-  };
+  const seenKeys = new Set<string>();
+  const result: ContractFieldProvenanceDTO[] = [];
+  for (const item of parsed) {
+    if (typeof item !== 'object' || item === null) {
+      throw new ContractDataCorruptionError(`${context}: provenance item is not an object`);
+    }
+    const obj = item as Record<string, unknown>;
+    const expectedKeys = [
+      'sectionKey',
+      'source',
+      'grillAnswerIds',
+      'grillProposalIds',
+      'aiTaskId',
+      'modelInvocationId',
+      'sourceProposalId',
+      'previousFieldHash',
+      'rationale',
+    ];
+    const objKeys = Object.keys(obj);
+    if (objKeys.length !== expectedKeys.length || !expectedKeys.every((k) => k in obj)) {
+      throw new ContractDataCorruptionError(`${context}: provenance item has invalid keys`);
+    }
+    if (typeof obj.sectionKey !== 'string' || obj.sectionKey.length === 0) {
+      throw new ContractDataCorruptionError(`${context}: provenance sectionKey invalid`);
+    }
+    if (seenKeys.has(obj.sectionKey)) {
+      throw new ContractDataCorruptionError(
+        `${context}: duplicate provenance sectionKey "${obj.sectionKey}"`,
+      );
+    }
+    seenKeys.add(obj.sectionKey);
+    if (typeof obj.source !== 'string' || !VALID_PROVENANCE_SOURCES.has(obj.source)) {
+      throw new ContractDataCorruptionError(`${context}: provenance source invalid`);
+    }
+    if (!Array.isArray(obj.grillAnswerIds) || !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')) {
+      throw new ContractDataCorruptionError(`${context}: provenance grillAnswerIds invalid`);
+    }
+    if (!Array.isArray(obj.grillProposalIds) || !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')) {
+      throw new ContractDataCorruptionError(`${context}: provenance grillProposalIds invalid`);
+    }
+    if (obj.aiTaskId !== null && typeof obj.aiTaskId !== 'string') {
+      throw new ContractDataCorruptionError(`${context}: provenance aiTaskId invalid`);
+    }
+    if (obj.modelInvocationId !== null && typeof obj.modelInvocationId !== 'string') {
+      throw new ContractDataCorruptionError(`${context}: provenance modelInvocationId invalid`);
+    }
+    if (obj.sourceProposalId !== null && typeof obj.sourceProposalId !== 'string') {
+      throw new ContractDataCorruptionError(`${context}: provenance sourceProposalId invalid`);
+    }
+    if (obj.previousFieldHash !== null) {
+      if (typeof obj.previousFieldHash !== 'string' || !isLowercaseSha256Hex(obj.previousFieldHash)) {
+        throw new ContractDataCorruptionError(`${context}: provenance previousFieldHash invalid`);
+      }
+    }
+    if (obj.rationale !== null && typeof obj.rationale !== 'string') {
+      throw new ContractDataCorruptionError(`${context}: provenance rationale invalid`);
+    }
+    result.push({
+      sectionKey: obj.sectionKey,
+      source: obj.source as ProvenanceSource,
+      grillAnswerIds: obj.grillAnswerIds as ReadonlyArray<string>,
+      grillProposalIds: obj.grillProposalIds as ReadonlyArray<string>,
+      aiTaskId: obj.aiTaskId as string | null,
+      modelInvocationId: obj.modelInvocationId as string | null,
+      sourceProposalId: obj.sourceProposalId as string | null,
+      previousFieldHash: obj.previousFieldHash as string | null,
+      rationale: obj.rationale as string | null,
+    });
+  }
+  return result;
+}
+
+function validateVersionData(
+  version: {
+    readonly id: string;
+    readonly projectId: string;
+    readonly version: number;
+    readonly schemaVersion: number;
+    readonly createdBy: string;
+  },
+  context: string,
+): void {
+  if (!Number.isSafeInteger(version.version) || version.version < 1) {
+    throw new ContractDataCorruptionError(`${context}: version must be positive integer`);
+  }
+  if (version.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+    throw new ContractSchemaUnsupportedError(
+      `${context}: unsupported schemaVersion ${version.schemaVersion}`,
+    );
+  }
+  if (!VALID_CREATED_BY.has(version.createdBy)) {
+    throw new ContractDataCorruptionError(`${context}: invalid createdBy "${version.createdBy}"`);
+  }
+}
+
+function validateProposalData(
+  proposal: {
+    readonly status: string;
+    readonly schemaVersion: number;
+    readonly baseGrillSessionVersion: number;
+    readonly baseContractVersion: number | null;
+  },
+  context: string,
+): void {
+  if (!VALID_PROPOSAL_STATUSES.has(proposal.status)) {
+    throw new ContractDataCorruptionError(`${context}: invalid status "${proposal.status}"`);
+  }
+  if (proposal.schemaVersion !== CREATION_CONTRACT_SCHEMA_VERSION) {
+    throw new ContractSchemaUnsupportedError(
+      `${context}: unsupported schemaVersion ${proposal.schemaVersion}`,
+    );
+  }
+  if (!Number.isSafeInteger(proposal.baseGrillSessionVersion) || proposal.baseGrillSessionVersion < 1) {
+    throw new ContractDataCorruptionError(`${context}: baseGrillSessionVersion must be positive`);
+  }
+  if (
+    proposal.baseContractVersion !== null &&
+    (!Number.isSafeInteger(proposal.baseContractVersion) || proposal.baseContractVersion < 1)
+  ) {
+    throw new ContractDataCorruptionError(`${context}: baseContractVersion must be null or positive`);
+  }
 }
 
 // ── GetCurrentCreationContract ─────────────────────────────────
@@ -140,11 +309,6 @@ export interface GetCurrentCreationContractInput {
   readonly projectId: string;
 }
 
-/**
- * 获取当前创作契约版本。
- *
- * 返回 null 表示项目尚无创作契约。
- */
 export function getCurrentCreationContract(
   deps: CreationContractQueryDeps,
   input: GetCurrentCreationContractInput,
@@ -159,8 +323,15 @@ export function getCurrentCreationContract(
     );
   }
 
-  const sections = parseSectionsJson(version.sectionsJson);
-  const lockedFieldPaths = parseLockedFieldPathsJson(version.lockedFieldPathsJson);
+  const ctx = 'getCurrentCreationContract';
+  validateVersionData(version, ctx);
+  const sections = parseSectionsJson(version.sectionsJson, ctx);
+  const lockedFieldPaths = parseLockedFieldPathsJson(version.lockedFieldPathsJson, ctx);
+  const provenance = parseProvenanceJson(version.provenanceJson, ctx);
+
+  if (!isLowercaseSha256Hex(version.contractSnapshotHash)) {
+    throw new ContractDataCorruptionError(`${ctx}: contractSnapshotHash is not lowercase SHA-256`);
+  }
 
   return {
     id: version.id,
@@ -173,9 +344,9 @@ export function getCurrentCreationContract(
     sections: sectionsToPublicData(sections),
     lockedFieldPaths,
     contractSnapshotHash: version.contractSnapshotHash,
-    provenance: parseProvenanceJson(version.provenanceJson),
+    provenance,
     createdAt: version.createdAt,
-    createdBy: version.createdBy,
+    createdBy: version.createdBy as ContractVersionCreatedBy,
   };
 }
 
@@ -185,25 +356,24 @@ export interface ListCreationContractVersionsInput {
   readonly projectId: string;
 }
 
-/**
- * 列出项目的所有创作契约版本摘要。
- *
- * 按 version DESC 排序。
- */
 export function listCreationContractVersions(
   deps: CreationContractQueryDeps,
   input: ListCreationContractVersionsInput,
 ): ReadonlyArray<ContractVersionSummary> {
   const versions = deps.versionRepo.listSummaries(input.projectId);
-  return versions.map((v) => ({
-    id: v.id,
-    projectId: v.projectId,
-    version: v.version,
-    schemaVersion: v.schemaVersion,
-    contractSnapshotHash: v.contractSnapshotHash,
-    createdAt: v.createdAt,
-    createdBy: v.createdBy,
-  }));
+  return versions.map((v) => {
+    const ctx = 'listCreationContractVersions';
+    validateVersionData(v, ctx);
+    return {
+      id: v.id,
+      projectId: v.projectId,
+      version: v.version,
+      schemaVersion: v.schemaVersion,
+      contractSnapshotHash: v.contractSnapshotHash,
+      createdAt: v.createdAt,
+      createdBy: v.createdBy as ContractVersionCreatedBy,
+    };
+  });
 }
 
 // ── GetCreationContractProposal ────────────────────────────────
@@ -213,11 +383,6 @@ export interface GetCreationContractProposalInput {
   readonly proposalId: string;
 }
 
-/**
- * 获取单个创作契约提案。
- *
- * 提案不存在时抛出 ContractProposalNotFoundError。
- */
 export function getCreationContractProposal(
   deps: CreationContractQueryDeps,
   input: GetCreationContractProposalInput,
@@ -227,14 +392,20 @@ export function getCreationContractProposal(
     throw new ContractProposalNotFoundError(input.proposalId);
   }
 
-  const sections = parseSectionsJson(proposal.sectionsJson);
+  const ctx = 'getCreationContractProposal';
+  validateProposalData(proposal, ctx);
+  const sections = parseSectionsJson(proposal.sectionsJson, ctx);
+
+  if (!isLowercaseSha256Hex(proposal.sectionsHash)) {
+    throw new ContractDataCorruptionError(`${ctx}: sectionsHash is not lowercase SHA-256`);
+  }
 
   return {
     id: proposal.id,
     projectId: proposal.projectId,
     taskId: proposal.taskId,
     invocationId: proposal.invocationId,
-    status: proposal.status,
+    status: proposal.status as ProposalStatus,
     baseGrillSessionId: proposal.baseGrillSessionId,
     baseGrillSessionVersion: proposal.baseGrillSessionVersion,
     baseContractVersion: proposal.baseContractVersion,
@@ -252,24 +423,21 @@ export interface ListCreationContractProposalsInput {
   readonly projectId: string;
 }
 
-/**
- * 列出项目的所有创作契约提案。
- *
- * 按 createdAt DESC，再以 id 作为稳定 tie-breaker。
- */
 export function listCreationContractProposals(
   deps: CreationContractQueryDeps,
   input: ListCreationContractProposalsInput,
 ): ReadonlyArray<ProposalPublicData> {
   const proposals = deps.proposalRepo.listByProject(input.projectId);
   return proposals.map((proposal) => {
-    const sections = parseSectionsJson(proposal.sectionsJson);
+    const ctx = 'listCreationContractProposals';
+    validateProposalData(proposal, ctx);
+    const sections = parseSectionsJson(proposal.sectionsJson, ctx);
     return {
       id: proposal.id,
       projectId: proposal.projectId,
       taskId: proposal.taskId,
       invocationId: proposal.invocationId,
-      status: proposal.status,
+      status: proposal.status as ProposalStatus,
       baseGrillSessionId: proposal.baseGrillSessionId,
       baseGrillSessionVersion: proposal.baseGrillSessionVersion,
       baseContractVersion: proposal.baseContractVersion,

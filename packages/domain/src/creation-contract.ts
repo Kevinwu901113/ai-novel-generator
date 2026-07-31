@@ -1748,19 +1748,19 @@ export function applyContractPatchOperations(
     snapshot = applySingleOperation(snapshot, op);
   }
 
-  // Step 8: Validate final snapshot schema
-  validateCreationContractSections(snapshot);
+  // Step 8: Validate final snapshot schema and normalize
+  const normalized = validateCreationContractSections(snapshot);
 
   // Step 9: Relationship integrity check on final snapshot
-  if (snapshot.relationships) {
+  if (normalized.relationships) {
     const allCharKeys = new Set<string>();
-    allCharKeys.add(snapshot.protagonist.characterKey);
-    if (snapshot.supportingCharacters) {
-      for (const char of snapshot.supportingCharacters) {
+    allCharKeys.add(normalized.protagonist.characterKey);
+    if (normalized.supportingCharacters) {
+      for (const char of normalized.supportingCharacters) {
         allCharKeys.add(char.characterKey);
       }
     }
-    for (const rel of snapshot.relationships) {
+    for (const rel of normalized.relationships) {
       if (!allCharKeys.has(rel.fromCharacterKey)) {
         throw new Error(`最终 snapshot 中 relationship 引用未知角色: "${rel.fromCharacterKey}"`);
       }
@@ -1770,5 +1770,5 @@ export function applyContractPatchOperations(
     }
   }
 
-  return snapshot;
+  return normalized;
 }

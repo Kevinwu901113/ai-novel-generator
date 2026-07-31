@@ -65,7 +65,19 @@ function makeVersion(
     sectionsJson: SECTIONS_JSON,
     lockedFieldPathsJson: '[]',
     contractSnapshotHash: HASH_A,
-    provenanceJson: '{"source":"user"}',
+    provenanceJson: JSON.stringify([
+      {
+        sectionKey: '/premise',
+        source: 'DEFAULT',
+        grillAnswerIds: [],
+        grillProposalIds: [],
+        aiTaskId: null,
+        modelInvocationId: null,
+        sourceProposalId: null,
+        previousFieldHash: null,
+        rationale: null,
+      },
+    ]),
     createdAt: '2026-01-01T00:00:00Z',
     createdBy: 'ai-proposal-accepted',
     ...overrides,
@@ -88,6 +100,7 @@ function makeMockDeps(overrides?: {
     listByProject: (projectId: string) => proposals.filter((p) => p.projectId === projectId),
     listByGrillSession: () => [],
     transitionStatus: () => false,
+    transitionStatusWithHash: () => false,
     supersedeAllProposed: () => 0,
   };
 

@@ -157,6 +157,8 @@ export type {
 
 // ── 创作契约端口和用例 ────────────────────────────────────────
 
+export type { ProposalStatus, ContractVersionCreatedBy } from '@ai-novel/domain';
+
 export {
   ContractVersionConflictError,
   ContractProposalStaleError,
@@ -166,6 +168,7 @@ export {
   ContractModelLockViolationError,
   ContractSchemaUnsupportedError,
   ContractValidationError,
+  ContractDataCorruptionError,
 } from './errors.js';
 
 export type {

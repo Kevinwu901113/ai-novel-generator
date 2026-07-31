@@ -104,6 +104,14 @@ export interface CreationContractProposalRepositoryPort {
     newStatus: ProposalStatus,
     now: string,
   ): boolean;
+  transitionStatusWithHash(
+    projectId: string,
+    id: string,
+    expectedStatus: ProposalStatus,
+    expectedSectionsHash: string,
+    newStatus: ProposalStatus,
+    now: string,
+  ): boolean;
   supersedeAllProposed(projectId: string, now: string): number;
 }
 
