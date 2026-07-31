@@ -5,7 +5,6 @@ import {
   isLowercaseSha256Hex,
   CREATION_CONTRACT_SCHEMA_VERSION,
   type CreationContractSections,
-  type ProvenanceSource,
   type ProposalStatus,
   type ContractVersionCreatedBy,
 } from '@ai-novel/domain';
@@ -14,7 +13,6 @@ import type {
   ContractVersionSummary,
   ProposalPublicData,
   CreationContractSectionsPublicData,
-  ContractFieldProvenanceDTO,
 } from '@ai-novel/contracts';
 import type {
   CreationContractProposalRepositoryPort,
@@ -26,6 +24,7 @@ import {
   ContractDataCorruptionError,
   ContractSchemaUnsupportedError,
 } from './errors.js';
+import { parseProvenanceArray } from './creation-contract-validation.js';
 
 // ── 依赖 ──────────────────────────────────────────────────────
 
@@ -36,14 +35,6 @@ export interface CreationContractQueryDeps {
 }
 
 // ── 辅助 ──────────────────────────────────────────────────────
-
-const VALID_PROVENANCE_SOURCES: ReadonlySet<string> = new Set([
-  'GRILL_ANSWER',
-  'AI_PROPOSAL',
-  'USER_EDIT',
-  'PREVIOUS_VERSION',
-  'DEFAULT',
-]);
 
 const VALID_PROPOSAL_STATUSES: ReadonlySet<string> = new Set([
   'PROPOSED',
@@ -170,100 +161,6 @@ function parseLockedFieldPathsJson(json: string, context: string): ReadonlyArray
   return result;
 }
 
-function parseProvenanceJson(
-  json: string,
-  context: string,
-): ReadonlyArray<ContractFieldProvenanceDTO> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    throw new ContractDataCorruptionError(`${context}: provenanceJson is not valid JSON`);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new ContractDataCorruptionError(`${context}: provenanceJson must be an array`);
-  }
-  const seenKeys = new Set<string>();
-  const result: ContractFieldProvenanceDTO[] = [];
-  for (const item of parsed) {
-    if (typeof item !== 'object' || item === null) {
-      throw new ContractDataCorruptionError(`${context}: provenance item is not an object`);
-    }
-    const obj = item as Record<string, unknown>;
-    const expectedKeys = [
-      'sectionKey',
-      'source',
-      'grillAnswerIds',
-      'grillProposalIds',
-      'aiTaskId',
-      'modelInvocationId',
-      'sourceProposalId',
-      'previousFieldHash',
-      'rationale',
-    ];
-    const objKeys = Object.keys(obj);
-    if (objKeys.length !== expectedKeys.length || !expectedKeys.every((k) => k in obj)) {
-      throw new ContractDataCorruptionError(`${context}: provenance item has invalid keys`);
-    }
-    if (typeof obj.sectionKey !== 'string' || obj.sectionKey.length === 0) {
-      throw new ContractDataCorruptionError(`${context}: provenance sectionKey invalid`);
-    }
-    if (seenKeys.has(obj.sectionKey)) {
-      throw new ContractDataCorruptionError(
-        `${context}: duplicate provenance sectionKey "${obj.sectionKey}"`,
-      );
-    }
-    seenKeys.add(obj.sectionKey);
-    if (typeof obj.source !== 'string' || !VALID_PROVENANCE_SOURCES.has(obj.source)) {
-      throw new ContractDataCorruptionError(`${context}: provenance source invalid`);
-    }
-    if (
-      !Array.isArray(obj.grillAnswerIds) ||
-      !obj.grillAnswerIds.every((x: unknown) => typeof x === 'string')
-    ) {
-      throw new ContractDataCorruptionError(`${context}: provenance grillAnswerIds invalid`);
-    }
-    if (
-      !Array.isArray(obj.grillProposalIds) ||
-      !obj.grillProposalIds.every((x: unknown) => typeof x === 'string')
-    ) {
-      throw new ContractDataCorruptionError(`${context}: provenance grillProposalIds invalid`);
-    }
-    if (obj.aiTaskId !== null && typeof obj.aiTaskId !== 'string') {
-      throw new ContractDataCorruptionError(`${context}: provenance aiTaskId invalid`);
-    }
-    if (obj.modelInvocationId !== null && typeof obj.modelInvocationId !== 'string') {
-      throw new ContractDataCorruptionError(`${context}: provenance modelInvocationId invalid`);
-    }
-    if (obj.sourceProposalId !== null && typeof obj.sourceProposalId !== 'string') {
-      throw new ContractDataCorruptionError(`${context}: provenance sourceProposalId invalid`);
-    }
-    if (obj.previousFieldHash !== null) {
-      if (
-        typeof obj.previousFieldHash !== 'string' ||
-        !isLowercaseSha256Hex(obj.previousFieldHash)
-      ) {
-        throw new ContractDataCorruptionError(`${context}: provenance previousFieldHash invalid`);
-      }
-    }
-    if (obj.rationale !== null && typeof obj.rationale !== 'string') {
-      throw new ContractDataCorruptionError(`${context}: provenance rationale invalid`);
-    }
-    result.push({
-      sectionKey: obj.sectionKey,
-      source: obj.source as ProvenanceSource,
-      grillAnswerIds: obj.grillAnswerIds as ReadonlyArray<string>,
-      grillProposalIds: obj.grillProposalIds as ReadonlyArray<string>,
-      aiTaskId: obj.aiTaskId as string | null,
-      modelInvocationId: obj.modelInvocationId as string | null,
-      sourceProposalId: obj.sourceProposalId as string | null,
-      previousFieldHash: obj.previousFieldHash as string | null,
-      rationale: obj.rationale as string | null,
-    });
-  }
-  return result;
-}
-
 function validateVersionData(
   version: {
     readonly id: string;
@@ -344,7 +241,7 @@ export function getCurrentCreationContract(
   validateVersionData(version, ctx);
   const sections = parseSectionsJson(version.sectionsJson, ctx);
   const lockedFieldPaths = parseLockedFieldPathsJson(version.lockedFieldPathsJson, ctx);
-  const provenance = parseProvenanceJson(version.provenanceJson, ctx);
+  const provenance = parseProvenanceArray(version.provenanceJson, ctx);
 
   if (!isLowercaseSha256Hex(version.contractSnapshotHash)) {
     throw new ContractDataCorruptionError(`${ctx}: contractSnapshotHash is not lowercase SHA-256`);

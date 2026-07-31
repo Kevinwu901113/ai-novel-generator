@@ -12,8 +12,9 @@ export class AppError extends Error {
   constructor(
     public readonly code: ErrorCode,
     message: string,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.name = 'AppError';
   }
 }
@@ -253,23 +254,40 @@ export class TaskDedupeConflictError extends AppError {
 
 // ── 创作契约错误 ───────────────────────────────────────────────
 
-/** 契约版本冲突（乐观并发控制失败） */
+/**
+ * 内部诊断包装：public message 固定时，把内部细节放入 cause。
+ * detail 字符串 + 可选的原始 cause 都会被保留。
+ */
+function diagnostic(detail: string, cause?: unknown): Error {
+  return cause === undefined ? new Error(detail) : new Error(detail, { cause });
+}
+
+/** 契约版本冲突（乐观并发控制失败）。public message 固定，内部细节在 cause。 */
 export class ContractVersionConflictError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_VERSION_CONFLICT', message);
+  constructor(message: string, cause?: unknown) {
+    super(
+      'CONTRACT_VERSION_CONFLICT',
+      '创作契约版本已变化，请刷新后重试',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractVersionConflictError';
   }
 }
 
-/** 契约提案已过期 */
+/** 契约提案已过期。public message 固定，内部细节在 cause。 */
 export class ContractProposalStaleError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_PROPOSAL_STALE', message);
+  constructor(message: string, cause?: unknown) {
+    super('CONTRACT_PROPOSAL_STALE', '创作契约提案已过期，请重新生成', diagnostic(message, cause));
     this.name = 'ContractProposalStaleError';
   }
 }
 
-/** 契约提案未找到 */
+/**
+ * 契约提案未找到。
+ *
+ * 按项目既有安全策略（ProjectNotFoundError、Grill*NotFoundError 等
+ * 均暴露实体 ID），proposalId 属于非敏感 UI 信息，保留在 public message。
+ */
 export class ContractProposalNotFoundError extends AppError {
   constructor(proposalId: string) {
     super('CONTRACT_PROPOSAL_NOT_FOUND', `创作契约提案 ${proposalId} 不存在`);
@@ -277,49 +295,113 @@ export class ContractProposalNotFoundError extends AppError {
   }
 }
 
-/** 契约提案不可接受 */
+/** 契约提案不可接受。public message 固定，不暴露原始 status。 */
 export class ContractProposalNotAcceptableError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_PROPOSAL_NOT_ACCEPTABLE', message);
+  constructor(message: string, cause?: unknown) {
+    super(
+      'CONTRACT_PROPOSAL_NOT_ACCEPTABLE',
+      '创作契约提案当前状态不允许此操作',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractProposalNotAcceptableError';
   }
 }
 
-/** 契约锁冲突 */
+/** 契约锁冲突。public message 固定，不暴露 locked path。 */
 export class ContractLockConflictError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_LOCK_CONFLICT', message);
+  constructor(message: string, cause?: unknown) {
+    super('CONTRACT_LOCK_CONFLICT', '操作与受保护的契约字段冲突', diagnostic(message, cause));
     this.name = 'ContractLockConflictError';
   }
 }
 
-/** 模型输出违反锁定字段 */
+/** 模型输出违反锁定字段。public message 固定，不暴露 locked path。 */
 export class ContractModelLockViolationError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_MODEL_LOCK_VIOLATION', message);
+  constructor(message: string, cause?: unknown) {
+    super(
+      'CONTRACT_MODEL_LOCK_VIOLATION',
+      '模型输出修改了受保护的契约字段',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractModelLockViolationError';
   }
 }
 
-/** 契约 schema 版本不支持 */
+/** 契约 schema 版本不支持。public message 固定，不暴露 schemaVersion。 */
 export class ContractSchemaUnsupportedError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_SCHEMA_UNSUPPORTED', message);
+  constructor(message: string, cause?: unknown) {
+    super(
+      'CONTRACT_SCHEMA_UNSUPPORTED',
+      '创作契约 schema 版本不受支持',
+      diagnostic(message, cause),
+    );
     this.name = 'ContractSchemaUnsupportedError';
   }
 }
 
-/** 契约验证失败 */
+/** 契约验证失败。public message 固定，不暴露 operation index/path 或原始 validator 消息。 */
 export class ContractValidationError extends AppError {
-  constructor(message: string) {
-    super('CONTRACT_VALIDATION_FAILED', message);
+  constructor(message: string, cause?: unknown) {
+    super('CONTRACT_VALIDATION_FAILED', '创作契约内容验证失败', diagnostic(message, cause));
     this.name = 'ContractValidationError';
   }
 }
 
+/** 契约数据完整性异常。public message 固定，内部细节（JSON 解析错误、字段路径等）在 cause。 */
 export class ContractDataCorruptionError extends AppError {
-  constructor(message: string) {
-    super('INTERNAL_ERROR', `数据完整性异常: ${message}`);
+  constructor(message: string, cause?: unknown) {
+    super('INTERNAL_ERROR', '创作契约数据完整性异常', diagnostic(message, cause));
     this.name = 'ContractDataCorruptionError';
+  }
+}
+
+/**
+ * SQLite busy/locked — 由事务适配器抛出。
+ *
+ * public message 固定，不包含 SQLite 实现细节（SQLITE_BUSY / database is locked 等）。
+ * 内部诊断保存在 cause。
+ */
+export class ContractTransactionBusyError extends AppError {
+  constructor(cause?: unknown) {
+    super('CONTRACT_VERSION_CONFLICT', '创作契约正在被其他操作修改，请重试', cause);
+    this.name = 'ContractTransactionBusyError';
+  }
+}
+
+/**
+ * 嵌套事务检测 — 由事务适配器抛出。
+ *
+ * public message 固定，不包含 BEGIN IMMEDIATE 等 SQLite 实现细节。
+ */
+export class ContractNestedTransactionError extends AppError {
+  constructor() {
+    super('INTERNAL_ERROR', '检测到嵌套创作契约事务');
+    this.name = 'ContractNestedTransactionError';
+  }
+}
+
+/**
+ * 创作契约事务基础设施失败（非 busy/locked）。
+ *
+ * 用于把 SQLite 约束错误、磁盘错误等原始错误转换为安全错误，
+ * 内部诊断保存在 cause。
+ */
+export class ContractTransactionError extends AppError {
+  constructor(cause?: unknown) {
+    super('INTERNAL_ERROR', '创作契约事务执行失败', cause);
+    this.name = 'ContractTransactionError';
+  }
+}
+
+/**
+ * 事务回调返回 Promise/thenable。
+ *
+ * 同步事务要求回调同步完成，否则 adapter 会在 Promise 完成前 COMMIT，
+ * 破坏事务生命周期。public message 固定，不暴露实现细节。
+ */
+export class ContractAsyncTransactionCallbackError extends AppError {
+  constructor() {
+    super('INTERNAL_ERROR', '创作契约事务回调必须同步执行');
+    this.name = 'ContractAsyncTransactionCallbackError';
   }
 }
