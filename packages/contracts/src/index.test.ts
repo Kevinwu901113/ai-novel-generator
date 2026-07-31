@@ -753,3 +753,78 @@ describe('isValidProposalPublicData', () => {
     expect(isValidProposalPublicData(null)).toBe(false);
   });
 });
+
+// ── Compile-time type safety tests ─────────────────────────────────
+
+describe('ContractPatchOperationDTO compile-time type safety', () => {
+  it('proves invalid path→value assignments fail at compile time', () => {
+    // Valid assignments should compile
+    const validPremise: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/premise',
+      value: 'A story',
+    };
+    const validNarrativePov: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/narrativePov',
+      value: 'FIRST',
+    };
+    const validTense: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/tense',
+      value: 'PAST',
+    };
+    const validTargetLengthUnit: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/targetLength/unit',
+      value: 'words',
+    };
+    const validTargetLengthValue: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/targetLength/value',
+      value: 80000,
+    };
+
+    // Use variables to avoid unused warnings
+    expect(validPremise).toBeDefined();
+    expect(validNarrativePov).toBeDefined();
+    expect(validTense).toBeDefined();
+    expect(validTargetLengthUnit).toBeDefined();
+    expect(validTargetLengthValue).toBeDefined();
+
+    // Invalid assignments should fail at compile time
+    // @ts-expect-error - /narrativePov requires NarrativePov enum, not arbitrary string
+    const invalidNarrativePov: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/narrativePov',
+      value: 'INVALID_POV',
+    };
+
+    // @ts-expect-error - /tense requires Tense enum, not arbitrary string
+    const invalidTense: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/tense',
+      value: 'INVALID_TENSE',
+    };
+
+    // @ts-expect-error - /targetLength/unit requires TargetLengthUnit enum, not number
+    const invalidTargetLengthUnit: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/targetLength/unit',
+      value: 123,
+    };
+
+    // @ts-expect-error - /targetLength/value requires number, not string
+    const invalidTargetLengthValue: import('./index').ContractPatchOperationDTO = {
+      kind: 'set-scalar',
+      path: '/targetLength/value',
+      value: 'eighty thousand',
+    };
+
+    // Use variables to avoid unused warnings
+    expect(invalidNarrativePov).toBeDefined();
+    expect(invalidTense).toBeDefined();
+    expect(invalidTargetLengthUnit).toBeDefined();
+    expect(invalidTargetLengthValue).toBeDefined();
+  });
+});

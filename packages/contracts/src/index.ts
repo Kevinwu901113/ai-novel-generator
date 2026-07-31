@@ -1064,9 +1064,12 @@ export interface ListCreationContractProposalsInput {
 // ── Closed-path ContractPatchOperation DTO ────────────────────────
 
 export type ContractPatchOperationDTO =
-  | ContractPatchSetScalarTopLevelDTO
+  | ContractPatchSetPremiseLikeDTO
+  | ContractPatchSetNarrativePovDTO
+  | ContractPatchSetTenseDTO
   | ContractPatchSetProtagonistScalarDTO
-  | ContractPatchSetTargetLengthChildDTO
+  | ContractPatchSetTargetLengthUnitDTO
+  | ContractPatchSetTargetLengthValueDTO
   | ContractPatchSetContentBoundariesScalarDTO
   | ContractPatchSetSupportingCharScalarDTO
   | ContractPatchSetRelationshipScalarDTO
@@ -1083,11 +1086,25 @@ export type ContractPatchOperationDTO =
   | ContractPatchRemoveCharacterDTO
   | ContractPatchRemoveRelationshipDTO;
 
-/** set-scalar: top-level string/enum paths */
-export interface ContractPatchSetScalarTopLevelDTO {
+/** set-scalar: premise-like string paths */
+export interface ContractPatchSetPremiseLikeDTO {
   readonly kind: 'set-scalar';
-  readonly path: '/premise' | '/targetAudience' | '/structure' | '/narrativePov' | '/tense';
+  readonly path: '/premise' | '/targetAudience' | '/structure';
   readonly value: string;
+}
+
+/** set-scalar: narrativePov with NarrativePov enum */
+export interface ContractPatchSetNarrativePovDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/narrativePov';
+  readonly value: NarrativePov;
+}
+
+/** set-scalar: tense with Tense enum */
+export interface ContractPatchSetTenseDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/tense';
+  readonly value: Tense;
 }
 
 /** set-scalar: protagonist child fields */
@@ -1098,11 +1115,18 @@ export interface ContractPatchSetProtagonistScalarDTO {
   readonly value: string;
 }
 
-/** set-scalar: targetLength child fields */
-export interface ContractPatchSetTargetLengthChildDTO {
+/** set-scalar: targetLength/unit with TargetLengthUnit enum */
+export interface ContractPatchSetTargetLengthUnitDTO {
   readonly kind: 'set-scalar';
-  readonly path: '/targetLength/unit' | '/targetLength/value';
-  readonly value: string | number;
+  readonly path: '/targetLength/unit';
+  readonly value: TargetLengthUnit;
+}
+
+/** set-scalar: targetLength/value with number */
+export interface ContractPatchSetTargetLengthValueDTO {
+  readonly kind: 'set-scalar';
+  readonly path: '/targetLength/value';
+  readonly value: number;
 }
 
 /** set-scalar: contentBoundaries scalar children */
