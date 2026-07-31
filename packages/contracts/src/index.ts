@@ -63,6 +63,7 @@ export type ErrorCode =
   | 'CONTRACT_MODEL_LOCK_VIOLATION'
   | 'CONTRACT_SCHEMA_UNSUPPORTED'
   | 'CONTRACT_VALIDATION_FAILED'
+  | 'CONTRACT_DRAFT_ALREADY_RUNNING'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -238,6 +239,16 @@ export const IPC_CHANNELS = {
   GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'ipc:grill-accept-question-plan-proposal',
   GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'ipc:grill-list-question-plan-proposals',
   GRILL_GET_QUESTION_PLAN_PROPOSAL: 'ipc:grill-get-question-plan-proposal',
+  CONTRACT_GET_CURRENT: 'ipc:contract-get-current',
+  CONTRACT_LIST_VERSIONS: 'ipc:contract-list-versions',
+  CONTRACT_GET_PROPOSAL: 'ipc:contract-get-proposal',
+  CONTRACT_LIST_PROPOSALS: 'ipc:contract-list-proposals',
+  CONTRACT_REQUEST_DRAFT: 'ipc:contract-request-draft',
+  CONTRACT_ACCEPT_PROPOSAL: 'ipc:contract-accept-proposal',
+  CONTRACT_REJECT_PROPOSAL: 'ipc:contract-reject-proposal',
+  CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
+  CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
+  CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -319,6 +330,24 @@ export interface DataServiceStatusResponse {
   readonly status: DataServiceStatus;
 }
 
+/** 创作契约 API —— 通过 contextBridge 暴露给 Renderer */
+export interface ContractAPI {
+  getCurrent(input: GetCurrentCreationContractInput): Promise<ContractVersionPublicData | null>;
+  listVersions(
+    input: ListCreationContractVersionsInput,
+  ): Promise<ReadonlyArray<ContractVersionSummary>>;
+  getProposal(input: GetCreationContractProposalInput): Promise<ProposalPublicData>;
+  listProposals(
+    input: ListCreationContractProposalsInput,
+  ): Promise<ReadonlyArray<ProposalPublicData>>;
+  requestDraft(input: RequestContractDraftInput): Promise<RequestContractDraftResult>;
+  acceptProposal(input: AcceptContractProposalInput): Promise<ContractVersionPublicData>;
+  rejectProposal(input: RejectContractProposalInput): Promise<ProposalPublicData>;
+  updateByUser(input: UpdateContractByUserInput): Promise<ContractVersionPublicData>;
+  lockField(input: LockContractFieldInput): Promise<ContractVersionPublicData>;
+  unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -328,6 +357,7 @@ export interface DesktopAPI {
   provider: ProviderAPI;
   tasks: TasksAPI;
   grill: GrillAPI;
+  contract: ContractAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -411,6 +441,7 @@ export function isAppError(data: unknown): data is AppError {
     'CONTRACT_MODEL_LOCK_VIOLATION',
     'CONTRACT_SCHEMA_UNSUPPORTED',
     'CONTRACT_VALIDATION_FAILED',
+    'CONTRACT_DRAFT_ALREADY_RUNNING',
     'INTERNAL_ERROR',
   ]);
   return (
@@ -1059,6 +1090,59 @@ export interface GetCreationContractProposalInput {
 
 export interface ListCreationContractProposalsInput {
   readonly projectId: string;
+}
+
+// ── Creation contract draft request DTO ───────────────────────────
+// Renderer 不传 providerProfileId / ID / 时间戳 / hash —— 全部由 Worker 注入。
+
+export interface RequestContractDraftInput {
+  readonly projectId: string;
+  readonly grillSessionId: string;
+  readonly expectedGrillSessionVersion: number;
+  readonly expectedContractVersion: number | null;
+}
+
+export interface RequestContractDraftResult {
+  readonly taskId: string;
+  readonly grillSessionId: string;
+  readonly baseGrillSessionVersion: number;
+  readonly baseContractVersion: number | null;
+}
+
+// ── Creation contract mutation input DTOs ─────────────────────────
+// now / newVersionId / lockEventId 由 Worker 生成，Renderer 不得传入。
+
+export interface AcceptContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+  readonly expectedGrillSessionVersion: number;
+  readonly expectedContractVersion: number | null;
+  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
+}
+
+export interface RejectContractProposalInput {
+  readonly projectId: string;
+  readonly proposalId: string;
+  readonly expectedProposalSectionsHash: string;
+}
+
+export interface UpdateContractByUserInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly operations: ReadonlyArray<ContractPatchOperationDTO>;
+}
+
+export interface LockContractFieldInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly fieldPath: string;
+}
+
+export interface UnlockContractFieldInput {
+  readonly projectId: string;
+  readonly expectedContractVersion: number;
+  readonly fieldPath: string;
 }
 
 // ── Closed-path ContractPatchOperation DTO ────────────────────────
@@ -1807,5 +1891,256 @@ export function isValidProposalPublicData(data: unknown): data is ProposalPublic
     SHA256_HEX_RE.test(obj.sectionsHash) &&
     typeof obj.createdAt === 'string' &&
     typeof obj.updatedAt === 'string'
+  );
+}
+
+// ── 创作契约 IPC 输入严格验证 ───────────────────────────────────────
+
+/** 契约 ID 长度上限（Unicode code points） */
+const CONTRACT_MAX_ID_LENGTH = 128;
+
+function contractCodePointLength(str: string): number {
+  return [...str].length;
+}
+
+/** 严格 ID：非空、trim 后非空、长度不超过上限 */
+function isContractId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return contractCodePointLength(trimmed) <= CONTRACT_MAX_ID_LENGTH;
+}
+
+/** 严格正安全整数（拒绝 NaN/Infinity/0/负数/小数） */
+function isContractPositiveInt(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** null 或正安全整数（严格 null 语义） */
+function isContractNullablePositiveInt(value: unknown): boolean {
+  return value === null || isContractPositiveInt(value);
+}
+
+/** 拒绝继承/额外 key：允许的 key 集合必须与 obj 完全一致 */
+function hasContractExactKeys(
+  obj: Record<string, unknown>,
+  allowed: ReadonlyArray<string>,
+): boolean {
+  const keys = Object.keys(obj);
+  if (keys.length !== allowed.length) return false;
+  const allowedSet = new Set(allowed);
+  for (const k of keys) {
+    if (!allowedSet.has(k)) return false;
+  }
+  return true;
+}
+
+// ── Canonical field path（自包含实现，与 domain grammar 一致）──────
+
+const CONTRACT_VALID_SECTIONS: ReadonlySet<string> = new Set([
+  'premise',
+  'genre',
+  'tone',
+  'themes',
+  'targetAudience',
+  'narrativePov',
+  'tense',
+  'targetLength',
+  'structure',
+  'protagonist',
+  'supportingCharacters',
+  'relationships',
+  'worldRules',
+  'mustInclude',
+  'mustAvoid',
+  'contentBoundaries',
+  'unresolvedQuestions',
+]);
+
+const CONTRACT_STRUCTURED_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['targetLength', new Set(['unit', 'value'])],
+  ['contentBoundaries', new Set(['rating', 'allowedContent', 'prohibitedContent', 'notes'])],
+  ['protagonist', new Set(['characterKey', 'name', 'role', 'motivation', 'arc', 'traits'])],
+]);
+
+const CONTRACT_COLLECTION_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['supportingCharacters', new Set(['characterKey', 'name', 'role', 'relationship', 'traits'])],
+  [
+    'relationships',
+    new Set(['relationshipKey', 'fromCharacterKey', 'toCharacterKey', 'type', 'dynamic']),
+  ],
+]);
+
+const CONTRACT_STABLE_KEY_RE = /^[a-z0-9_-]{1,50}$/;
+
+export function isCanonicalContractFieldPath(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.startsWith('/')) return false;
+  const segments = value.split('/').slice(1);
+  if (segments.length === 0) return false;
+  const section = segments[0];
+  if (!CONTRACT_VALID_SECTIONS.has(section)) return false;
+  if (segments.length === 1) return true;
+  const structured = CONTRACT_STRUCTURED_CHILDREN.get(section);
+  if (structured) {
+    if (segments.length !== 2 || !structured.has(segments[1])) return false;
+    return true;
+  }
+  const collection = CONTRACT_COLLECTION_CHILDREN.get(section);
+  if (collection) {
+    if (segments.length < 2 || segments.length > 3) return false;
+    if (!CONTRACT_STABLE_KEY_RE.test(segments[1])) return false;
+    if (segments.length === 3 && !collection.has(segments[2])) return false;
+    return true;
+  }
+  return false;
+}
+
+// ── Query input validators ─────────────────────────────────────────
+
+export function isValidGetCurrentCreationContractInput(
+  data: unknown,
+): data is GetCurrentCreationContractInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return hasContractExactKeys(obj, ['projectId']) && isContractId(obj.projectId);
+}
+
+export function isValidListCreationContractVersionsInput(
+  data: unknown,
+): data is ListCreationContractVersionsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return hasContractExactKeys(obj, ['projectId']) && isContractId(obj.projectId);
+}
+
+export function isValidGetCreationContractProposalInput(
+  data: unknown,
+): data is GetCreationContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'proposalId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.proposalId)
+  );
+}
+
+export function isValidListCreationContractProposalsInput(
+  data: unknown,
+): data is ListCreationContractProposalsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return hasContractExactKeys(obj, ['projectId']) && isContractId(obj.projectId);
+}
+
+// ── Draft request validator ────────────────────────────────────────
+
+export function isValidRequestContractDraftInput(data: unknown): data is RequestContractDraftInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractExactKeys(obj, [
+      'projectId',
+      'grillSessionId',
+      'expectedGrillSessionVersion',
+      'expectedContractVersion',
+    ])
+  ) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.grillSessionId) &&
+    isContractPositiveInt(obj.expectedGrillSessionVersion) &&
+    isContractNullablePositiveInt(obj.expectedContractVersion)
+  );
+}
+
+// ── Mutation input validators ──────────────────────────────────────
+
+export function isValidAcceptContractProposalInput(
+  data: unknown,
+): data is AcceptContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractExactKeys(obj, [
+      'projectId',
+      'proposalId',
+      'expectedProposalSectionsHash',
+      'expectedGrillSessionVersion',
+      'expectedContractVersion',
+      'operations',
+    ])
+  ) {
+    return false;
+  }
+  if (
+    !isContractId(obj.projectId) ||
+    !isContractId(obj.proposalId) ||
+    typeof obj.expectedProposalSectionsHash !== 'string' ||
+    !SHA256_HEX_RE.test(obj.expectedProposalSectionsHash)
+  ) {
+    return false;
+  }
+  return (
+    isContractPositiveInt(obj.expectedGrillSessionVersion) &&
+    isContractNullablePositiveInt(obj.expectedContractVersion) &&
+    isValidContractPatchOperationsDTO(obj.operations)
+  );
+}
+
+export function isValidRejectContractProposalInput(
+  data: unknown,
+): data is RejectContractProposalInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'proposalId', 'expectedProposalSectionsHash'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.proposalId) &&
+    typeof obj.expectedProposalSectionsHash === 'string' &&
+    SHA256_HEX_RE.test(obj.expectedProposalSectionsHash)
+  );
+}
+
+export function isValidUpdateContractByUserInput(data: unknown): data is UpdateContractByUserInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'expectedContractVersion', 'operations'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractPositiveInt(obj.expectedContractVersion) &&
+    isValidContractPatchOperationsDTO(obj.operations)
+  );
+}
+
+export function isValidLockContractFieldInput(data: unknown): data is LockContractFieldInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'expectedContractVersion', 'fieldPath'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractPositiveInt(obj.expectedContractVersion) &&
+    isCanonicalContractFieldPath(obj.fieldPath)
+  );
+}
+
+export function isValidUnlockContractFieldInput(data: unknown): data is UnlockContractFieldInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'expectedContractVersion', 'fieldPath'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractPositiveInt(obj.expectedContractVersion) &&
+    isCanonicalContractFieldPath(obj.fieldPath)
   );
 }

@@ -199,8 +199,10 @@ export interface ProjectDatabaseManager {
   getCreationContractCurrentRepository(): CreationContractCurrentRepository;
   /** 获取创作契约锁定事件仓库 */
   getCreationContractLockEventRepository(): CreationContractLockEventRepository;
-  /** 执行事务 */
+  /** 执行事务（BEGIN 延迟写锁，适合先读后写路径） */
   transaction<T>(fn: () => T): T;
+  /** 执行事务（BEGIN IMMEDIATE，执行前立即获得写锁，适合最终原子提交） */
+  transactionImmediate<T>(fn: () => T): T;
   /** 关闭数据库连接 */
   close(): void;
 }
@@ -212,7 +214,10 @@ export type DbTaskStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CAN
 
 /** 任务类型 */
 export type DbTaskType =
-  'PROVIDER_CONNECTION_TEST' | 'MODEL_INVOCATION_TEST' | 'GRILL_QUESTION_PLAN';
+  | 'PROVIDER_CONNECTION_TEST'
+  | 'MODEL_INVOCATION_TEST'
+  | 'GRILL_QUESTION_PLAN'
+  | 'CREATION_CONTRACT_DRAFT';
 
 /** 任务行 */
 export interface TaskRow {

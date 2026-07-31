@@ -238,7 +238,17 @@ export function getFieldValueByPath(sections: CreationContractSections, path: st
 
 // ── Locked proposal source validation ─────────────────────────
 
-function validateProposalAgainstLocks(
+/**
+ * 验证 proposal 的源 sections 不违反当前活跃 lock 集合。
+ *
+ * 对每个 active locked path：
+ * - baseline 缺失（locked-absent）时 proposal 必须保持缺失；
+ * - baseline 存在（locked-present）时 proposal 值必须 canonical 等价。
+ *
+ * 供 Accept 用例（defense-in-depth）与任务引擎（generation-time）
+ * 共用，保证模型输出在持久化前经过与 Accept 相同的锁检查。
+ */
+export function validateProposalAgainstLocks(
   proposalSections: CreationContractSections,
   baselineSections: CreationContractSections | null,
   lockedFieldPaths: readonly string[],

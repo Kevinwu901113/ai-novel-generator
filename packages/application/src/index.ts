@@ -173,6 +173,7 @@ export {
   ContractNestedTransactionError,
   ContractTransactionError,
   ContractAsyncTransactionCallbackError,
+  ContractDraftAlreadyRunningError,
 } from './errors.js';
 
 export type {
@@ -217,6 +218,12 @@ export type {
 export {
   acceptCreationContractProposal,
   rejectCreationContractProposal,
+  validateProposalAgainstLocks,
+  getFieldValueByPath,
+  collectAllFieldPaths,
+  requireSha256Digest,
+  parseSectionsJson,
+  parseLockedFieldPathsJson,
 } from './creation-contract-mutations.js';
 export type { CreationContractMutationDeps } from './creation-contract-mutations.js';
 
@@ -225,3 +232,11 @@ export {
   lockCreationContractField,
   unlockCreationContractField,
 } from './creation-contract-user-mutations.js';
+
+export { requestCreationContractProposal } from './creation-contract-request.js';
+export type {
+  RequestCreationContractProposalDeps,
+  RequestCreationContractProposalInput,
+  RequestCreationContractProposalCommand,
+  RequestCreationContractProposalResult,
+} from './creation-contract-request.js';
