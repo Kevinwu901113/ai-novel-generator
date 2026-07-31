@@ -20,6 +20,7 @@ import {
   type RunnerScheduleResult,
   type RunnerRecoveryDeps,
   type SettleMessages,
+  type SettlementOutcome,
 } from './runner-kernel.js';
 
 // ── 依赖接口 ─────────────────────────────────────────────────────
@@ -44,8 +45,8 @@ export function settleContractDraftRunnerFailure(
   deps: ContractDraftRunnerDeps,
   projDb: ProjectDatabase,
   taskId: string,
-): void {
-  settleRunnerFailure(deps, projDb, taskId, CONTRACT_DRAFT_MESSAGES);
+): SettlementOutcome {
+  return settleRunnerFailure(deps, projDb, taskId, CONTRACT_DRAFT_MESSAGES);
 }
 
 // ── Runner ────────────────────────────────────────────────────────

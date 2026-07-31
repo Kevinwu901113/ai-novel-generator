@@ -18,6 +18,7 @@ import {
   type RunnerScheduleResult,
   type RunnerRecoveryDeps,
   type SettleMessages,
+  type SettlementOutcome,
 } from './runner-kernel.js';
 
 // ── 依赖接口（委托 kernel 类型）────────────────────────────────
@@ -42,8 +43,8 @@ export function settleGrillPlanRunnerFailure(
   deps: GrillPlanRunnerDeps,
   projDb: ProjectDatabase,
   taskId: string,
-): void {
-  settleRunnerFailure(deps, projDb, taskId, GRILL_MESSAGES);
+): SettlementOutcome {
+  return settleRunnerFailure(deps, projDb, taskId, GRILL_MESSAGES);
 }
 
 // ── Runner ────────────────────────────────────────────────────────
@@ -64,4 +65,4 @@ export function recoverPendingGrillPlans(deps: GrillPlanRecoveryDeps): void {
 
 // 保持既有内部测试引用兼容
 export { isTerminalStatus };
-export type { TaskRepositoryPort, ModelInvocationRepositoryPort };
+export type { TaskRepositoryPort, ModelInvocationRepositoryPort, SettlementOutcome };

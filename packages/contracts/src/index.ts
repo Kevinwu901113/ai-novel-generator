@@ -1921,15 +1921,30 @@ function isContractNullablePositiveInt(value: unknown): boolean {
   return value === null || isContractPositiveInt(value);
 }
 
-/** 拒绝继承/额外 key：允许的 key 集合必须与 obj 完全一致 */
+/**
+ * 拒绝继承/额外 key：允许的 key 集合必须与 obj 完全一致。
+ *
+ * 除 own exact keys 外，还拒绝：
+ * - 自定义 prototype（enumerable inherited property）；
+ * - class instance；
+ * - array。
+ *
+ * 通过要求原型必须是 Object.prototype 或 null，并确认所有 key 均为 own property，
+ * 防止 `Object.create({ now: 'inherited' })` + `Object.assign(obj, valid)` 之类
+ * 的对象绕过 key 校验。
+ */
 function hasContractExactKeys(
   obj: Record<string, unknown>,
   allowed: ReadonlyArray<string>,
 ): boolean {
+  if (Array.isArray(obj)) return false;
+  const proto = Object.getPrototypeOf(obj);
+  if (proto !== Object.prototype && proto !== null) return false;
   const keys = Object.keys(obj);
   if (keys.length !== allowed.length) return false;
   const allowedSet = new Set(allowed);
   for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(obj, k)) return false;
     if (!allowedSet.has(k)) return false;
   }
   return true;

@@ -100,12 +100,15 @@ import {
 } from './grill-handlers.js';
 import {
   scheduleGrillPlanRun,
+  settleGrillPlanRunnerFailure,
   recoverPendingGrillPlans as recoverPendingGrillPlansModule,
   type GrillPlanRunnerDeps,
+  type GrillPlanScheduleResult,
 } from './grill-plan-runner.js';
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
 import {
   scheduleContractDraftRun,
+  settleContractDraftRunnerFailure,
   recoverPendingContractDrafts as recoverPendingContractDraftsModule,
   type ContractDraftRunnerDeps,
   type ContractDraftScheduleResult,
@@ -358,21 +361,27 @@ class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
 // ── 任务仓库适配器 ────────────────────────────────────────────────
 
 /**
- * 判断错误是否为 UNIQUE/PRIMARY KEY 约束冲突（dedupe 部分唯一索引触发）。
+ * 精确判定 dedupe 冲突：只有明确命中 tasks.dedupe_key 或
+ * idx_tasks_dedupe_active 的唯一约束冲突才映射为 TaskDedupeConflictError。
+ *
+ * duplicate task primary key 与其他 UNIQUE violation（uq_tasks_project_id、
+ * uq_cc_proposals_task 等）必须保持为 infra/internal error，不得变成
+ * CONTRACT_DRAFT_ALREADY_RUNNING / GRILL_PLAN_ALREADY_RUNNING。
  *
  * node:sqlite 对约束错误抛出 code='ERR_SQLITE_ERROR' + 稳定 errcode
- * （SQLITE_CONSTRAINT_UNIQUE=2067，SQLITE_CONSTRAINT_PRIMARYKEY=1555），
- * 属性不可用时回退到受控 message 文本。
+ * （SQLITE_CONSTRAINT_UNIQUE=2067，SQLITE_CONSTRAINT_PRIMARYKEY=1555）。
+ * errcode 仅作候选预过滤；最终判定以 message 中是否引用
+ * tasks.dedupe_key / idx_tasks_dedupe_active 为准。
  */
 function isDedupeUniqueConstraintError(err: unknown): boolean {
   if (err !== null && typeof err === 'object' && 'errcode' in err) {
     const code = (err as { errcode?: unknown }).errcode;
-    if (typeof code === 'number' && Number.isInteger(code)) {
-      return code === 2067 || code === 1555;
+    if (typeof code === 'number' && Number.isInteger(code) && code !== 2067 && code !== 1555) {
+      return false;
     }
   }
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('UNIQUE constraint failed');
+  return msg.includes('tasks.dedupe_key') || msg.includes('idx_tasks_dedupe_active');
 }
 
 class TaskRepositoryAdapter implements TaskRepositoryPort {
@@ -1113,14 +1122,16 @@ function buildGrillPlanRunnerDeps(): GrillPlanRunnerDeps {
 
 /**
  * 后台执行 Grill 问题规划任务（委托给 grill-plan-runner 模块）。
+ * 返回调度结果供恢复路径判断是否需要 settlement fallback。
  */
-function runGrillQuestionPlan(projectId: string, taskId: string): void {
-  if (!appDb || !secretStore) return;
-  scheduleGrillPlanRun(buildGrillPlanRunnerDeps(), projectId, taskId);
+function runGrillQuestionPlan(projectId: string, taskId: string): GrillPlanScheduleResult {
+  if (!appDb || !secretStore) return { scheduled: false, reason: 'SETUP_FAILED' };
+  return scheduleGrillPlanRun(buildGrillPlanRunnerDeps(), projectId, taskId);
 }
 
 /**
  * 启动时恢复：扫描所有项目中 PENDING 的 GRILL_QUESTION_PLAN 任务并调度执行。
+ * schedule 失败时安全终结任务，避免永久 PENDING。
  */
 function recoverPendingGrillPlans(dataRoot: string): void {
   const projectsPath = join(dataRoot, 'projects');
@@ -1146,6 +1157,8 @@ function recoverPendingGrillPlans(dataRoot: string): void {
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
     schedule: (projectId: string, taskId: string) => runGrillQuestionPlan(projectId, taskId),
+    settle: (projDb: ProjectDatabase, taskId: string) =>
+      settleGrillPlanRunnerFailure(buildGrillPlanRunnerDeps(), projDb, taskId),
   });
 }
 
@@ -1229,6 +1242,8 @@ function recoverPendingContractDrafts(dataRoot: string): void {
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
     schedule: (projectId: string, taskId: string) => runContractDraft(projectId, taskId),
+    settle: (projDb: ProjectDatabase, taskId: string) =>
+      settleContractDraftRunnerFailure(buildContractDraftRunnerDeps(), projDb, taskId),
   });
 }
 

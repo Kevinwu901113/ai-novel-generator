@@ -41,16 +41,21 @@ export const NOW = '2026-01-10T08:00:00.000Z';
 export const NOW2 = '2026-01-10T08:00:30.000Z';
 export const HEX64 = 'c'.repeat(64);
 
-/** node:sqlite 对 UNIQUE/PRIMARY KEY 约束错误的稳定判定。 */
+/**
+ * 精确判定 dedupe 冲突：必须是 tasks.dedupe_key 或 idx_tasks_dedupe_active
+ * 的唯一约束冲突。duplicate task primary key 与其他 UNIQUE violation
+ * 保持 infra/internal error，不得映射为 TaskDedupeConflictError。
+ * errcode 仅作候选预过滤（UNIQUE=2067 / PRIMARY KEY=1555）。
+ */
 function isUniqueConstraintError(err: unknown): boolean {
   if (err !== null && typeof err === 'object' && 'errcode' in err) {
     const code = (err as { errcode?: unknown }).errcode;
-    if (typeof code === 'number' && Number.isInteger(code)) {
-      return code === 2067 || code === 1555;
+    if (typeof code === 'number' && Number.isInteger(code) && code !== 2067 && code !== 1555) {
+      return false;
     }
   }
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes('UNIQUE constraint failed');
+  return msg.includes('tasks.dedupe_key') || msg.includes('idx_tasks_dedupe_active');
 }
 
 // ── 真实 DB 适配器 ────────────────────────────────────────────────
@@ -373,7 +378,8 @@ export function buildRequestDeps(
     currentRepo: projDb.getCreationContractCurrentRepository(),
     versionRepo: projDb.getCreationContractVersionRepository(),
     taskRepo: new TaskRepoAdapter(projDb),
-    transaction: <T>(fn: () => T) => projDb.transaction(fn),
+    sha256Port: { digestUtf8: (s: string) => sha256Utf8(s) },
+    transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
   };
 }
 

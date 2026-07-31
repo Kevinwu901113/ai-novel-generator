@@ -53,6 +53,7 @@ import {
 import type { ProjectDatabase } from '@ai-novel/database';
 import { CreationContractTransactionPortImpl, sha256Utf8 } from '@ai-novel/database';
 import { GrillSessionRepositoryAdapter } from './grill-handlers.js';
+import { isTerminalStatus } from './runner-kernel.js';
 import type { ContractDraftScheduleResult } from './contract-draft-runner.js';
 
 // ── 上下文 ────────────────────────────────────────────────────────
@@ -97,7 +98,10 @@ function buildRequestDeps(
     currentRepo: projDb.getCreationContractCurrentRepository(),
     versionRepo: projDb.getCreationContractVersionRepository(),
     taskRepo: ctx.getTaskRepo(projDb),
-    transaction: <T>(fn: () => T) => projDb.transaction(fn),
+    sha256Port: { digestUtf8: (input: string) => sha256Utf8(input) },
+    // Request 用例在单个 BEGIN IMMEDIATE 事务内捕获 session + contract 快照，
+    // 防止其他 writer 在中间改变 session/current 产生混合快照。
+    transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
   };
 }
 
@@ -191,8 +195,26 @@ function handleRequestDraft(
     // 异步调度后台执行（独立 DB，不阻塞 IPC 响应）
     const scheduleResult = ctx.scheduleContractDraft(payload.projectId, requested.taskId);
     if (!scheduleResult.scheduled) {
-      // 调度失败：使用请求 DB 立即终结任务，释放 dedupe，不留 PENDING
-      taskRepo.failPending(requested.taskId, 'TASK_EXECUTION_FAILED', '创作契约草案任务调度失败');
+      // 调度失败：先尝试 failPending，释放 dedupe，不留永久 PENDING。
+      const failed = taskRepo.failPending(
+        requested.taskId,
+        'TASK_EXECUTION_FAILED',
+        '创作契约草案任务调度失败',
+      );
+      if (!failed) {
+        // CAS 失败：重新读取任务，按实际状态分类处理（不得静默返回 taskId）。
+        const reread = taskRepo.getById(requested.taskId);
+        if (reread) {
+          if (isTerminalStatus(reread.status)) {
+            // 已终态：接受该终态，不覆盖。
+          } else if (reread.status === 'RUNNING') {
+            // 其他 runner 已领取：不得覆盖，返回 taskId。
+          } else {
+            // 仍 PENDING：不得静默返回，抛固定安全 INTERNAL_ERROR。
+            throw new AppError('INTERNAL_ERROR', '创作契约草案任务调度失败');
+          }
+        }
+      }
     }
 
     return {
