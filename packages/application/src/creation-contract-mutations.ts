@@ -15,7 +15,6 @@ import {
   parseContractPatchOperation,
   getCanonicalTargetPath,
   operationWriteSetConflictsWithLocks,
-  pathsOverlap,
   isLowercaseSha256Hex,
   parseContractFieldPath,
   canonicalizeContractFieldPath,
@@ -308,15 +307,34 @@ export function collectAllFieldPaths(sections: CreationContractSections): string
   return paths;
 }
 
-function isPathInOperationWriteSet(
-  fieldPath: string,
-  operations: ReadonlyArray<ContractPatchOperation>,
+/**
+ * 方向性 provenance write-set 判定（与设计文档第 9 节 operation write-set 定义一致）。
+ *
+ * - scalar / list child operation（set-scalar、set-string-list）：write-set = 精确目标路径，
+ *   仅 finalFieldPath === canonicalTargetPath 命中；ancestor 与 sibling 不命中。
+ * - structured / entity 完整替换（set-structured、remove-field、upsert-protagonist、
+ *   upsert-supporting-character、remove-character、upsert-relationship、remove-relationship）：
+ *   write-set = 目标路径及其所有 descendant，不含 target 的 ancestor。
+ * - remove 后已删除且最终不存在的字段不产生 tombstone；不得为补偿删除
+ *   把 ancestor 标为 USER_EDIT。
+ *
+ * Accept（generateProvenance）与 User Update（generateUserUpdateProvenance）
+ * 共用此 helper，保证两类路径对同一种 operation 的 USER_EDIT 分类一致。
+ * 注意：lock conflict 仍使用 symmetric pathsOverlap（operationWriteSetConflictsWithLocks
+ * 与 Lock/Unlock 的 overlap 检查），此处只统一 provenance 分类。
+ */
+export function operationAffectsProvenancePath(
+  operation: ContractPatchOperation,
+  finalFieldPath: string,
 ): boolean {
-  for (const op of operations) {
-    const targetPath = getCanonicalTargetPath(op);
-    if (pathsOverlap(targetPath, fieldPath)) return true;
+  const targetPath = getCanonicalTargetPath(operation);
+  switch (operation.kind) {
+    case 'set-scalar':
+    case 'set-string-list':
+      return finalFieldPath === targetPath;
+    default:
+      return finalFieldPath === targetPath || finalFieldPath.startsWith(targetPath + '/');
   }
-  return false;
 }
 
 function generateProvenance(
@@ -334,7 +352,7 @@ function generateProvenance(
   const allPaths = collectAllFieldPaths(resultSections);
 
   for (const path of allPaths) {
-    const isUserEdit = isPathInOperationWriteSet(path, operations);
+    const isUserEdit = operations.some((op) => operationAffectsProvenancePath(op, path));
 
     if (isUserEdit) {
       const proposalValue = getFieldValueByPath(sourceSections, path);

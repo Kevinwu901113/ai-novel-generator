@@ -20,7 +20,6 @@ import {
   canonicalSerializeContractSnapshot,
   canonicalSerializeContractFieldValue,
   applyContractPatchOperations,
-  getCanonicalTargetPath,
   operationWriteSetConflictsWithLocks,
   pathsOverlap,
   isLowercaseSha256Hex,
@@ -60,6 +59,7 @@ import {
   requireSha256Digest,
   loadPreviousProvenanceMap,
   parseOperations,
+  operationAffectsProvenancePath,
   type CreationContractMutationDeps,
 } from './creation-contract-mutations.js';
 
@@ -354,31 +354,6 @@ function buildVersionPublicData(
 }
 
 // ── User Update provenance ────────────────────────────────────
-
-/**
- * 方向性 provenance write-set 判定（与设计文档第 9 节 operation write-set 定义一致）：
- *
- * - scalar / list child operation（set-scalar、set-string-list）：
- *   write-set = 精确目标路径，仅 finalFieldPath === canonicalTargetPath 是 USER_EDIT。
- * - structured / entity 完整替换（set-structured、remove-field、upsert-*、remove-*）：
- *   write-set = 目标路径及其所有 descendant，不含 target 的 ancestor。
- *
- * ancestor 路径不得因子字段被编辑而标为 USER_EDIT；remove 后已删除字段
- * 不产生 tombstone，也不得为补偿删除而把 ancestor 标为 USER_EDIT。
- */
-function operationAffectsProvenancePath(
-  operation: ContractPatchOperation,
-  finalFieldPath: string,
-): boolean {
-  const targetPath = getCanonicalTargetPath(operation);
-  switch (operation.kind) {
-    case 'set-scalar':
-    case 'set-string-list':
-      return finalFieldPath === targetPath;
-    default:
-      return finalFieldPath === targetPath || finalFieldPath.startsWith(targetPath + '/');
-  }
-}
 
 function isFieldUserEdited(
   finalFieldPath: string,
