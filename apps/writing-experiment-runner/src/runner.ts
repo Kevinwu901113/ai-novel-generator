@@ -253,10 +253,8 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
     removeDir: deps.removeDir,
     idGenerator: deps.idGenerator,
   };
-  preflightPublish(publishDeps, { finalDir, stagingDir, backupDir, force: options.force });
-  deps.mkdir(stagingDir);
-
-  // Keychain 预检：key 缺失则整体停止（LIVE_BLOCKED_KEY_NOT_CONFIGURED），不产生任何模型调用
+  // Keychain 预检：key 缺失则整体停止（LIVE_BLOCKED_KEY_NOT_CONFIGURED），
+  // 在任何 fs mutation（staging 创建）与模型调用之前，避免残留 staging。
   const apiKey = await deps.getApiKey(provider.keychainService, provider.keychainAccount);
   if (apiKey === null) {
     throw new ExperimentError(
@@ -264,6 +262,9 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
       LIVE_BLOCKED_KEY_NOT_CONFIGURED,
     );
   }
+
+  preflightPublish(publishDeps, { finalDir, stagingDir, backupDir, force: options.force });
+  deps.mkdir(stagingDir);
 
   const generator = new ModelGatewayWritingCandidateGenerator({
     invoke: deps.invoke,
