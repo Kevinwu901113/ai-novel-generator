@@ -154,6 +154,33 @@ describe('validateSuite — ID / 文本规范', () => {
     expectValidationError(input, /text/);
   });
 
+  it('拒绝仅零宽字符的文本（U+200B / U+FEFF / U+2060）', () => {
+    for (const zc of ['​​', '﻿', '⁠']) {
+      const input = cloneJson(makeSuite());
+      input.cases[0].candidates[0].text = zc;
+      expectValidationError(input, /实质内容|不能为空/);
+    }
+  });
+
+  it('拒绝零宽字符 + 纯标点文本', () => {
+    const input = cloneJson(makeSuite());
+    input.cases[0].candidates[0].text = '​。​';
+    expectValidationError(input, /实质内容/);
+  });
+
+  it('接受零宽字符包围的有效正文（自动清除首尾）', () => {
+    const input = cloneJson(makeSuite());
+    input.cases[0].candidates[0].text = '​你好。​';
+    const suite = validateSuite(input);
+    expect(suite.cases[0].candidates[0].text).toBe('你好。');
+  });
+
+  it('拒绝纯标点文本', () => {
+    const input = cloneJson(makeSuite());
+    input.cases[0].candidates[0].text = '。。。。。';
+    expectValidationError(input, /实质内容/);
+  });
+
   it('ID 长度按 code points 计算（emoji 不溢出）', () => {
     const input = cloneJson(makeSuite());
     input.cases[0].candidates[0].candidateId = 'a'.repeat(199) + '👋';

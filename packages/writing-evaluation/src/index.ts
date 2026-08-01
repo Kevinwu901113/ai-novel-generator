@@ -13,7 +13,13 @@
 export * from './schema.js';
 
 // ── 验证 ──────────────────────────────────────────────────────────
-export { validateSuite, EvaluationValidationError, looksLikeSuite } from './validate.js';
+export {
+  validateSuite,
+  validateBlindPacket,
+  validatePrivateMapping,
+  EvaluationValidationError,
+  looksLikeSuite,
+} from './validate.js';
 
 // ── Canonical / Hash / Clock ──────────────────────────────────────
 export { canonicalize, canonicalSerializeSuite } from './canonical.js';

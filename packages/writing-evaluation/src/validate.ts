@@ -15,14 +15,20 @@
 
 import { validateCreationContractSections, type CreationContractSections } from '@ai-novel/domain';
 import type {
+  BlindCaseCandidate,
+  BlindCasePacket,
+  BlindPacketV1,
   EvaluationConstraintV1,
   EvaluationSceneBriefV1,
   ExpectedMetricRelationV1,
+  PrivateMappingEntry,
+  PrivateMappingV1,
   WritingCandidateV1,
   WritingEvaluationCaseV1,
   WritingEvaluationSuiteV1,
 } from './schema.js';
 import { METRIC_IDS } from './schema.js';
+import { isLowercaseSha256Hex, sha256Hex } from './hash.js';
 import { hasSubstantiveContent, normalizeText } from './text.js';
 
 // ── 长度上限 ──────────────────────────────────────────────────────
@@ -107,6 +113,7 @@ function normalizeTextValue(value: unknown, path: string): string {
   const raw = expectString(value, path);
   const normalized = normalizeText(raw);
   if (normalized.length === 0) fail(path, '规范化后不能为空');
+  if (!hasSubstantiveContent(normalized)) fail(path, '规范化后必须有实质内容');
   return normalized;
 }
 
@@ -536,4 +543,172 @@ export function looksLikeSuite(value: unknown): boolean {
     typeof (value as Record<string, unknown>).cases === 'object' &&
     (value as Record<string, unknown>).cases !== null
   );
+}
+
+// ── Blind Packet / Private Mapping 严格验证 ───────────────────────
+
+const BLIND_PACKET_KEYS = new Set(['schemaVersion', 'locale', 'suiteId', 'packetId', 'cases']);
+const BLIND_CASE_KEYS = new Set(['caseId', 'title', 'sceneBrief', 'manualCriteria', 'candidates']);
+const BLIND_CASE_CANDIDATE_KEYS = new Set(['alias', 'text']);
+const PRIVATE_MAPPING_KEYS = new Set(['schemaVersion', 'suiteId', 'seed', 'entries']);
+const MAPPING_ENTRY_KEYS = new Set(['suiteId', 'caseId', 'alias', 'candidateId']);
+const MAX_SEED_LENGTH = 200;
+const ALIAS_RE = /^[A-Z]{1,2}$/;
+
+/**
+ * 严格验证 blind packet。
+ * 不允许 candidateId / strategyId / modelId / promptVersion / generationParameters 等身份字段
+ * （通过 exact keys 拒绝 extra keys 实现）。
+ */
+export function validateBlindPacket(input: unknown): BlindPacketV1 {
+  const obj = expectPlainObject(input, 'blind-packet');
+  expectKeys(obj, BLIND_PACKET_KEYS, BLIND_PACKET_KEYS, 'blind-packet');
+
+  if (obj.schemaVersion !== 1) {
+    fail('blind-packet.schemaVersion', '当前仅支持 schemaVersion = 1');
+  }
+  if (obj.locale !== 'zh-CN') {
+    fail('blind-packet.locale', '当前仅支持 locale = zh-CN');
+  }
+  const suiteId = normalizeId(obj.suiteId, 'blind-packet.suiteId');
+  const packetId = normalizeId(obj.packetId, 'blind-packet.packetId');
+  if (!isLowercaseSha256Hex(packetId)) {
+    fail('blind-packet.packetId', '必须是 lowercase SHA-256 hex');
+  }
+
+  if (!Array.isArray(obj.cases)) fail('blind-packet.cases', '必须是数组');
+  if (obj.cases.length === 0) fail('blind-packet.cases', '至少需要 1 个用例');
+
+  const packetCases: BlindCasePacket[] = [];
+  const caseIds = new Set<string>();
+
+  for (let ci = 0; ci < obj.cases.length; ci += 1) {
+    const cPath = `blind-packet.cases[${ci}]`;
+    const c = expectPlainObject(obj.cases[ci], cPath);
+    expectKeys(c, BLIND_CASE_KEYS, BLIND_CASE_KEYS, cPath);
+
+    const caseId = normalizeId(c.caseId, `${cPath}.caseId`);
+    if (caseIds.has(caseId)) fail('blind-packet.cases', `重复的 caseId "${caseId}"`);
+    caseIds.add(caseId);
+
+    const title = normalizeShortText(c.title, `${cPath}.title`, MAX_TITLE_LENGTH);
+    const sceneBrief = validateSceneBrief(c.sceneBrief, `${cPath}.sceneBrief`);
+
+    if (!Array.isArray(c.manualCriteria)) fail(`${cPath}.manualCriteria`, '必须是数组');
+    const manualCriteria = c.manualCriteria.map((mc, i) => {
+      const validated = validateConstraint(mc, `${cPath}.manualCriteria[${i}]`);
+      if (validated.kind !== 'manual-criterion') {
+        fail(`${cPath}.manualCriteria[${i}]`, '必须是 manual-criterion 约束');
+      }
+      return validated;
+    });
+
+    if (!Array.isArray(c.candidates)) fail(`${cPath}.candidates`, '必须是数组');
+    if (c.candidates.length === 0) fail(`${cPath}.candidates`, '至少需要 1 个候选');
+
+    const aliases = new Set<string>();
+    const candidates: BlindCaseCandidate[] = [];
+    for (let candI = 0; candI < c.candidates.length; candI += 1) {
+      const candPath = `${cPath}.candidates[${candI}]`;
+      const cand = expectPlainObject(c.candidates[candI], candPath);
+      expectKeys(cand, BLIND_CASE_CANDIDATE_KEYS, BLIND_CASE_CANDIDATE_KEYS, candPath);
+
+      const alias = normalizeId(cand.alias, `${candPath}.alias`);
+      if (!ALIAS_RE.test(alias)) {
+        fail(`${candPath}.alias`, `非法 alias "${alias}"（必须是 A-Z）`);
+      }
+      if (aliases.has(alias)) fail(cPath, `重复的 alias "${alias}"`);
+      aliases.add(alias);
+
+      const text = normalizeTextValue(cand.text, `${candPath}.text`);
+      candidates.push({ alias, text });
+    }
+
+    packetCases.push({ caseId, title, sceneBrief, manualCriteria, candidates });
+  }
+
+  return {
+    schemaVersion: 1,
+    locale: 'zh-CN',
+    suiteId,
+    packetId,
+    cases: packetCases,
+  };
+}
+
+/**
+ * 严格验证 private mapping，并校验与 blind packet 的一致性（bijection）。
+ */
+export function validatePrivateMapping(input: unknown, packetInput: unknown): PrivateMappingV1 {
+  const packet = validateBlindPacket(packetInput);
+  const obj = expectPlainObject(input, 'private-mapping');
+  expectKeys(obj, PRIVATE_MAPPING_KEYS, PRIVATE_MAPPING_KEYS, 'private-mapping');
+
+  if (obj.schemaVersion !== 1) {
+    fail('private-mapping.schemaVersion', '当前仅支持 schemaVersion = 1');
+  }
+  const suiteId = normalizeId(obj.suiteId, 'private-mapping.suiteId');
+  if (suiteId !== packet.suiteId) {
+    fail('private-mapping.suiteId', '与 blind packet 的 suiteId 不一致');
+  }
+
+  const seed = expectString(obj.seed, 'private-mapping.seed');
+  if (seed.trim().length === 0) fail('private-mapping.seed', 'trim 后不能为空');
+  if (Array.from(seed).length > MAX_SEED_LENGTH) {
+    fail('private-mapping.seed', `不能超过 ${MAX_SEED_LENGTH} 个 code points`);
+  }
+
+  const expectedPacketId = sha256Hex(`blind-packet:${seed}:${packet.suiteId}`);
+  if (packet.packetId !== expectedPacketId) {
+    fail('private-mapping', 'packetId 与 seed/suiteId 不匹配');
+  }
+
+  if (!Array.isArray(obj.entries)) fail('private-mapping.entries', '必须是数组');
+
+  const expectedPairs = new Set<string>();
+  for (const c of packet.cases) {
+    for (const cand of c.candidates) {
+      expectedPairs.add(JSON.stringify([c.caseId, cand.alias]));
+    }
+  }
+
+  const seenPairs = new Set<string>();
+  const seenCandidateIds = new Set<string>();
+  const entries: PrivateMappingEntry[] = [];
+
+  for (let i = 0; i < obj.entries.length; i += 1) {
+    const ePath = `private-mapping.entries[${i}]`;
+    const e = expectPlainObject(obj.entries[i], ePath);
+    expectKeys(e, MAPPING_ENTRY_KEYS, MAPPING_ENTRY_KEYS, ePath);
+
+    const entrySuiteId = normalizeId(e.suiteId, `${ePath}.suiteId`);
+    if (entrySuiteId !== packet.suiteId) {
+      fail(`${ePath}.suiteId`, '与 blind packet 的 suiteId 不一致');
+    }
+    const caseId = normalizeId(e.caseId, `${ePath}.caseId`);
+    const alias = normalizeId(e.alias, `${ePath}.alias`);
+    const candidateId = normalizeId(e.candidateId, `${ePath}.candidateId`);
+
+    const pairKey = JSON.stringify([caseId, alias]);
+    if (!expectedPairs.has(pairKey)) {
+      fail(ePath, 'case/alias 组合不存在于 blind packet');
+    }
+    if (seenPairs.has(pairKey)) {
+      fail(ePath, '重复的 case/alias 组合');
+    }
+    seenPairs.add(pairKey);
+
+    if (seenCandidateIds.has(candidateId)) {
+      fail(ePath, `重复的 candidateId "${candidateId}"`);
+    }
+    seenCandidateIds.add(candidateId);
+
+    entries.push({ suiteId: entrySuiteId, caseId, alias, candidateId });
+  }
+
+  if (seenPairs.size !== expectedPairs.size) {
+    fail('private-mapping.entries', 'mapping 必须且只能覆盖 blind packet 中的每个 case/alias');
+  }
+
+  return { schemaVersion: 1, suiteId, seed, entries };
 }
