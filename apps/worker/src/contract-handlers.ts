@@ -204,15 +204,18 @@ function handleRequestDraft(
       if (!failed) {
         // CAS 失败：重新读取任务，按实际状态分类处理（不得静默返回 taskId）。
         const reread = taskRepo.getById(requested.taskId);
-        if (reread) {
-          if (isTerminalStatus(reread.status)) {
-            // 已终态：接受该终态，不覆盖。
-          } else if (reread.status === 'RUNNING') {
-            // 其他 runner 已领取：不得覆盖，返回 taskId。
-          } else {
-            // 仍 PENDING：不得静默返回，抛固定安全 INTERNAL_ERROR。
-            throw new AppError('INTERNAL_ERROR', '创作契约草案任务调度失败');
-          }
+        if (reread === null) {
+          // 任务已被外部删除：不得返回 taskId，抛固定安全 INTERNAL_ERROR。
+          // message 不含 taskId / 路径 / SQLite 信息 / 内部异常。
+          throw new AppError('INTERNAL_ERROR', '创作契约草案任务调度失败');
+        }
+        if (isTerminalStatus(reread.status)) {
+          // 已终态：接受该终态，不覆盖。
+        } else if (reread.status === 'RUNNING') {
+          // 其他 runner 已领取：不得覆盖，返回 taskId。
+        } else {
+          // 仍 PENDING 或其他非终态：不得静默返回，抛固定安全 INTERNAL_ERROR。
+          throw new AppError('INTERNAL_ERROR', '创作契约草案任务调度失败');
         }
       }
     }

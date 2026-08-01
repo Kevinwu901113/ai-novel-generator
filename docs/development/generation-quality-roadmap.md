@@ -283,30 +283,30 @@ Evaluation Harness → Scene Planner → Draft Generator
 | Creation Contract C1-B2 User Update / Lock / Unlock | ✅   | PR #15                                                |
 | Creation Contract C2 AI task / process bridge       | 🟡   | PR #17（尚未合并，正在 review）                       |
 
-#### 生成质量能力（均尚未开始）
+#### 生成质量能力（部分 foundation 开发中，其余尚未开始）
 
-| 能力                                 | 状态 | 说明                             |
-| ------------------------------------ | ---- | -------------------------------- |
-| Minimal Creation Contract Renderer   | ⬜   | Contract 后端已有，需最小 UI     |
-| Writing Evaluation Lab               | ⬜   | 固定题库 + 多策略对比 + 评分体系 |
-| Minimal Manuscript / Chapter Version | ⬜   | 稿件版本管理基础                 |
-| Scene Planner                        | ⬜   | 从章节目标到场景卡片             |
-| Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                |
-| Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示） |
-| Character Voice Critic               | ⬜   | 人物声音一致性和区分度           |
-| AI-Smell Critic                      | ⬜   | 基于 taxonomy 的自动检测         |
-| Targeted Rewriter                    | ⬜   | 定点修订，非整章重写             |
-| Writer Preference Profile            | ⬜   | 用户偏好建模和可执行约束         |
-| Story State Ledger                   | ⬜   | 权威事实账本                     |
-| Chapter Summary / Fact Extraction    | ⬜   | 章节摘要和事实抽取               |
-| Retrieval Context Engine             | ⬜   | 动态检索上下文                   |
-| Outline Proposal / Version           | ⬜   | 大纲生成和版本管理               |
-| Long-form Generation                 | ⬜   | 长篇持续生成                     |
-| Continuity Detection                 | ⬜   | 连续性检测                       |
-| Review / Fix Workflow                | ⬜   | 审稿和定点修复流程               |
-| PlotPilot Product Integration        | ⬜   | PlotPilot 产品级接入             |
-| Export / Backup / Recovery           | ⬜   | 导出、备份、恢复                 |
-| Real Novel Quality Acceptance        | ⬜   | 真实作品质量验收                 |
+| 能力                                 | 状态 | 说明                                                            |
+| ------------------------------------ | ---- | --------------------------------------------------------------- |
+| Minimal Creation Contract Renderer   | ⬜   | Contract 后端已有，需最小 UI                                    |
+| Writing Evaluation Lab               | 🟡   | PR #18 foundation（固定题库 + 多策略对比 + 评分体系；尚未合并） |
+| Minimal Manuscript / Chapter Version | ⬜   | 稿件版本管理基础                                                |
+| Scene Planner                        | ⬜   | 从章节目标到场景卡片                                            |
+| Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                                               |
+| Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示）                                |
+| Character Voice Critic               | ⬜   | 人物声音一致性和区分度                                          |
+| AI-Smell Critic                      | ⬜   | 基于 taxonomy 的自动检测                                        |
+| Targeted Rewriter                    | ⬜   | 定点修订，非整章重写                                            |
+| Writer Preference Profile            | ⬜   | 用户偏好建模和可执行约束                                        |
+| Story State Ledger                   | ⬜   | 权威事实账本                                                    |
+| Chapter Summary / Fact Extraction    | ⬜   | 章节摘要和事实抽取                                              |
+| Retrieval Context Engine             | ⬜   | 动态检索上下文                                                  |
+| Outline Proposal / Version           | ⬜   | 大纲生成和版本管理                                              |
+| Long-form Generation                 | ⬜   | 长篇持续生成                                                    |
+| Continuity Detection                 | ⬜   | 连续性检测                                                      |
+| Review / Fix Workflow                | ⬜   | 审稿和定点修复流程                                              |
+| PlotPilot Product Integration        | ⬜   | PlotPilot 产品级接入                                            |
+| Export / Backup / Recovery           | ⬜   | 导出、备份、恢复                                                |
+| Real Novel Quality Acceptance        | ⬜   | 真实作品质量验收                                                |
 
 ---
 
@@ -370,40 +370,41 @@ Evaluation Harness → Scene Planner → Draft Generator
 
 ## 七、当前执行状态
 
-| 字段                       | 值                                                                                                |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| Last verified date         | 2026-08-01                                                                                        |
-| Verified main SHA          | `dd0448116d6ff55b823d3579b25e69738d7a85fb`                                                        |
-| Active implementation      | M1-C2 Creation Contract Draft Pipeline & Process Bridge                                           |
-| Active PR                  | PR #17 / feat/m1c2-contract-draft-pipeline（最终 HEAD 见 PR 顶部，尚未合并）                      |
-| Last merged capability     | M1-C1B2 Creation Contract User Update / Lock / Unlock（PR #15）                                   |
-| Next product capability    | Minimal Contract Renderer 与 Writing Evaluation Lab 并行推进；质量实验链路不得因 Contract UI 延期 |
-| Current largest risk       | 项目继续过度投资基础设施，而未建立生成质量评测与文章生成实验闭环                                  |
-| Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成                                       |
+| 字段                       | 值                                                                                                                       |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Last verified date         | 2026-08-01                                                                                                               |
+| Verified main SHA          | `dd0448116d6ff55b823d3579b25e69738d7a85fb`                                                                               |
+| Active implementation      | M1-C2 Creation Contract Draft Pipeline & Process Bridge；GQ1 Writing Evaluation Lab Foundation                           |
+| Active PR                  | PR #17 / feat/m1c2-contract-draft-pipeline（尚未合并）；PR #18 / feat/gq1-writing-evaluation-lab（foundation，尚未合并） |
+| Last merged capability     | M1-C1B2 Creation Contract User Update / Lock / Unlock（PR #15）                                                          |
+| Next product capability    | Minimal Contract Renderer 与 Writing Evaluation Lab 并行推进；质量实验链路不得因 Contract UI 延期                        |
+| Current largest risk       | 项目继续过度投资基础设施，而未建立生成质量评测与文章生成实验闭环                                                         |
+| Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成                                                              |
 
 ---
 
 ## 八、Progress Log
 
-| Date       | PR / SHA            | Status | Capability                                                          | Quality Impact                                         | Evidence                                                                                     | Next                                                     |
-| ---------- | ------------------- | ------ | ------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| 2026-07    | 初始提交 / M0       | ✅     | 仓库与工程基线                                                      | 无                                                     | Electron 启动、三栏 UI、健康检查                                                             | 本地项目和 Provider                                      |
-| 2026-07    | PR #1               | ✅     | M1-A 本地项目 + M1-B1 Provider / Keychain                           | 无                                                     | 232 tests passed                                                                             | 持久化任务                                               |
-| 2026-07    | PR #2               | ✅     | M1-B2 持久化任务与模型调用                                          | 无                                                     | 365 tests passed                                                                             | Task Activity Center                                     |
-| 2026-07    | PR #3               | ✅     | M2-A1 Grill 领域 / 持久化 / IPC                                     | 无                                                     | 领域模型 + 4 张表 + IPC 全链路                                                               | Grill Renderer                                           |
-| 2026-07    | PR #4, #5           | ✅     | M2-A1.5 Grill 桌面工作台                                            | 无                                                     | 三栏 UI、session/question/answer/proposal                                                    | AI question planning                                     |
-| 2026-07    | PR #6               | ✅     | M1-B2.5 Task Activity Center                                        | 无                                                     | 任务列表 / 详情 / 统计                                                                       | Renderer safety                                          |
-| 2026-07    | PR #7               | ✅     | M1-S1 Renderer safety boundary                                      | 无                                                     | ErrorBoundary + safe-error                                                                   | Grill Renderer safety                                    |
-| 2026-07    | PR #8               | 🧱     | PlotPilot sidecar foundation                                        | 无                                                     | adapter + lifecycle + SSE（仅 foundation）                                                   | 产品接入推迟                                             |
-| 2026-07    | PR #9               | ✅     | M2-A2-BE AI question-plan backend                                   | 无                                                     | GRILL_QUESTION_PLAN 任务类型 + 严格解析                                                      | AI question-plan Renderer                                |
-| 2026-07    | PR #10              | ✅     | M1-S2 Renderer accessibility                                        | 无                                                     | LiveRegion + focus-utils                                                                     | AI question-plan Renderer                                |
-| 2026-07-30 | PR #11              | ✅     | M2-A2-FE AI question-plan Renderer                                  | 无                                                     | 触发、审核、显式接受                                                                         | Creation Contract                                        |
-| 2026-07-29 | PR #12 / `dd5613ca` | ✅     | M1-C0 Creation Contract architecture design and document rebaseline | 无直接文章质量证据；建立生成规格护栏                   | creation-contract-design.md、roadmap/current-state/module-boundaries 重基线                  | M1-C1 foundation                                         |
-| 2026-07    | `497611f` PR #13    | ✅     | M1-C1A Creation Contract foundation                                 | 无                                                     | domain / contracts / database / application                                                  | Accept / Reject                                          |
-| 2026-07    | `569d912` PR #14    | ✅     | M1-C1B1 Accept / Reject                                             | 无                                                     | CAS、typed operations、原子事务                                                              | User Update / Lock                                       |
-| 2026-08-01 | `b4f40d2` PR #15    | ✅     | M1-C1B2 User Update / Lock / Unlock                                 | 无                                                     | lock/unlock 创建新 version、user update                                                      | M1-C2 AI task / process bridge                           |
-| 2026-08-01 | PR #17（尚未合并）  | 🟡     | M1-C2 AI task / process bridge                                      | 打通创作规格生成链路；尚无文章生成质量提升证据         | task-engine、runner、process bridge、SQLite concurrency、backend E2E（最终 HEAD 见 PR 顶部） | Minimal Contract Renderer 与 Writing Evaluation Lab 并行 |
-| 2026-08-01 | `dd04481` PR #16    | ✅     | Generation quality roadmap and progress ledger                      | 建立质量方向的权威路线和维护制度；尚无文章质量实验结果 | generation-quality-roadmap.md                                                                | 合并后由所有 DeepSeek / MiMo 任务持续维护                |
+| Date       | PR / SHA                                                        | Status | Capability                                                                | Quality Impact                                         | Evidence                                                                                     | Next                                                     |
+| ---------- | --------------------------------------------------------------- | ------ | ------------------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| 2026-07    | 初始提交 / M0                                                   | ✅     | 仓库与工程基线                                                            | 无                                                     | Electron 启动、三栏 UI、健康检查                                                             | 本地项目和 Provider                                      |
+| 2026-07    | PR #1                                                           | ✅     | M1-A 本地项目 + M1-B1 Provider / Keychain                                 | 无                                                     | 232 tests passed                                                                             | 持久化任务                                               |
+| 2026-07    | PR #2                                                           | ✅     | M1-B2 持久化任务与模型调用                                                | 无                                                     | 365 tests passed                                                                             | Task Activity Center                                     |
+| 2026-07    | PR #3                                                           | ✅     | M2-A1 Grill 领域 / 持久化 / IPC                                           | 无                                                     | 领域模型 + 4 张表 + IPC 全链路                                                               | Grill Renderer                                           |
+| 2026-07    | PR #4, #5                                                       | ✅     | M2-A1.5 Grill 桌面工作台                                                  | 无                                                     | 三栏 UI、session/question/answer/proposal                                                    | AI question planning                                     |
+| 2026-07    | PR #6                                                           | ✅     | M1-B2.5 Task Activity Center                                              | 无                                                     | 任务列表 / 详情 / 统计                                                                       | Renderer safety                                          |
+| 2026-07    | PR #7                                                           | ✅     | M1-S1 Renderer safety boundary                                            | 无                                                     | ErrorBoundary + safe-error                                                                   | Grill Renderer safety                                    |
+| 2026-07    | PR #8                                                           | 🧱     | PlotPilot sidecar foundation                                              | 无                                                     | adapter + lifecycle + SSE（仅 foundation）                                                   | 产品接入推迟                                             |
+| 2026-07    | PR #9                                                           | ✅     | M2-A2-BE AI question-plan backend                                         | 无                                                     | GRILL_QUESTION_PLAN 任务类型 + 严格解析                                                      | AI question-plan Renderer                                |
+| 2026-07    | PR #10                                                          | ✅     | M1-S2 Renderer accessibility                                              | 无                                                     | LiveRegion + focus-utils                                                                     | AI question-plan Renderer                                |
+| 2026-07-30 | PR #11                                                          | ✅     | M2-A2-FE AI question-plan Renderer                                        | 无                                                     | 触发、审核、显式接受                                                                         | Creation Contract                                        |
+| 2026-07-29 | PR #12 / `dd5613ca`                                             | ✅     | M1-C0 Creation Contract architecture design and document rebaseline       | 无直接文章质量证据；建立生成规格护栏                   | creation-contract-design.md、roadmap/current-state/module-boundaries 重基线                  | M1-C1 foundation                                         |
+| 2026-07    | `497611f` PR #13                                                | ✅     | M1-C1A Creation Contract foundation                                       | 无                                                     | domain / contracts / database / application                                                  | Accept / Reject                                          |
+| 2026-07    | `569d912` PR #14                                                | ✅     | M1-C1B1 Accept / Reject                                                   | 无                                                     | CAS、typed operations、原子事务                                                              | User Update / Lock                                       |
+| 2026-08-01 | `b4f40d2` PR #15                                                | ✅     | M1-C1B2 User Update / Lock / Unlock                                       | 无                                                     | lock/unlock 创建新 version、user update                                                      | M1-C2 AI task / process bridge                           |
+| 2026-08-01 | PR #17（尚未合并）                                              | 🟡     | M1-C2 AI task / process bridge                                            | 打通创作规格生成链路；尚无文章生成质量提升证据         | task-engine、runner、process bridge、SQLite concurrency、backend E2E（最终 HEAD 见 PR 顶部） | Minimal Contract Renderer 与 Writing Evaluation Lab 并行 |
+| 2026-08-01 | PR #18 / `b2456f353cfe765499adf303700ba73152543a1a`（尚未合并） | 🟡     | GQ1 Writing Evaluation Lab foundation（固定题库 + 多策略对比 + 评分体系） | 建立评测骨架；尚无文章质量提升证据                     | evaluation harness foundation、fixtures、评分体系骨架                                        | 合并后接入 generation pipeline 对比                      |
+| 2026-08-01 | `dd04481` PR #16                                                | ✅     | Generation quality roadmap and progress ledger                            | 建立质量方向的权威路线和维护制度；尚无文章质量实验结果 | generation-quality-roadmap.md                                                                | 合并后由所有 DeepSeek / MiMo 任务持续维护                |
 
 ### 早期能力汇总基线
 

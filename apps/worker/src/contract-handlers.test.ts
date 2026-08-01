@@ -204,15 +204,16 @@ describe('dispatchContractCommand', () => {
     expect(task?.errorCode).toBe('TASK_EXECUTION_FAILED');
   });
 
-  /** 构造 failPending 恒为 false 的 task repo，reread 返回指定状态。 */
-  function makeFailPendingFalseTaskRepo(opts: { rereadStatus: string }) {
+  /** 构造 failPending 恒为 false 的 task repo，reread 返回指定状态（或 null）。 */
+  function makeFailPendingFalseTaskRepo(opts: { rereadStatus?: string; rereadNull?: boolean }) {
     let taskId = '';
     const rereadStatus = opts.rereadStatus;
+    const rereadNull = opts.rereadNull ?? false;
     const makeTask = (id: string): TaskData => ({
       id,
       projectId: 'proj-1',
       taskType: 'CREATION_CONTRACT_DRAFT',
-      status: rereadStatus as TaskData['status'],
+      status: (rereadStatus ?? 'PENDING') as TaskData['status'],
       inputVersionJson: '{}',
       payloadJson: '{}',
       resultJson: null,
@@ -231,7 +232,11 @@ describe('dispatchContractCommand', () => {
       create: (data: CreateTaskInput) => {
         taskId = data.id;
       },
-      getById: () => (taskId ? makeTask(taskId) : null),
+      getById: () => {
+        if (!taskId) return null;
+        if (rereadNull) return null;
+        return makeTask(taskId);
+      },
       listByProject: () => [],
       listByStatus: () => [],
       claimPending: () => false,
@@ -310,6 +315,46 @@ describe('dispatchContractCommand', () => {
         }),
       ),
     ).toThrowError(expect.objectContaining({ code: 'INTERNAL_ERROR' }));
+  });
+
+  it('requestDraft：schedule false + failPending false + reread=null → 抛固定安全 INTERNAL_ERROR，不返回 taskId、不重复 schedule、不调用模型', () => {
+    const sessionVersion = seedCompletedGrillSession(openFreshDb(), {
+      sessionId: 'gs-h8',
+      projectId: 'proj-1',
+    });
+    const repo = makeFailPendingFalseTaskRepo({ rereadNull: true });
+    const scheduleMock = vi.fn(() => ({ scheduled: false, reason: 'OPEN_FAILED' }) as const);
+    let thrown: unknown;
+    let result: unknown;
+    try {
+      result = dispatchContractCommand(
+        'contract.requestDraft',
+        {
+          projectId: 'proj-1',
+          grillSessionId: 'gs-h8',
+          expectedGrillSessionVersion: sessionVersion,
+          expectedContractVersion: null,
+        },
+        makeCtx({
+          getTaskRepo: () => repo,
+          scheduleContractDraft: scheduleMock,
+        }),
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    // 抛 INTERNAL_ERROR，不返回 taskId
+    expect(thrown).toBeInstanceOf(AppError);
+    expect((thrown as AppError).code).toBe('INTERNAL_ERROR');
+    expect(result).toBeUndefined();
+    // public message 固定安全：不含 taskId / 路径 / SQLite / 内部异常
+    const msg = thrown instanceof Error ? thrown.message : '';
+    expect(msg).toBe('创作契约草案任务调度失败');
+    expect(msg).not.toContain('gs-h8');
+    expect(msg).not.toContain('sqlite');
+    expect(msg).not.toContain('/');
+    // 不重复 schedule（只调度一次）
+    expect(scheduleMock).toHaveBeenCalledTimes(1);
   });
 
   it('caller 注入 providerProfileId / now / newVersionId → VALIDATION_ERROR', () => {
