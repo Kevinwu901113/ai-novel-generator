@@ -858,13 +858,37 @@ describe('creation contract database', () => {
   it('list returns sorted results', () => {
     setupFks();
     createProposal();
+    // task_id / invocation_id 唯一：第二个 proposal 需要独立 task + invocation
+    db.getTaskRepository().create({
+      id: 't2',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    db.getModelInvocationRepository().create({
+      id: 'inv2',
+      projectId: 'p1',
+      taskId: 't2',
+      providerProfileId: 'pp1',
+      model: 'test-model',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
 
     const proposalRepo = db.getCreationContractProposalRepository();
     proposalRepo.create({
       id: 'prop2',
       projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
+      taskId: 't2',
+      invocationId: 'inv2',
       baseGrillSessionId: 'gs1',
       baseGrillSessionVersion: 2,
       baseContractVersion: null,
@@ -964,13 +988,37 @@ describe('creation contract database', () => {
   it('supersedeAllProposed transitions all PROPOSED to SUPERSEDED', () => {
     setupFks();
     createProposal();
+    // task_id / invocation_id 唯一：第二个 proposal 需要独立 task + invocation
+    db.getTaskRepository().create({
+      id: 't2',
+      projectId: 'p1',
+      taskType: 'GRILL_QUESTION_PLAN',
+      status: 'SUCCEEDED',
+      inputVersionJson: '{}',
+      payloadJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    db.getModelInvocationRepository().create({
+      id: 'inv2',
+      projectId: 'p1',
+      taskId: 't2',
+      providerProfileId: 'pp1',
+      model: 'test-model',
+      status: 'SUCCEEDED',
+      attemptNumber: 1,
+      requestKind: 'test',
+      promptHash: 'a'.repeat(64),
+      requestMetadataJson: '{}',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
 
     const proposalRepo = db.getCreationContractProposalRepository();
     proposalRepo.create({
       id: 'prop2',
       projectId: 'p1',
-      taskId: 't1',
-      invocationId: 'inv1',
+      taskId: 't2',
+      invocationId: 'inv2',
       baseGrillSessionId: 'gs1',
       baseGrillSessionVersion: 2,
       baseContractVersion: null,

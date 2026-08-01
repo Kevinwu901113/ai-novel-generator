@@ -275,3 +275,16 @@ export {
   type GrillQuestionPlanEngineDeps,
   type GrillQuestionPlanExecutionResult,
 } from './grill-question-plan.js';
+
+export {
+  executeCreationContractDraft,
+  buildContractDraftPrompt,
+  type ContractDraftEngineDeps,
+  type ContractDraftExecutionResult,
+} from './creation-contract-draft.js';
+
+export { validateContractDraftContext } from './contract-draft-context.js';
+export type {
+  ContractDraftContextDeps,
+  ValidatedContractDraftContext,
+} from './contract-draft-context.js';

@@ -405,3 +405,20 @@ export class ContractAsyncTransactionCallbackError extends AppError {
     this.name = 'ContractAsyncTransactionCallbackError';
   }
 }
+
+/**
+ * 创作契约草案任务已存在（dedupe 冲突）。
+ *
+ * 由请求用例在 TaskDedupeConflictError 触发时映射为稳定安全错误。
+ * public message 固定，不暴露 dedupe key 或内部细节（detail 进入 cause）。
+ */
+export class ContractDraftAlreadyRunningError extends AppError {
+  constructor(detail: string, cause?: unknown) {
+    super(
+      'CONTRACT_DRAFT_ALREADY_RUNNING',
+      '创作契约草案任务已存在，请等待其完成后重试',
+      diagnostic(detail, cause),
+    );
+    this.name = 'ContractDraftAlreadyRunningError';
+  }
+}

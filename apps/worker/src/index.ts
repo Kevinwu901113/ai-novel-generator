@@ -83,7 +83,11 @@ import type {
   ModelInvocationRow,
 } from '@ai-novel/database';
 import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
-import { executeModelInvocationTest, sha256Hex } from '@ai-novel/task-engine';
+import {
+  executeModelInvocationTest,
+  sha256Hex,
+  type ContractDraftEngineDeps,
+} from '@ai-novel/task-engine';
 import { createMacOSKeychainSecretStore } from './secret-store.js';
 import {
   dispatchGrillCommand,
@@ -92,12 +96,23 @@ import {
   GrillQuestionRepositoryAdapter,
   GrillAnswerRepositoryAdapter,
   GrillQuestionPlanProposalRepositoryAdapter,
+  GrillProposalRepositoryAdapter,
 } from './grill-handlers.js';
 import {
   scheduleGrillPlanRun,
+  settleGrillPlanRunnerFailure,
   recoverPendingGrillPlans as recoverPendingGrillPlansModule,
   type GrillPlanRunnerDeps,
+  type GrillPlanScheduleResult,
 } from './grill-plan-runner.js';
+import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
+import {
+  scheduleContractDraftRun,
+  settleContractDraftRunnerFailure,
+  recoverPendingContractDrafts as recoverPendingContractDraftsModule,
+  type ContractDraftRunnerDeps,
+  type ContractDraftScheduleResult,
+} from './contract-draft-runner.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -345,6 +360,30 @@ class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
 
 // ── 任务仓库适配器 ────────────────────────────────────────────────
 
+/**
+ * 精确判定 dedupe 冲突：只有明确命中 tasks.dedupe_key 或
+ * idx_tasks_dedupe_active 的唯一约束冲突才映射为 TaskDedupeConflictError。
+ *
+ * duplicate task primary key 与其他 UNIQUE violation（uq_tasks_project_id、
+ * uq_cc_proposals_task 等）必须保持为 infra/internal error，不得变成
+ * CONTRACT_DRAFT_ALREADY_RUNNING / GRILL_PLAN_ALREADY_RUNNING。
+ *
+ * node:sqlite 对约束错误抛出 code='ERR_SQLITE_ERROR' + 稳定 errcode
+ * （SQLITE_CONSTRAINT_UNIQUE=2067，SQLITE_CONSTRAINT_PRIMARYKEY=1555）。
+ * errcode 仅作候选预过滤；最终判定以 message 中是否引用
+ * tasks.dedupe_key / idx_tasks_dedupe_active 为准。
+ */
+function isDedupeUniqueConstraintError(err: unknown): boolean {
+  if (err !== null && typeof err === 'object' && 'errcode' in err) {
+    const code = (err as { errcode?: unknown }).errcode;
+    if (typeof code === 'number' && Number.isInteger(code) && code !== 2067 && code !== 1555) {
+      return false;
+    }
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('tasks.dedupe_key') || msg.includes('idx_tasks_dedupe_active');
+}
+
 class TaskRepositoryAdapter implements TaskRepositoryPort {
   constructor(private readonly projDb: ProjectDatabase) {}
 
@@ -363,8 +402,7 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
         updatedAt: now,
       });
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === 'SQLITE_CONSTRAINT_UNIQUE' && data.dedupeKey !== undefined) {
+      if (isDedupeUniqueConstraintError(err) && data.dedupeKey !== undefined) {
         throw new TaskDedupeConflictError('已存在相同 dedupe key 的活跃任务');
       }
       throw err;
@@ -715,6 +753,9 @@ function initialize(): void {
 
   // 恢复 PENDING 的 Grill 规划任务（异步调度）
   recoverPendingGrillPlans(dataRoot);
+
+  // 恢复 PENDING 的创作契约草案任务（异步调度）
+  recoverPendingContractDrafts(dataRoot);
 }
 
 /**
@@ -1081,14 +1122,16 @@ function buildGrillPlanRunnerDeps(): GrillPlanRunnerDeps {
 
 /**
  * 后台执行 Grill 问题规划任务（委托给 grill-plan-runner 模块）。
+ * 返回调度结果供恢复路径判断是否需要 settlement fallback。
  */
-function runGrillQuestionPlan(projectId: string, taskId: string): void {
-  if (!appDb || !secretStore) return;
-  scheduleGrillPlanRun(buildGrillPlanRunnerDeps(), projectId, taskId);
+function runGrillQuestionPlan(projectId: string, taskId: string): GrillPlanScheduleResult {
+  if (!appDb || !secretStore) return { scheduled: false, reason: 'SETUP_FAILED' };
+  return scheduleGrillPlanRun(buildGrillPlanRunnerDeps(), projectId, taskId);
 }
 
 /**
  * 启动时恢复：扫描所有项目中 PENDING 的 GRILL_QUESTION_PLAN 任务并调度执行。
+ * schedule 失败时安全终结任务，避免永久 PENDING。
  */
 function recoverPendingGrillPlans(dataRoot: string): void {
   const projectsPath = join(dataRoot, 'projects');
@@ -1114,6 +1157,93 @@ function recoverPendingGrillPlans(dataRoot: string): void {
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
     schedule: (projectId: string, taskId: string) => runGrillQuestionPlan(projectId, taskId),
+    settle: (projDb: ProjectDatabase, taskId: string) =>
+      settleGrillPlanRunnerFailure(buildGrillPlanRunnerDeps(), projDb, taskId),
+  });
+}
+
+/**
+ * 构建创作契约草案 runner 依赖（engine deps 使用 BEGIN IMMEDIATE 最终事务）。
+ */
+function buildContractDraftRunnerDeps(): ContractDraftRunnerDeps {
+  return {
+    openDb: (projectId: string) => getProjectDb(projectId),
+    buildEngineDeps: (projDb: ProjectDatabase) => {
+      const clock = createClock();
+      const engineDeps: ContractDraftEngineDeps = {
+        taskRepo: new TaskRepositoryAdapter(projDb),
+        invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
+        secretStore: secretStore!,
+        providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+        idGenerator: createIdGenerator(),
+        clock,
+        sessionRepo: new GrillSessionRepositoryAdapter(projDb, clock),
+        questionRepo: new GrillQuestionRepositoryAdapter(projDb, clock),
+        answerRepo: new GrillAnswerRepositoryAdapter(projDb, clock),
+        grillProposalRepo: new GrillProposalRepositoryAdapter(projDb, clock),
+        ccProposalRepo: projDb.getCreationContractProposalRepository(),
+        ccVersionRepo: projDb.getCreationContractVersionRepository(),
+        ccCurrentRepo: projDb.getCreationContractCurrentRepository(),
+        sha256Port: { digestUtf8: (input: string) => sha256Hex(input) },
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+          systemPrompt?: string;
+          maxTokens?: number;
+          temperature?: number;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
+      };
+      return engineDeps;
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+  };
+}
+
+/**
+ * 后台执行创作契约草案任务（委托给 contract-draft-runner 模块）。
+ * 返回调度结果供请求路径判断是否需要 failPending fallback。
+ */
+function runContractDraft(projectId: string, taskId: string): ContractDraftScheduleResult {
+  if (!appDb || !secretStore) {
+    return { scheduled: false, reason: 'SETUP_FAILED' };
+  }
+  return scheduleContractDraftRun(buildContractDraftRunnerDeps(), projectId, taskId);
+}
+
+/**
+ * 启动时恢复：扫描所有项目中 PENDING 的 CREATION_CONTRACT_DRAFT 任务并调度执行。
+ * 不重复 claim（引擎 CAS）；每个 project DB close exactly once；异常不阻塞其他项目。
+ */
+function recoverPendingContractDrafts(dataRoot: string): void {
+  const projectsPath = join(dataRoot, 'projects');
+  if (!existsSync(projectsPath)) return;
+
+  recoverPendingContractDraftsModule({
+    listProjectDbs: () => {
+      const result: Array<{ projectId: string; projDb: ProjectDatabase }> = [];
+      for (const entry of readdirSync(projectsPath)) {
+        const projectDir = join(projectsPath, entry);
+        const dbPath = join(projectDir, 'project.sqlite');
+        if (!existsSync(dbPath)) continue;
+        try {
+          const projDb = new ProjectDatabase(dbPath);
+          result.push({ projectId: entry, projDb });
+        } catch {
+          // 无法打开的数据库留待下次恢复
+        }
+      }
+      return result;
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    schedule: (projectId: string, taskId: string) => runContractDraft(projectId, taskId),
+    settle: (projDb: ProjectDatabase, taskId: string) =>
+      settleContractDraftRunnerFailure(buildContractDraftRunnerDeps(), projDb, taskId),
   });
 }
 
@@ -1313,6 +1443,53 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           clock: createClock(),
         };
         data = dispatchGrillCommand(request.command, request.payload, grillCtx);
+        break;
+      }
+      case 'contract.getCurrent':
+      case 'contract.listVersions':
+      case 'contract.getProposal':
+      case 'contract.listProposals':
+      case 'contract.requestDraft':
+      case 'contract.acceptProposal':
+      case 'contract.rejectProposal':
+      case 'contract.updateByUser':
+      case 'contract.lockField':
+      case 'contract.unlockField': {
+        if (!appDb) {
+          throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+        }
+        const contractCtx: ContractHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+          resolveEnabledProvider: () => {
+            const enabled = appDb!
+              .getProviderProfileRepository()
+              .list()
+              .find((p) => p.enabled);
+            if (!enabled) return null;
+            return {
+              id: enabled.id,
+              providerType: enabled.providerType,
+              displayName: enabled.displayName,
+              baseUrl: enabled.baseUrl,
+              model: enabled.model,
+              keychainService: enabled.keychainService,
+              keychainAccount: enabled.keychainAccount,
+              enabled: enabled.enabled,
+              createdAt: enabled.createdAt,
+              updatedAt: enabled.updatedAt,
+              lastTestedAt: enabled.lastTestedAt,
+              lastTestStatus: enabled.lastTestStatus,
+              lastTestErrorCode: enabled.lastTestErrorCode,
+              lastTestLatencyMs: enabled.lastTestLatencyMs,
+            };
+          },
+          getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+          scheduleContractDraft: (projectId: string, taskId: string) =>
+            runContractDraft(projectId, taskId),
+        };
+        data = dispatchContractCommand(request.command, request.payload, contractCtx);
         break;
       }
       default:

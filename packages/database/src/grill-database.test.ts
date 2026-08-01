@@ -48,14 +48,14 @@ describe('Grill 迁移', () => {
     }
   });
 
-  it('新数据库版本应该是 4', () => {
+  it('新数据库版本应该是 6（含创作契约草案 task_type 迁移）', () => {
     const dbPath = join(tempDir, 'project.sqlite');
     const db = new ProjectDatabase(dbPath);
     db.close();
 
     const raw = new DatabaseSync(dbPath);
     const migrator = new SQLiteMigrator(raw);
-    expect(migrator.getCurrentVersion()).toBe(5);
+    expect(migrator.getCurrentVersion()).toBe(6);
     raw.close();
   });
 
