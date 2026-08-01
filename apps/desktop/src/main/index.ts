@@ -33,6 +33,16 @@ import {
   isValidGrillAcceptQuestionPlanProposalInput,
   isValidGrillListQuestionPlanProposalsInput,
   isValidGrillQuestionPlanProposalIdInput,
+  isValidGetCurrentCreationContractInput,
+  isValidListCreationContractVersionsInput,
+  isValidGetCreationContractProposalInput,
+  isValidListCreationContractProposalsInput,
+  isValidRequestContractDraftInput,
+  isValidAcceptContractProposalInput,
+  isValidRejectContractProposalInput,
+  isValidUpdateContractByUserInput,
+  isValidLockContractFieldInput,
+  isValidUnlockContractFieldInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -47,6 +57,10 @@ import {
   type GrillProposalPublicData,
   type GrillRequestQuestionPlanResult,
   type GrillQuestionPlanProposalPublicData,
+  type ContractVersionPublicData,
+  type ContractVersionSummary,
+  type ProposalPublicData,
+  type RequestContractDraftResult,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -608,6 +622,159 @@ ipcMain.handle(
       command: 'grill.getQuestionPlanProposal',
       payload: input,
     })) as GrillQuestionPlanProposalPublicData;
+  },
+);
+
+// ── 创作契约 IPC 处理器 ────────────────────────────────────────────
+// Main 只做 validator + forwardToWorker，不直接打开 SQLite。
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_GET_CURRENT,
+  async (_event, input: unknown): Promise<ContractVersionPublicData | null> => {
+    if (!isValidGetCurrentCreationContractInput(input)) {
+      throw Object.assign(new Error('无效的当前契约查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.getCurrent',
+      payload: input,
+    })) as ContractVersionPublicData | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_LIST_VERSIONS,
+  async (_event, input: unknown): Promise<ReadonlyArray<ContractVersionSummary>> => {
+    if (!isValidListCreationContractVersionsInput(input)) {
+      throw Object.assign(new Error('无效的契约版本列表输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.listVersions',
+      payload: input,
+    })) as ReadonlyArray<ContractVersionSummary>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_GET_PROPOSAL,
+  async (_event, input: unknown): Promise<ProposalPublicData> => {
+    if (!isValidGetCreationContractProposalInput(input)) {
+      throw Object.assign(new Error('无效的契约提案查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.getProposal',
+      payload: input,
+    })) as ProposalPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_LIST_PROPOSALS,
+  async (_event, input: unknown): Promise<ReadonlyArray<ProposalPublicData>> => {
+    if (!isValidListCreationContractProposalsInput(input)) {
+      throw Object.assign(new Error('无效的契约提案列表输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.listProposals',
+      payload: input,
+    })) as ReadonlyArray<ProposalPublicData>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_REQUEST_DRAFT,
+  async (_event, input: unknown): Promise<RequestContractDraftResult> => {
+    if (!isValidRequestContractDraftInput(input)) {
+      throw Object.assign(new Error('无效的请求创作契约输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.requestDraft',
+      payload: input,
+    })) as RequestContractDraftResult;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_ACCEPT_PROPOSAL,
+  async (_event, input: unknown): Promise<ContractVersionPublicData> => {
+    if (!isValidAcceptContractProposalInput(input)) {
+      throw Object.assign(new Error('无效的接受契约提案输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.acceptProposal',
+      payload: input,
+    })) as ContractVersionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_REJECT_PROPOSAL,
+  async (_event, input: unknown): Promise<ProposalPublicData> => {
+    if (!isValidRejectContractProposalInput(input)) {
+      throw Object.assign(new Error('无效的拒绝契约提案输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.rejectProposal',
+      payload: input,
+    })) as ProposalPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_UPDATE_BY_USER,
+  async (_event, input: unknown): Promise<ContractVersionPublicData> => {
+    if (!isValidUpdateContractByUserInput(input)) {
+      throw Object.assign(new Error('无效的用户更新契约输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.updateByUser',
+      payload: input,
+    })) as ContractVersionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_LOCK_FIELD,
+  async (_event, input: unknown): Promise<ContractVersionPublicData> => {
+    if (!isValidLockContractFieldInput(input)) {
+      throw Object.assign(new Error('无效的锁定契约字段输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.lockField',
+      payload: input,
+    })) as ContractVersionPublicData;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CONTRACT_UNLOCK_FIELD,
+  async (_event, input: unknown): Promise<ContractVersionPublicData> => {
+    if (!isValidUnlockContractFieldInput(input)) {
+      throw Object.assign(new Error('无效的解锁契约字段输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'contract.unlockField',
+      payload: input,
+    })) as ContractVersionPublicData;
   },
 );
 

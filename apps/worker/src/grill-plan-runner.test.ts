@@ -768,7 +768,11 @@ describe('recoverPendingGrillPlans', () => {
     const deps: GrillPlanRecoveryDeps = {
       listProjectDbs: () => [{ projectId: 'proj-1', projDb }],
       getTaskRepo: () => taskRepo,
-      schedule: (projectId, taskId) => scheduled.push({ projectId, taskId }),
+      schedule: (projectId, taskId) => {
+        scheduled.push({ projectId, taskId });
+        return { scheduled: true };
+      },
+      settle: () => 'TERMINAL',
     };
 
     recoverPendingGrillPlans(deps);
@@ -786,7 +790,11 @@ describe('recoverPendingGrillPlans', () => {
     const deps: GrillPlanRecoveryDeps = {
       listProjectDbs: () => [{ projectId: 'proj-1', projDb }],
       getTaskRepo: () => taskRepo,
-      schedule: (_p, taskId) => scheduled.push(taskId),
+      schedule: (_p, taskId) => {
+        scheduled.push(taskId);
+        return { scheduled: true };
+      },
+      settle: () => 'TERMINAL',
     };
 
     recoverPendingGrillPlans(deps);
@@ -798,10 +806,35 @@ describe('recoverPendingGrillPlans', () => {
     const deps: GrillPlanRecoveryDeps = {
       listProjectDbs: () => [],
       getTaskRepo: () => createMockTaskRepo(createMockState()),
-      schedule: (_p, taskId) => scheduled.push(taskId),
+      schedule: (_p, taskId) => {
+        scheduled.push(taskId);
+        return { scheduled: true };
+      },
+      settle: () => 'TERMINAL',
     };
 
     recoverPendingGrillPlans(deps);
     expect(scheduled).toEqual([]);
+  });
+
+  it('startup recovery SETUP_FAILED：调度失败时安全终结，无永久 PENDING', () => {
+    const settled: string[] = [];
+    const scheduled: string[] = [];
+    const projDb = { close: vi.fn() } as unknown as ProjectDatabase;
+    const deps: GrillPlanRecoveryDeps = {
+      listProjectDbs: () => [{ projectId: 'proj-1', projDb }],
+      getTaskRepo: () => createMockTaskRepo(createMockState()),
+      schedule: (_p, taskId) => {
+        scheduled.push(taskId);
+        return { scheduled: false, reason: 'SETUP_FAILED' };
+      },
+      settle: (_db, taskId) => {
+        settled.push(taskId);
+        return 'FAILED';
+      },
+    };
+    recoverPendingGrillPlans(deps);
+    expect(scheduled).toEqual(['task-1']);
+    expect(settled).toEqual(['task-1']);
   });
 });

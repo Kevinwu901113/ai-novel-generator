@@ -321,7 +321,7 @@ export class GrillAnswerRepositoryAdapter implements GrillAnswerRepositoryPort {
   }
 }
 
-class GrillProposalRepositoryAdapter implements GrillProposalRepositoryPort {
+export class GrillProposalRepositoryAdapter implements GrillProposalRepositoryPort {
   constructor(
     private readonly projDb: ProjectDatabase,
     private readonly clock: Clock,

@@ -49,7 +49,7 @@ import type {
 
 // ── 迁移定义 ──────────────────────────────────────────────────────
 
-const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
+export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
   {
     version: 1,
     sql: `
@@ -498,6 +498,75 @@ const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
       BEGIN
         SELECT RAISE(ABORT, 'creation_contract_lock_events is append-only');
       END;
+    `,
+  },
+  {
+    version: 6,
+    sql: `
+      -- ── 重建 tasks 表：放宽 task_type CHECK 以支持 CREATION_CONTRACT_DRAFT ──
+      -- 保留全部既有列、数据、CHECK、索引、dedupe 部分唯一索引与
+      -- 被创作契约表复合 FK 引用的 parent 唯一索引（uq_tasks_project_id）。
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_version_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        result_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        dedupe_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        stale_at TEXT,
+        cancelled_at TEXT,
+        CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST', 'GRILL_QUESTION_PLAN', 'CREATION_CONTRACT_DRAFT')),
+        CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+        CHECK (attempt_count >= 0),
+        CHECK (json_valid(input_version_json)),
+        CHECK (json_valid(payload_json)),
+        CHECK (result_json IS NULL OR json_valid(result_json))
+      ) STRICT;
+
+      INSERT INTO tasks_new (
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      )
+      SELECT
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at);
+
+      -- 去重 partial unique index（原样重建，保证 PENDING/RUNNING 至多一个活跃任务）
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedupe_active
+        ON tasks(dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status IN ('PENDING', 'RUNNING');
+
+      -- 被 creation_contract_proposals 复合 FK 引用的 parent 唯一索引（原样重建）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_id
+        ON tasks(project_id, id);
+
+      -- ── 创作契约提案：task_id / invocation_id 唯一 ──
+      -- 一个任务至多产生一个 proposal，一个调用至多产生一个 proposal。
+      -- 全新功能，base 无历史 proposal 数据，不会因新增唯一约束失败。
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_cc_proposals_task
+        ON creation_contract_proposals(task_id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_cc_proposals_invocation
+        ON creation_contract_proposals(invocation_id);
     `,
   },
 ];
@@ -1054,6 +1123,23 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   transaction<T>(fn: () => T): T {
     this.db.exec('BEGIN');
+    try {
+      const result = fn();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * BEGIN IMMEDIATE 事务：执行前立即获得 RESERVED 写锁，
+   * 避免延迟事务在并发写入时的升级死锁。用于创作契约草案的
+   * proposal + invocation + task 最终原子提交。
+   */
+  transactionImmediate<T>(fn: () => T): T {
+    this.db.exec('BEGIN IMMEDIATE');
     try {
       const result = fn();
       this.db.exec('COMMIT');

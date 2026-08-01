@@ -40,6 +40,16 @@ const IPC_CHANNELS = {
   GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'ipc:grill-accept-question-plan-proposal',
   GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'ipc:grill-list-question-plan-proposals',
   GRILL_GET_QUESTION_PLAN_PROPOSAL: 'ipc:grill-get-question-plan-proposal',
+  CONTRACT_GET_CURRENT: 'ipc:contract-get-current',
+  CONTRACT_LIST_VERSIONS: 'ipc:contract-list-versions',
+  CONTRACT_GET_PROPOSAL: 'ipc:contract-get-proposal',
+  CONTRACT_LIST_PROPOSALS: 'ipc:contract-list-proposals',
+  CONTRACT_REQUEST_DRAFT: 'ipc:contract-request-draft',
+  CONTRACT_ACCEPT_PROPOSAL: 'ipc:contract-accept-proposal',
+  CONTRACT_REJECT_PROPOSAL: 'ipc:contract-reject-proposal',
+  CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
+  CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
+  CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
 } as const;
 
 /**
@@ -80,6 +90,20 @@ import type {
   GrillProposalPublicData,
   GrillRequestQuestionPlanResult,
   GrillQuestionPlanProposalPublicData,
+  GetCurrentCreationContractInput,
+  ListCreationContractVersionsInput,
+  GetCreationContractProposalInput,
+  ListCreationContractProposalsInput,
+  RequestContractDraftInput,
+  RequestContractDraftResult,
+  AcceptContractProposalInput,
+  RejectContractProposalInput,
+  UpdateContractByUserInput,
+  LockContractFieldInput,
+  UnlockContractFieldInput,
+  ContractVersionPublicData,
+  ContractVersionSummary,
+  ProposalPublicData,
 } from '@ai-novel/contracts';
 
 /**
@@ -261,6 +285,54 @@ const desktopAPI: DesktopAPI = {
       input: GrillQuestionPlanProposalIdInput,
     ): Promise<GrillQuestionPlanProposalPublicData> {
       return ipcRenderer.invoke(IPC_CHANNELS.GRILL_GET_QUESTION_PLAN_PROPOSAL, input);
+    },
+  },
+
+  contract: {
+    async getCurrent(
+      input: GetCurrentCreationContractInput,
+    ): Promise<ContractVersionPublicData | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_GET_CURRENT, input);
+    },
+
+    async listVersions(
+      input: ListCreationContractVersionsInput,
+    ): Promise<ReadonlyArray<ContractVersionSummary>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_LIST_VERSIONS, input);
+    },
+
+    async getProposal(input: GetCreationContractProposalInput): Promise<ProposalPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_GET_PROPOSAL, input);
+    },
+
+    async listProposals(
+      input: ListCreationContractProposalsInput,
+    ): Promise<ReadonlyArray<ProposalPublicData>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_LIST_PROPOSALS, input);
+    },
+
+    async requestDraft(input: RequestContractDraftInput): Promise<RequestContractDraftResult> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_REQUEST_DRAFT, input);
+    },
+
+    async acceptProposal(input: AcceptContractProposalInput): Promise<ContractVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_ACCEPT_PROPOSAL, input);
+    },
+
+    async rejectProposal(input: RejectContractProposalInput): Promise<ProposalPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_REJECT_PROPOSAL, input);
+    },
+
+    async updateByUser(input: UpdateContractByUserInput): Promise<ContractVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_UPDATE_BY_USER, input);
+    },
+
+    async lockField(input: LockContractFieldInput): Promise<ContractVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_LOCK_FIELD, input);
+    },
+
+    async unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_UNLOCK_FIELD, input);
     },
   },
 };
