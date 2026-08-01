@@ -172,7 +172,7 @@ WritingCandidateV1
 
 **严格验证（CLI 的 validate-ratings 与 aggregate 必须调用，禁止 cast 充当验证）**：
 
-- `validateBlindPacket(input)`：plain object、exact keys、schemaVersion=1、locale=zh-CN、suiteId/packetId/caseId/alias 严格验证、caseId 唯一、case 内 alias 唯一且为 A-Z、candidates 非空、sceneBrief 与 manualCriteria 走共享严格验证、候选文本规范化后有实质内容、**拒绝身份字段**（candidateId 等）。
+- `validateBlindPacket(input)`：plain object、exact keys、schemaVersion=1、locale=zh-CN、suiteId/packetId/caseId/alias 严格验证、caseId 唯一、case 内 alias 唯一且为**大写单字母 A-Z**（`/^[A-Z]$/`，与 generator `MAX_ALIASES=26` 及 HumanRating 共用同一规则）、candidates 非空、sceneBrief 与 manualCriteria 走共享严格验证、候选文本规范化后有实质内容、**拒绝身份字段**（candidateId 等）。
 - `validatePrivateMapping(input, packet)`：exact keys、schemaVersion=1、suiteId === packet.suiteId、seed 非空且长度受限、`packetId === sha256("blind-packet:" + seed + ":" + suiteId)`、entry 引用必须存在于 packet、每个 packet case/alias **恰好**对应一个 entry（无缺失/多余/重复）、candidateId 不重复、alias→candidateId 一对一。
 
 ## 九、人工评分
@@ -216,7 +216,9 @@ writing-evaluation aggregate --packet <packet.json> --mapping <mapping.json> --r
 - 不使用外部 CLI dependency；严格参数解析，unknown option / missing argument 失败；
 - exit code：0 成功，非 0 校验或 IO 失败；
 - 错误消息安全：不回显完整候选文本，不输出 absolute path 到公共错误；read/write/exists 失败只输出操作类型、文件名与固定安全消息，不输出原始 fs error.message / errno / stack；
-- **private mapping 禁止输出到 stdout，必须显式提供 `--mapping-output`**；`--packet-output` 与 `--mapping-output` 不能指向同一路径；先在内存完成全部路径与 overwrite 校验后再写入；
+- **private mapping 禁止输出到 stdout，必须显式提供 `--mapping-output`**；
+- **路径身份判断使用规范化绝对路径比较**（`path.resolve`）：`./`、父级遍历（`out/../x.json`）、相对/绝对路径别名都会识别为同一路径并拒绝；错误只显示 basename；
+- **staged / atomic publication**：先在内存生成并验证 packet/mapping；完成全部路径、overwrite 与路径身份检查；mapping 与 packet（若写文件）先写临时文件；两个临时文件都成功后再 rename 发布正式文件；任一步失败则 best-effort rollback（移除已发布文件、恢复 `--force` 下被替换的旧文件、清理临时文件），不留下半个输出，stdout packet 只在 mapping 正式发布成功后输出；
 - validate-ratings 与 aggregate 使用 `validateBlindPacket` / `validatePrivateMapping` 严格校验（禁止 cast）；
 - 无网络访问；默认不写文件，除非显式提供 output；不覆盖已有文件，除非显式 `--force`；
 - UTF-8；JSON 为确定性 compact 输出；Markdown 稳定；
