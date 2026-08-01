@@ -20,26 +20,28 @@
 > Grill 能力提前落地，但 M1 的"创作契约"目标尚未完成。
 > PlotPilot foundation 已存在，但产品接入推迟到创作契约和稿件版本建立之后。
 
-| 切片编号 | 名称                             | 状态      | 合并 PR / 备注   |
-| -------- | -------------------------------- | --------- | ---------------- |
-| M0       | 仓库与工程基线                   | ✅ 完成   | 初始提交         |
-| M1-A     | 本地项目与 SQLite                | ✅ 完成   | PR #1 前置       |
-| M1-B1    | Provider 与 Keychain             | ✅ 完成   | PR #1            |
-| M1-B2    | 持久化任务与模型调用             | ✅ 完成   | PR #2            |
-| M1-B2.5  | Task Activity Center             | ✅ 完成   | PR #6            |
-| M1-S1    | Renderer safety boundary         | ✅ 完成   | PR #7            |
-| M1-S2    | Renderer accessibility           | ✅ 完成   | PR #10           |
-| M2-A1    | Grill 领域、持久化、IPC          | ✅ 完成   | PR #3            |
-| M2-A1.5  | Grill 桌面工作台                 | ✅ 完成   | PR #4, #5        |
-| M2-A2-BE | AI question-plan backend         | ✅ 完成   | PR #9            |
-| M2-A2-FE | AI question-plan Renderer        | ✅ 完成   | PR #11           |
-| —        | PlotPilot sidecar foundation     | ✅ 完成   | PR #8            |
-| M1-C0    | 创作契约架构设计                 | ✅ 完成   | PR #12           |
-| M1-C1    | 创作契约 domain/contracts/db/app | ✅ 完成   | PR #13, #14, #15 |
-| M1-C2    | 创作契约 AI proposal task        | ✅ 完成   | PR #17           |
-| M1-C3    | 创作契约 Renderer                | 🔵 下一项 |                  |
-| M2-B     | 正文编辑与稿件版本               | ⬜ 待开始 |                  |
-| M3       | 大纲与章节生成                   | ⬜ 待开始 |                  |
+| 切片编号 | 名称                              | 状态      | 合并 PR / 备注   |
+| -------- | --------------------------------- | --------- | ---------------- |
+| M0       | 仓库与工程基线                    | ✅ 完成   | 初始提交         |
+| M1-A     | 本地项目与 SQLite                 | ✅ 完成   | PR #1 前置       |
+| M1-B1    | Provider 与 Keychain              | ✅ 完成   | PR #1            |
+| M1-B2    | 持久化任务与模型调用              | ✅ 完成   | PR #2            |
+| M1-B2.5  | Task Activity Center              | ✅ 完成   | PR #6            |
+| M1-S1    | Renderer safety boundary          | ✅ 完成   | PR #7            |
+| M1-S2    | Renderer accessibility            | ✅ 完成   | PR #10           |
+| M2-A1    | Grill 领域、持久化、IPC           | ✅ 完成   | PR #3            |
+| M2-A1.5  | Grill 桌面工作台                  | ✅ 完成   | PR #4, #5        |
+| M2-A2-BE | AI question-plan backend          | ✅ 完成   | PR #9            |
+| M2-A2-FE | AI question-plan Renderer         | ✅ 完成   | PR #11           |
+| —        | PlotPilot sidecar foundation      | ✅ 完成   | PR #8            |
+| M1-C0    | 创作契约架构设计                  | ✅ 完成   | PR #12           |
+| M1-C1    | 创作契约 domain/contracts/db/app  | ✅ 完成   | PR #13, #14, #15 |
+| M1-C2    | 创作契约 AI proposal task         | ✅ 完成   | PR #17           |
+| M1-C3    | 创作契约 Renderer                 | 🔵 下一项 |                  |
+| GQ1      | Writing Evaluation Lab foundation | ✅ 完成   | PR #18           |
+| GQ2      | Real Generation Experiment Runner | ⬜ 下一项 |                  |
+| M2-B     | 正文编辑与稿件版本                | ⬜ 待开始 |                  |
+| M3       | 大纲与章节生成                    | ⬜ 待开始 |                  |
 
 ## M0：仓库与开发基线
 
