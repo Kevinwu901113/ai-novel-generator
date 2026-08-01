@@ -443,8 +443,12 @@ export interface RatingAggregationReport {
   readonly candidateAggregates: readonly CandidateRatingAggregate[];
   readonly pairwiseWins: readonly PairwiseWin[];
   readonly raterCount: number;
-  /** 有 ratings 但缺失了某些维度评分的 case/alias 列表 */
-  readonly missingDimensions: readonly string[];
+  /**
+   * 某 (case, rater) 未覆盖该 case 内全部 alias 的记录（格式 "caseId/raterId"）。
+   * 每个 rating 都强制包含全部 8 个维度，因此这里表达的是“评分覆盖不完整”，
+   * 而不是“维度缺失”。
+   */
+  readonly missingRatingCoverage: readonly string[];
   readonly warnings: readonly string[];
 }
 

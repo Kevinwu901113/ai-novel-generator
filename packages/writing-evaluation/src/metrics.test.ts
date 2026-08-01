@@ -178,4 +178,33 @@ describe('重复信号', () => {
     expect(top[0].opener).toBe('他');
     expect(top[0].count).toBe(2);
   });
+
+  it('无重复时 topRepeatedNgrams 为空数组（只含 singleton）', () => {
+    const seg = segmentText('甲乙丙丁。');
+    expect(topRepeatedNgrams(seg)).toEqual([]);
+  });
+
+  it('无重复时 topRepeatedSentenceOpeners 为空数组', () => {
+    const seg = segmentText('甲走。乙来。丙停。');
+    expect(topRepeatedSentenceOpeners(seg.sentences)).toEqual([]);
+  });
+
+  it('top n-gram 只包含 count > 1 的真正重复项', () => {
+    // “甲” 出现两次 → 2-gram "甲X" 重复一次以上；其余为 singleton
+    const seg = segmentText('甲一。甲二。乙三。');
+    const top = topRepeatedNgrams(seg);
+    for (const g of top) {
+      expect(g.count).toBeGreaterThan(1);
+    }
+  });
+
+  it('同 count 的 n-gram 按 code point 升序（tie-order 稳定）', () => {
+    // 甲乙/乙丙/丙甲 各出现 2 次，count 相同 → 按 code point 升序（丙 U+4E19 < 乙 U+4E59 < 甲 U+7532）
+    const seg = segmentText('甲乙丙甲乙丙甲');
+    const repeated = topRepeatedNgrams(seg)
+      .filter((g) => g.n === 2)
+      .filter((g) => g.count > 1)
+      .map((g) => g.ngram);
+    expect(repeated).toEqual(['丙甲', '乙丙', '甲乙']);
+  });
 });

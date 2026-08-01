@@ -290,10 +290,10 @@ export function renderMarkdownRatingAggregation(agg: RatingAggregationReport): s
     lines.push('');
   }
 
-  if (agg.missingDimensions.length > 0) {
-    lines.push('## 缺失维度');
+  if (agg.missingRatingCoverage.length > 0) {
+    lines.push('## 未覆盖全部候选的评分（case/rater）');
     lines.push('');
-    for (const m of agg.missingDimensions) lines.push(`- ${m}`);
+    for (const m of agg.missingRatingCoverage) lines.push(`- ${m}`);
     lines.push('');
   }
 

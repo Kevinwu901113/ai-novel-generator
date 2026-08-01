@@ -296,7 +296,7 @@ describe('aggregateRatings', () => {
     expect(json).not.toContain('overallQualityScore');
   });
 
-  it('missingDimensions 字段存在（完整数据下为空）', () => {
+  it('missingRatingCoverage 字段存在（完整覆盖下为空）', () => {
     const packet = makePacket();
     const agg = aggregateRatings({
       packet,
@@ -304,7 +304,24 @@ describe('aggregateRatings', () => {
       mapping: null,
       clock: CLOCK,
     });
-    expect(Array.isArray(agg.missingDimensions)).toBe(true);
+    expect(Array.isArray(agg.missingRatingCoverage)).toBe(true);
+    expect(agg.missingRatingCoverage).toEqual([]);
+  });
+
+  it('missingRatingCoverage 标记未覆盖全部 alias 的 rater', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    // r1 只给 alias a 打分，未覆盖该 case 的另一个 alias
+    const ratings = [
+      makeRating(packet, {
+        caseId: 'restrained-reunion',
+        candidateAlias: a,
+        raterId: 'r1',
+        preferredRank: 1,
+      }),
+    ];
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    expect(agg.missingRatingCoverage).toContain('restrained-reunion/r1');
   });
 
   it('样例规模过小时给出 warning', () => {

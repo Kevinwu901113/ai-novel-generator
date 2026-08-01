@@ -280,7 +280,7 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
 
   const candidateAggregates: CandidateRatingAggregate[] = [];
   const warnings: string[] = [];
-  const missingDimensions: string[] = [];
+  const missingRatingCoverage: string[] = [];
 
   // case 内按 alias code-point 顺序遍历，保证稳定
   for (const c of packet.cases) {
@@ -295,9 +295,6 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
       for (const dim of HUMAN_RATING_DIMENSIONS) {
         const values = caseRatings.map((r) => r[dim]);
         dims[dim] = dimensionAggregate(values);
-        if (values.length === 0) {
-          missingDimensions.push(`${c.caseId}/${alias}/${dim}`);
-        }
       }
 
       const rankDistribution: Record<number, number> = {};
@@ -364,6 +361,27 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
     }
   }
 
+  // missingRatingCoverage：某 (case, rater) 未覆盖该 case 内全部 alias
+  for (const c of packet.cases) {
+    const aliasCount = c.candidates.length;
+    const aliasesByRater = new Map<string, Set<string>>();
+    for (const r of ratings) {
+      if (r.caseId !== c.caseId) continue;
+      let set = aliasesByRater.get(r.raterId);
+      if (!set) {
+        set = new Set();
+        aliasesByRater.set(r.raterId, set);
+      }
+      set.add(r.candidateAlias);
+    }
+    const raterIds = [...aliasesByRater.keys()].sort(codePointCompare);
+    for (const raterId of raterIds) {
+      if ((aliasesByRater.get(raterId)?.size ?? 0) < aliasCount) {
+        missingRatingCoverage.push(`${c.caseId}/${raterId}`);
+      }
+    }
+  }
+
   if (raterCount < MIN_RATERS_FOR_STABLE_STATS) {
     warnings.push(
       `总评分数人数 ${raterCount} 低于 ${MIN_RATERS_FOR_STABLE_STATS}，任何结论都只能视为示例，不代表真实用户研究`,
@@ -378,7 +396,7 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
     candidateAggregates,
     pairwiseWins,
     raterCount,
-    missingDimensions,
+    missingRatingCoverage,
     warnings,
   };
 }

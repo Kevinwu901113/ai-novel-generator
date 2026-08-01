@@ -146,7 +146,7 @@ export function containsWhitespace(segment: string): boolean {
  * 文本规范化：
  * - NFC；
  * - CRLF / CR → LF；
- * - 每行清除首尾空白；
+ * - 每行清除首尾空白（含 U+200B / U+FEFF / U+2060 等零宽空白，与 isWhitespaceChar 统一）；
  * - 去除空行（连续空行不产生空段落）。
  * 返回以 \n 连接的规范化文本。
  */
@@ -156,10 +156,20 @@ export function normalizeText(raw: string): string {
   const lines = withLf.split('\n');
   const nonEmpty: string[] = [];
   for (const line of lines) {
-    const trimmed = line.trim();
+    const trimmed = trimEdges(line);
     if (trimmed.length > 0) nonEmpty.push(trimmed);
   }
   return nonEmpty.join('\n');
+}
+
+/** 按 isWhitespaceChar 集合清除字符串首尾空白（JS trim 不覆盖零宽字符）。 */
+function trimEdges(s: string): string {
+  const cps = Array.from(s);
+  let start = 0;
+  let end = cps.length;
+  while (start < end && isWhitespaceChar(cps[start])) start += 1;
+  while (end > start && isWhitespaceChar(cps[end - 1])) end -= 1;
+  return cps.slice(start, end).join('');
 }
 
 /** 计算 code point 数量。 */
@@ -183,6 +193,14 @@ function isCjkOpeningQuote(c: string): boolean {
 function isCjkClosingQuote(c: string): boolean {
   return c === '”' || c === '」' || c === '』';
 }
+
+/** 每个 closer 唯一对应的 opener（严格配对）。 */
+const CLOSER_TO_OPENER: ReadonlyMap<string, string> = new Map([
+  ['”', '“'],
+  ['」', '「'],
+  ['』', '『'],
+  ['"', '"'],
+]);
 
 // ── 分段与分句 ────────────────────────────────────────────────────
 
@@ -208,7 +226,7 @@ function segmentParagraph(paragraph: string): string[] {
   const cps = Array.from(paragraph);
   const sentences: string[] = [];
   let current: string[] = [];
-  let quoteDepth = 0;
+  const quoteStack: string[] = [];
   let inAsciiQuote = false;
 
   const appendChar = (c: string): void => {
@@ -223,24 +241,27 @@ function segmentParagraph(paragraph: string): string[] {
     current = [];
   };
 
-  /** 更新引号深度；返回该字符是否为处于引号区域内的内容（含引号本身）。 */
+  /** 严格配对：只有栈顶 opener 与当前 closer 匹配才闭合。不匹配不弹栈。 */
   const updateQuoteState = (c: string): boolean => {
     if (c === '"') {
       if (!inAsciiQuote) {
         inAsciiQuote = true;
-        quoteDepth += 1;
-        return true;
+        quoteStack.push('"');
+      } else if (quoteStack[quoteStack.length - 1] === '"') {
+        quoteStack.pop();
+        inAsciiQuote = false;
       }
-      inAsciiQuote = false;
-      quoteDepth = Math.max(0, quoteDepth - 1);
       return true;
     }
     if (isCjkOpeningQuote(c)) {
-      quoteDepth += 1;
+      quoteStack.push(c);
       return true;
     }
     if (isCjkClosingQuote(c)) {
-      if (quoteDepth > 0) quoteDepth -= 1;
+      const top = quoteStack[quoteStack.length - 1];
+      if (top !== undefined && CLOSER_TO_OPENER.get(c) === top) {
+        quoteStack.pop();
+      }
       return true;
     }
     return false;
@@ -249,8 +270,11 @@ function segmentParagraph(paragraph: string): string[] {
   const consumeTrailingClosingQuotes = (): void => {
     while (i < cps.length) {
       const nc = cps[i];
-      const isClosing = isCjkClosingQuote(nc) || (nc === '"' && inAsciiQuote);
-      if (!isClosing) break;
+      const top = quoteStack[quoteStack.length - 1];
+      const isMatchingClosing =
+        (isCjkClosingQuote(nc) && CLOSER_TO_OPENER.get(nc) === top) ||
+        (nc === '"' && inAsciiQuote && top === '"');
+      if (!isMatchingClosing) break;
       appendChar(nc);
       updateQuoteState(nc);
       i += 1;
@@ -401,11 +425,13 @@ function countDialogueCodePoints(text: string): {
       if (!inAsciiQuote) {
         stack.push({ char: '"', startIndex: i });
         inAsciiQuote = true;
-      } else {
+      } else if (stack[stack.length - 1]?.char === '"') {
         const frame = stack.pop();
-        // 嵌套引号只统计最外层区域，避免重复计数
+        // 嵌套引号只统计最外层完整匹配区域，避免重复计数
         if (frame && stack.length === 0) dialogue += i - frame.startIndex + 1;
         inAsciiQuote = false;
+      } else {
+        warnings.push(`发现不匹配的引号 "${c}"`);
       }
       continue;
     }
@@ -414,12 +440,13 @@ function countDialogueCodePoints(text: string): {
       continue;
     }
     if (isCjkClosingQuote(c)) {
-      const frame = stack.pop();
-      // 嵌套引号只统计最外层区域，避免重复计数
-      if (frame && stack.length === 0) {
-        dialogue += i - frame.startIndex + 1;
-      } else if (!frame) {
-        warnings.push(`发现没有对应开引号的闭合引号 "${c}"`);
+      const top = stack[stack.length - 1];
+      if (top !== undefined && CLOSER_TO_OPENER.get(c) === top.char) {
+        stack.pop();
+        // 嵌套引号只统计最外层完整匹配区域，避免重复计数
+        if (stack.length === 0) dialogue += i - top.startIndex + 1;
+      } else {
+        warnings.push(`发现不匹配的闭合引号 "${c}"`);
       }
       continue;
     }

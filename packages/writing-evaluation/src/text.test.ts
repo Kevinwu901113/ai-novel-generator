@@ -16,6 +16,29 @@ describe('normalizeText', () => {
     expect(normalizeText('ä')).toBe('ä');
   });
 
+  it('清理仅零宽字符的行（U+200B / U+FEFF / U+2060）', () => {
+    expect(normalizeText('​​')).toBe('');
+    expect(normalizeText('﻿')).toBe('');
+    expect(normalizeText('⁠')).toBe('');
+  });
+
+  it('零宽字符包围有效正文时清除首尾', () => {
+    expect(normalizeText('​你好​')).toBe('你好');
+    expect(normalizeText('﻿你好﻿')).toBe('你好');
+    expect(normalizeText('⁠你好⁠')).toBe('你好');
+  });
+
+  it('正文中间的零宽字符保留（不破坏正文）', () => {
+    expect(normalizeText('你​好')).toBe('你​好');
+  });
+
+  it('不 mutation 输入', () => {
+    const input = '　你好　\n第二行';
+    const snapshot = input;
+    normalizeText(input);
+    expect(input).toBe(snapshot);
+  });
+
   it('将 CRLF / CR 统一为 LF', () => {
     expect(normalizeText('a\r\nb\rc\n')).toBe('a\nb\nc');
   });
@@ -168,6 +191,56 @@ describe('segmentText — 对话统计', () => {
   it('无对话时 ratio 为 0', () => {
     const seg = segmentText('他转身走了。');
     expect(seg.dialogueCodePointRatio).toBe(0);
+  });
+});
+
+describe('segmentText — 严格引号配对', () => {
+  it('不匹配闭合（“内容』）不计数且产生 warning', () => {
+    const seg = segmentText('“内容』');
+    expect(seg.dialogueCodePointCount).toBe(0);
+    expect(seg.dialogueCodePointRatio).toBeLessThanOrEqual(1);
+    expect(seg.warnings.some((w) => w.includes('不匹配'))).toBe(true);
+  });
+
+  it('不匹配闭合（「内容”）不计数且产生 warning', () => {
+    const seg = segmentText('「内容”');
+    expect(seg.dialogueCodePointCount).toBe(0);
+    expect(seg.dialogueCodePointRatio).toBeLessThanOrEqual(1);
+    expect(seg.warnings.some((w) => w.includes('不匹配'))).toBe(true);
+  });
+
+  it('嵌套匹配只统计最外层完整区域', () => {
+    const seg = segmentText('“他说『好』。”');
+    expect(seg.dialogueCodePointCount).toBe(seg.codePointCount);
+    expect(seg.dialogueCodePointRatio).toBe(1);
+  });
+
+  it('嵌套不匹配（外层不闭合）不计为完整 dialogue', () => {
+    const seg = segmentText('“他说『好』。');
+    expect(seg.dialogueCodePointCount).toBe(0);
+    expect(seg.warnings.some((w) => w.includes('未闭合引号'))).toBe(true);
+  });
+
+  it('extra closing quote 产生 warning 且不计数', () => {
+    const seg = segmentText('内容」');
+    expect(seg.dialogueCodePointCount).toBe(0);
+    expect(seg.warnings.some((w) => w.includes('不匹配'))).toBe(true);
+  });
+
+  it('unclosed outer / closed inner：内层闭合不算完整 dialogue', () => {
+    const seg = segmentText('“『好』');
+    expect(seg.dialogueCodePointCount).toBe(0);
+    expect(seg.warnings.some((w) => w.includes('未闭合引号'))).toBe(true);
+  });
+
+  it('ASCII 与 CJK 混合严格配对', () => {
+    // 内层 ASCII 引号先闭合，外层 CJK 引号随后闭合 → 完整 dialogue
+    const seg = segmentText('“好”');
+    expect(seg.dialogueCodePointRatio).toBe(1);
+    // 内层 ASCII 引号与外层 CJK 交叉不匹配
+    const seg2 = segmentText('「a"b」');
+    expect(seg2.dialogueCodePointCount).toBe(0);
+    expect(seg2.warnings.some((w) => w.includes('不匹配'))).toBe(true);
   });
 });
 

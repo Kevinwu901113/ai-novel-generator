@@ -121,6 +121,8 @@ export function topRepeatedNgrams(segmentation: TextSegmentation): RepeatedNgram
     }
     const sorted = [...counts.entries()]
       .map(([ngram, count]) => ({ n, ngram, count }))
+      // 只保留真正的重复项（count > 1）；无重复时返回空数组
+      .filter((x) => x.count > 1)
       .sort((a, b) => {
         if (b.count !== a.count) return b.count - a.count;
         return codePointCompare(a.ngram, b.ngram);
@@ -138,13 +140,17 @@ export function topRepeatedSentenceOpeners(sentences: readonly string[]): Repeat
     const opener = sentenceOpener(s);
     counts.set(opener, (counts.get(opener) ?? 0) + 1);
   }
-  return [...counts.entries()]
-    .map(([opener, count]) => ({ opener, count }))
-    .sort((a, b) => {
-      if (b.count !== a.count) return b.count - a.count;
-      return codePointCompare(a.opener, b.opener);
-    })
-    .slice(0, TOP_OPENERS);
+  return (
+    [...counts.entries()]
+      .map(([opener, count]) => ({ opener, count }))
+      // 只保留真正的重复开词（count > 1）；无重复时返回空数组
+      .filter((x) => x.count > 1)
+      .sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return codePointCompare(a.opener, b.opener);
+      })
+      .slice(0, TOP_OPENERS)
+  );
 }
 
 export function computeRepetitionMetrics(segmentation: TextSegmentation): RepetitionMetrics {
