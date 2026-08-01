@@ -15,6 +15,7 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
+    "writing-experiment": "pnpm --filter @ai-novel/writing-experiment-runner cli",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check": "pnpm format:check && pnpm lint && pnpm build && pnpm typecheck && pnpm test"
