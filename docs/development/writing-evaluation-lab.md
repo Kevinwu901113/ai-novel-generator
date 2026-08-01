@@ -291,6 +291,11 @@ interface WritingCandidateGeneratorPort {
 
 本 PR 只用 fake generator 测试（`createFakeCandidateGenerator`）。接口保持小而通用，不提前冻结 Scene Planner 或生产 Generation API。真实 adapter 需要：接收 experiment input → 生成候选 → 纳入 suite 后走现有评测链路。**禁止**在本 package 内直接调用 model-gateway。
 
+> 真实 adapter 已由 GQ2 Runner 提供（`apps/writing-experiment-runner`，包外适配，PR #21），
+> 走 source/output suite 语义：source 的占位 candidate / expectedRelations 不混入 generated output suite；
+> `candidates` 只含本次真实生成的候选。GQ2 未合并时，真实 candidate 实验是否完成见
+> `docs/development/writing-experiment-runner.md` 当前状态。
+
 ## 十八、当前明确不能评估的内容
 
 以下能力尚未实现，也不会被自动指标冒充：
