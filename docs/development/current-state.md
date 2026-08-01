@@ -1,8 +1,8 @@
 # 当前状态
 
-**文档基线日期**：2026-07-30
-**Main SHA**：`7df3ac5640f1c3f5ba6fcf46ffe563ca19ac0717`
-**基线事件**：PR #11 (AI question-plan Renderer) 合并
+**文档基线日期**：2026-08-02
+**Main SHA**：`4eab0c14a889647b7057e4688bd2e76b508a9ec9`
+**基线事件**：PR #18 Writing Evaluation Lab Foundation 合并
 
 ---
 
@@ -21,35 +21,36 @@
 | AI question-plan backend（GRILL_QUESTION_PLAN 任务）      | M2-A2-BE | #9     |
 | AI question-plan Renderer（触发、审核、显式接受）         | M2-A2-FE | #11    |
 | PlotPilot sidecar foundation（adapter + lifecycle + SSE） | —        | #8     |
+| Creation Contract architecture design                     | M1-C0    | #12    |
+| Creation Contract domain/contracts/database/application   | M1-C1    | #13    |
+| Creation Contract Accept/Reject                           | M1-C1    | #14    |
+| Creation Contract User Update/Lock/Unlock                 | M1-C1    | #15    |
+| Creation Contract Draft task + Worker/Main/Preload bridge | M1-C2    | #17    |
+| Writing Evaluation Lab foundation                         | GQ1      | #18    |
 
 ## 当前不能做的事
 
-- 创作契约（无 domain、无数据库表、无 UI）
-- 正文编辑和稿件版本
-- 大纲与章节生成
-- PlotPilot 产品级接入（无 Worker RPC、无产品 UI）
-- 导入、导出、备份
-- 跨平台 SecretStore（仅 macOS）
+- 无 Contract Renderer，用户尚不能在 UI 请求、审核和接受 AI Contract Draft
+- 无真实稿件和 Chapter Version
+- 无真实文章生成 pipeline
+- 无 Scene Planner / Draft Generator / Critics / Rewriter
+- 无长篇连续性能力
+- PlotPilot 仍只有 foundation（无 Worker RPC、无产品 UI）
+- 无导出备份
+- SecretStore 仍只支持 macOS
 - 自动重试和通用任务队列
 
 ## 下一条产品纵向切片
 
-```
-Grill answers/proposals
-→ CreationContractProposal（AI 生成）
-→ 用户审核（逐字段对比、锁定标识）
-→ 用户显式接受
-→ CreationContractVersion（不可变权威版本）
-→ 字段锁定
-→ 后续大纲与稿件版本消费 ContractVersion snapshot
-```
+M1-C0、M1-C1、M1-C2 已合并。后端已支持 Creation Contract proposal / version / accept / reject / user update / lock / unlock / draft task / process bridge。
 
-切片拆分：
+**下一条产品纵向切片**：`M1-C3 Minimal Creation Contract Renderer`
 
-1. **M1-C1**：domain / contracts / database / application
-2. **M1-C2**：CREATION_CONTRACT_DRAFT task + model proposal + Worker IPC
-3. **M1-C3**：Renderer（请求、对比、接受、版本历史）
-4. **M1-C4**：hardening / manual acceptance
+用户尚不能在 UI 请求、审核和接受 AI Contract Draft。M1-C3 需要实现最小可用的 Renderer 界面，完成从 UI 触发到用户接受的完整链路。
+
+**质量主线并行下一步**：`GQ2 Real Generation Experiment Runner`
+
+Writing Evaluation Lab foundation 已合并，但仅证明评测工具可用，不构成文章生成质量提升证据。GQ2 需要接入真实模型生成、运行固定评测 suite、产出 candidate artifacts 和盲评数据。
 
 ## 暂缓事项
 
