@@ -18,12 +18,17 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import type { Clock } from './clock.js';
 import { systemClock } from './clock.js';
-import { validateSuite } from './validate.js';
+import { validateBlindPacket, validatePrivateMapping, validateSuite } from './validate.js';
 import { evaluateSuite, type EvaluateOptions } from './evaluate.js';
 import { generateBlindPacket } from './blind.js';
-import { aggregateRatings, validateRatings, type AggregateRatingsOptions } from './rating.js';
+import {
+  aggregateRatings,
+  validateRatings,
+  RatingValidationError,
+  type AggregateRatingsOptions,
+} from './rating.js';
 import { renderMarkdownRatingAggregation, renderMarkdownReport } from './markdown.js';
-import type { BlindPacketV1, PrivateMappingV1 } from './schema.js';
+import { EvaluationValidationError } from './validate.js';
 
 // ── 解析 ──────────────────────────────────────────────────────────
 
@@ -132,19 +137,26 @@ function resolveDeps(deps: CliDeps): ResolvedDeps {
   };
 }
 
+/** 安全错误消息白名单：只有受控错误类型才输出 message，其余一律固定文本。 */
+function safeErrorMessage(err: unknown): string {
+  if (err instanceof CliUsageError) return err.message;
+  if (err instanceof EvaluationValidationError) return err.message;
+  if (err instanceof RatingValidationError) return err.message;
+  return '内部错误（详见本地日志）';
+}
+
 function readJson(deps: ResolvedDeps, pathInput: string): unknown {
   let raw: string;
   try {
     raw = deps.readFile(pathInput);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new CliUsageError(`无法读取文件 "${safeDisplayPath(pathInput)}": ${message}`);
+  } catch {
+    // 不输出原始 fs error.message（可能含绝对路径 / errno / 密钥）
+    throw new CliUsageError(`无法读取文件 "${safeDisplayPath(pathInput)}"（IO 错误）`);
   }
   try {
     return JSON.parse(raw) as unknown;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    throw new CliUsageError(`无法解析 JSON 文件 "${safeDisplayPath(pathInput)}": ${message}`);
+  } catch {
+    throw new CliUsageError(`无法解析 JSON 文件 "${safeDisplayPath(pathInput)}"（JSON 格式错误）`);
   }
 }
 
@@ -164,7 +176,11 @@ function writeJsonOutput(
       `输出文件 "${safeDisplayPath(pathInput)}" 已存在；如需覆盖请显式使用 --force`,
     );
   }
-  deps.writeFile(pathInput, content);
+  try {
+    deps.writeFile(pathInput, content);
+  } catch {
+    throw new CliUsageError(`无法写入文件 "${safeDisplayPath(pathInput)}"（IO 错误）`);
+  }
 }
 
 // ── 命令实现 ──────────────────────────────────────────────────────
@@ -175,12 +191,13 @@ const HELP_TEXT = `writing-evaluation CLI
   writing-evaluation help
   writing-evaluation validate <suite.json> [--type suite|ratings] [--packet <blind-packet.json>]
   writing-evaluation evaluate <suite.json> [--output <report.json>] [--format json|markdown] [--clock <iso>] [--force]
-  writing-evaluation blind <suite.json> --seed <seed> [--packet-output <packet.json>] [--mapping-output <mapping.json>] [--force]
+  writing-evaluation blind <suite.json> --seed <seed> --mapping-output <mapping.json> [--packet-output <packet.json>] [--force]
   writing-evaluation aggregate --packet <packet.json> --mapping <mapping.json> --ratings <ratings.json> [--output <agg.json>] [--format json|markdown] [--clock <iso>] [--force]
 
 说明:
   - 默认不写文件；未提供 output 时 JSON 输出到 stdout。
   - 不覆盖已有文件，除非显式 --force。
+  - private mapping 禁止输出到 stdout，必须显式提供 --mapping-output。
   - 报告不是 AI 检测器；自动指标不代表文学质量；没有单一总分。
   - private mapping 不应交给评审者。
   - 工具完全离线，不上传任何文本。
@@ -216,16 +233,8 @@ export async function runCli(argv: readonly string[], deps: CliDeps = {}): Promi
         return runAggregate(resolved, parsed);
     }
   } catch (err) {
-    if (err instanceof CliUsageError) {
-      resolved.stderr(`错误: ${err.message}\n`);
-      return 1;
-    }
-    // 校验错误消息本身是安全的（不回显正文）
-    if (err instanceof Error) {
-      resolved.stderr(`错误: ${err.message}\n`);
-      return 1;
-    }
-    resolved.stderr('错误: 未知失败\n');
+    // 只输出白名单错误类型；任何原始 Error 的 message 都不进入 stderr
+    resolved.stderr(`错误: ${safeErrorMessage(err)}\n`);
     return 1;
   }
 
@@ -265,7 +274,7 @@ function runValidate(deps: ResolvedDeps, parsed: ParsedCli): number {
     const packetFile = requireOption(parsed, 'packet');
     const packetInput = readJson(deps, packetFile);
     const ratingsInput = readJson(deps, file);
-    const packet = packetInput as BlindPacketV1;
+    const packet = validateBlindPacket(packetInput);
     validateRatings(ratingsInput, { packet });
     deps.stdout(`OK: ratings 有效（${safeDisplayPath(file)}）\n`);
     return 0;
@@ -310,10 +319,39 @@ function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
   const suite = validateSuite(readJson(deps, file));
   const result = generateBlindPacket(suite, { seed });
 
-  writeJsonOutput(deps, packetOutput, JSON.stringify(result.packet), force);
-  writeJsonOutput(deps, mappingOutput, JSON.stringify(result.mapping), force);
+  // 防御性校验生成的产物（禁止 cast 充当验证）
+  const packet = validateBlindPacket(result.packet);
+  const mapping = validatePrivateMapping(result.mapping, result.packet);
 
+  const packetJson = JSON.stringify(packet);
+  const mappingJson = JSON.stringify(mapping);
+
+  // private mapping 禁止默认输出到 stdout：必须显式 --mapping-output
+  if (mappingOutput === undefined) {
+    throw new CliUsageError(
+      'private mapping 必须通过 --mapping-output 显式输出（禁止输出到 stdout）',
+    );
+  }
+  if (packetOutput !== undefined && packetOutput === mappingOutput) {
+    throw new CliUsageError('--packet-output 与 --mapping-output 不能指向同一路径');
+  }
+
+  // 先在内存完成全部路径与 overwrite 校验，再写入（避免失败时留下半个输出）
+  const writeTargets: Array<{ path: string }> = [];
+  if (packetOutput !== undefined) writeTargets.push({ path: packetOutput });
+  writeTargets.push({ path: mappingOutput });
+  for (const t of writeTargets) {
+    if (deps.exists(t.path) && !force) {
+      throw new CliUsageError(
+        `输出文件 "${safeDisplayPath(t.path)}" 已存在；如需覆盖请显式使用 --force`,
+      );
+    }
+  }
+
+  // 全部校验通过后再写；packet 可到文件或 stdout，mapping 只写文件
+  writeJsonOutput(deps, packetOutput, packetJson, force);
   deps.stderr('警告: private mapping 不应交给评审者；请将其与 blind packet 分开保管。\n');
+  writeJsonOutput(deps, mappingOutput, mappingJson, force);
   return 0;
 }
 
@@ -328,8 +366,8 @@ function runAggregate(deps: ResolvedDeps, parsed: ParsedCli): number {
   const force = parsed.options.get('force') === true;
   const output = optionString(parsed, 'output');
 
-  const packet = readJson(deps, packetFile) as BlindPacketV1;
-  const mapping = readJson(deps, mappingFile) as PrivateMappingV1;
+  const packet = validateBlindPacket(readJson(deps, packetFile));
+  const mapping = validatePrivateMapping(readJson(deps, mappingFile), packet);
   const ratingsInput = readJson(deps, ratingsFile);
 
   const ratings = validateRatings(ratingsInput, { packet });

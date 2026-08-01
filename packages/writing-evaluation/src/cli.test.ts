@@ -248,12 +248,73 @@ describe('runCli — blind / aggregate', () => {
     expect(h.err.join('')).toContain('private mapping');
   });
 
-  it('blind 未提供输出时打印到 stdout', async () => {
+  it('blind 缺少 --mapping-output 明确失败', async () => {
     const h = makeHarness({ 'suite.json': SUITE_JSON });
     const code = await runCli(['blind', 'suite.json', '--seed', 's'], h.deps);
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('--mapping-output');
+    // 不允许把 mapping 输出到 stdout
+    expect(h.out.join('')).not.toContain('candidateId');
+  });
+
+  it('blind 无 --packet-output 时 packet 输出到 stdout，mapping 只在文件', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const code = await runCli(
+      ['blind', 'suite.json', '--seed', 's', '--mapping-output', 'mapping.json'],
+      h.deps,
+    );
     expect(code).toBe(0);
     const stdout = h.out.join('');
     expect(stdout).toContain('"packetId"');
+    // stdout 只有一个合法 JSON document（packet），不含 mapping
+    expect(stdout).not.toContain('candidateId');
+    // mapping 写入文件
+    expect(h.fs.files.get('mapping.json')).toContain('candidateId');
+  });
+
+  it('blind 拒绝 packet-output 与 mapping-output 同路径', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'same.json',
+        '--mapping-output',
+        'same.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('同一路径');
+  });
+
+  it('blind 在写入失败时不产生误导性成功', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const originalWrite = h.deps.writeFile;
+    h.deps.writeFile = (p: string, content: string) => {
+      if (p === 'mapping.json') throw new Error('EACCES: permission denied /Users/secret/dir');
+      originalWrite(p, content);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    // 错误消息安全：不暴露绝对路径 / 原始 errno
+    expect(h.err.join('')).not.toContain('/Users/secret');
+    expect(h.err.join('')).not.toContain('EACCES');
   });
 
   it('aggregate 成功并解析 candidateId', async () => {
@@ -317,5 +378,68 @@ describe('runCli — blind / aggregate', () => {
     const h = makeHarness({ 'ratings.json': '[]' });
     const code = await runCli(['validate', 'ratings.json', '--type', 'ratings'], h.deps);
     expect(code).toBeGreaterThan(0);
+  });
+});
+
+describe('runCli — IO 错误安全（不泄漏绝对路径 / 密钥 / errno）', () => {
+  const SECRET_ERROR = (op: string) =>
+    new Error(
+      `${op} failed: /Users/kevin/private/secret.json ENOENT Bearer secret-token API_KEY=secret`,
+    );
+
+  function secretHarness(overrides: Partial<ReturnType<typeof makeHarness>['deps']> = {}) {
+    const baseDeps = makeHarness({ 'suite.json': SUITE_JSON });
+    return {
+      ...baseDeps,
+      deps: {
+        ...baseDeps.deps,
+        ...overrides,
+      },
+    };
+  }
+
+  it('读取失败不泄漏错误内容', async () => {
+    const h = secretHarness({
+      readFile: () => {
+        throw SECRET_ERROR('read');
+      },
+    });
+    const code = await runCli(['validate', 'suite.json'], h.deps);
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('/Users/kevin');
+    expect(all).not.toContain('Bearer secret-token');
+    expect(all).not.toContain('API_KEY=secret');
+    expect(all).not.toContain('ENOENT');
+    expect(all).toContain('IO 错误');
+  });
+
+  it('写入失败不泄漏错误内容', async () => {
+    const h = secretHarness({
+      writeFile: () => {
+        throw SECRET_ERROR('write');
+      },
+    });
+    const code = await runCli(
+      ['evaluate', 'suite.json', '--output', 'report.json', '--clock', fixedClockIso()],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('/Users/kevin');
+    expect(all).not.toContain('Bearer secret-token');
+    expect(all).not.toContain('API_KEY=secret');
+    expect(all).toContain('IO 错误');
+  });
+
+  it('JSON 解析失败不泄漏原文内容', async () => {
+    const h = secretHarness();
+    h.fs.files.set('bad.json', 'Bearer secret-token { not json /Users/kevin/private/secret.json');
+    const code = await runCli(['validate', 'bad.json'], h.deps);
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('Bearer secret-token');
+    expect(all).not.toContain('/Users/kevin');
+    expect(all).toContain('JSON 格式错误');
   });
 });
