@@ -281,7 +281,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 | Creation Contract C1-A foundation                   | ✅   | PR #13（domain / contracts / database / application） |
 | Creation Contract C1-B1 Accept/Reject               | ✅   | PR #14                                                |
 | Creation Contract C1-B2 User Update / Lock / Unlock | ✅   | PR #15                                                |
-| Creation Contract C2 AI task / process bridge       | 🟡   | PR #17（尚未合并，正在 review）                       |
+| Creation Contract C2 AI task / process bridge       | ✅   | PR #17 / `e84601f2`                                   |
 
 #### 生成质量能力（部分 foundation 开发中，其余尚未开始）
 
@@ -403,7 +403,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 | 2026-07    | `569d912` PR #14                                                | ✅     | M1-C1B1 Accept / Reject                                                   | 无                                                     | CAS、typed operations、原子事务                                                          | User Update / Lock                                       |
 | 2026-08-01 | `b4f40d2` PR #15                                                | ✅     | M1-C1B2 User Update / Lock / Unlock                                       | 无                                                     | lock/unlock 创建新 version、user update                                                  | M1-C2 AI task / process bridge                           |
 | 2026-08-01 | PR #17 / `e84601f2`（已合并）                                   | ✅     | M1-C2 AI task / process bridge                                            | 打通创作规格生成链路；尚无文章生成质量提升证据         | task-engine、runner、process bridge、SQLite concurrency、backend E2E（merge `e84601f2`） | Minimal Contract Renderer 与 Writing Evaluation Lab 并行 |
-| 2026-08-01 | PR #18 / `b2456f353cfe765499adf303700ba73152543a1a`（尚未合并） | 🟡     | GQ1 Writing Evaluation Lab foundation（固定题库 + 多策略对比 + 评分体系） | 建立评测骨架；尚无文章质量提升证据                     | evaluation harness foundation、fixtures、评分体系骨架                                    | 合并后接入 generation pipeline 对比                      |
+| 2026-08-01 | PR #18 / `9142682346d183f02ce635c4e88adb7193d1ba79`（尚未合并） | 🟡     | GQ1 Writing Evaluation Lab foundation（固定题库 + 多策略对比 + 评分体系） | 建立评测骨架与完整性/隐私边界；尚无文章质量提升证据    | evaluation harness、fixtures、评分体系、artifact validators、255 tests                   | 合并后接入 generation pipeline 对比                      |
 | 2026-08-01 | `dd04481` PR #16                                                | ✅     | Generation quality roadmap and progress ledger                            | 建立质量方向的权威路线和维护制度；尚无文章质量实验结果 | generation-quality-roadmap.md                                                            | 合并后由所有 DeepSeek / MiMo 任务持续维护                |
 
 ### 早期能力汇总基线

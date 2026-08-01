@@ -115,7 +115,9 @@ WritingCandidateV1
 - 连续句末标点归入当前句；
 - 仅由标点/空白组成的片段不记为句子。
 
-**引号**：支持 `“”` `「」` `『』` 与 ASCII 双引号；未闭合引号产生 warning；对话 code points = 从开引号到匹配闭引号（含引号）的 code points，未闭合区域不计入对话；**嵌套引号只统计最外层区域**，避免重复计数。
+**引号（严格配对）**：支持 `“”` `「」` `『』` 与 ASCII 双引号；每个 closer 只匹配唯一的 opener（`”←“`、`」←「`、`』←『`、`"←"`）；只有栈顶 opener 与当前 closer 匹配才闭合，不匹配产生固定 warning 且不计为完整 dialogue；未闭合引号产生 warning；嵌套引号只统计最外层**完整匹配**区域，dialogueCodePointRatio 恒 ≤ 1。
+
+**零宽空白**：每行首尾统一清除普通空白、`U+200B`、`U+FEFF`、`U+2060` 等零宽空白；候选文本必须满足规范化后长度 > 0 且 `hasSubstantiveContent === true`。
 
 ## 六、自动指标 V1
 
@@ -136,7 +138,8 @@ WritingCandidateV1
 - 空分布：min/max/mean/median/p90/std/cv 全部为 null；单值：全部等于该值，std=cv=0；
 - n-gram 规则：code-point 基础，不使用 UTF-16 index；跳过含空白窗口；跳过纯标点窗口；同分按 code-point 顺序排序；
 - 句子开词 = 句子第一个实质字符（跳过前导引号/省略号/空白）；
-- 重复比例 = `1 - 唯一项数 / 总数`。
+- 重复比例 = `1 - 唯一项数 / 总数`；
+- `topRepeatedNgrams` / `topRepeatedSentenceOpeners` **只包含真正的重复项（count > 1）**，无重复时返回空数组。
 
 **AI-smell 词表信号限制**：
 
@@ -167,6 +170,11 @@ WritingCandidateV1
 
 排序：`SHA-256(seed + suiteId + caseId + candidateId)` 十六进制升序决定 alias。同 seed 稳定；不同 seed 可改变顺序；alias 无碰撞。
 
+**严格验证（CLI 的 validate-ratings 与 aggregate 必须调用，禁止 cast 充当验证）**：
+
+- `validateBlindPacket(input)`：plain object、exact keys、schemaVersion=1、locale=zh-CN、suiteId/packetId/caseId/alias 严格验证、caseId 唯一、case 内 alias 唯一且为 A-Z、candidates 非空、sceneBrief 与 manualCriteria 走共享严格验证、候选文本规范化后有实质内容、**拒绝身份字段**（candidateId 等）。
+- `validatePrivateMapping(input, packet)`：exact keys、schemaVersion=1、suiteId === packet.suiteId、seed 非空且长度受限、`packetId === sha256("blind-packet:" + seed + ":" + suiteId)`、entry 引用必须存在于 packet、每个 packet case/alias **恰好**对应一个 entry（无缺失/多余/重复）、candidateId 不重复、alias→candidateId 一对一。
+
 ## 九、人工评分
 
 `HumanRatingV1` 八个 1–5 整数维度：
@@ -180,14 +188,15 @@ WritingCandidateV1
 - exact keys；1–5 整数；raterId 非空；notes code-point 上限（2000）；
 - alias 必须存在于 blind packet；
 - 同 rater/case/alias 不得重复；
-- 同 (rater, case) 的 preferredRank 不得重复。
+- 同 (rater, case) 的 preferredRank 不得重复；
+- suiteId 必须匹配 blind packet。
 
 聚合输出：
 
 - 每个 candidate/dimension 的 count / mean / median；
 - preference rank 分布；
-- pairwise wins（只统计同时给两个候选打分的 rater）；
-- rater count；missing dimensions warning；
+- pairwise wins（aliasA/aliasB wins，只统计同时给两个候选打分的 rater）；
+- rater count；`missingRatingCoverage`（某 (case, rater) 未覆盖该 case 内全部 alias 的记录，格式 `caseId/raterId`）；
 - **不计算默认 overall score**。
 
 样本 ratings 只作为格式示例，不得描述为真实用户研究（聚合报告含此警告）。
@@ -198,7 +207,7 @@ WritingCandidateV1
 writing-evaluation help
 writing-evaluation validate <suite.json> [--type suite|ratings] [--packet <blind-packet.json>]
 writing-evaluation evaluate <suite.json> [--output <report.json>] [--format json|markdown] [--clock <iso>] [--force]
-writing-evaluation blind <suite.json> --seed <seed> [--packet-output <packet.json>] [--mapping-output <mapping.json>] [--force]
+writing-evaluation blind <suite.json> --seed <seed> --mapping-output <mapping.json> [--packet-output <packet.json>] [--force]
 writing-evaluation aggregate --packet <packet.json> --mapping <mapping.json> --ratings <ratings.json> [--output <agg.json>] [--format json|markdown] [--clock <iso>] [--force]
 ```
 
@@ -206,7 +215,9 @@ writing-evaluation aggregate --packet <packet.json> --mapping <mapping.json> --r
 
 - 不使用外部 CLI dependency；严格参数解析，unknown option / missing argument 失败；
 - exit code：0 成功，非 0 校验或 IO 失败；
-- 错误消息安全：不回显完整候选文本，不输出 absolute path 到公共错误；
+- 错误消息安全：不回显完整候选文本，不输出 absolute path 到公共错误；read/write/exists 失败只输出操作类型、文件名与固定安全消息，不输出原始 fs error.message / errno / stack；
+- **private mapping 禁止输出到 stdout，必须显式提供 `--mapping-output`**；`--packet-output` 与 `--mapping-output` 不能指向同一路径；先在内存完成全部路径与 overwrite 校验后再写入；
+- validate-ratings 与 aggregate 使用 `validateBlindPacket` / `validatePrivateMapping` 严格校验（禁止 cast）；
 - 无网络访问；默认不写文件，除非显式提供 output；不覆盖已有文件，除非显式 `--force`；
 - UTF-8；JSON 为确定性 compact 输出；Markdown 稳定；
 - Programmatic API（`evaluateSuite` / `validateSuite` / `generateBlindPacket` / `aggregateRatings`）与 CLI parser 分离。
