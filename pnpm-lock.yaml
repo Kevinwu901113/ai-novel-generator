@@ -93,6 +93,9 @@ importers:
       '@ai-novel/model-gateway':
         specifier: workspace:*
         version: link:../../packages/model-gateway
+      '@ai-novel/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
       '@ai-novel/task-engine':
         specifier: workspace:*
         version: link:../../packages/task-engine
@@ -103,6 +106,31 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+
+  apps/writing-experiment-runner:
+    dependencies:
+      '@ai-novel/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
+      '@ai-novel/model-gateway':
+        specifier: workspace:*
+        version: link:../../packages/model-gateway
+      '@ai-novel/secret-store':
+        specifier: workspace:*
+        version: link:../../packages/secret-store
+      '@ai-novel/writing-evaluation':
+        specifier: workspace:*
+        version: link:../../packages/writing-evaluation
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jsdom@29.1.1)(supports-color@7.2.0)
 
   packages/application:
     dependencies:
@@ -209,6 +237,22 @@ importers:
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
+
+  packages/secret-store:
+    dependencies:
+      '@ai-novel/application':
+        specifier: workspace:*
+        version: link:../application
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.3)(jsdom@29.1.1)(supports-color@7.2.0)
 
   packages/task-engine:
     dependencies:

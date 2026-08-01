@@ -56,5 +56,8 @@ temp/
 .writing-evaluation-results/
 writing-evaluation-results/
 
+# Writing experiment artifacts (real model candidates stay local)
+artifacts/writing-experiments/
+
 # Claude Code local settings
 .claude/settings.local.json

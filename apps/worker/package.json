@@ -21,6 +21,7 @@
     "@ai-novel/database": "workspace:*",
     "@ai-novel/domain": "workspace:*",
     "@ai-novel/model-gateway": "workspace:*",
+    "@ai-novel/secret-store": "workspace:*",
     "@ai-novel/task-engine": "workspace:*"
   },
   "devDependencies": {
