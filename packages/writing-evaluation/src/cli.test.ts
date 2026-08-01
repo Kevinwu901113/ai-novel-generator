@@ -3,7 +3,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { runCli, parseCliArgs, CliUsageError, BLIND_TEMP_SUFFIX } from './cli.js';
+import {
+  runCli,
+  parseCliArgs,
+  CliUsageError,
+  BLIND_TEMP_SUFFIX,
+  deriveBlindPublicationPaths,
+} from './cli.js';
 import { getBaselineSuite } from './fixtures.js';
 import { fixedClockIso } from './test-util.js';
 
@@ -667,6 +673,330 @@ describe('runCli — blind 原子（staged）发布与 rollback', () => {
     expect(all).not.toContain('/Users/kevin');
     expect(all).not.toContain('Bearer');
     expect(all).not.toContain('API_KEY');
+    expect(all).not.toContain('EACCES');
+    expect(all).toContain('IO 错误');
+  });
+});
+
+describe('deriveBlindPublicationPaths — 输出角色派生', () => {
+  it('双文件模式派生全部 final/temp/backup 角色', () => {
+    expect(deriveBlindPublicationPaths('packet.json', 'mapping.json')).toEqual({
+      mappingFinal: 'mapping.json',
+      mappingTemp: 'mapping.json.gq1-tmp',
+      mappingBackup: 'mapping.json.gq1-tmp.bak',
+      packetFinal: 'packet.json',
+      packetTemp: 'packet.json.gq1-tmp',
+      packetBackup: 'packet.json.gq1-tmp.bak',
+    });
+  });
+
+  it('stdout packet 模式下无 packet 文件角色', () => {
+    const roles = deriveBlindPublicationPaths(undefined, 'mapping.json');
+    expect(roles.packetFinal).toBeNull();
+    expect(roles.packetTemp).toBeNull();
+    expect(roles.packetBackup).toBeNull();
+    expect(roles.mappingFinal).toBe('mapping.json');
+  });
+});
+
+describe('runCli — blind 派生输出路径角色碰撞（任何 IO 之前拒绝）', () => {
+  async function expectRoleCollisionRejected(
+    packetOut: string,
+    mappingOut: string,
+    opts: { force?: boolean; preexisting?: Record<string, string> } = {},
+  ) {
+    const h = makeHarness({ 'suite.json': SUITE_JSON, ...(opts.preexisting ?? {}) });
+    const args = [
+      'blind',
+      'suite.json',
+      '--seed',
+      's',
+      '--packet-output',
+      packetOut,
+      '--mapping-output',
+      mappingOut,
+    ];
+    if (opts.force) args.push('--force');
+    const code = await runCli(args, h.deps);
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('路径角色冲突');
+    expect(h.err.join('')).toContain('同一路径');
+    // 错误不泄露规范化绝对路径
+    expect(h.err.join('')).not.toContain(process.cwd());
+    expect(h.out.join('')).toBe('');
+    return h;
+  }
+
+  it('mapping.final == packet.temp 被拒绝（packet-output X.json / mapping-output X.json.gq1-tmp）', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json', 'pkt.json.gq1-tmp');
+    expect(h.fs.files.has('pkt.json')).toBe(false);
+    expect(h.fs.files.has('pkt.json.gq1-tmp')).toBe(false);
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('packet.final == mapping.temp 被拒绝（packet-output X.json.gq1-tmp / mapping-output X.json）', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json.gq1-tmp', 'pkt.json');
+    expect(h.fs.files.has('pkt.json')).toBe(false);
+    expect(h.fs.files.has('pkt.json.gq1-tmp')).toBe(false);
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('packet.backup == mapping.final 被拒绝（packet-output X.json / mapping-output X.json.gq1-tmp.bak）', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json', 'pkt.json.gq1-tmp.bak');
+    expect(h.fs.files.has('pkt.json')).toBe(false);
+    expect(h.fs.files.has('pkt.json.gq1-tmp.bak')).toBe(false);
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('packet.final == mapping.backup 被拒绝（packet-output X.json.gq1-tmp.bak / mapping-output X.json）', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json.gq1-tmp.bak', 'pkt.json');
+    expect(h.fs.files.has('pkt.json')).toBe(false);
+    expect(h.fs.files.has('pkt.json.gq1-tmp.bak')).toBe(false);
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('--force 下路径角色碰撞同样前置拒绝，且不破坏已有 final 文件', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json', 'pkt.json.gq1-tmp', {
+      force: true,
+      preexisting: { 'pkt.json': 'old-packet', 'pkt.json.gq1-tmp': 'old-mapping' },
+    });
+    expect(h.fs.files.get('pkt.json')).toBe('old-packet');
+    expect(h.fs.files.get('pkt.json.gq1-tmp')).toBe('old-mapping');
+    // 文件集合保持原样，未创建任何新输出/临时/备份
+    expect([...h.fs.files.keys()].sort()).toEqual(['pkt.json', 'pkt.json.gq1-tmp', 'suite.json']);
+  });
+
+  it('backup 后缀碰撞在 --force 下前置拒绝，旧文件 byte-identical', async () => {
+    const h = await expectRoleCollisionRejected('pkt.json', 'pkt.json.gq1-tmp.bak', {
+      force: true,
+      preexisting: { 'pkt.json': 'old-packet', 'pkt.json.gq1-tmp.bak': 'old-mapping' },
+    });
+    expect(h.fs.files.get('pkt.json')).toBe('old-packet');
+    expect(h.fs.files.get('pkt.json.gq1-tmp.bak')).toBe('old-mapping');
+    // 文件集合保持原样，未创建任何新输出/临时/备份
+    expect([...h.fs.files.keys()].sort()).toEqual([
+      'pkt.json',
+      'pkt.json.gq1-tmp.bak',
+      'suite.json',
+    ]);
+  });
+
+  it('路径角色碰撞错误不含绝对路径 / Bearer / API_KEY / errno', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        `${process.cwd()}/pkt.json`,
+        '--mapping-output',
+        'pkt.json.gq1-tmp',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain(process.cwd());
+    expect(all).not.toContain('Bearer');
+    expect(all).not.toContain('API_KEY');
+    expect(all).not.toContain('EACCES');
+    expect(all).not.toContain('ENOENT');
+  });
+});
+
+describe('runCli — blind 辅助路径存在性保护', () => {
+  it('预先存在 mapping temp 文件时拒绝且不覆盖', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'mapping.json.gq1-tmp': 'foreign-temp',
+    });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('临时文件');
+    expect(h.err.join('')).toContain('已存在');
+    expect(h.fs.files.get('mapping.json.gq1-tmp')).toBe('foreign-temp');
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+  });
+
+  it('预先存在 packet temp 文件时拒绝且不覆盖', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'packet.json.gq1-tmp': 'foreign-temp',
+    });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('临时文件');
+    expect(h.fs.files.get('packet.json.gq1-tmp')).toBe('foreign-temp');
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.fs.tempArtifacts()).toEqual(['packet.json.gq1-tmp']);
+  });
+
+  it('--force 下预先存在 mapping backup 文件时拒绝且不覆盖', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'mapping.json': 'old-mapping',
+      'mapping.json.gq1-tmp.bak': 'foreign-backup',
+    });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--force',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('备份文件');
+    expect(h.fs.files.get('mapping.json')).toBe('old-mapping');
+    expect(h.fs.files.get('mapping.json.gq1-tmp.bak')).toBe('foreign-backup');
+    expect(h.fs.files.has('mapping.json.gq1-tmp')).toBe(false);
+    expect(h.out.join('')).toBe('');
+  });
+
+  it('--force 下预先存在 packet backup 文件时拒绝且不覆盖', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'packet.json': 'old-packet',
+      'packet.json.gq1-tmp.bak': 'foreign-backup',
+    });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--force',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('备份文件');
+    expect(h.fs.files.get('packet.json')).toBe('old-packet');
+    expect(h.fs.files.get('packet.json.gq1-tmp.bak')).toBe('foreign-backup');
+    expect(h.fs.files.has('packet.json.gq1-tmp')).toBe(false);
+    expect(h.out.join('')).toBe('');
+  });
+
+  it('辅助路径错误不含绝对路径', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'sub/mapping.json.gq1-tmp': 'foreign-temp',
+    });
+    const code = await runCli(
+      ['blind', 'suite.json', '--seed', 's', '--mapping-output', 'sub/mapping.json'],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain(process.cwd());
+  });
+});
+
+describe('runCli — blind temp 部分写入失败清理', () => {
+  it('mapping temp 写入产生部分文件后抛错：该 temp 被清理，无正式文件，stdout 空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const origWrite = h.deps.writeFile;
+    h.deps.writeFile = (p: string, c: string) => {
+      if (p === 'mapping.json.gq1-tmp') {
+        // 模拟“先产生部分文件再失败”
+        h.fs.files.set(p, 'partial-mapping');
+        throw new Error('EACCES /Users/kevin/secret.json');
+      }
+      origWrite(p, c);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.fs.files.has('mapping.json.gq1-tmp')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('/Users/kevin');
+    expect(all).not.toContain('EACCES');
+    expect(all).toContain('IO 错误');
+  });
+
+  it('packet temp 写入产生部分文件后抛错：该 temp 被清理，无正式文件', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const origWrite = h.deps.writeFile;
+    h.deps.writeFile = (p: string, c: string) => {
+      if (p === 'packet.json.gq1-tmp') {
+        h.fs.files.set(p, 'partial-packet');
+        throw new Error('EACCES /Users/kevin/secret.json');
+      }
+      origWrite(p, c);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.fs.files.has('packet.json.gq1-tmp')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('/Users/kevin');
     expect(all).not.toContain('EACCES');
     expect(all).toContain('IO 错误');
   });

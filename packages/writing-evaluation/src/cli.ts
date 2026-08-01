@@ -317,6 +317,8 @@ function runEvaluate(deps: ResolvedDeps, parsed: ParsedCli): number {
 
 /** blind 临时文件后缀（staged publication 用）。 */
 export const BLIND_TEMP_SUFFIX = '.gq1-tmp';
+/** blind 备份文件后缀。 */
+const BLIND_BACKUP_SUFFIX = BLIND_TEMP_SUFFIX + '.bak';
 
 /** 规范化路径身份：统一相对路径 / ./ / 父级遍历等别名。 */
 function resolvePathIdentity(p: string): string {
@@ -324,14 +326,80 @@ function resolvePathIdentity(p: string): string {
 }
 
 /**
+ * blind 输出的全部路径角色。mapping 角色始终存在（--mapping-output 必填）；
+ * packet 角色仅在提供 --packet-output 时存在。
+ */
+export interface BlindPathRoles {
+  readonly mappingFinal: string;
+  readonly mappingTemp: string;
+  readonly mappingBackup: string;
+  readonly packetFinal: string | null;
+  readonly packetTemp: string | null;
+  readonly packetBackup: string | null;
+}
+
+/** 派生 blind 输出的全部 final / temp / backup 角色路径（供身份校验与 staged publication 使用）。 */
+export function deriveBlindPublicationPaths(
+  packetOutput: string | undefined,
+  mappingOutput: string,
+): BlindPathRoles {
+  return {
+    mappingFinal: mappingOutput,
+    mappingTemp: mappingOutput + BLIND_TEMP_SUFFIX,
+    mappingBackup: mappingOutput + BLIND_BACKUP_SUFFIX,
+    packetFinal: packetOutput ?? null,
+    packetTemp: packetOutput !== undefined ? packetOutput + BLIND_TEMP_SUFFIX : null,
+    packetBackup: packetOutput !== undefined ? packetOutput + BLIND_BACKUP_SUFFIX : null,
+  };
+}
+
+interface RoleIdentity {
+  readonly role: string;
+  readonly display: string;
+  readonly identity: string;
+}
+
+/**
+ * 校验全部输出角色（final / temp / backup）的规范化路径身份互不冲突。
+ * 任何两个不同角色指向同一路径（包括 ./、父级遍历、相对/绝对别名）都会在
+ * 任何写入 / rename / backup / stdout 之前被拒绝。
+ * 错误只显示角色名与安全 basename，不显示规范化绝对路径。
+ */
+function validateBlindPublicationPathIdentity(roles: BlindPathRoles): void {
+  const items: RoleIdentity[] = [];
+  const addRole = (role: string, p: string | null) => {
+    if (p !== null) {
+      items.push({ role, display: safeDisplayPath(p), identity: resolvePathIdentity(p) });
+    }
+  };
+  addRole('mapping 最终文件', roles.mappingFinal);
+  addRole('mapping 临时文件', roles.mappingTemp);
+  addRole('mapping 备份文件', roles.mappingBackup);
+  addRole('packet 最终文件', roles.packetFinal);
+  addRole('packet 临时文件', roles.packetTemp);
+  addRole('packet 备份文件', roles.packetBackup);
+
+  for (let i = 0; i < items.length; i += 1) {
+    for (let j = i + 1; j < items.length; j += 1) {
+      if (items[i].identity === items[j].identity) {
+        throw new CliUsageError(
+          `输出路径角色冲突：${items[i].role}与${items[j].role}指向同一路径（"${items[i].display}"）；请更换 --packet-output / --mapping-output`,
+        );
+      }
+    }
+  }
+}
+
+/**
  * blind 的 staged publication：
  * 1. 内存生成并验证 packet/mapping；
- * 2. 完成全部路径（含规范化身份）、overwrite 检查；
- * 3. mapping / packet 先写临时文件；
- * 4. 全部临时文件成功后，再逐个 rename 发布正式文件；
- * 5. 任一步失败：清理临时文件与已发布文件（best-effort rollback），不输出 stdout packet，
+ * 2. 派生全部 final/temp/backup 角色路径，并在任何文件操作前校验规范化身份冲突；
+ * 3. 完成全部 final 与辅助路径（temp/backup）的 overwrite / 存在性检查；
+ * 4. mapping / packet 先写临时文件（写入前即登记，部分写入失败也会进入清理）；
+ * 5. 全部临时文件成功后，再逐个 rename 发布正式文件；
+ * 6. 任一步失败：清理临时文件与已发布文件（best-effort rollback），不输出 stdout packet，
  *    不显示成功信息；
- * 6. stdout packet 只在 mapping 正式发布成功后输出。
+ * 7. stdout packet 只在 mapping / packet 全部正式发布成功后输出。
  */
 function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
   const file = requirePositional(parsed, 0, '<suite.json>');
@@ -356,22 +424,47 @@ function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
       'private mapping 必须通过 --mapping-output 显式输出（禁止输出到 stdout）',
     );
   }
-  // 路径身份判断：使用规范化绝对路径比较（./、父级遍历、相对/绝对别名都识别为同一路径）
-  if (
-    packetOutput !== undefined &&
-    resolvePathIdentity(packetOutput) === resolvePathIdentity(mappingOutput)
-  ) {
-    throw new CliUsageError('--packet-output 与 --mapping-output 不能指向同一路径');
-  }
 
-  // 全部路径与 overwrite 校验（在创建任何临时文件之前）
+  // 派生全部输出角色路径（final / temp / backup），在任何文件操作之前校验身份冲突
+  const roles = deriveBlindPublicationPaths(packetOutput, mappingOutput);
+  validateBlindPublicationPathIdentity(roles);
+
+  // 全部 final 路径的 overwrite 检查（在创建任何临时文件之前）
   const finalTargets: string[] = [];
-  if (packetOutput !== undefined) finalTargets.push(packetOutput);
-  finalTargets.push(mappingOutput);
+  if (roles.packetFinal !== null) finalTargets.push(roles.packetFinal);
+  finalTargets.push(roles.mappingFinal);
   for (const p of finalTargets) {
     if (deps.exists(p) && !force) {
       throw new CliUsageError(
         `输出文件 "${safeDisplayPath(p)}" 已存在；如需覆盖请显式使用 --force`,
+      );
+    }
+  }
+
+  // 辅助路径（temp/backup）存在性预检：temp 总是使用；backup 仅在 --force 且对应
+  // final 已存在时使用。--force 只授权覆盖用户显式指定的 final outputs，
+  // 不授权覆盖内部辅助路径上的无关文件（可能来自其他进程、上次异常或用户自有文件）。
+  const auxChecks: Array<{ path: string; label: string }> = [
+    { path: roles.mappingTemp, label: 'mapping 临时文件' },
+  ];
+  if (roles.packetTemp !== null) {
+    auxChecks.push({ path: roles.packetTemp, label: 'packet 临时文件' });
+  }
+  if (force && deps.exists(roles.mappingFinal)) {
+    auxChecks.push({ path: roles.mappingBackup, label: 'mapping 备份文件' });
+  }
+  if (
+    roles.packetFinal !== null &&
+    roles.packetBackup !== null &&
+    force &&
+    deps.exists(roles.packetFinal)
+  ) {
+    auxChecks.push({ path: roles.packetBackup, label: 'packet 备份文件' });
+  }
+  for (const aux of auxChecks) {
+    if (deps.exists(aux.path)) {
+      throw new CliUsageError(
+        `内部${aux.label} "${safeDisplayPath(aux.path)}" 已存在；为避免覆盖无关文件，请先移除或更换输出路径`,
       );
     }
   }
@@ -382,39 +475,40 @@ function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
   const backups: Array<{ backup: string; original: string }> = [];
 
   try {
-    const mappingTemp = mappingOutput + BLIND_TEMP_SUFFIX;
-    deps.writeFile(mappingTemp, mappingJson);
-    createdTempFiles.push(mappingTemp);
+    // 先登记 temp 路径再写入：部分写入失败时 rollback 也能清理该 temp
+    createdTempFiles.push(roles.mappingTemp);
+    deps.writeFile(roles.mappingTemp, mappingJson);
 
-    let packetTemp: string | undefined;
-    if (packetOutput !== undefined) {
-      packetTemp = packetOutput + BLIND_TEMP_SUFFIX;
-      deps.writeFile(packetTemp, packetJson);
-      createdTempFiles.push(packetTemp);
+    if (roles.packetTemp !== null) {
+      createdTempFiles.push(roles.packetTemp);
+      deps.writeFile(roles.packetTemp, packetJson);
     }
 
     // --force 覆盖已有文件时，先把旧文件移到 backup，发布成功后删除 backup；
     // 失败时可恢复旧文件，避免“先破坏旧文件再发现另一个输出失败”。
-    if (force && deps.exists(mappingOutput)) {
-      const backup = mappingOutput + BLIND_TEMP_SUFFIX + '.bak';
-      deps.renameFile(mappingOutput, backup);
-      backups.push({ backup, original: mappingOutput });
+    if (force && deps.exists(roles.mappingFinal)) {
+      deps.renameFile(roles.mappingFinal, roles.mappingBackup);
+      backups.push({ backup: roles.mappingBackup, original: roles.mappingFinal });
     }
-    if (packetOutput !== undefined && force && deps.exists(packetOutput)) {
-      const backup = packetOutput + BLIND_TEMP_SUFFIX + '.bak';
-      deps.renameFile(packetOutput, backup);
-      backups.push({ backup, original: packetOutput });
+    if (
+      roles.packetFinal !== null &&
+      roles.packetBackup !== null &&
+      force &&
+      deps.exists(roles.packetFinal)
+    ) {
+      deps.renameFile(roles.packetFinal, roles.packetBackup);
+      backups.push({ backup: roles.packetBackup, original: roles.packetFinal });
     }
 
     // 先发布 mapping（敏感产物），再发布 packet
-    deps.renameFile(mappingTemp, mappingOutput);
-    publishedFiles.push(mappingOutput);
-    createdTempFiles.splice(createdTempFiles.indexOf(mappingTemp), 1);
+    deps.renameFile(roles.mappingTemp, roles.mappingFinal);
+    publishedFiles.push(roles.mappingFinal);
+    createdTempFiles.splice(createdTempFiles.indexOf(roles.mappingTemp), 1);
 
-    if (packetOutput !== undefined && packetTemp !== undefined) {
-      deps.renameFile(packetTemp, packetOutput);
-      publishedFiles.push(packetOutput);
-      createdTempFiles.splice(createdTempFiles.indexOf(packetTemp), 1);
+    if (roles.packetFinal !== null && roles.packetTemp !== null) {
+      deps.renameFile(roles.packetTemp, roles.packetFinal);
+      publishedFiles.push(roles.packetFinal);
+      createdTempFiles.splice(createdTempFiles.indexOf(roles.packetTemp), 1);
     }
 
     // 全部正式文件发布成功后，删除 backups
@@ -427,7 +521,7 @@ function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
     }
 
     // stdout packet 只在 mapping / packet 全部正式发布成功后输出
-    if (packetOutput === undefined) {
+    if (roles.packetFinal === null) {
       deps.stdout(packetJson);
       deps.stdout('\n');
     }

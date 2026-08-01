@@ -218,7 +218,9 @@ writing-evaluation aggregate --packet <packet.json> --mapping <mapping.json> --r
 - 错误消息安全：不回显完整候选文本，不输出 absolute path 到公共错误；read/write/exists 失败只输出操作类型、文件名与固定安全消息，不输出原始 fs error.message / errno / stack；
 - **private mapping 禁止输出到 stdout，必须显式提供 `--mapping-output`**；
 - **路径身份判断使用规范化绝对路径比较**（`path.resolve`）：`./`、父级遍历（`out/../x.json`）、相对/绝对路径别名都会识别为同一路径并拒绝；错误只显示 basename；
-- **staged / atomic publication**：先在内存生成并验证 packet/mapping；完成全部路径、overwrite 与路径身份检查；mapping 与 packet（若写文件）先写临时文件；两个临时文件都成功后再 rename 发布正式文件；任一步失败则 best-effort rollback（移除已发布文件、恢复 `--force` 下被替换的旧文件、清理临时文件），不留下半个输出，stdout packet 只在 mapping 正式发布成功后输出；
+- **全部路径角色（final / temp / backup）身份校验**：blind 双文件输出派生全部角色——`mapping.final` / `mapping.temp`（`+ .gq1-tmp`）/ `mapping.backup`（`+ .gq1-tmp.bak`）与 `packet.final` / `packet.temp` / `packet.backup`（存在 `--packet-output` 时）。任何两个不同角色指向同一规范化路径（包括 `packet.final == mapping.temp`、`packet.backup == mapping.final` 等交叉碰撞）都会在**任何写入 / rename / backup / stdout 之前**被拒绝，不能依赖“mapping 先发布、packet 后发布”的顺序碰巧正确；错误只显示角色名与安全 basename，不显示规范化绝对路径；
+- **辅助路径存在性保护**：`--force` 只授权覆盖用户显式指定的 final outputs，不授权覆盖内部辅助路径（temp / backup）上预先存在的无关文件（可能来自其他进程、上次异常或用户自有文件）。任何本次运行会使用的 temp / backup 路径若已存在，会在任何 mutation 前安全拒绝；
+- **staged / atomic publication**：先在内存生成并验证 packet/mapping；完成全部路径、overwrite 与路径身份检查；mapping 与 packet（若写文件）先写临时文件（**写入前即登记**，部分写入失败也会进入清理路径）；两个临时文件都成功后再 rename 发布正式文件；任一步失败则 best-effort rollback（移除已发布文件、恢复 `--force` 下被替换的旧文件、清理临时文件），不留下半个输出，stdout packet 只在 mapping 正式发布成功后输出；
 - validate-ratings 与 aggregate 使用 `validateBlindPacket` / `validatePrivateMapping` 严格校验（禁止 cast）；
 - 无网络访问；默认不写文件，除非显式提供 output；不覆盖已有文件，除非显式 `--force`；
 - UTF-8；JSON 为确定性 compact 输出；Markdown 稳定；
