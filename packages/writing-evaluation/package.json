@@ -1,0 +1,31 @@
+{
+  "name": "@ai-novel/writing-evaluation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "离线、可复现、中文优先的文章质量评测实验基础设施（suite / 自动指标 / 盲评 / 人工评分聚合）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "writing-evaluation": "./dist/cli-run.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "cli": "node ./dist/cli-run.js"
+  },
+  "dependencies": {
+    "@ai-novel/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

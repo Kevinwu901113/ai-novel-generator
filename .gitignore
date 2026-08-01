@@ -52,5 +52,9 @@ coverage/
 tmp/
 temp/
 
+# Writing evaluation local results
+.writing-evaluation-results/
+writing-evaluation-results/
+
 # Claude Code local settings
 .claude/settings.local.json
