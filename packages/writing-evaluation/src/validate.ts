@@ -27,7 +27,7 @@ import type {
   WritingEvaluationCaseV1,
   WritingEvaluationSuiteV1,
 } from './schema.js';
-import { METRIC_IDS } from './schema.js';
+import { BLIND_ALIAS_ERROR, isValidBlindAlias, METRIC_IDS } from './schema.js';
 import { isLowercaseSha256Hex, sha256Hex } from './hash.js';
 import { hasSubstantiveContent, normalizeText } from './text.js';
 
@@ -553,7 +553,6 @@ const BLIND_CASE_CANDIDATE_KEYS = new Set(['alias', 'text']);
 const PRIVATE_MAPPING_KEYS = new Set(['schemaVersion', 'suiteId', 'seed', 'entries']);
 const MAPPING_ENTRY_KEYS = new Set(['suiteId', 'caseId', 'alias', 'candidateId']);
 const MAX_SEED_LENGTH = 200;
-const ALIAS_RE = /^[A-Z]{1,2}$/;
 
 /**
  * 严格验证 blind packet。
@@ -614,8 +613,8 @@ export function validateBlindPacket(input: unknown): BlindPacketV1 {
       expectKeys(cand, BLIND_CASE_CANDIDATE_KEYS, BLIND_CASE_CANDIDATE_KEYS, candPath);
 
       const alias = normalizeId(cand.alias, `${candPath}.alias`);
-      if (!ALIAS_RE.test(alias)) {
-        fail(`${candPath}.alias`, `非法 alias "${alias}"（必须是 A-Z）`);
+      if (!isValidBlindAlias(alias)) {
+        fail(`${candPath}.alias`, `非法 alias "${alias}"：${BLIND_ALIAS_ERROR}`);
       }
       if (aliases.has(alias)) fail(cPath, `重复的 alias "${alias}"`);
       aliases.add(alias);

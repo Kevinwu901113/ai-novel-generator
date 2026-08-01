@@ -84,10 +84,24 @@ describe('validateRatings — 非法输入', () => {
     expectRatingError([r1, r2], packet, /重复评分/);
   });
 
-  it('拒绝未知 alias', () => {
+  it('拒绝未知 alias（单字母但不在 packet 中）', () => {
     const packet = makePacket();
-    const r = makeRating(packet, { candidateAlias: 'ZZ' });
+    const r = makeRating(packet, { candidateAlias: 'Z' });
     expectRatingError([r], packet, /不存在 alias/);
+  });
+
+  it('拒绝非法 alias 格式（AA / ZZ / 小写 / 数字）', () => {
+    const packet = makePacket();
+    for (const bad of ['AA', 'ZZ', 'a', '1']) {
+      const r = makeRating(packet, { candidateAlias: bad });
+      expectRatingError([r], packet, /大写单字母/);
+    }
+  });
+
+  it('拒绝空 alias', () => {
+    const packet = makePacket();
+    const r = makeRating(packet, { candidateAlias: '' });
+    expectRatingError([r], packet, /不能为空|大写单字母/);
   });
 
   it('拒绝非法 preferredRank（0 / 越界）', () => {

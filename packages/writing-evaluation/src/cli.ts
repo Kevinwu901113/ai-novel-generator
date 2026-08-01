@@ -14,7 +14,7 @@
  * aggregateRatings 等）与 CLI parser 分离。
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import type { Clock } from './clock.js';
 import { systemClock } from './clock.js';
@@ -115,6 +115,8 @@ export interface CliDeps {
   readonly readFile?: (p: string) => string;
   readonly writeFile?: (p: string, content: string) => void;
   readonly exists?: (p: string) => boolean;
+  readonly renameFile?: (from: string, to: string) => void;
+  readonly removeFile?: (p: string) => void;
 }
 
 interface ResolvedDeps {
@@ -124,6 +126,8 @@ interface ResolvedDeps {
   readonly readFile: (p: string) => string;
   readonly writeFile: (p: string, content: string) => void;
   readonly exists: (p: string) => boolean;
+  readonly renameFile: (from: string, to: string) => void;
+  readonly removeFile: (p: string) => void;
 }
 
 function resolveDeps(deps: CliDeps): ResolvedDeps {
@@ -134,6 +138,8 @@ function resolveDeps(deps: CliDeps): ResolvedDeps {
     readFile: deps.readFile ?? ((p) => readFileSync(p, 'utf8')),
     writeFile: deps.writeFile ?? ((p, content) => writeFileSync(p, content, 'utf8')),
     exists: deps.exists ?? ((p) => existsSync(p)),
+    renameFile: deps.renameFile ?? ((from, to) => renameSync(from, to)),
+    removeFile: deps.removeFile ?? ((p) => unlinkSync(p)),
   };
 }
 
@@ -309,6 +315,24 @@ function runEvaluate(deps: ResolvedDeps, parsed: ParsedCli): number {
   return 0;
 }
 
+/** blind 临时文件后缀（staged publication 用）。 */
+export const BLIND_TEMP_SUFFIX = '.gq1-tmp';
+
+/** 规范化路径身份：统一相对路径 / ./ / 父级遍历等别名。 */
+function resolvePathIdentity(p: string): string {
+  return path.resolve(p);
+}
+
+/**
+ * blind 的 staged publication：
+ * 1. 内存生成并验证 packet/mapping；
+ * 2. 完成全部路径（含规范化身份）、overwrite 检查；
+ * 3. mapping / packet 先写临时文件；
+ * 4. 全部临时文件成功后，再逐个 rename 发布正式文件；
+ * 5. 任一步失败：清理临时文件与已发布文件（best-effort rollback），不输出 stdout packet，
+ *    不显示成功信息；
+ * 6. stdout packet 只在 mapping 正式发布成功后输出。
+ */
 function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
   const file = requirePositional(parsed, 0, '<suite.json>');
   const seed = requireOption(parsed, 'seed');
@@ -332,27 +356,117 @@ function runBlind(deps: ResolvedDeps, parsed: ParsedCli): number {
       'private mapping 必须通过 --mapping-output 显式输出（禁止输出到 stdout）',
     );
   }
-  if (packetOutput !== undefined && packetOutput === mappingOutput) {
+  // 路径身份判断：使用规范化绝对路径比较（./、父级遍历、相对/绝对别名都识别为同一路径）
+  if (
+    packetOutput !== undefined &&
+    resolvePathIdentity(packetOutput) === resolvePathIdentity(mappingOutput)
+  ) {
     throw new CliUsageError('--packet-output 与 --mapping-output 不能指向同一路径');
   }
 
-  // 先在内存完成全部路径与 overwrite 校验，再写入（避免失败时留下半个输出）
-  const writeTargets: Array<{ path: string }> = [];
-  if (packetOutput !== undefined) writeTargets.push({ path: packetOutput });
-  writeTargets.push({ path: mappingOutput });
-  for (const t of writeTargets) {
-    if (deps.exists(t.path) && !force) {
+  // 全部路径与 overwrite 校验（在创建任何临时文件之前）
+  const finalTargets: string[] = [];
+  if (packetOutput !== undefined) finalTargets.push(packetOutput);
+  finalTargets.push(mappingOutput);
+  for (const p of finalTargets) {
+    if (deps.exists(p) && !force) {
       throw new CliUsageError(
-        `输出文件 "${safeDisplayPath(t.path)}" 已存在；如需覆盖请显式使用 --force`,
+        `输出文件 "${safeDisplayPath(p)}" 已存在；如需覆盖请显式使用 --force`,
       );
     }
   }
 
-  // 全部校验通过后再写；packet 可到文件或 stdout，mapping 只写文件
-  writeJsonOutput(deps, packetOutput, packetJson, force);
-  deps.stderr('警告: private mapping 不应交给评审者；请将其与 blind packet 分开保管。\n');
-  writeJsonOutput(deps, mappingOutput, mappingJson, force);
-  return 0;
+  // staged publication：临时文件 + rename 发布，失败时 best-effort rollback
+  const createdTempFiles: string[] = [];
+  const publishedFiles: string[] = [];
+  const backups: Array<{ backup: string; original: string }> = [];
+
+  try {
+    const mappingTemp = mappingOutput + BLIND_TEMP_SUFFIX;
+    deps.writeFile(mappingTemp, mappingJson);
+    createdTempFiles.push(mappingTemp);
+
+    let packetTemp: string | undefined;
+    if (packetOutput !== undefined) {
+      packetTemp = packetOutput + BLIND_TEMP_SUFFIX;
+      deps.writeFile(packetTemp, packetJson);
+      createdTempFiles.push(packetTemp);
+    }
+
+    // --force 覆盖已有文件时，先把旧文件移到 backup，发布成功后删除 backup；
+    // 失败时可恢复旧文件，避免“先破坏旧文件再发现另一个输出失败”。
+    if (force && deps.exists(mappingOutput)) {
+      const backup = mappingOutput + BLIND_TEMP_SUFFIX + '.bak';
+      deps.renameFile(mappingOutput, backup);
+      backups.push({ backup, original: mappingOutput });
+    }
+    if (packetOutput !== undefined && force && deps.exists(packetOutput)) {
+      const backup = packetOutput + BLIND_TEMP_SUFFIX + '.bak';
+      deps.renameFile(packetOutput, backup);
+      backups.push({ backup, original: packetOutput });
+    }
+
+    // 先发布 mapping（敏感产物），再发布 packet
+    deps.renameFile(mappingTemp, mappingOutput);
+    publishedFiles.push(mappingOutput);
+    createdTempFiles.splice(createdTempFiles.indexOf(mappingTemp), 1);
+
+    if (packetOutput !== undefined && packetTemp !== undefined) {
+      deps.renameFile(packetTemp, packetOutput);
+      publishedFiles.push(packetOutput);
+      createdTempFiles.splice(createdTempFiles.indexOf(packetTemp), 1);
+    }
+
+    // 全部正式文件发布成功后，删除 backups
+    for (const b of backups) {
+      try {
+        deps.removeFile(b.backup);
+      } catch {
+        // best-effort
+      }
+    }
+
+    // stdout packet 只在 mapping / packet 全部正式发布成功后输出
+    if (packetOutput === undefined) {
+      deps.stdout(packetJson);
+      deps.stdout('\n');
+    }
+
+    deps.stderr('警告: private mapping 不应交给评审者；请将其与 blind packet 分开保管。\n');
+    return 0;
+  } catch (err) {
+    // best-effort rollback：先移除本次已发布的正式文件，再恢复旧文件备份，最后清理临时文件
+    for (const p of publishedFiles) {
+      try {
+        deps.removeFile(p);
+      } catch {
+        // best-effort
+      }
+    }
+    for (const b of backups) {
+      try {
+        deps.renameFile(b.backup, b.original);
+      } catch {
+        // best-effort
+      }
+    }
+    for (const p of createdTempFiles) {
+      try {
+        deps.removeFile(p);
+      } catch {
+        // best-effort
+      }
+    }
+    // 原始错误可能含绝对路径 / errno / 密钥：白名单类型原样抛出，其余包装为安全消息
+    if (
+      err instanceof CliUsageError ||
+      err instanceof EvaluationValidationError ||
+      err instanceof RatingValidationError
+    ) {
+      throw err;
+    }
+    throw new CliUsageError('blind 输出失败（IO 错误）');
+  }
 }
 
 function runAggregate(deps: ResolvedDeps, parsed: ParsedCli): number {

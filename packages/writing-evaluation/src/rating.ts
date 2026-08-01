@@ -19,7 +19,12 @@ import type {
   PrivateMappingV1,
   RatingAggregationReport,
 } from './schema.js';
-import { DEFAULT_TOOL_VERSION, HUMAN_RATING_DIMENSIONS } from './schema.js';
+import {
+  BLIND_ALIAS_ERROR,
+  DEFAULT_TOOL_VERSION,
+  HUMAN_RATING_DIMENSIONS,
+  isValidBlindAlias,
+} from './schema.js';
 import type { Clock } from './clock.js';
 import { codePointCompare } from '@ai-novel/domain';
 
@@ -102,10 +107,10 @@ function validateSingleRating(
   const candidateAlias = requireNonEmptyString(obj.candidateAlias, `${path}.candidateAlias`);
   const raterId = requireNonEmptyString(obj.raterId, `${path}.raterId`);
 
-  if (!/^[A-Z]{1,2}$/.test(candidateAlias)) {
+  if (!isValidBlindAlias(candidateAlias)) {
     throw new RatingValidationError(
       `${path}.candidateAlias`,
-      `非法 alias "${candidateAlias}"（必须是 A/B/C...）`,
+      `非法 alias "${candidateAlias}"：${BLIND_ALIAS_ERROR}`,
     );
   }
 

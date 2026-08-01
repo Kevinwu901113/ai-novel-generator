@@ -10,6 +10,7 @@ import {
 } from './validate.js';
 import { generateBlindPacket } from './blind.js';
 import { getBaselineSuite } from './fixtures.js';
+import { isValidBlindAlias } from './schema.js';
 
 interface Base {
   suite: ReturnType<typeof getBaselineSuite>;
@@ -111,11 +112,28 @@ describe('validateBlindPacket — 非法 packet', () => {
     expectBlindError(input, /重复的 alias/);
   });
 
-  it('拒绝非法 alias（非 A-Z）', () => {
+  it('拒绝非法 alias（AA / ZZ / 小写 / 数字）', () => {
+    for (const bad of ['AA', 'ZZ', 'a', '1']) {
+      const { packet } = base();
+      const input = cloneJson(packet);
+      input.cases[0].candidates[0].alias = bad;
+      expectBlindError(input, /大写单字母/);
+    }
+  });
+
+  it('拒绝空 alias', () => {
     const { packet } = base();
     const input = cloneJson(packet);
-    input.cases[0].candidates[0].alias = 'a';
-    expectBlindError(input, /alias/);
+    input.cases[0].candidates[0].alias = '';
+    expectBlindError(input, /不能为空|大写单字母/);
+  });
+
+  it('接受合法 alias（A / Z）', () => {
+    const { packet } = base();
+    const input = cloneJson(packet);
+    input.cases[0].candidates[0].alias = 'A';
+    input.cases[0].candidates[1].alias = 'Z';
+    expect(validateBlindPacket(input).cases[0].candidates.map((c) => c.alias)).toEqual(['A', 'Z']);
   });
 
   it('拒绝身份字段泄漏（candidateId 等）', () => {
@@ -147,6 +165,19 @@ describe('validateBlindPacket — 非法 packet', () => {
     const input = cloneJson(packet);
     input.cases[0].manualCriteria = [{ kind: 'forbidden-phrase', constraintId: 'x', phrase: '禁' }];
     expectBlindError(input, /manual-criterion/);
+  });
+});
+
+describe('isValidBlindAlias — 共享单字母规则', () => {
+  it('A、Z 通过', () => {
+    expect(isValidBlindAlias('A')).toBe(true);
+    expect(isValidBlindAlias('Z')).toBe(true);
+  });
+
+  it('AA、ZZ、小写、数字、空字符串失败', () => {
+    for (const bad of ['AA', 'ZZ', 'a', '1', '', 'AB']) {
+      expect(isValidBlindAlias(bad)).toBe(false);
+    }
   });
 });
 

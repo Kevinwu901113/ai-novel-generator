@@ -388,6 +388,21 @@ export const HUMAN_RATING_DIMENSIONS = [
 
 export type HumanRatingDimension = (typeof HUMAN_RATING_DIMENSIONS)[number];
 
+// ── 盲评 alias 共享规则 ────────────────────────────────────────────
+
+/**
+ * 盲评 alias 规则：大写单字母 A-Z。
+ * 与 generateBlindPacket 的 MAX_ALIASES=26 一致；BlindPacket validator 与
+ * HumanRating validator 必须共用此规则，不得维护第二套 regex。
+ */
+export const BLIND_ALIAS_RE = /^[A-Z]$/;
+
+export function isValidBlindAlias(alias: string): boolean {
+  return BLIND_ALIAS_RE.test(alias);
+}
+
+export const BLIND_ALIAS_ERROR = '必须是大写单字母 A-Z（如 A、B、C，最多 26 个候选）';
+
 export interface HumanRatingV1 {
   readonly schemaVersion: 1;
   readonly suiteId: string;

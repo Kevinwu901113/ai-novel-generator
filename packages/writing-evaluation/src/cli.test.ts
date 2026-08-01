@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { runCli, parseCliArgs, CliUsageError } from './cli.js';
+import { runCli, parseCliArgs, CliUsageError, BLIND_TEMP_SUFFIX } from './cli.js';
 import { getBaselineSuite } from './fixtures.js';
 import { fixedClockIso } from './test-util.js';
 
@@ -25,6 +25,22 @@ class MemFs {
   exists(p: string): boolean {
     return this.files.has(p);
   }
+
+  renameFile(from: string, to: string): void {
+    const content = this.files.get(from);
+    if (content === undefined) throw new Error(`ENOENT: ${from}`);
+    this.files.delete(from);
+    this.files.set(to, content);
+  }
+
+  removeFile(p: string): void {
+    if (!this.files.has(p)) throw new Error(`ENOENT: ${p}`);
+    this.files.delete(p);
+  }
+
+  tempArtifacts(): string[] {
+    return [...this.files.keys()].filter((k) => k.includes(BLIND_TEMP_SUFFIX));
+  }
 }
 
 function makeHarness(files: Record<string, string> = {}) {
@@ -43,6 +59,8 @@ function makeHarness(files: Record<string, string> = {}) {
       readFile: (p: string) => fs.readFile(p),
       writeFile: (p: string, c: string) => fs.writeFile(p, c),
       exists: (p: string) => fs.exists(p),
+      renameFile: (from: string, to: string) => fs.renameFile(from, to),
+      removeFile: (p: string) => fs.removeFile(p),
     },
   };
 }
@@ -295,7 +313,9 @@ describe('runCli — blind / aggregate', () => {
     const h = makeHarness({ 'suite.json': SUITE_JSON });
     const originalWrite = h.deps.writeFile;
     h.deps.writeFile = (p: string, content: string) => {
-      if (p === 'mapping.json') throw new Error('EACCES: permission denied /Users/secret/dir');
+      if (p === 'mapping.json.gq1-tmp') {
+        throw new Error('EACCES: permission denied /Users/secret/dir');
+      }
       originalWrite(p, content);
     };
     const code = await runCli(
@@ -315,6 +335,9 @@ describe('runCli — blind / aggregate', () => {
     // 错误消息安全：不暴露绝对路径 / 原始 errno
     expect(h.err.join('')).not.toContain('/Users/secret');
     expect(h.err.join('')).not.toContain('EACCES');
+    // 不产生误导性成功：无 packet 文件、无 mapping 文件
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
   });
 
   it('aggregate 成功并解析 candidateId', async () => {
@@ -378,6 +401,300 @@ describe('runCli — blind / aggregate', () => {
     const h = makeHarness({ 'ratings.json': '[]' });
     const code = await runCli(['validate', 'ratings.json', '--type', 'ratings'], h.deps);
     expect(code).toBeGreaterThan(0);
+  });
+});
+
+describe('runCli — blind 路径身份（规范化绝对路径比较）', () => {
+  const ABS = process.cwd();
+
+  async function expectSamePathRejected(packetOut: string, mappingOut: string, force = false) {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const args = [
+      'blind',
+      'suite.json',
+      '--seed',
+      's',
+      '--packet-output',
+      packetOut,
+      '--mapping-output',
+      mappingOut,
+    ];
+    if (force) args.push('--force');
+    const code = await runCli(args, h.deps);
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('同一路径');
+    // 错误消息只显示 basename，不泄露规范化后的绝对路径
+    expect(h.err.join('')).not.toContain(ABS);
+  }
+
+  it('exact same path 拒绝', async () => {
+    await expectSamePathRejected('packet.json', 'packet.json');
+  });
+
+  it('./path alias 拒绝', async () => {
+    await expectSamePathRejected('./packet.json', 'packet.json');
+  });
+
+  it('父级遍历 alias 拒绝（out/../packet.json）', async () => {
+    await expectSamePathRejected('out/../packet.json', 'packet.json');
+  });
+
+  it('相对路径与对应绝对路径 alias 拒绝', async () => {
+    await expectSamePathRejected('packet.json', `${ABS}/packet.json`);
+  });
+
+  it('使用 --force 时同路径也拒绝', async () => {
+    await expectSamePathRejected('./packet.json', 'packet.json', true);
+  });
+
+  it('mapping 不得覆盖 packet', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'out/../packet.json',
+        '--mapping-output',
+        'packet.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    // 同路径被拒，mapping 不会覆盖 packet
+    expect(h.fs.files.get('packet.json')).toBeUndefined();
+  });
+});
+
+describe('runCli — blind 原子（staged）发布与 rollback', () => {
+  function failOnWrite(
+    h: ReturnType<typeof makeHarness>,
+    pathIncludes: string,
+  ): ReturnType<typeof makeHarness>['deps']['writeFile'] {
+    const origWrite = h.deps.writeFile;
+    return (p: string, c: string) => {
+      if (p.includes(pathIncludes)) throw new Error('EACCES /Users/kevin/secret.json');
+      origWrite(p, c);
+    };
+  }
+
+  it('mapping 临时写失败：无 packet / mapping 文件，stdout 为空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    h.deps.writeFile = failOnWrite(h, 'mapping.json.gq1-tmp');
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('packet 临时写失败：无新正式文件，stdout 为空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    h.deps.writeFile = failOnWrite(h, 'packet.json.gq1-tmp');
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('mapping publish 失败：无正式文件，stdout 为空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const origRename = h.deps.renameFile;
+    h.deps.renameFile = (from: string, to: string) => {
+      if (to === 'mapping.json') throw new Error('EACCES publish');
+      origRename(from, to);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('packet publish 失败：rollback 移除已发布 mapping，stdout 为空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const origRename = h.deps.renameFile;
+    h.deps.renameFile = (from: string, to: string) => {
+      if (to === 'packet.json') throw new Error('EACCES publish');
+      origRename(from, to);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    // mapping 已发布但随后失败 → rollback 移除 mapping
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+    expect(h.fs.files.has('packet.json')).toBe(false);
+    expect(h.out.join('')).toBe('');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('stdout 模式 mapping publish 失败：stdout 为空', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const origRename = h.deps.renameFile;
+    h.deps.renameFile = (from: string, to: string) => {
+      if (to === 'mapping.json') throw new Error('EACCES publish');
+      origRename(from, to);
+    };
+    const code = await runCli(
+      ['blind', 'suite.json', '--seed', 's', '--mapping-output', 'mapping.json'],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.out.join('')).toBe('');
+    expect(h.fs.files.has('mapping.json')).toBe(false);
+  });
+
+  it('--force 失败时不损坏原有 packet/mapping', async () => {
+    const h = makeHarness({
+      'suite.json': SUITE_JSON,
+      'packet.json': 'old-packet',
+      'mapping.json': 'old-mapping',
+    });
+    const origRename = h.deps.renameFile;
+    let publishAttempted = false;
+    h.deps.renameFile = (from: string, to: string) => {
+      // 只让首次发布失败，rollback 的恢复 rename 正常执行
+      if (to === 'packet.json' && !publishAttempted) {
+        publishAttempted = true;
+        throw new Error('EACCES publish');
+      }
+      origRename(from, to);
+    };
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+        '--force',
+      ],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    // rollback 恢复旧文件
+    expect(h.fs.files.get('mapping.json')).toBe('old-mapping');
+    expect(h.fs.files.get('packet.json')).toBe('old-packet');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('成功时两个正式文件正确且无临时文件', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    const code = await runCli(
+      [
+        'blind',
+        'suite.json',
+        '--seed',
+        's',
+        '--packet-output',
+        'packet.json',
+        '--mapping-output',
+        'mapping.json',
+      ],
+      h.deps,
+    );
+    expect(code).toBe(0);
+    expect(JSON.parse(h.fs.files.get('packet.json')!)).toHaveProperty('packetId');
+    expect(JSON.parse(h.fs.files.get('mapping.json')!)).toHaveProperty('entries');
+    expect(h.fs.tempArtifacts()).toEqual([]);
+  });
+
+  it('公共错误不含绝对路径 / Bearer / API_KEY / errno', async () => {
+    const h = makeHarness({ 'suite.json': SUITE_JSON });
+    h.deps.writeFile = failOnWrite(h, 'mapping.json.gq1-tmp');
+    const code = await runCli(
+      ['blind', 'suite.json', '--seed', 's', '--mapping-output', 'mapping.json'],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    const all = h.out.join('') + h.err.join('');
+    expect(all).not.toContain('/Users/kevin');
+    expect(all).not.toContain('Bearer');
+    expect(all).not.toContain('API_KEY');
+    expect(all).not.toContain('EACCES');
+    expect(all).toContain('IO 错误');
+  });
+});
+
+describe('runCli — blind alias 规则', () => {
+  it('拒绝多字母 alias（AA）', async () => {
+    const { packetJson } = packetFiles();
+    const bad = JSON.parse(packetJson);
+    bad.cases[0].candidates[0].alias = 'AA';
+    const h = makeHarness({
+      'bad-packet.json': JSON.stringify(bad),
+      'ratings.json': '[]',
+    });
+    const code = await runCli(
+      ['validate', 'ratings.json', '--type', 'ratings', '--packet', 'bad-packet.json'],
+      h.deps,
+    );
+    expect(code).toBeGreaterThan(0);
+    expect(h.err.join('')).toContain('大写单字母');
+  });
+
+  it('生成的单字母 alias 通过校验', () => {
+    const { packetJson } = packetFiles();
+    const packet = JSON.parse(packetJson) as BlindPacketV1;
+    const aliases = packet.cases.flatMap((c) => c.candidates.map((x) => x.alias));
+    expect(aliases.length).toBeGreaterThan(0);
+    expect(aliases.every((a) => /^[A-Z]$/.test(a))).toBe(true);
   });
 });
 
