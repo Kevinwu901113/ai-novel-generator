@@ -64,6 +64,12 @@ export type ErrorCode =
   | 'CONTRACT_SCHEMA_UNSUPPORTED'
   | 'CONTRACT_VALIDATION_FAILED'
   | 'CONTRACT_DRAFT_ALREADY_RUNNING'
+  | 'MANUSCRIPT_NOT_FOUND'
+  | 'MANUSCRIPT_STATE_CONFLICT'
+  | 'MANUSCRIPT_VERSION_CONFLICT'
+  | 'MANUSCRIPT_POSITION_OVERFLOW'
+  | 'CHAPTER_NOT_FOUND'
+  | 'CHAPTER_VERSION_NOT_FOUND'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -442,6 +448,12 @@ export function isAppError(data: unknown): data is AppError {
     'CONTRACT_SCHEMA_UNSUPPORTED',
     'CONTRACT_VALIDATION_FAILED',
     'CONTRACT_DRAFT_ALREADY_RUNNING',
+    'MANUSCRIPT_NOT_FOUND',
+    'MANUSCRIPT_STATE_CONFLICT',
+    'MANUSCRIPT_VERSION_CONFLICT',
+    'MANUSCRIPT_POSITION_OVERFLOW',
+    'CHAPTER_NOT_FOUND',
+    'CHAPTER_VERSION_NOT_FOUND',
     'INTERNAL_ERROR',
   ]);
   return (
@@ -2158,4 +2170,624 @@ export function isValidUnlockContractFieldInput(data: unknown): data is UnlockCo
     isContractPositiveInt(obj.expectedContractVersion) &&
     isCanonicalContractFieldPath(obj.fieldPath)
   );
+}
+
+// ── 稿件 / 章节 / 章节版本 DTO ────────────────────────────────────
+
+export type ManuscriptStatus = 'active' | 'archived';
+export type ChapterStatus = 'active' | 'archived';
+export type ChapterVersionSourceType =
+  'USER' | 'AI_GENERATION' | 'AI_REWRITE' | 'IMPORT' | 'RESTORE';
+
+/** 稿件公开数据 —— 返回给 Renderer */
+export interface ManuscriptPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly title: string;
+  readonly status: ManuscriptStatus;
+  readonly creationContractVersionId: string | null;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 章节版本摘要 —— listChapterVersions 返回，**不含 content**（§7.3） */
+export interface ChapterVersionSummary {
+  readonly id: string;
+  readonly chapterId: string;
+  readonly versionNumber: number;
+  readonly title: string;
+  readonly sourceType: ChapterVersionSourceType;
+  readonly createdAt: string;
+  readonly parentVersionId: string | null;
+  readonly creationContractVersionId: string | null;
+  readonly contentHash: string;
+}
+
+/** 章节版本公开数据 —— getChapterVersion / createChapterVersion / promote 返回，含 content */
+export interface ChapterVersionPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly versionNumber: number;
+  readonly title: string;
+  readonly content: string;
+  readonly contentHash: string;
+  readonly parentVersionId: string | null;
+  readonly sourceType: ChapterVersionSourceType;
+  readonly createdByTaskId: string | null;
+  readonly invocationId: string | null;
+  readonly creationContractVersionId: string | null;
+  readonly createdAt: string;
+}
+
+/** 章节列表项 —— 当前版本标题与版本数（UI 展示用） */
+export interface ChapterSummary {
+  readonly id: string;
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly position: number;
+  readonly currentVersionId: string | null;
+  readonly status: ChapterStatus;
+  /** 当前版本标题；空章节为 null（UI 显示占位「未命名章节」） */
+  readonly currentTitle: string | null;
+  readonly versionCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 章节公开数据 —— 含当前版本摘要与版本数 */
+export interface ChapterPublicData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly position: number;
+  readonly currentVersionId: string | null;
+  readonly status: ChapterStatus;
+  readonly currentVersion: ChapterVersionSummary | null;
+  readonly versionCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+// ── 稿件 / 章节 / 版本输入 DTO（Renderer 面，§7.1/§7.2）────────────
+// Renderer 不传新 ID / now / sourceType / taskId / invocationId ——
+// 全部由 Worker 或 application 注入。
+
+export interface GetOrCreateManuscriptInput {
+  readonly projectId: string;
+  readonly title?: string;
+}
+
+export interface GetManuscriptInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+}
+
+export interface ListChaptersInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly includeArchived?: boolean;
+}
+
+export interface GetChapterInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly chapterId: string;
+}
+
+export interface GetCurrentChapterVersionInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export interface ListChapterVersionsInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export interface GetChapterVersionInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly versionId: string;
+}
+
+export interface CreateChapterInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly insertBeforeChapterId: string | null;
+}
+
+export interface CreateChapterVersionInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly title: string;
+  readonly content: string;
+  readonly expectedCurrentVersionId: string | null;
+  readonly creationContractVersionId?: string | null;
+}
+
+export interface PromoteChapterVersionInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly versionId: string;
+  readonly expectedCurrentVersionId: string | null;
+}
+
+export interface UpdateChapterOrderInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly chapterId: string;
+  readonly insertBeforeChapterId: string | null;
+}
+
+export interface ArchiveChapterInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly expectedCurrentVersionId: string | null;
+}
+
+export interface RestoreChapterInput {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly expectedCurrentVersionId: string | null;
+}
+
+export interface UpdateManuscriptTitleInput {
+  readonly projectId: string;
+  readonly manuscriptId: string;
+  readonly title: string;
+  readonly expectedUpdatedAt: string;
+}
+
+// ── 稿件 / 章节 / 版本严格输入验证 ─────────────────────────────────
+// 与创作契约同一套严格约束：exact keys（拒绝继承/多余字段）、
+// ID trim 非空且 ≤128 code points、position/versionNumber 正安全整数、
+// null 语义严格。
+
+/**
+ * 允许子集 + 必需字段的严格 key 校验（可选字段输入用）。
+ *
+ * 与 hasContractExactKeys 同一强度：拒绝 array / 自定义 prototype /
+ * 非 own enumerable key，且只允许 allowed 中的 key；
+ * 与 hasContractExactKeys 不同：allowed 中可选字段可以缺失，
+ * 但 required 中每个字段都必须存在（own property）。
+ */
+function hasContractAllowedKeys(
+  obj: Record<string, unknown>,
+  allowed: ReadonlyArray<string>,
+  required: ReadonlyArray<string>,
+): boolean {
+  if (Array.isArray(obj)) return false;
+  const proto = Object.getPrototypeOf(obj);
+  if (proto !== Object.prototype && proto !== null) return false;
+  const keys = Object.keys(obj);
+  const allowedSet = new Set(allowed);
+  for (const k of keys) {
+    if (!Object.prototype.hasOwnProperty.call(obj, k)) return false;
+    if (!allowedSet.has(k)) return false;
+  }
+  for (const r of required) {
+    if (!Object.prototype.hasOwnProperty.call(obj, r)) return false;
+  }
+  return true;
+}
+
+const MANUSCRIPT_STATUS_SET: ReadonlySet<string> = new Set(['active', 'archived']);
+const CHAPTER_VERSION_SOURCE_SET: ReadonlySet<string> = new Set([
+  'USER',
+  'AI_GENERATION',
+  'AI_REWRITE',
+  'IMPORT',
+  'RESTORE',
+]);
+const MANUSCRIPT_TITLE_MAX = 200;
+const CHAPTER_CONTENT_MAX = 1_000_000;
+
+function isManuscriptStatusValue(value: unknown): value is ManuscriptStatus {
+  return typeof value === 'string' && MANUSCRIPT_STATUS_SET.has(value);
+}
+
+function isChapterStatusValue(value: unknown): value is ChapterStatus {
+  return typeof value === 'string' && MANUSCRIPT_STATUS_SET.has(value);
+}
+
+function isChapterVersionSourceValue(value: unknown): value is ChapterVersionSourceType {
+  return typeof value === 'string' && CHAPTER_VERSION_SOURCE_SET.has(value);
+}
+
+/** 严格标题：trim 后非空且 ≤ 200 UTF-16 code units */
+function isManuscriptTitle(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  return trimmed.length <= MANUSCRIPT_TITLE_MAX;
+}
+
+/** 严格正文：string 且 ≤ 1,000,000 UTF-16 code units（允许空串，不 trim） */
+function isChapterContent(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  return value.length <= CHAPTER_CONTENT_MAX;
+}
+
+/** 严格 position / versionNumber：正安全整数 */
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** null 或非空 ID */
+function isNullableId(value: unknown): boolean {
+  return value === null || isContractId(value);
+}
+
+/** 严格更新时间戳（宽松结构校验：非空字符串） */
+function isIsoTimestampLike(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isLowercaseSha256HexLike(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
+export function isValidGetOrCreateManuscriptInput(
+  data: unknown,
+): data is GetOrCreateManuscriptInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractAllowedKeys(obj, ['projectId', 'title'], ['projectId'])) return false;
+  if (!isContractId(obj.projectId)) return false;
+  if (obj.title !== undefined && !isManuscriptTitle(obj.title)) return false;
+  return true;
+}
+
+export function isValidGetManuscriptInput(data: unknown): data is GetManuscriptInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'manuscriptId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId)
+  );
+}
+
+export function isValidListChaptersInput(data: unknown): data is ListChaptersInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractAllowedKeys(
+      obj,
+      ['projectId', 'manuscriptId', 'includeArchived'],
+      ['projectId', 'manuscriptId'],
+    )
+  ) {
+    return false;
+  }
+  if (!isContractId(obj.projectId) || !isContractId(obj.manuscriptId)) return false;
+  if (obj.includeArchived !== undefined && typeof obj.includeArchived !== 'boolean') return false;
+  return true;
+}
+
+export function isValidGetChapterInput(data: unknown): data is GetChapterInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'manuscriptId', 'chapterId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId) &&
+    isContractId(obj.chapterId)
+  );
+}
+
+export function isValidGetCurrentChapterVersionInput(
+  data: unknown,
+): data is GetCurrentChapterVersionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'chapterId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId)
+  );
+}
+
+export function isValidListChapterVersionsInput(data: unknown): data is ListChapterVersionsInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'chapterId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId)
+  );
+}
+
+export function isValidGetChapterVersionInput(data: unknown): data is GetChapterVersionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'chapterId', 'versionId']) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isContractId(obj.versionId)
+  );
+}
+
+export function isValidCreateChapterInput(data: unknown): data is CreateChapterInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'manuscriptId', 'insertBeforeChapterId'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId) &&
+    isNullableId(obj.insertBeforeChapterId)
+  );
+}
+
+export function isValidCreateChapterVersionInput(data: unknown): data is CreateChapterVersionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractAllowedKeys(
+      obj,
+      [
+        'projectId',
+        'chapterId',
+        'title',
+        'content',
+        'expectedCurrentVersionId',
+        'creationContractVersionId',
+      ],
+      ['projectId', 'chapterId', 'title', 'content', 'expectedCurrentVersionId'],
+    )
+  ) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isManuscriptTitle(obj.title) &&
+    isChapterContent(obj.content) &&
+    isNullableId(obj.expectedCurrentVersionId) &&
+    (obj.creationContractVersionId === undefined ||
+      obj.creationContractVersionId === null ||
+      isContractId(obj.creationContractVersionId))
+  );
+}
+
+export function isValidPromoteChapterVersionInput(
+  data: unknown,
+): data is PromoteChapterVersionInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractExactKeys(obj, ['projectId', 'chapterId', 'versionId', 'expectedCurrentVersionId'])
+  ) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isContractId(obj.versionId) &&
+    isNullableId(obj.expectedCurrentVersionId)
+  );
+}
+
+export function isValidUpdateChapterOrderInput(data: unknown): data is UpdateChapterOrderInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractExactKeys(obj, ['projectId', 'manuscriptId', 'chapterId', 'insertBeforeChapterId'])
+  ) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId) &&
+    isContractId(obj.chapterId) &&
+    isNullableId(obj.insertBeforeChapterId)
+  );
+}
+
+export function isValidArchiveChapterInput(data: unknown): data is ArchiveChapterInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'chapterId', 'expectedCurrentVersionId'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isNullableId(obj.expectedCurrentVersionId)
+  );
+}
+
+export function isValidRestoreChapterInput(data: unknown): data is RestoreChapterInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'chapterId', 'expectedCurrentVersionId'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isNullableId(obj.expectedCurrentVersionId)
+  );
+}
+
+export function isValidUpdateManuscriptTitleInput(
+  data: unknown,
+): data is UpdateManuscriptTitleInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'manuscriptId', 'title', 'expectedUpdatedAt'])) {
+    return false;
+  }
+  return (
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId) &&
+    isManuscriptTitle(obj.title) &&
+    isIsoTimestampLike(obj.expectedUpdatedAt)
+  );
+}
+
+// ── 稿件 / 章节 / 版本公开数据验证 ─────────────────────────────────
+
+export function isValidManuscriptPublicData(data: unknown): data is ManuscriptPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, [
+      'id',
+      'projectId',
+      'title',
+      'status',
+      'creationContractVersionId',
+      'createdAt',
+      'updatedAt',
+    ]) &&
+    isContractId(obj.id) &&
+    isContractId(obj.projectId) &&
+    isManuscriptTitle(obj.title) &&
+    isManuscriptStatusValue(obj.status) &&
+    (obj.creationContractVersionId === null || isContractId(obj.creationContractVersionId)) &&
+    isIsoTimestampLike(obj.createdAt) &&
+    isIsoTimestampLike(obj.updatedAt)
+  );
+}
+
+export function isValidChapterVersionSummary(data: unknown): data is ChapterVersionSummary {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, [
+      'id',
+      'chapterId',
+      'versionNumber',
+      'title',
+      'sourceType',
+      'createdAt',
+      'parentVersionId',
+      'creationContractVersionId',
+      'contentHash',
+    ]) &&
+    isContractId(obj.id) &&
+    isContractId(obj.chapterId) &&
+    isPositiveSafeInteger(obj.versionNumber) &&
+    isManuscriptTitle(obj.title) &&
+    isChapterVersionSourceValue(obj.sourceType) &&
+    isIsoTimestampLike(obj.createdAt) &&
+    isNullableId(obj.parentVersionId) &&
+    (obj.creationContractVersionId === null ||
+      obj.creationContractVersionId === undefined ||
+      isContractId(obj.creationContractVersionId)) &&
+    isLowercaseSha256HexLike(obj.contentHash)
+  );
+}
+
+export function isValidChapterVersionPublicData(data: unknown): data is ChapterVersionPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, [
+      'id',
+      'projectId',
+      'chapterId',
+      'versionNumber',
+      'title',
+      'content',
+      'contentHash',
+      'parentVersionId',
+      'sourceType',
+      'createdByTaskId',
+      'invocationId',
+      'creationContractVersionId',
+      'createdAt',
+    ]) &&
+    isContractId(obj.id) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.chapterId) &&
+    isPositiveSafeInteger(obj.versionNumber) &&
+    isManuscriptTitle(obj.title) &&
+    isChapterContent(obj.content) &&
+    isLowercaseSha256HexLike(obj.contentHash) &&
+    isNullableId(obj.parentVersionId) &&
+    isChapterVersionSourceValue(obj.sourceType) &&
+    isNullableId(obj.createdByTaskId) &&
+    isNullableId(obj.invocationId) &&
+    (obj.creationContractVersionId === null ||
+      obj.creationContractVersionId === undefined ||
+      isContractId(obj.creationContractVersionId)) &&
+    isIsoTimestampLike(obj.createdAt)
+  );
+}
+
+export function isValidChapterSummary(data: unknown): data is ChapterSummary {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, [
+      'id',
+      'projectId',
+      'manuscriptId',
+      'position',
+      'currentVersionId',
+      'status',
+      'currentTitle',
+      'versionCount',
+      'createdAt',
+      'updatedAt',
+    ]) &&
+    isContractId(obj.id) &&
+    isContractId(obj.projectId) &&
+    isContractId(obj.manuscriptId) &&
+    isPositiveSafeInteger(obj.position) &&
+    isNullableId(obj.currentVersionId) &&
+    isChapterStatusValue(obj.status) &&
+    (obj.currentTitle === null || isManuscriptTitle(obj.currentTitle)) &&
+    typeof obj.versionCount === 'number' &&
+    Number.isSafeInteger(obj.versionCount) &&
+    obj.versionCount >= 0 &&
+    isIsoTimestampLike(obj.createdAt) &&
+    isIsoTimestampLike(obj.updatedAt)
+  );
+}
+
+export function isValidChapterPublicData(data: unknown): data is ChapterPublicData {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  if (
+    !hasContractExactKeys(obj, [
+      'id',
+      'projectId',
+      'manuscriptId',
+      'position',
+      'currentVersionId',
+      'status',
+      'currentVersion',
+      'versionCount',
+      'createdAt',
+      'updatedAt',
+    ])
+  ) {
+    return false;
+  }
+  if (
+    !isContractId(obj.id) ||
+    !isContractId(obj.projectId) ||
+    !isContractId(obj.manuscriptId) ||
+    !isPositiveSafeInteger(obj.position) ||
+    !isNullableId(obj.currentVersionId) ||
+    !isChapterStatusValue(obj.status) ||
+    !(
+      typeof obj.versionCount === 'number' &&
+      Number.isSafeInteger(obj.versionCount) &&
+      obj.versionCount >= 0
+    ) ||
+    !isIsoTimestampLike(obj.createdAt) ||
+    !isIsoTimestampLike(obj.updatedAt)
+  ) {
+    return false;
+  }
+  if (obj.currentVersion === null) return true;
+  return isValidChapterVersionSummary(obj.currentVersion);
 }
