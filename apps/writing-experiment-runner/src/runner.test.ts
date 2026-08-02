@@ -181,6 +181,16 @@ describe('invalid model output / provider 错误', () => {
     expect(fs.exists('/out/exp1/manifest.private.json')).toBe(true);
   });
 
+  it('failed case 的 manifest 条目 textHash=null、candidateId=null（不冒充成功）', async () => {
+    const suite = makeSourceSuite(['restrained-reunion']);
+    const { run } = makeHarness(suite, [okOutput('')]);
+    const outcome = await run();
+    expect(outcome.runStatus).toBe('PARTIAL_FAILURE');
+    expect(outcome.cases[0].status).toBe('FAILED');
+    expect(outcome.cases[0].textHash).toBeNull();
+    expect(outcome.cases[0].candidateId).toBeNull();
+  });
+
   it('rate limit / timeout / network → 对应安全码，raw provider error 不进入 artifact', async () => {
     const suite = makeSourceSuite(['restrained-reunion', 'suspense-corridor']);
     const { fs, run } = makeHarness(suite, [

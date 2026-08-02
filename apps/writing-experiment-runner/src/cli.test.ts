@@ -312,6 +312,78 @@ describe('LIVE gate 与 Keychain', () => {
   });
 });
 
+describe('LIVE 环境变量精确门控（env === "1" 才开启）', () => {
+  function withEnv(value: string | undefined, fn: () => Promise<void>): Promise<void> {
+    const key = 'WRITING_EXPERIMENT_LIVE';
+    const prev = process.env[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+    return Promise.resolve()
+      .then(fn)
+      .finally(() => {
+        if (prev === undefined) delete process.env[key];
+        else process.env[key] = prev;
+      });
+  }
+
+  it('WRITING_EXPERIMENT_LIVE=false 不联网、不读 Keychain', async () =>
+    withEnv('false', async () => {
+      const h = makeCli({ invoke: undefined, getApiKey: undefined });
+      const code = await h.run(['generate', '--suite', '/tmp/source.json', '--output', '/o']);
+      expect(code).toBe(1);
+      expect(h.err.join('')).toContain('WRITING_EXPERIMENT_LIVE=1');
+      expect(h.invoke.calls).toHaveLength(0);
+    }));
+
+  it('WRITING_EXPERIMENT_LIVE=0 不联网、不读 Keychain', async () =>
+    withEnv('0', async () => {
+      const h = makeCli({ invoke: undefined, getApiKey: undefined });
+      const code = await h.run(['generate', '--suite', '/tmp/source.json', '--output', '/o']);
+      expect(code).toBe(1);
+      expect(h.err.join('')).toContain('WRITING_EXPERIMENT_LIVE=1');
+      expect(h.invoke.calls).toHaveLength(0);
+    }));
+
+  it('WRITING_EXPERIMENT_LIVE=1 + --dry-run：不读取 Keychain、不联网', async () =>
+    withEnv('1', async () => {
+      // getApiKey 若被调用会抛出 → 证明 dry-run 不触碰 Keychain
+      const h = makeCli({
+        invoke: undefined,
+        getApiKey: async () => {
+          throw new Error('KEYCHAIN TOUCHED');
+        },
+      });
+      const code = await h.run([
+        'generate',
+        '--suite',
+        '/tmp/source.json',
+        '--output',
+        '/o',
+        '--dry-run',
+      ]);
+      expect(code).toBe(0);
+      expect(h.out.join('')).toContain('"dryRun": true');
+      expect(h.invoke.calls).toHaveLength(0);
+    }));
+});
+
+describe('未知 positional 参数拒绝', () => {
+  it('positional 参数 → exit 2', async () => {
+    const h = makeCli();
+    const code = await h.run([
+      'generate',
+      'positional',
+      '--suite',
+      '/tmp/source.json',
+      '--output',
+      '/o',
+    ]);
+    expect(code).toBe(2);
+    expect(h.err.join('')).toContain('不支持的参数');
+    expect(h.invoke.calls).toHaveLength(0);
+  });
+});
+
 describe('stdout / stderr 分离与确定性', () => {
   it('stdout 只有机器可读 JSON 摘要，进度与警告在 stderr', async () => {
     const h = makeCli();
