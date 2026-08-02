@@ -448,7 +448,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 **`createChapter`**
 
 - **Input**：`{projectId, manuscriptId, insertBeforeChapterId | null}`（Worker 注入 `newChapterId`、`now`）
-- **Preconditions**：manuscript 存在且属于 project 且 `status='active'`（V1 恒 active）；若提供 `insertBeforeChapterId`，目标 T 存在、属于同一 manuscript 且 **`status='active'`**（归档章节不可作为 insert-before 目标，§5 不变量 8）。插入位置按 §6.1：append（`null`）→ 冻结的 append 算法（`M = MAX(position)+GAP`，`M > LIMIT - GAP` 则 rebalance，重算后仍溢出则 `MANUSCRIPT_POSITION_OVERFLOW`）；prepend（insert-before-first）→ `floor(first.position/2)`（撞 0 则 rebalance）；insert-before-X → 安全 midpoint `P + floor((X.position - P.position)/2)`（gap==1 则 rebalance）。插入位置考虑**所有已占用 rank（含 archived）**（§5 不变量 10）；rebalance 在同一事务内完成（§6.1）。
+- **Preconditions**：manuscript 存在且属于 project 且 `status='active'`（V1 恒 active）；若提供 `insertBeforeChapterId`，目标 T 存在、属于同一 manuscript 且 **`status='active'`**（归档章节不可作为 insert-before 目标，§5 不变量 8）。插入位置按 §6.1：append（`null`）→ 冻结的 append 算法：`M = MAX(position over manuscript 全部章节)`；若 `M <= LIMIT - GAP` 则 `target = M + GAP`；否则 rebalance 并重算，仍溢出则 `MANUSCRIPT_POSITION_OVERFLOW`；prepend（insert-before-first）→ `floor(first.position/2)`（撞 0 则 rebalance）；insert-before-X → 安全 midpoint `P + floor((X.position - P.position)/2)`（gap==1 则 rebalance）。插入位置考虑**所有已占用 rank（含 archived）**（§5 不变量 10）；rebalance 在同一事务内完成（§6.1）。
 - **Transaction**：单个 `BEGIN IMMEDIATE`；插入章节行（`current_version_id = NULL`、`status='active'`）；更新 manuscript.updatedAt；COMMIT。
 - **Result**：`ChapterPublicData`（空章节，`currentVersionId = null`）。
 - **Errors**：`MANUSCRIPT_NOT_FOUND`、`MANUSCRIPT_STATE_CONFLICT`（稿件 archived；insert-before 目标同稿件但 archived）、`CHAPTER_NOT_FOUND`（insert-before 目标不存在/跨稿件，不泄露存在性）、`MANUSCRIPT_POSITION_OVERFLOW`、`VALIDATION_ERROR`。
