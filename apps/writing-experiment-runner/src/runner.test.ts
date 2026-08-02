@@ -83,7 +83,7 @@ function makeHarness(
       strategy: 'baseline-one-shot-v1',
       providerId: 'mimo-token-plan-cn',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
       force: false,
       dryRun: false,
       gitCommit: 'abc123',
@@ -228,6 +228,20 @@ describe('invalid model output / provider 错误', () => {
     expect(caseResults.cases[0].candidate.text).toContain('正文A');
     expect(caseResults.cases[2].candidate.text).toContain('正文C');
   });
+
+  it('默认预算 8192 下每 case 恰好一次 invoke；失败不重复调用（无隐藏 retry）', async () => {
+    const suite = makeSourceSuite(['restrained-reunion', 'suspense-corridor']);
+    const { invoke, run } = makeHarness(suite, [
+      okOutput('正文A'),
+      errorOutput('PROVIDER_TIMEOUT'),
+    ]);
+    const outcome = await run(); // 不显式传 maxTokens → 走 harness 默认 8192
+    expect(outcome.runStatus).toBe('PARTIAL_FAILURE');
+    expect(invoke.calls).toHaveLength(2);
+    for (const call of invoke.calls) {
+      expect(call.maxTokens).toBe(8192);
+    }
+  });
 });
 
 describe('--max-cases（PARTIAL_SELECTION）', () => {
@@ -346,7 +360,7 @@ describe('abort（ABORTED）', () => {
       strategy: 'baseline-one-shot-v1',
       providerId: 'mimo-token-plan-cn',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
       force: false,
       dryRun: false,
       gitCommit: null,

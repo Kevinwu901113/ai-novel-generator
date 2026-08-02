@@ -252,7 +252,7 @@ function buildRunOptions(
   if (temperature < 0 || temperature > 2) {
     throw new CliUsageError('--temperature 必须在 [0,2] 范围');
   }
-  const maxTokens = optionInt(parsed, 'max-tokens', 1024);
+  const maxTokens = optionInt(parsed, 'max-tokens', 8192);
   if (maxTokens === undefined || maxTokens < 1 || maxTokens > 1_000_000) {
     throw new CliUsageError('--max-tokens 必须是 [1,1000000] 的正整数');
   }
@@ -361,7 +361,8 @@ const HELP_TEXT = `writing-experiment CLI
   - run：generate（Q1 模式，全部 cases）+ 仅全部成功时 evaluation report + blind packet + private mapping。
   - run 不接收 ratings、不自动 aggregate；人工评分继续使用 writing-evaluation CLI。
   - 真实模型调用必须显式设置环境变量 WRITING_EXPERIMENT_LIVE=1。
-  - 禁止 --api-key / --base-url / --model / --keychain-service / --keychain-account / --provider-file。
+  - 默认参数：--temperature 0.7、--max-tokens 8192（MiMo extended-thinking 输出预算；可显式调整）。
+  - 禁止 --api-key / --base-url / --model / --keychain-service / --keychain-account / --provider-file / --provider。
   - --max-cases 只用于受控 smoke/调试；产生 PARTIAL_SELECTION，不满足 Q1。
   - 不覆盖已有输出目录，除非显式 --force。
   - 不自动重试失败调用。

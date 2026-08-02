@@ -23,7 +23,7 @@ function generatedCandidate(caseId: string): WritingCandidateV1 {
     strategyId: 'baseline-one-shot-v1',
     modelId: 'mimo-v2.5-pro',
     promptVersion: 'baseline-one-shot-v1.p1',
-    generationParameters: { temperature: 0.7, maxTokens: 1024, seed: null },
+    generationParameters: { temperature: 0.7, maxTokens: 8192, seed: null },
     text: `这是 ${caseId} 的真实生成正文。`,
   };
 }

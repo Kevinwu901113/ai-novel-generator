@@ -26,7 +26,7 @@ function baseManifest(overrides: Partial<ExperimentManifestV1> = {}): Experiment
       promptVersion: 'baseline-one-shot-v1.p1',
     },
     provider: { providerId: 'mimo-token-plan-cn', modelId: 'mimo-v2.5-pro' },
-    generationParameters: { temperature: 0.7, maxTokens: 1024, seed: 'seed' },
+    generationParameters: { temperature: 0.7, maxTokens: 8192, seed: 'seed' },
     sourceSuite: { suiteId: 'gq1-baseline-v1', suiteHash: 'a'.repeat(64) },
     outputSuite: {
       suiteId: 'gq1-baseline-v1--baseline-one-shot-v1--exp-1',

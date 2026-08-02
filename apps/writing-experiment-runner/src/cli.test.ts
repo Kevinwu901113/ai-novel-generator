@@ -209,6 +209,60 @@ describe('generate', () => {
   });
 });
 
+describe('max-tokens 默认与显式覆盖（GQ2 budget fix）', () => {
+  it('省略 --max-tokens → 默认 8192 传给 model gateway 且 manifest 记录 8192', async () => {
+    const h = makeCli();
+    const code = await h.run([
+      'generate',
+      '--suite',
+      '/tmp/source.json',
+      '--output',
+      '/out/exp1',
+      '--max-cases',
+      '1',
+    ]);
+    expect(code).toBe(0);
+    expect(h.invoke.calls).toHaveLength(1);
+    expect(h.invoke.calls[0].maxTokens).toBe(8192);
+    const manifest = JSON.parse(h.fs.readFile('/out/exp1/manifest.private.json'));
+    expect(manifest.generationParameters.maxTokens).toBe(8192);
+  });
+
+  it('显式 --max-tokens 2048 → 准确传递到 invoke 与 manifest（用户可显式降低/提高预算）', async () => {
+    const h = makeCli();
+    const code = await h.run([
+      'generate',
+      '--suite',
+      '/tmp/source.json',
+      '--output',
+      '/out/exp1',
+      '--max-cases',
+      '1',
+      '--max-tokens',
+      '2048',
+    ]);
+    expect(code).toBe(0);
+    expect(h.invoke.calls[0].maxTokens).toBe(2048);
+    const manifest = JSON.parse(h.fs.readFile('/out/exp1/manifest.private.json'));
+    expect(manifest.generationParameters.maxTokens).toBe(2048);
+  });
+
+  it('默认预算下失败 case 仍恰好一次调用（不引入隐藏 retry）', async () => {
+    const h = makeCli({}, [errorOutput('PROVIDER_TIMEOUT')]);
+    const code = await h.run([
+      'generate',
+      '--suite',
+      '/tmp/source.json',
+      '--output',
+      '/o',
+      '--max-cases',
+      '1',
+    ]);
+    expect(code).toBe(2);
+    expect(h.invoke.calls).toHaveLength(1);
+  });
+});
+
 describe('run', () => {
   it('run 全成功 → evaluate + blind 产物 + COMPLETE', async () => {
     const h = makeCli();

@@ -1,7 +1,7 @@
 /**
  * baseline-one-shot-v1 策略：单次真实模型调用生成一个场景的正文候选。
  *
- * 固定参数：temperature 0.7 / maxTokens 1024 / concurrency 1 / retries 0。
+ * 固定参数：temperature 0.7 / maxTokens 8192 / concurrency 1 / retries 0。
  * Prompt 结构固定（system 稳定、user 逐 case 变化）；默认只记录 promptVersion + promptHash，
  * 不把完整 prompt 落盘。
  */
@@ -15,7 +15,7 @@ export const BASELINE_ONE_SHOT_STRATEGY = {
   strategyVersion: '1',
   promptVersion: 'baseline-one-shot-v1.p1',
   defaultTemperature: 0.7,
-  defaultMaxTokens: 1024,
+  defaultMaxTokens: 8192,
   concurrency: 1,
   retries: 0,
 } as const;

@@ -60,7 +60,8 @@ pnpm writing-experiment run \
 
 值镜像 product `FIXED_PROVIDER_PROFILE`。未知 provider ID 在**任何 IO / 网络 / 生成之前**前置拒绝。
 禁止 `--api-key / --base-url / --model / --keychain-service / --keychain-account / --provider-file / --provider`——
-不得让外部文件或 CLI 参数控制 secret selector 或网络端点。
+不得让外部文件或 CLI 参数控制 secret selector 或网络端点。默认 `--temperature 0.7`、`--max-tokens 8192`；
+用户可用现有合法 `--max-tokens` 显式降低或提高预算，但 provider / model / 端点固定。
 
 ## 四、Source / Output suite 语义
 
@@ -78,9 +79,13 @@ pnpm writing-experiment run \
 ```ts
 { strategyId: 'baseline-one-shot-v1', strategyVersion: '1',
   promptVersion: 'baseline-one-shot-v1.p1', defaultTemperature: 0.7,
-  defaultMaxTokens: 1024, concurrency: 1, retries: 0 }
+  defaultMaxTokens: 8192, concurrency: 1, retries: 0 }
 ```
 
+- 默认 `maxTokens: 8192`（2026-08-02 从 1024 上调）：MiMo V2.5 Pro 的 extended-thinking 会占用
+  输出预算，1024 下 2/3 case 返回仅 thinking、无 text block 的响应（`finishReason=max_tokens`）→
+  gateway 判 `PROVIDER_RESPONSE_INVALID`。上调为协议兼容修复：给 thinking + text 留出预算，
+  不改 provider / model / 端点，不把 thinking 当正文，不自动重试，失败仍 fail closed。
 - Prompt 拆 system（稳定）+ user（逐 case）：角色与任务 / 禁止内容与行为 / 输出规则 /
   创作契约 / 场景简报 / 硬性约束 / 结尾指令。manual-criterion 不进入生成约束。
 - 输出要求：仅正文、中文、不输出标题 / 说明 / 分析 / markdown fence、不自称 AI、保持契约事实。

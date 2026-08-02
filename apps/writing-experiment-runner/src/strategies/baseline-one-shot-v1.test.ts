@@ -38,7 +38,7 @@ describe('baseline-one-shot-v1 固定参数', () => {
       strategyVersion: '1',
       promptVersion: 'baseline-one-shot-v1.p1',
       defaultTemperature: 0.7,
-      defaultMaxTokens: 1024,
+      defaultMaxTokens: 8192,
       concurrency: 1,
       retries: 0,
     });

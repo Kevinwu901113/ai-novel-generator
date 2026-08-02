@@ -67,6 +67,45 @@ describe('validateModelText 结构层验证', () => {
   });
 });
 
+describe('GQ2 budget fix：提高预算不改变 fail-closed 语义（thinking-only 仍拒绝）', () => {
+  it('finishReason=max_tokens 且无 text block（thinking-only）→ FAILED MODEL_RESPONSE_INVALID，candidate null', async () => {
+    const gen = new ModelGatewayWritingCandidateGenerator({
+      invoke: createQueuedInvoke([okOutput('', { finishReason: 'max_tokens' })]),
+      clock: fixedClock('2026-08-02T00:00:00.000Z'),
+      idGenerator: () => 'tok',
+    });
+    const result = await gen.generateCase(inputForCase('restrained-reunion'), {
+      provider: PROVIDER,
+      apiKey: 'k',
+      temperature: 0.7,
+      maxTokens: 8192,
+    });
+    expect(result.status).toBe('FAILED');
+    expect(result.audit.finishReason).toBe('max_tokens');
+    expect(result.audit.safeErrorCode).toBe('MODEL_RESPONSE_INVALID');
+    expect(result.candidate).toBeNull();
+  });
+
+  it('gateway 实际映射路径（errorCode=PROVIDER_RESPONSE_INVALID）→ FAILED，即便预算提高到 8192', async () => {
+    const gen = new ModelGatewayWritingCandidateGenerator({
+      invoke: createQueuedInvoke([
+        { ...errorOutput('PROVIDER_RESPONSE_INVALID'), finishReason: 'max_tokens' },
+      ]),
+      clock: fixedClock('2026-08-02T00:00:00.000Z'),
+      idGenerator: () => 'tok',
+    });
+    const result = await gen.generateCase(inputForCase('restrained-reunion'), {
+      provider: PROVIDER,
+      apiKey: 'k',
+      temperature: 0.7,
+      maxTokens: 8192,
+    });
+    expect(result.status).toBe('FAILED');
+    expect(result.audit.safeErrorCode).toBe('PROVIDER_RESPONSE_INVALID');
+    expect(result.candidate).toBeNull();
+  });
+});
+
 describe('ModelGatewayWritingCandidateGenerator', () => {
   it('成功输出组装 candidate + audit（usage / providerRequestId / finishReason）', async () => {
     const invoke = createQueuedInvoke([
@@ -84,7 +123,7 @@ describe('ModelGatewayWritingCandidateGenerator', () => {
       provider: PROVIDER,
       apiKey: 'sk-dummy',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
     });
     expect(result.status).toBe('SUCCEEDED');
     expect(result.candidate?.candidateId).toBe('baseline-one-shot-v1.restrained-reunion.tok-1');
@@ -92,7 +131,7 @@ describe('ModelGatewayWritingCandidateGenerator', () => {
     expect(result.candidate?.promptVersion).toBe('baseline-one-shot-v1.p1');
     expect(result.candidate?.generationParameters).toEqual({
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
       seed: null,
     });
     expect(result.audit.providerRequestId).toBe('req-abc');
@@ -119,13 +158,13 @@ describe('ModelGatewayWritingCandidateGenerator', () => {
       provider: PROVIDER,
       apiKey: 'k',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
     });
     const b = await gen.generateCase(inputForCase('suspense-corridor'), {
       provider: PROVIDER,
       apiKey: 'k',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
     });
     expect(a.candidate?.candidateId).not.toBe(b.candidate?.candidateId);
   });
@@ -149,7 +188,7 @@ describe('ModelGatewayWritingCandidateGenerator', () => {
         provider: PROVIDER,
         apiKey: 'k',
         temperature: 0.7,
-        maxTokens: 1024,
+        maxTokens: 8192,
       });
       expect(result.status).toBe('FAILED');
       expect(result.audit.safeErrorCode).toBe(expected);
@@ -168,7 +207,7 @@ describe('ModelGatewayWritingCandidateGenerator', () => {
       provider: PROVIDER,
       apiKey: 'k',
       temperature: 0.7,
-      maxTokens: 1024,
+      maxTokens: 8192,
     });
     expect(result.status).toBe('FAILED');
     expect(result.audit.safeErrorCode).toBe('MODEL_RESPONSE_INVALID');
