@@ -246,3 +246,82 @@ export type {
   RequestCreationContractProposalCommand,
   RequestCreationContractProposalResult,
 } from './creation-contract-request.js';
+
+// ── 稿件 / 章节 / 章节版本端口和用例 ────────────────────────────
+
+export {
+  ManuscriptNotFoundError,
+  ManuscriptStateConflictError,
+  ManuscriptVersionConflictError,
+  ManuscriptPositionOverflowError,
+  ChapterNotFoundError,
+  ChapterVersionNotFoundError,
+  ManuscriptTransactionBusyError,
+  ManuscriptNestedTransactionError,
+  ManuscriptTransactionError,
+  ManuscriptAsyncTransactionCallbackError,
+} from './errors.js';
+
+export type {
+  ManuscriptData,
+  ChapterData,
+  ChapterVersionData,
+  ChapterVersionSummaryData,
+  CreateManuscriptInput,
+  CreateChapterInput,
+  CreateChapterVersionInput,
+  ManuscriptRepositoryPort,
+  ChapterRepositoryPort,
+  ChapterVersionRepositoryPort,
+  ManuscriptTransactionRepositories,
+  ManuscriptTransactionPort,
+  GetOrCreateManuscriptCommand,
+  GetManuscriptCommand,
+  ListChaptersCommand,
+  GetChapterCommand,
+  GetCurrentChapterVersionCommand,
+  ListChapterVersionsCommand,
+  GetChapterVersionCommand,
+  CreateChapterCommand,
+  CreateChapterVersionCommand,
+  PromoteChapterVersionCommand,
+  UpdateChapterOrderCommand,
+  ArchiveChapterCommand,
+  RestoreChapterCommand,
+  UpdateManuscriptTitleCommand,
+} from './manuscript-types.js';
+
+export {
+  getManuscript,
+  listChapters,
+  getChapter,
+  getCurrentChapterVersion,
+  listChapterVersions,
+  getChapterVersion,
+} from './manuscript.js';
+export type {
+  ManuscriptQueryDeps,
+  GetManuscriptInput,
+  ListChaptersInput,
+  GetChapterInput,
+  GetCurrentChapterVersionInput,
+  ListChapterVersionsInput,
+  GetChapterVersionInput,
+} from './manuscript.js';
+
+export {
+  getOrCreateManuscript,
+  createChapter,
+  createChapterVersion,
+  promoteChapterVersion,
+  updateChapterOrder,
+  archiveChapter,
+  restoreChapter,
+  updateManuscriptTitle,
+} from './manuscript-mutations.js';
+export type { ManuscriptMutationDeps } from './manuscript-mutations.js';
+
+export { rebalanceManuscript, computeTargetPosition } from './manuscript-position.js';
+export type { PositionContext } from './manuscript-position.js';
+
+export { chapterVersionPortFrom } from './manuscript-conversion.js';

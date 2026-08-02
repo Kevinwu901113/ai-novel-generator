@@ -422,3 +422,111 @@ export class ContractDraftAlreadyRunningError extends AppError {
     this.name = 'ContractDraftAlreadyRunningError';
   }
 }
+
+// ── 稿件 / 章节 / 章节版本错误 ─────────────────────────────────
+
+/**
+ * 稿件不存在或无权限。跨 project 查询同样返回此码，不泄露存在性（§7）。
+ */
+export class ManuscriptNotFoundError extends AppError {
+  constructor() {
+    super('MANUSCRIPT_NOT_FOUND', '稿件不存在或无权访问');
+    this.name = 'ManuscriptNotFoundError';
+  }
+}
+
+/**
+ * 稿件 / 章节状态不允许此操作（归档/非活跃）。public message 固定，
+ * 内部细节（归档章节 id 等）在 cause。
+ */
+export class ManuscriptStateConflictError extends AppError {
+  constructor(message: string, cause?: unknown) {
+    super(
+      'MANUSCRIPT_STATE_CONFLICT',
+      '稿件或章节当前状态不允许此操作',
+      diagnostic(message, cause),
+    );
+    this.name = 'ManuscriptStateConflictError';
+  }
+}
+
+/**
+ * current version CAS 失败（乐观并发冲突）。public message 固定，
+ * 内部细节（期望/实际指针）在 cause。
+ */
+export class ManuscriptVersionConflictError extends AppError {
+  constructor(message: string, cause?: unknown) {
+    super(
+      'MANUSCRIPT_VERSION_CONFLICT',
+      '稿件内容已更新，请刷新后重试',
+      diagnostic(message, cause),
+    );
+    this.name = 'ManuscriptVersionConflictError';
+  }
+}
+
+/**
+ * 排序 position 空间溢出（超过 MAX_SAFE_INTEGER）。整笔事务 rollback，
+ * 不修改任何 position、不执行 DDL、不删除/归档章节（§6.1、§7）。
+ */
+export class ManuscriptPositionOverflowError extends AppError {
+  constructor() {
+    super('MANUSCRIPT_POSITION_OVERFLOW', '章节排序位置空间已满，无法继续添加');
+    this.name = 'ManuscriptPositionOverflowError';
+  }
+}
+
+/**
+ * 章节不存在或无权限。跨 project / 跨稿件查询同样返回此码（§7）。
+ */
+export class ChapterNotFoundError extends AppError {
+  constructor() {
+    super('CHAPTER_NOT_FOUND', '章节不存在或无权访问');
+    this.name = 'ChapterNotFoundError';
+  }
+}
+
+/**
+ * 版本不存在或无权限（含跨章引用）。public message 固定，不泄露存在性。
+ */
+export class ChapterVersionNotFoundError extends AppError {
+  constructor() {
+    super('CHAPTER_VERSION_NOT_FOUND', '版本不存在或无权访问');
+    this.name = 'ChapterVersionNotFoundError';
+  }
+}
+
+/**
+ * SQLite busy/locked — 由稿件事务适配器抛出。
+ * public message 固定，不包含 SQLite 实现细节；内部诊断保存在 cause。
+ */
+export class ManuscriptTransactionBusyError extends AppError {
+  constructor(cause?: unknown) {
+    super('MANUSCRIPT_VERSION_CONFLICT', '稿件正在被其他操作修改，请重试', cause);
+    this.name = 'ManuscriptTransactionBusyError';
+  }
+}
+
+/** 嵌套稿件事务检测 — 由事务适配器抛出。 */
+export class ManuscriptNestedTransactionError extends AppError {
+  constructor() {
+    super('INTERNAL_ERROR', '检测到嵌套稿件事务');
+    this.name = 'ManuscriptNestedTransactionError';
+  }
+}
+
+/** 稿件事务基础设施失败（非 busy/locked）。 */
+export class ManuscriptTransactionError extends AppError {
+  constructor(cause?: unknown) {
+    super('INTERNAL_ERROR', '稿件事务执行失败', cause);
+    this.name = 'ManuscriptTransactionError';
+  }
+}
+
+/** 事务回调返回 Promise/thenable。 */
+export class ManuscriptAsyncTransactionCallbackError extends AppError {
+  constructor() {
+    super('INTERNAL_ERROR', '稿件事务回调必须同步执行');
+    this.name = 'ManuscriptAsyncTransactionCallbackError';
+  }
+}
