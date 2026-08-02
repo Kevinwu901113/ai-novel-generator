@@ -9,6 +9,9 @@ import type {
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
 import { GrillWorkbench } from './grill/GrillWorkbench';
+import { ManuscriptWorkbench } from './manuscript/ManuscriptWorkbench';
+import { ManuscriptLeaveDialog } from './manuscript/ManuscriptLeaveDialog';
+import { manuscriptHasDirty } from './manuscript/manuscript-leave-guard';
 import { TaskCenter } from './task-center/TaskCenter';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
@@ -31,6 +34,13 @@ export function App() {
   const [currentProject, setCurrentProject] = useState<OpenProjectResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // 工作区视图：Grill-me / 稿件
+  const [workbench, setWorkbench] = useState<'grill' | 'manuscript'>('grill');
+  // 项目/工作区切换的未保存修改离开确认
+  const [pendingWorkbenchLeave, setPendingWorkbenchLeave] = useState<{ run: () => void } | null>(
+    null,
+  );
 
   // 追踪是否已加载过项目列表
   const hasLoadedProjects = useRef(false);
@@ -151,8 +161,8 @@ export function App() {
     [loadProjects],
   );
 
-  // 打开项目
-  const handleOpenProject = useCallback(
+  // 打开项目（实际执行）
+  const performOpenProject = useCallback(
     async (projectId: string) => {
       if (isLoading || dataServiceStatus !== 'ready') return;
       setIsLoading(true);
@@ -161,6 +171,7 @@ export function App() {
       try {
         const project = await window.desktop.projects.open(projectId);
         setCurrentProject(project);
+        setWorkbench('grill');
         await loadProjects();
       } catch (err) {
         const safe = toSafeUserError(err, '打开项目失败');
@@ -172,6 +183,37 @@ export function App() {
     [isLoading, dataServiceStatus, loadProjects],
   );
 
+  // 切换项目 / 离开稿件工作区前检查未保存修改
+  const guardLeave = useCallback((run: () => void) => {
+    if (manuscriptHasDirty()) {
+      setPendingWorkbenchLeave({ run });
+    } else {
+      run();
+    }
+  }, []);
+
+  // 打开项目（带 dirty 离开守卫）
+  const handleOpenProject = useCallback(
+    (projectId: string) => {
+      guardLeave(() => void performOpenProject(projectId));
+    },
+    [guardLeave, performOpenProject],
+  );
+
+  // 切换工作区视图（离开稿件工作区前检查 dirty）
+  const handleSwitchWorkbench = useCallback(
+    (target: 'grill' | 'manuscript') => {
+      if (target === workbench) return;
+      const run = () => setWorkbench(target);
+      if (target === 'grill' && manuscriptHasDirty()) {
+        setPendingWorkbenchLeave({ run });
+      } else {
+        run();
+      }
+    },
+    [workbench],
+  );
+
   // 重试数据服务
   const handleRetry = useCallback(async () => {
     try {
@@ -181,13 +223,15 @@ export function App() {
     }
   }, []);
 
-  // 新建项目按钮
+  // 新建项目按钮（带 dirty 离开守卫）
   const handleNewProject = useCallback(() => {
-    setCurrentProject(null);
-    setError(null);
-    // 切换到新建项目时焦点进入名称输入框
-    setShouldFocusCreate(true);
-  }, []);
+    guardLeave(() => {
+      setCurrentProject(null);
+      setError(null);
+      // 切换到新建项目时焦点进入名称输入框
+      setShouldFocusCreate(true);
+    });
+  }, [guardLeave]);
 
   // 创建成功后焦点进入 Grill 工作区
   useEffect(() => {
@@ -304,17 +348,57 @@ export function App() {
           </aside>
         )}
 
-        {/* 中栏：新建项目 / Grill 工作台 */}
+        {/* 中栏：新建项目 / 项目工作区（Grill 或稿件） */}
         {currentProject ? (
           <section
             ref={grillSectionRef}
             className="panel panel-center"
             style={{ padding: 0 }}
-            aria-label="Grill 工作台"
+            aria-label="项目工作区"
           >
-            <RendererErrorBoundary label="Grill 工作台">
-              <GrillWorkbench projectId={currentProject.id} />
-            </RendererErrorBoundary>
+            <div className="workbench-tabs" role="tablist" aria-label="工作区">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workbench === 'grill'}
+                aria-controls="workbench-grill"
+                onClick={() => handleSwitchWorkbench('grill')}
+              >
+                Grill-me
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={workbench === 'manuscript'}
+                aria-controls="workbench-manuscript"
+                onClick={() => handleSwitchWorkbench('manuscript')}
+              >
+                稿件
+              </button>
+            </div>
+            {workbench === 'grill' ? (
+              <div
+                id="workbench-grill"
+                className="workbench-pane"
+                role="tabpanel"
+                aria-label="Grill 工作台"
+              >
+                <RendererErrorBoundary label="Grill 工作台">
+                  <GrillWorkbench projectId={currentProject.id} />
+                </RendererErrorBoundary>
+              </div>
+            ) : (
+              <div
+                id="workbench-manuscript"
+                className="workbench-pane"
+                role="tabpanel"
+                aria-label="稿件工作台"
+              >
+                <RendererErrorBoundary label="稿件工作台">
+                  <ManuscriptWorkbench projectId={currentProject.id} />
+                </RendererErrorBoundary>
+              </div>
+            )}
           </section>
         ) : (
           <section ref={createSectionRef} className="panel panel-center" aria-label="新建项目">
@@ -419,6 +503,20 @@ export function App() {
           )}
         </div>
       </footer>
+
+      {/* 项目/工作区切换的未保存修改离开确认 */}
+      {pendingWorkbenchLeave && (
+        <ManuscriptLeaveDialog
+          title="未保存的修改"
+          message="当前稿件有未保存的修改，离开后将丢失这些修改。"
+          onContinue={() => setPendingWorkbenchLeave(null)}
+          onDiscard={() => {
+            const action = pendingWorkbenchLeave;
+            setPendingWorkbenchLeave(null);
+            action.run();
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -45,6 +45,14 @@ export const ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
   CONTRACT_VALIDATION_FAILED: '创作契约输入验证失败',
   CONTRACT_DRAFT_ALREADY_RUNNING: '创作契约任务已在进行中',
 
+  // ── 稿件 / 章节 / 版本相关 ───────────────────────────────────────
+  MANUSCRIPT_NOT_FOUND: '稿件不存在或无权访问',
+  MANUSCRIPT_STATE_CONFLICT: '稿件或章节状态不允许此操作',
+  MANUSCRIPT_VERSION_CONFLICT: '稿件已在其他操作中更新，数据已自动刷新',
+  MANUSCRIPT_POSITION_OVERFLOW: '章节排序空间不足，请减少章节数量',
+  CHAPTER_NOT_FOUND: '章节不存在或无权访问',
+  CHAPTER_VERSION_NOT_FOUND: '章节版本不存在或无权访问',
+
   // ── 通用 ─────────────────────────────────────────────────────────
   NETWORK_UNAVAILABLE: '网络不可用',
   WORKER_UNAVAILABLE: '数据服务不可用',
