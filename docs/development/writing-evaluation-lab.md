@@ -291,6 +291,21 @@ interface WritingCandidateGeneratorPort {
 
 本 PR 只用 fake generator 测试（`createFakeCandidateGenerator`）。接口保持小而通用，不提前冻结 Scene Planner 或生产 Generation API。真实 adapter 需要：接收 experiment input → 生成候选 → 纳入 suite 后走现有评测链路。**禁止**在本 package 内直接调用 model-gateway。
 
+> 真实 adapter 已由 GQ2 Runner 提供（`apps/writing-experiment-runner`，包外适配，PR #21），
+> 走 source/output suite 语义：source 的占位 candidate / expectedRelations 不混入 generated output suite；
+> `candidates` 只含本次真实生成的候选。GQ2 未合并时，真实 candidate 实验是否完成见
+> `docs/development/writing-experiment-runner.md` 当前状态。
+>
+> 受控真实实验（2026-08-02）：
+>
+> - **v1（maxTokens=1024）**：live smoke（`--max-cases 1`）成功产生 1 个真实 candidate；
+>   全量 `run`（3 case）`PARTIAL_FAILURE`（2/3 `PROVIDER_RESPONSE_INVALID`，finishReason `max_tokens`）——
+>   无完整 suite 的 evaluation / blind，Q1 未达成。
+> - **v2（maxTokens=8192，预算修复 commit `926704a`）**：全量 `run`（3 case）`COMPLETE`，`satisfiesQ1=true`，
+>   产出完整 output suite + evaluation.report + blind.packet + blind.mapping。
+> - **Q1 engineering loop demonstrated with real MiMo candidates. No human quality conclusion exists.**
+> - GQ2 未合并时，真实 candidate 实验是否完成见 `docs/development/writing-experiment-runner.md` 当前状态。
+
 ## 十八、当前明确不能评估的内容
 
 以下能力尚未实现，也不会被自动指标冒充：

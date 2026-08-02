@@ -6,3 +6,6 @@ coverage/
 *.db-journal
 *.db-wal
 pnpm-lock.yaml
+# Writing experiment artifacts (real model candidates stay local, never formatted/committed).
+# `pnpm --filter` runs the CLI with cwd = package dir → match at any depth.
+**/artifacts/writing-experiments/

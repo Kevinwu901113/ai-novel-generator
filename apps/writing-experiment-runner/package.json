@@ -1,0 +1,35 @@
+{
+  "name": "@ai-novel/writing-experiment-runner",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "真实生成实验 Runner：source suite → 真实模型 → output suite → evaluation → blind review（Q1 工程闭环）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "writing-experiment": "./dist/cli-run.js"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "cli": "node ./dist/cli-run.js",
+    "test": "vitest run --root ../.. apps/writing-experiment-runner/src"
+  },
+  "dependencies": {
+    "@ai-novel/domain": "workspace:*",
+    "@ai-novel/model-gateway": "workspace:*",
+    "@ai-novel/secret-store": "workspace:*",
+    "@ai-novel/writing-evaluation": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

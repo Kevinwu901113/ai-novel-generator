@@ -1,0 +1,28 @@
+{
+  "name": "@ai-novel/secret-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "macOS Keychain SecretStore 唯一实现（/usr/bin/security adapter，供 Worker 与 writing-experiment-runner 共享）",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "test": "vitest run --root ../.. packages/secret-store/src"
+  },
+  "dependencies": {
+    "@ai-novel/application": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}
