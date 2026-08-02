@@ -199,6 +199,12 @@ export interface ProjectDatabaseManager {
   getCreationContractCurrentRepository(): CreationContractCurrentRepository;
   /** 获取创作契约锁定事件仓库 */
   getCreationContractLockEventRepository(): CreationContractLockEventRepository;
+  /** 获取稿件仓库 */
+  getManuscriptRepository(): ManuscriptRepository;
+  /** 获取章节仓库 */
+  getChapterRepository(): ChapterRepository;
+  /** 获取章节版本仓库 */
+  getChapterVersionRepository(): ChapterVersionRepository;
   /** 执行事务（BEGIN 延迟写锁，适合先读后写路径） */
   transaction<T>(fn: () => T): T;
   /** 执行事务（BEGIN IMMEDIATE，执行前立即获得写锁，适合最终原子提交） */
@@ -609,6 +615,16 @@ import type {
   CreationContractVersionRepositoryPort,
   CreationContractCurrentRepositoryPort,
   CreationContractLockEventRepositoryPort,
+  ManuscriptData,
+  ChapterData,
+  ChapterVersionData,
+  ChapterVersionSummaryData,
+  CreateManuscriptInput,
+  CreateChapterInput,
+  CreateChapterVersionInput,
+  ManuscriptRepositoryPort,
+  ChapterRepositoryPort,
+  ChapterVersionRepositoryPort,
 } from '@ai-novel/application';
 
 export type DbProposalStatus = ProposalStatus;
@@ -626,3 +642,15 @@ export type CreationContractProposalRepository = CreationContractProposalReposit
 export type CreationContractVersionRepository = CreationContractVersionRepositoryPort;
 export type CreationContractCurrentRepository = CreationContractCurrentRepositoryPort;
 export type CreationContractLockEventRepository = CreationContractLockEventRepositoryPort;
+
+export type ManuscriptRow = ManuscriptData;
+export type CreateManuscriptData = CreateManuscriptInput;
+export type ChapterRow = ChapterData;
+export type CreateChapterData = CreateChapterInput;
+export type ChapterVersionRow = ChapterVersionData;
+export type ChapterVersionSummaryRow = ChapterVersionSummaryData;
+export type CreateChapterVersionData = CreateChapterVersionInput;
+
+export type ManuscriptRepository = ManuscriptRepositoryPort;
+export type ChapterRepository = ChapterRepositoryPort;
+export type ChapterVersionRepository = ChapterVersionRepositoryPort;

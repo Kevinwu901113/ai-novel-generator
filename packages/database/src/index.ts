@@ -70,6 +70,16 @@ export type {
   CreationContractLockEventRow,
   CreateCreationContractLockEventData,
   CreationContractLockEventRepository,
+  ManuscriptRow,
+  CreateManuscriptData,
+  ManuscriptRepository,
+  ChapterRow,
+  CreateChapterData,
+  ChapterRepository,
+  ChapterVersionRow,
+  ChapterVersionSummaryRow,
+  CreateChapterVersionData,
+  ChapterVersionRepository,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
@@ -77,4 +87,10 @@ export { AppDatabase, FIXED_PROVIDER_PROFILE } from './app-database.js';
 export { ProjectDatabase, checkProjectDatabaseVersion } from './project-database.js';
 export { SQLiteMigrator } from './migrator.js';
 export { CreationContractTransactionPortImpl } from './creation-contract-transaction.js';
+export { ManuscriptTransactionPortImpl } from './manuscript-transaction.js';
+export {
+  ManuscriptRepositoryImpl,
+  ChapterRepositoryImpl,
+  ChapterVersionRepositoryImpl,
+} from './manuscript-repositories.js';
 export { sha256Utf8 } from './creation-contract-repositories.js';

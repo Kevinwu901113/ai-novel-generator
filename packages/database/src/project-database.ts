@@ -20,6 +20,11 @@ import {
   CreationContractCurrentRepositoryImpl,
   CreationContractLockEventRepositoryImpl,
 } from './creation-contract-repositories.js';
+import {
+  ManuscriptRepositoryImpl,
+  ChapterRepositoryImpl,
+  ChapterVersionRepositoryImpl,
+} from './manuscript-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -44,6 +49,9 @@ import type {
   CreationContractVersionRepository,
   CreationContractCurrentRepository,
   CreationContractLockEventRepository,
+  ManuscriptRepository,
+  ChapterRepository,
+  ChapterVersionRepository,
   Migration,
 } from './types.js';
 
@@ -569,6 +577,123 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON creation_contract_proposals(invocation_id);
     `,
   },
+  {
+    version: 7,
+    sql: `
+      -- ── Minimal Manuscript / Chapter Version（§6.4）─────────────
+      -- 新增表（不重建既有表）：manuscripts / chapters / chapter_versions。
+      -- 既有 v6 数据不受影响；全部复合主键 (project_id, id)、复合外键、
+      -- 部分唯一索引、append-only trigger。
+
+      CREATE TABLE IF NOT EXISTS manuscripts (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active','archived')),
+        creation_contract_version_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        FOREIGN KEY (project_id, creation_contract_version_id)
+          REFERENCES creation_contract_versions(project_id, id)
+      ) STRICT;
+
+      -- 每 project 至多一个 active manuscript（§6.1）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_manuscripts_project_active
+        ON manuscripts(project_id) WHERE status = 'active';
+
+      CREATE INDEX IF NOT EXISTS idx_manuscripts_project_status_updated
+        ON manuscripts(project_id, status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS chapters (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        manuscript_id TEXT NOT NULL,
+        position INTEGER NOT NULL CHECK (position > 0),
+        current_version_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active'
+          CHECK (status IN ('active','archived')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        FOREIGN KEY (project_id, manuscript_id)
+          REFERENCES manuscripts(project_id, id),
+        -- 指针同章约束：chapters.id = chapter_versions.chapter_id（非 manuscript_id，§13）
+        FOREIGN KEY (project_id, id, current_version_id)
+          REFERENCES chapter_versions(project_id, chapter_id, id)
+      ) STRICT;
+
+      -- position 覆盖所有章节（含 archived），唯一（§5 不变量 10）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapters_project_manuscript_position
+        ON chapters(project_id, manuscript_id, position);
+
+      CREATE INDEX IF NOT EXISTS idx_chapters_project_manuscript_status
+        ON chapters(project_id, manuscript_id, status, position);
+
+      CREATE TABLE IF NOT EXISTS chapter_versions (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        version_number INTEGER NOT NULL CHECK (version_number > 0),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 200),
+        content TEXT NOT NULL CHECK (length(content) <= 1000000),
+        content_hash TEXT NOT NULL CHECK (length(content_hash) = 64),
+        parent_version_id TEXT,
+        source_type TEXT NOT NULL
+          CHECK (source_type IN ('USER','AI_GENERATION','AI_REWRITE','IMPORT','RESTORE')),
+        created_by_task_id TEXT,
+        invocation_id TEXT,
+        creation_contract_version_id TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, chapter_id, version_number),
+        FOREIGN KEY (project_id, chapter_id)
+          REFERENCES chapters(project_id, id),
+        -- 血缘同章复合 FK
+        FOREIGN KEY (project_id, chapter_id, parent_version_id)
+          REFERENCES chapter_versions(project_id, chapter_id, id),
+        -- provenance 全部复合 FK，禁止跨 project 引用（不变量 14）
+        FOREIGN KEY (project_id, created_by_task_id)
+          REFERENCES tasks(project_id, id),
+        FOREIGN KEY (project_id, invocation_id)
+          REFERENCES model_invocations(project_id, id),
+        FOREIGN KEY (project_id, creation_contract_version_id)
+          REFERENCES creation_contract_versions(project_id, id),
+        -- sourceType 与 provenance 一致性（§4.3）
+        CHECK (
+          (source_type IN ('AI_GENERATION','AI_REWRITE') AND
+             created_by_task_id IS NOT NULL AND invocation_id IS NOT NULL
+             AND creation_contract_version_id IS NOT NULL)
+          OR
+          (source_type IN ('USER','IMPORT','RESTORE') AND
+             created_by_task_id IS NULL AND invocation_id IS NULL)
+        )
+      ) STRICT;
+
+      -- 支撑 chapters.current_version_id 复合外键 + 血缘外键
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_versions_project_chapter
+        ON chapter_versions(project_id, chapter_id, id);
+
+      -- AI task 幂等：同一 task 至多产生一个版本（§11.3）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_versions_task
+        ON chapter_versions(project_id, created_by_task_id)
+        WHERE created_by_task_id IS NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_chapter_versions_project_chapter_number
+        ON chapter_versions(project_id, chapter_id, version_number DESC);
+
+      -- 不可变性：版本创建后不可 UPDATE / DELETE（不变量 2/9）
+      CREATE TRIGGER IF NOT EXISTS trg_chapter_versions_no_update
+      BEFORE UPDATE ON chapter_versions
+      BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
+
+      CREATE TRIGGER IF NOT EXISTS trg_chapter_versions_no_delete
+      BEFORE DELETE ON chapter_versions
+      BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1042,6 +1167,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly ccVersionRepo: CreationContractVersionRepositoryImpl;
   private readonly ccCurrentRepo: CreationContractCurrentRepositoryImpl;
   private readonly ccLockEventRepo: CreationContractLockEventRepositoryImpl;
+  private readonly manuscriptRepo: ManuscriptRepositoryImpl;
+  private readonly chapterRepo: ChapterRepositoryImpl;
+  private readonly chapterVersionRepo: ChapterVersionRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1067,6 +1195,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.ccVersionRepo = new CreationContractVersionRepositoryImpl(this.db);
     this.ccCurrentRepo = new CreationContractCurrentRepositoryImpl(this.db);
     this.ccLockEventRepo = new CreationContractLockEventRepositoryImpl(this.db);
+    this.manuscriptRepo = new ManuscriptRepositoryImpl(this.db);
+    this.chapterRepo = new ChapterRepositoryImpl(this.db);
+    this.chapterVersionRepo = new ChapterVersionRepositoryImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1119,6 +1250,18 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getCreationContractLockEventRepository(): CreationContractLockEventRepository {
     return this.ccLockEventRepo;
+  }
+
+  getManuscriptRepository(): ManuscriptRepository {
+    return this.manuscriptRepo;
+  }
+
+  getChapterRepository(): ChapterRepository {
+    return this.chapterRepo;
+  }
+
+  getChapterVersionRepository(): ChapterVersionRepository {
+    return this.chapterVersionRepo;
   }
 
   transaction<T>(fn: () => T): T {

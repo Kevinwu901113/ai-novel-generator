@@ -693,7 +693,7 @@ settle 语义（MV1-C）：
 - **Changed modules**：`packages/domain`、`packages/contracts`（ErrorCode/DTO/validator）、`packages/database`（migration v7 + repositories）、`packages/application`（use cases + ports + errors）。
 - **Acceptance tests**：§14 中「后端」全部矩阵项（项目隔离、单稿、章节 create/list/order、版本不可变、CAS 成功/冲突、事务回滚、版本历史、promote 历史版本、archive/restore、跨章/跨 project 引用拒绝、确定性排序、大 Unicode 正文、restart 持久化、migration upgrade）。
 - **Merge gate**：`pnpm check` 通过；`git diff --check` 干净。
-- **Capability status after merge**：仍 ⬜（backend foundation 不构成产品能力）。
+- **Capability status after merge**：仍 🧱（backend foundation 不构成产品能力；仅 MV1-B 合并后标 ✅）。
 
 ### MV1-B — IPC + Minimal Manuscript Renderer
 
@@ -827,6 +827,6 @@ settle 语义（MV1-C）：
 能力状态按 `docs/development/generation-quality-roadmap.md` 维护：
 
 - 本设计 PR 合并后，`Minimal Manuscript / Chapter Version` 标为 🟡（design PR 进行中，实现未开始）；
-- MV1-A 合并后仍 🟡（backend foundation 不构成产品能力）；
+- MV1-A 合并后标 🧱（backend foundation 不构成产品能力）；
 - **仅 MV1-B 合并后**标 ✅；
 - 任何进度记录不得声称数据库、UI 或稿件产品能力已完成，除非对应切片真实合并。

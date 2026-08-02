@@ -53,21 +53,21 @@ function isUniqueConstraintError(err: unknown): boolean {
   return msg.includes('UNIQUE constraint failed');
 }
 
-function requireString(row: Record<string, unknown>, key: string, context: string): string {
+export function requireString(row: Record<string, unknown>, key: string, context: string): string {
   const v = row[key];
   if (typeof v !== 'string')
     throw new ContractDataCorruptionError(`${context}: ${key} 应为 string，实际 ${typeof v}`);
   return v;
 }
 
-function requireNumber(row: Record<string, unknown>, key: string, context: string): number {
+export function requireNumber(row: Record<string, unknown>, key: string, context: string): number {
   const v = row[key];
   if (typeof v !== 'number')
     throw new ContractDataCorruptionError(`${context}: ${key} 应为 number，实际 ${typeof v}`);
   return v;
 }
 
-function optionalString(row: Record<string, unknown>, key: string): string | null {
+export function optionalString(row: Record<string, unknown>, key: string): string | null {
   const v = row[key];
   if (v === null || v === undefined) return null;
   if (typeof v !== 'string')
@@ -75,7 +75,7 @@ function optionalString(row: Record<string, unknown>, key: string): string | nul
   return v;
 }
 
-function optionalNumber(row: Record<string, unknown>, key: string): number | null {
+export function optionalNumber(row: Record<string, unknown>, key: string): number | null {
   const v = row[key];
   if (v === null || v === undefined) return null;
   if (typeof v !== 'number')
