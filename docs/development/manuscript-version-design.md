@@ -45,22 +45,22 @@ Project
 
 ## 2. 核心设计问题（14 问）
 
-| #   | 问题                                                   | 裁决                                                                                                                                  | 要点                                                                 |
-| --- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| 1   | 一个 project 可以有几个 manuscript？                   | V1：至多一个 **active** manuscript；允许多个 **archived** manuscript                                                                  | `UNIQUE(project_id) WHERE status='active'` 部分唯一索引强制（§6.4）  |
-| 2   | manuscript / chapter / chapter version 分别由谁拥有？  | Manuscript 属于 project；Chapter 属于 manuscript；ChapterVersion 属于 chapter                                                         | 全部通过复合主键 `(project_id, id)` 与复合外键在数据库层强制（§4）   |
-| 3   | 版本粒度是整本稿件还是单章？                           | **单章**（ChapterVersion 是版本单元）                                                                                                 | Manuscript 不保存整本快照，正文只存在章节版本里（§6.2）              |
-| 4   | chapter title 是否属于版本快照？                       | **是**。title 属于 ChapterVersion 快照，Chapter 行不存 title                                                                          | 修改标题 = 保存新版本（§4.3、§5）                                    |
-| 5   | chapter order 是否属于版本内容？                       | **否**。order 是 Chapter 的排序字段，独立于正文版本                                                                                   | 重排不复制、不修改任何版本（§6.1、不变量 11）                        |
-| 6   | current version 如何推进？                             | `chapters.current_version_id` 指针 + CAS（`expectedCurrentVersionId`）                                                                | 与 creation_contract 的 current pointer CAS 同构（§6.3、§11）        |
-| 7   | 如何防止并发保存覆盖？                                 | CAS 谓词 `UPDATE ... WHERE current_version_id = expected`；失败 → `MANUSCRIPT_VERSION_CONFLICT`                                       | 冲突时整笔回滚，不产生孤儿版本（§11.2）                              |
-| 8   | 用户保存 / AI 生成 / 定点重写如何记录 provenance？     | ChapterVersion 行自带 provenance：`sourceType` + `createdByTaskId` + `invocationId` + `creationContractVersionId` + `parentVersionId` | 不再需要独立 provenance 表（§4.3、§10）                              |
-| 9   | Creation Contract version 如何与稿件版本关联？         | Manuscript 记录初始 contract 锚点；ChapterVersion 记录实际生成时使用的 contract version                                               | 历史版本不因 Contract 更新而变化（§10.1、不变量 14）                 |
-| 10  | 删除 / 归档 / 恢复分别是什么语义？                     | 不 hard-delete；archive = 状态切到 `archived`（可逆）；restore = 切回 `active`；project 删除是文件级                                  | 版本 append-only，DB trigger 禁止 DELETE/UPDATE（§6.4、不变量 9/12） |
-| 11  | Scene Planner 未来应关联什么？                         | **chapter**（稳定身份）+ `baseChapterVersionId`（生成时基线），不关联版本、不用独立计划版本                                           | 避免计划内容与实际正文版本失配（§10.3）                              |
-| 12  | 如何避免一次正文修改复制整本稿件？                     | 版本粒度是单章；正文只存当前章节的新版本；Manuscript 无整本快照；order 独立                                                           | 一次保存只写一行 ChapterVersion + 一个指针更新（§6、§11.1）          |
-| 13  | 如何避免 autosave 制造大量无意义版本？                 | V1 **不做 autosave 自动版本化**；只有显式「保存新版本」创建版本                                                                       | 未来 autosave 只进本地草稿 buffer，不落版本（§8、§13）               |
-| 14  | 何时才算「Minimal Manuscript / Chapter Version」完成？ | MV1-B 合并后满足 §8 全部完成标准                                                                                                      | MV1-A/MV1-B/MV1-C 切片见 §12                                         |
+| #   | 问题                                                   | 裁决                                                                                                                                                                           | 要点                                                                 |
+| --- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------- |
+| 1   | 一个 project 可以有几个 manuscript？                   | V1：至多一个 **active** manuscript；`archived` 为未来 reserved 语义（V1 无 archive/restore manuscript 用例，§13）                                                              | `UNIQUE(project_id) WHERE status='active'` 部分唯一索引强制（§6.4）  |
+| 2   | manuscript / chapter / chapter version 分别由谁拥有？  | Manuscript 属于 project；Chapter 属于 manuscript；ChapterVersion 属于 chapter                                                                                                  | 全部通过复合主键 `(project_id, id)` 与复合外键在数据库层强制（§4）   |
+| 3   | 版本粒度是整本稿件还是单章？                           | **单章**（ChapterVersion 是版本单元）                                                                                                                                          | Manuscript 不保存整本快照，正文只存在章节版本里（§6.2）              |
+| 4   | chapter title 是否属于版本快照？                       | **是**。title 属于 ChapterVersion 快照，Chapter 行不存 title                                                                                                                   | 修改标题 = 保存新版本（§4.3、§5）                                    |
+| 5   | chapter order 是否属于版本内容？                       | **否**。order 是 Chapter 的排序字段，独立于正文版本                                                                                                                            | 重排不复制、不修改任何版本（§6.1、不变量 11）                        |
+| 6   | current version 如何推进？                             | `chapters.current_version_id` 指针 + CAS（`expectedCurrentVersionId`）                                                                                                         | 与 creation_contract 的 current pointer CAS 同构（§6.3、§11）        |
+| 7   | 如何防止并发保存覆盖？                                 | CAS 谓词 `UPDATE ... WHERE current_version_id = expected`；失败 → `MANUSCRIPT_VERSION_CONFLICT`                                                                                | 冲突时整笔回滚，不产生孤儿版本（§11.2）                              |
+| 8   | 用户保存 / AI 生成 / 定点重写如何记录 provenance？     | ChapterVersion 行自带 provenance：`sourceType` + `createdByTaskId` + `invocationId` + `creationContractVersionId` + `parentVersionId`                                          | 不再需要独立 provenance 表（§4.3、§10）                              |
+| 9   | Creation Contract version 如何与稿件版本关联？         | Manuscript 记录初始 contract 锚点；ChapterVersion 记录实际生成时使用的 contract version                                                                                        | 历史版本不因 Contract 更新而变化（§10.1、不变量 14）                 |
+| 10  | 删除 / 归档 / 恢复分别是什么语义？                     | 不 hard-delete；**chapter** archive/restore 是 V1 能力（status 切换、position 保留、可逆）；**manuscript** archive/restore 为 reserved（V1 无用例，§13）；project 删除是文件级 | 版本 append-only，DB trigger 禁止 DELETE/UPDATE（§6.4、不变量 9/12） |
+| 11  | Scene Planner 未来应关联什么？                         | **chapter**（稳定身份）+ `baseChapterVersionId`（生成时基线），不关联版本、不用独立计划版本                                                                                    | 避免计划内容与实际正文版本失配（§10.3）                              |
+| 12  | 如何避免一次正文修改复制整本稿件？                     | 版本粒度是单章；正文只存当前章节的新版本；Manuscript 无整本快照；order 独立                                                                                                    | 一次保存只写一行 ChapterVersion + 一个指针更新（§6、§11.1）          |
+| 13  | 如何避免 autosave 制造大量无意义版本？                 | V1 **不做 autosave 自动版本化**；只有显式「保存新版本」创建版本                                                                                                                | 未来 autosave 只进本地草稿 buffer，不落版本（§8、§13）               |
+| 14  | 何时才算「Minimal Manuscript / Chapter Version」完成？ | MV1-B 合并后满足 §8 全部完成标准                                                                                                                                               | MV1-A/MV1-B/MV1-C 切片见 §12                                         |
 
 ---
 
@@ -68,22 +68,22 @@ Project
 
 初始假设逐条标记。任何调整都给出明确理由。
 
-| 初始假设                                                       | 裁决                            | 理由                                                                       |
-| -------------------------------------------------------------- | ------------------------------- | -------------------------------------------------------------------------- |
-| V1 每个 project 最多一个 active manuscript                     | **ACCEPTED**                    | 单稿模式满足 V1 产品需要；archived 可保留多个；未来多稿用部分唯一索引放开  |
-| Manuscript 是容器，不保存整本正文快照                          | **ACCEPTED**                    | 避免任何正文修改复制整本；正文只存在于章节版本                             |
-| Chapter 是稳定身份和排序节点                                   | **ACCEPTED**                    | order 独立于版本，重排不复制正文                                           |
-| ChapterVersion 是不可变的标题 + 正文快照                       | **ACCEPTED**                    | title 属于版本快照（问题 4）；版本创建后不可修改                           |
-| Chapter.currentVersionId 指向当前版本                          | **ACCEPTED**                    | 折叠指针进 Chapter 行，比独立映射表简单（§6.3）                            |
-| 推进 currentVersion 使用 expectedCurrentVersionId 做 CAS       | **ACCEPTED**                    | 与既有 expectedVersion 乐观并发约定一致                                    |
-| Chapter order 独立于正文版本，重排不复制正文                   | **ACCEPTED**                    | 排序字段在 Chapter 行                                                      |
-| 所有正文版本永久保留，不 hard-delete                           | **ACCEPTED**                    | append-only + DB trigger 禁止 DELETE（§6.4）                               |
-| V1 使用 UTF-8 plain text 或 Markdown，不引入富文本 AST         | **ACCEPTED**（选择 plain text） | content 存原始 UTF-8 字节；不做 Markdown 结构化解析；无富文本              |
-| 用户显式「保存新版本」，V1 不做自动版本化 autosave             | **ACCEPTED**                    | autosave 制造无意义版本；V1 显式保存                                       |
-| AI 未来只能创建新版本，不能原地修改现有版本                    | **ACCEPTED**                    | 版本不可变；AI 通过 createChapterVersion 产生新版本（§10.2）               |
-| AI 生成版本必须记录 taskId、model invocation 或等价 provenance | **ACCEPTED**                    | sourceType + createdByTaskId + invocationId 落在版本行                     |
-| 生成时使用的 Creation Contract version 必须可追溯              | **ACCEPTED**                    | ChapterVersion.creationContractVersionId；Manuscript 记录初始锚点（§10.1） |
-| V1 不实现合并、分支编辑、协同编辑或多人实时同步                | **ACCEPTED**                    | 明确非目标（§8）                                                           |
+| 初始假设                                                       | 裁决                            | 理由                                                                                       |
+| -------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------ |
+| V1 每个 project 最多一个 active manuscript                     | **ACCEPTED**                    | 单稿模式满足 V1 产品需要；`archived` 为未来 reserved（V1 无 manuscript archive 用例，§13） |
+| Manuscript 是容器，不保存整本正文快照                          | **ACCEPTED**                    | 避免任何正文修改复制整本；正文只存在于章节版本                                             |
+| Chapter 是稳定身份和排序节点                                   | **ACCEPTED**                    | order 独立于版本，重排不复制正文                                                           |
+| ChapterVersion 是不可变的标题 + 正文快照                       | **ACCEPTED**                    | title 属于版本快照（问题 4）；版本创建后不可修改                                           |
+| Chapter.currentVersionId 指向当前版本                          | **ACCEPTED**                    | 折叠指针进 Chapter 行，比独立映射表简单（§6.3）                                            |
+| 推进 currentVersion 使用 expectedCurrentVersionId 做 CAS       | **ACCEPTED**                    | 与既有 expectedVersion 乐观并发约定一致                                                    |
+| Chapter order 独立于正文版本，重排不复制正文                   | **ACCEPTED**                    | 排序字段在 Chapter 行                                                                      |
+| 所有正文版本永久保留，不 hard-delete                           | **ACCEPTED**                    | append-only + DB trigger 禁止 DELETE（§6.4）                                               |
+| V1 使用 UTF-8 plain text 或 Markdown，不引入富文本 AST         | **ACCEPTED**（选择 plain text） | content 存原始 UTF-8 字节；不做 Markdown 结构化解析；无富文本                              |
+| 用户显式「保存新版本」，V1 不做自动版本化 autosave             | **ACCEPTED**                    | autosave 制造无意义版本；V1 显式保存                                                       |
+| AI 未来只能创建新版本，不能原地修改现有版本                    | **ACCEPTED**                    | 版本不可变；AI 通过 createChapterVersion 产生新版本（§10.2）                               |
+| AI 生成版本必须记录 taskId、model invocation 或等价 provenance | **ACCEPTED**                    | sourceType + createdByTaskId + invocationId 落在版本行                                     |
+| 生成时使用的 Creation Contract version 必须可追溯              | **ACCEPTED**                    | ChapterVersion.creationContractVersionId；Manuscript 记录初始锚点（§10.1）                 |
+| V1 不实现合并、分支编辑、协同编辑或多人实时同步                | **ACCEPTED**                    | 明确非目标（§8）                                                                           |
 
 无 REJECTED 项。
 
@@ -95,54 +95,54 @@ Project
 
 ### 4.1 Manuscript
 
-Manuscript 是 project 内的稿件容器。V1 每 project 至多一个 active，可存在多个 archived。
+Manuscript 是 project 内的稿件容器。V1 每 project 至多一个 **active**。`status='archived'` 与「多个 archived manuscript」是**未来 reserved 语义**：V1 没有 `archiveManuscript`/`restoreManuscript` 用例，正常产品路径只存在一个 active manuscript（§12、§13）。
 
 | 字段                      | 类型                               | 必填 | 说明                                                                                                               |
 | ------------------------- | ---------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------ |
 | id                        | `string`（branded `ManuscriptId`） | 是   | 复合主键 `(project_id, id)` 的一部分                                                                               |
 | projectId                 | `string`                           | 是   | 所属项目；`project_metadata(id)` 外键                                                                              |
 | title                     | `string`                           | 是   | trim 后非空；≤ 200 UTF-16 code units                                                                               |
-| status                    | `'active' \| 'archived'`           | 是   | 闭合枚举；默认 `'active'`                                                                                          |
+| status                    | `'active' \| 'archived'`           | 是   | 闭合枚举；默认 `'active'`；**V1 恒为 `'active'`**（archived 为未来 reserved，§13）                                 |
 | creationContractVersionId | `string \| null`                   | 否   | **初始 contract 锚点**：getOrCreateManuscript 创建时记录当时的 current contract version；**永不自动更新**（§10.1） |
 | createdAt / updatedAt     | `string`（ISO 8601 UTC）           | 是   | 创建/最后更新时间                                                                                                  |
 
-**project 内唯一性**：部分唯一索引 `UNIQUE(project_id) WHERE status = 'active'`（§6.4）。**多个 archived manuscript**：允许。**空标题**：禁止（trim 非空）；创建时若未提供标题用默认 `'未命名稿件'`。
+**project 内唯一性**：部分唯一索引 `UNIQUE(project_id) WHERE status = 'active'`（§6.4）在 V1 强制「至多一个 active」，也是未来支持多个 archived 的机制。**空标题**：禁止（trim 非空）；创建时若未提供标题用默认 `'未命名稿件'`。**V1 不宣称「支持多个 archived manuscript」为当前产品能力**（reserved，§13）。
 
 ### 4.2 Chapter
 
 Chapter 是 manuscript 内的稳定身份与排序节点，不保存正文、不保存标题。
 
-| 字段                  | 类型                            | 必填 | 说明                                                                                                 |
-| --------------------- | ------------------------------- | ---- | ---------------------------------------------------------------------------------------------------- |
-| id                    | `string`（branded `ChapterId`） | 是   | 复合主键 `(project_id, id)`                                                                          |
-| projectId             | `string`                        | 是   | 所属项目                                                                                             |
-| manuscriptId          | `string`                        | 是   | 所属稿件；`manuscripts(project_id, id)` 复合外键                                                     |
-| position              | `number`（正整数）              | 是   | 稀疏 rank；`UNIQUE(project_id, manuscript_id, position)`（§6.1）                                     |
-| currentVersionId      | `string \| null`                | 否   | 当前版本指针；`null` = 空章节（尚无版本）；复合外键到 `chapter_versions(project_id, chapter_id, id)` |
-| status                | `'active' \| 'archived'`        | 是   | 闭合枚举；默认 `'active'`                                                                            |
-| createdAt / updatedAt | `string`                        | 是   | 创建/最后更新时间                                                                                    |
+| 字段                  | 类型                            | 必填 | 说明                                                                                                                                                                         |
+| --------------------- | ------------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| id                    | `string`（branded `ChapterId`） | 是   | 复合主键 `(project_id, id)`                                                                                                                                                  |
+| projectId             | `string`                        | 是   | 所属项目                                                                                                                                                                     |
+| manuscriptId          | `string`                        | 是   | 所属稿件；`manuscripts(project_id, id)` 复合外键                                                                                                                             |
+| position              | `number`（正整数）              | 是   | 稀疏 rank，**覆盖所有章节（含 archived）**；`UNIQUE(project_id, manuscript_id, position)`（§6.1、§5 不变量 10）                                                              |
+| currentVersionId      | `string \| null`                | 否   | 当前版本指针；`null` = 空章节（尚无版本）；复合外键 `(project_id, id, current_version_id)` 指向 `chapter_versions(project_id, chapter_id, id)`（同项目 + 同章，§5 不变量 3） |
+| status                | `'active' \| 'archived'`        | 是   | 闭合枚举；默认 `'active'`                                                                                                                                                    |
+| createdAt / updatedAt | `string`                        | 是   | 创建/最后更新时间                                                                                                                                                            |
 
-**稳定身份**：id 一经创建不可变，重排/改名/改版本均不改变 id。**空章节语义**：`currentVersionId = NULL`、无任何版本；列表展示占位标题（UI 渲染，不落库）；打开即空白编辑器；保存首个版本后才有标题与正文。**重排语义**：只更新 `position`，不触碰任何版本行（不变量 11）。
+**稳定身份**：id 一经创建不可变，重排/改名/改版本均不改变 id。**空章节语义**：`currentVersionId = NULL`、无任何版本；列表展示占位标题（UI 渲染，不落库）；打开即空白编辑器；保存首个版本后才有标题与正文。**重排语义**：只更新 `position`，不触碰任何版本行（不变量 11）；归档不改 position、restore 保留 position（不变量 10）。
 
 ### 4.3 ChapterVersion
 
 ChapterVersion 是不可变的「标题 + 正文」快照，同时携带 provenance。
 
-| 字段                      | 类型                                                                 | 必填 | 说明                                                                                                                                                                |
-| ------------------------- | -------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| id                        | `string`（branded `ChapterVersionId`）                               | 是   | 复合主键 `(project_id, id)`                                                                                                                                         |
-| projectId                 | `string`                                                             | 是   | 所属项目                                                                                                                                                            |
-| chapterId                 | `string`                                                             | 是   | 所属章节；`chapters(project_id, id)` 复合外键                                                                                                                       |
-| versionNumber             | `number`（正整数）                                                   | 是   | 章节内单调递增，从 1 开始；`UNIQUE(project_id, chapter_id, version_number)`                                                                                         |
-| title                     | `string`                                                             | 是   | trim 后非空；≤ 200 UTF-16 code units                                                                                                                                |
-| content                   | `string`                                                             | 是   | 原始 UTF-8 文本；允许空字符串；≤ 1,000,000 UTF-16 code units（§6.2）                                                                                                |
-| contentHash               | `string`（SHA-256 hex）                                              | 是   | `sha256Utf8(content)`，即存储正文精确字节的摘要；`length = 64`                                                                                                      |
-| parentVersionId           | `string \| null`                                                     | 否   | 血缘：保存时 chapter 的 current version（即 expectedCurrentVersionId 验证后的 current）；首个版本为 null；复合外键到 `chapter_versions(project_id, chapter_id, id)` |
-| sourceType                | `'USER' \| 'AI_GENERATION' \| 'AI_REWRITE' \| 'IMPORT' \| 'RESTORE'` | 是   | 闭合枚举（见下）                                                                                                                                                    |
-| createdByTaskId           | `string \| null`                                                     | 否   | 产生此版本的 AI task；`USER`/`IMPORT` 为 null；`AI_*` 必填；复合外键到 `tasks(project_id, id)`                                                                      |
-| invocationId              | `string \| null`                                                     | 否   | 关联模型调用；`AI_*` 必填；复合外键到 `model_invocations(project_id, id)`                                                                                           |
-| creationContractVersionId | `string \| null`                                                     | 否   | 生成时使用的 contract version；`AI_*` 必填、`USER`/`IMPORT` 可选；复合外键到 `creation_contract_versions(project_id, id)`                                           |
-| createdAt                 | `string`                                                             | 是   | 创建时间（即保存时间）                                                                                                                                              |
+| 字段                      | 类型                                                                 | 必填 | 说明                                                                                                                                                                                                                                              |
+| ------------------------- | -------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| id                        | `string`（branded `ChapterVersionId`）                               | 是   | 复合主键 `(project_id, id)`                                                                                                                                                                                                                       |
+| projectId                 | `string`                                                             | 是   | 所属项目                                                                                                                                                                                                                                          |
+| chapterId                 | `string`                                                             | 是   | 所属章节；`chapters(project_id, id)` 复合外键                                                                                                                                                                                                     |
+| versionNumber             | `number`（正整数）                                                   | 是   | 章节内**全局创建顺序**：`COALESCE(MAX(version_number),0)+1`（同事务内计算，§7.2）；`UNIQUE(project_id, chapter_id, version_number)`                                                                                                               |
+| title                     | `string`                                                             | 是   | trim 后非空；≤ 200 UTF-16 code units                                                                                                                                                                                                              |
+| content                   | `string`                                                             | 是   | 原始 UTF-8 文本；允许空字符串；≤ 1,000,000 UTF-16 code units（§6.2）                                                                                                                                                                              |
+| contentHash               | `string`（SHA-256 hex）                                              | 是   | `sha256Utf8(content)`，即存储正文精确字节的摘要；`length = 64`                                                                                                                                                                                    |
+| parentVersionId           | `string \| null`                                                     | 否   | **编辑血缘**：保存时 chapter 的 current version（即 expectedCurrentVersionId 验证后的 current）；与 versionNumber 无关（promote 历史版本后保存，parent = 该历史版本）；首个版本为 null；复合外键到 `chapter_versions(project_id, chapter_id, id)` |
+| sourceType                | `'USER' \| 'AI_GENERATION' \| 'AI_REWRITE' \| 'IMPORT' \| 'RESTORE'` | 是   | 闭合枚举（见下）                                                                                                                                                                                                                                  |
+| createdByTaskId           | `string \| null`                                                     | 否   | 产生此版本的 AI task；`USER`/`IMPORT` 为 null；`AI_*` 必填；复合外键到 `tasks(project_id, id)`                                                                                                                                                    |
+| invocationId              | `string \| null`                                                     | 否   | 关联模型调用；`AI_*` 必填；复合外键到 `model_invocations(project_id, id)`                                                                                                                                                                         |
+| creationContractVersionId | `string \| null`                                                     | 否   | 生成时使用的 contract version；`AI_*` 必填、`USER`/`IMPORT` 可选；复合外键到 `creation_contract_versions(project_id, id)`                                                                                                                         |
+| createdAt                 | `string`                                                             | 是   | 创建时间（即保存时间）                                                                                                                                                                                                                            |
 
 **sourceType 规则**：
 
@@ -155,6 +155,8 @@ ChapterVersion 是不可变的「标题 + 正文」快照，同时携带 provena
 | `RESTORE`       | 未来备份恢复物化内容为新版本 | null            | null         | 可选                               |
 
 > 注意：promoteChapterVersion（把历史版本设为 current）**不创建新版本**，因此不产生 `RESTORE` 版本。`RESTORE` 预留给未来「从备份恢复正文」的物化路径（§10、§13）。
+>
+> **versionNumber 与 parentVersionId 的区别**：versionNumber 表示章节内**全局创建顺序**（`MAX+1`，永不重用既有编号）；parentVersionId 表示**编辑血缘**（被编辑的基线版本）。两者不可混为一谈：promote 历史版本 v2 为 current 后再保存，新版本 `versionNumber = max+1`（如 v6）而 `parentVersionId = v2`（§7.2 示例）。
 
 **immutable 约束**：版本创建后不可 UPDATE、不可 DELETE（DB trigger 强制，§6.4）。`contentHash` 由 repository 写入前重算校验（与 `sha256Utf8` 现有约定一致），读取时可复核。
 
@@ -166,21 +168,22 @@ ChapterVersion 是不可变的「标题 + 正文」快照，同时携带 provena
 
 1. **项目隔离**：Manuscript、Chapter、ChapterVersion 不得跨 project 访问。复合主键 `(project_id, ...)` + 复合外键 + 应用层 projectId 校验三重强制；跨 project 访问返回对应 NOT_FOUND，不泄露存在性（§7、§13）。
 2. **版本不可变**：ChapterVersion 创建后不可修改。DB trigger `BEFORE UPDATE`/`BEFORE DELETE` RAISE(ABORT)（§6.4）。
-3. **指针同章约束**：`currentVersionId` 只能指向同一 Chapter 的版本。复合外键 `chapters(project_id, manuscript_id, current_version_id) → chapter_versions(project_id, chapter_id, id)` 在数据库层强制「同项目 + 同章」。
+3. **指针同章约束**：`currentVersionId` 只能指向同一 Chapter 的版本。复合外键 `chapters(project_id, id, current_version_id) → chapter_versions(project_id, chapter_id, id)` 在数据库层强制「同项目 + 同章」——因为 `chapters.id = chapter_versions.chapter_id`（不是 `manuscript_id`）。
 4. **CAS 推进**：current version 推进必须使用 CAS。谓词 `UPDATE chapters SET current_version_id = :new WHERE project_id = :p AND id = :c AND current_version_id = :expected`；首个版本用 `current_version_id IS NULL`。affected ≠ 1 → `MANUSCRIPT_VERSION_CONFLICT`。
 5. **CAS 失败不得悄悄覆盖**：CAS 失败即整笔回滚（§11.2），绝不静默继续、绝不产生孤儿版本。
-6. **version number 章节内唯一**：`UNIQUE(project_id, chapter_id, version_number)`；单调递增，从 1 开始。
+6. **version number 章节内全局创建顺序**：`versionNumber = COALESCE(MAX(version_number),0)+1`（同一 `BEGIN IMMEDIATE` 事务内计算）；表示章节内创建顺序，与 current/parent 无关；`UNIQUE(project_id, chapter_id, version_number)` 为最终保护。promote 历史版本后保存新版本，编号继续 `max+1`，不重用既有编号。
 7. **事务边界明确**：新版本创建 + current 推进在同一事务（createChapterVersion）；current 切换（promote）单独一个事务；全部 `BEGIN IMMEDIATE`（§11）。
 8. **归档章节不可接收新版本**：`status='archived'` 的 chapter 对 createChapterVersion 返回 `MANUSCRIPT_STATE_CONFLICT`，必须先 restore。
 9. **版本历史不得 hard-delete**：版本行 append-only；DB trigger 禁止 DELETE（§6.4）。
-10. **排序唯一且稳定**：`position` 在 manuscript 内唯一；确定性排序 `ORDER BY position ASC, id ASC`（不变量 16）。
+10. **排序唯一且稳定**：`position` 在 manuscript 内唯一，**覆盖所有章节（含 archived）**；确定性排序 `ORDER BY position ASC, id ASC`（不变量 16）。archive 不改 position；restore 保留 position（不重新分配）。
 11. **重排不改版本内容**：updateChapterOrder 只更新 `position`，不得改变任何 ChapterVersion 内容或 hash。
-12. **Project 删除/恢复级联明确**：V1 无逐行级联——删除语义 = archive；project 删除（未来）是文件级（删除整个 project.sqlite），恢复 = 恢复数据库文件备份；不依赖 FK ON DELETE CASCADE（现有 schema 无 ON DELETE 子句）。
+12. **Project 删除/恢复级联明确**：V1 无逐行级联——chapter 删除语义 = archive（可逆）；manuscript archive/restore 为 reserved（无用例，§13）；project 删除（未来）是文件级（删除整个 project.sqlite），恢复 = 恢复数据库文件备份；不依赖 FK ON DELETE CASCADE（现有 schema 无 ON DELETE 子句）。
 13. **AI task 失败不得产生半成品 current version**：AI settle 使用与用户保存相同的原子 `createChapterVersion`（create + CAS promote 同一事务）；冲突 → task FAILED，不产生版本（§11.3）。
 14. **Provenance 不得跨 project 引用**：`createdByTaskId`/`invocationId`/`creationContractVersionId` 全部用复合外键 `(project_id, ...)` 约束，禁止引用其他 project 的 task/invocation/contract version。
 15. **空正文 / 最大长度 / Unicode 规范明确**：content 可为空字符串；title trim 后非空；title ≤ 200、content ≤ 1,000,000 UTF-16 code units；Unicode 不规范化（NFC/NFD 均不执行），精确字节保真（§6.2）。
-16. **返回顺序确定性**：listChapters `ORDER BY position ASC, id ASC`；listChapterVersions `ORDER BY version_number DESC, id ASC`；archive 列表（未来）`ORDER BY updated_at DESC, id DESC`。每个列表的次要排序键永远是 id。
+16. **返回顺序确定性**：listChapters 默认（includeArchived=false）返回 active 子集 `ORDER BY position ASC, id ASC`；includeArchived=true 返回全部章节 `ORDER BY position ASC, id ASC`；listChapterVersions `ORDER BY version_number DESC, id ASC`。每个列表的次要排序键永远是 id。
 17. **稳定版本 ID 可被未来系统引用**：导出、Scene Plan、Story State Ledger 等未来系统必须引用不可变的 ChapterVersionId（§10.3、§10.4）。
+18. **运行时零 DDL**：章节排序 / 重排 / rebalance 不得执行 `DROP INDEX` / `CREATE INDEX`；排序是数据操作，`uq_chapters_project_manuscript_position` 唯一索引全程存在，rebalance 用数据级两阶段实现（§6.1）。
 
 ---
 
@@ -198,23 +201,41 @@ ChapterVersion 是不可变的「标题 + 正文」快照，同时携带 provena
 
 **方案 B：稀疏 position / rank（gap 稀疏整数 + midpoint + 显式 rebalance）** ← **V1 选择**
 
-- 初始分配：首章 `position = 1024`；追加 `position = max + 1024`。
-- 插入中间章节 / 单章重排：`position = floor((left + right) / 2)`（`gap >= 2` 时整数严格介于两者之间），**单行 UPDATE，O(1) 写，不触碰其他行**。
-- 当 `gap <= 1`（两个相邻 position 之间无整数可插入）时触发 **rebalance**，procedure 固定为（单事务，无实现自由度）：
-  1. `BEGIN IMMEDIATE`；
-  2. 读取该 manuscript 全部 active 章节，按 `ORDER BY position ASC, id ASC` 得有序 id 列表；
-  3. `DROP INDEX IF EXISTS uq_chapters_project_manuscript_position`；
-  4. 对第 i 个 id（i 从 0 起）：`UPDATE chapters SET position = (i + 1) * 1024 WHERE project_id = ? AND id = ?`；
-  5. `CREATE UNIQUE INDEX uq_chapters_project_manuscript_position ON chapters(project_id, manuscript_id, position)`；
-  6. `COMMIT`（步骤 5 若因重复值失败则整体 ROLLBACK，约束完整性由该 CREATE 的失败暴露）。
+**固定常量**：
 
-  SQLite DDL 可事务化，DROP/CREATE 索引保证重排期间无瞬时唯一冲突，且重排后仍保留 GAP-1 的插入空间。
+- `GAP = 1024`。
+- rebalance 布局：rank r（1-based）→ `position = (r + 2) * GAP`。首章（rank 1）位于 `2048`，为 prepend 保留 `1..2047` 的首部空间；尾部空间不受限（append 持续 `+GAP`）。
 
-- 唯一性：`UNIQUE(project_id, manuscript_id, position)`；midpoint 构造保证与左右邻居互异，`gap==1` 才 rebalance。
-- 并发重排：worker 是唯一写者，`BEGIN IMMEDIATE` 串行化；每次重排基于已提交状态重算邻居 midpoint，两次并发 move 收敛为最后应用者（重排是 last-write-wins 语义，§7、§11）。
-- 未来迁移成本：稀疏是连续的超集，任何时刻可一次数据迁移压实为连续 1..N；显式且受限。
+**操作语义**（全部在单个 `BEGIN IMMEDIATE` 事务内）：
 
-**选择理由**：V1 操作以「创建章节（通常追加）+ 偶发重排」为主；方案 B 对中间插入与重排是 O(1) 单行写，完全绕开方案 A 的瞬时唯一冲突与 O(N) 后缀位移；rebalance 是唯一且精确定义的兜底。章节数为人工尺度（数十级），rebalance 成本可忽略。
+- **创建首章**（manuscript 无章节）：`position = 2048`。
+- **append**（插入末尾）：`position = MAX(position over manuscript 全部章节) + GAP`。
+- **prepend**（插入当前首章 F 之前）：`position = floor(F.position / 2)`。若 `F.position == 1`（`floor(1/2)=0` 违反 `position > 0`）→ 触发 rebalance 后重算（rebalance 后首章回到 2048，可得 1024）。
+- **insert-before-X**（X 非首章，P = X 按 `(position, id)` 的紧邻前驱）：若 `X.position - P.position >= 2` → `position = floor((P.position + X.position) / 2)`（严格介于两者，且不与任何已占用值冲突）；否则（gap == 1）→ 触发 rebalance 后重算。
+- **move M before T**（updateChapterOrder）：若 M 已是 T 的紧邻前驱（或 T 为首章且 M 为首章）→ no-op（幂等，§7.2）；否则目标 position 按 insert-before-T 计算（T 为首章则 prepend，否则 midpoint(prev(T), T)），gap 耗尽则先 rebalance 再重算；`UPDATE chapters SET position = target`，M 旧位置留作 gap，**不触碰其他行**。
+- **rebalance 触发条件**：上述任一操作无法在当前布局中找到合法整数 position 时（prepend 撞 0、相邻 gap == 1）。
+
+**rebalance procedure（数据级两阶段，运行时零 DDL，§5 不变量 18）**：
+
+参与范围：**manuscript 全部章节（active + archived）**——position 覆盖所有章节（§5 不变量 10），不存在「范围外章节」。
+
+1. `BEGIN IMMEDIATE`；
+2. 按 `ORDER BY position ASC, id ASC` 读取该 manuscript 全部章节，得 rank i（i = 1..n，n = 章节总数）；
+3. 计算 `M = MAX(position)`（over manuscript 全部章节）、`maxFinal = (n + 2) * GAP`、`TEMP_BASE = max(M, maxFinal) + 1`；
+4. **溢出防护**：若 `TEMP_BASE + n - 1 > Number.MAX_SAFE_INTEGER` → 确定性失败（整笔 ROLLBACK，不写入任何行）。V1 章节数为人尺度（数十级），实际不可达；
+5. **第一阶段（临时值）**：按任意确定性顺序，对第 i 个章节 `UPDATE chapters SET position = TEMP_BASE + i`。临时值全部 `> M`（严格大于任何现有 position）且互异 → 不与任何行冲突；`uq_chapters_project_manuscript_position` 唯一索引全程生效；
+6. **第二阶段（最终值）**：按 rank 顺序，对第 i 个章节 `UPDATE chapters SET position = (i + 2) * GAP`。最终值 `<= maxFinal < TEMP_BASE <=` 所有临时值，且互异 → 不与任何未更新行（仍持临时值）冲突；
+7. `COMMIT`。任何一步失败 → 整笔 ROLLBACK；**从不 DROP / CREATE 索引**（排序是数据操作，不是 schema mutation）。
+
+**为什么 prepend 可持续**：prepend 用减半策略 `floor(F.position/2)`：2048 → 1024 → 512 → … → 1 → 撞 0 → rebalance 把首章放回 2048，如此循环。每次 rebalance 后首部空间恢复为 `1..2047`，尾部空间不受限；连续 prepend（约 11 次）触发一次 rebalance 后仍可继续 prepend（§14 必测场景 5/6）。
+
+**唯一性**：`UNIQUE(project_id, manuscript_id, position)` 覆盖所有章节（含 archived）。midpoint / 减半构造保证与已占用值互异；只有 gap 耗尽才 rebalance。
+
+**并发重排**：worker 是唯一写者，`BEGIN IMMEDIATE` 串行化；每次重排基于已提交状态重算，两次并发 move 收敛为最后应用者（重排是 last-write-wins 语义，§7、§11）。
+
+**未来迁移成本**：稀疏是连续的超集，任何时刻可一次数据迁移压实为连续 1..N；显式且受限。
+
+**选择理由**：V1 操作以「创建章节（通常追加）+ 偶发重排」为主；方案 B 对中间插入、prepend 与重排是 O(1) 单行写（gap 耗尽才 rebalance），完全绕开方案 A 的瞬时唯一冲突与 O(N) 后缀位移；rebalance 是唯一且精确定义的兜底，且用数据级两阶段实现（不变量 18），无运行时 DDL。章节数为人工尺度（数十级），rebalance 成本可忽略。
 
 ### 6.2 正文存储
 
@@ -283,7 +304,7 @@ CREATE TABLE chapters (
   PRIMARY KEY (project_id, id),
   FOREIGN KEY (project_id, manuscript_id)
     REFERENCES manuscripts(project_id, id),
-  FOREIGN KEY (project_id, manuscript_id, current_version_id)
+  FOREIGN KEY (project_id, id, current_version_id)
     REFERENCES chapter_versions(project_id, chapter_id, id)
 ) STRICT;
 
@@ -293,9 +314,9 @@ CREATE INDEX idx_chapters_project_manuscript_status
   ON chapters(project_id, manuscript_id, status, position);
 ```
 
-> `position` 采用**稀疏正整数**：插入中间用 `floor((left+right)/2)`（`gap >= 2` 时为整数严格介于两者之间），`gap <= 1` 时触发 rebalance（§6.1）。保持与 codebase 一致的整数纪律（safe integer）。
+> `position` 采用**稀疏正整数**，覆盖所有章节（含 archived，§5 不变量 10）：首章 2048、prepend 减半、append `+GAP`、中间插入 midpoint、gap 耗尽触发数据级两阶段 rebalance（§6.1、§5 不变量 18）。保持与 codebase 一致的整数纪律（safe integer）。
 >
-> `chapters(project_id, manuscript_id, current_version_id)` 复合外键目标 `chapter_versions(project_id, chapter_id, id)` 需下表的复合唯一索引支持；SQLite 允许前向引用（运行时解析），同一迁移内建表顺序为 manuscripts → chapters → chapter_versions 后，运行时双向 FK 均生效。
+> `chapters(project_id, id, current_version_id)` 复合外键目标 `chapter_versions(project_id, chapter_id, id)`：子列 `(project_id, id)` 匹配父列 `(project_id, chapter_id)`，故只允许 current 指向**同一章节**的版本（§5 不变量 3）。需下表 `uq_chapter_versions_project_chapter` 复合唯一索引支持；SQLite 允许前向引用（运行时解析），同一迁移内建表顺序为 manuscripts → chapters → chapter_versions 后，运行时双向 FK 均生效。
 
 #### chapter_versions
 
@@ -367,7 +388,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 - CHECK 强制 sourceType 与 provenance 字段的一致性（AI 必填三件套、非 AI 不得填 task/invocation）。
 - 版本行无 `updated_at`（不可变）；无 `status`（不存在「草稿版本」，创建即权威快照）。
 
-**archive 字段**：manuscripts/chapters 的 `status` 承担 archive 语义；chapter_versions 无 status（版本永不变更）。**级联策略**：所有 FK 无 `ON DELETE`（与现有 schema 一致）；V1 不逐行删除；project 删除为文件级（§5 不变量 12）。
+**archive 字段**：chapters 的 `status` 承担 chapter archive 语义（V1 能力）；manuscripts 的 `status` 为未来 reserved（V1 恒为 `active`，§13）；chapter_versions 无 status（版本永不变更）。**级联策略**：所有 FK 无 `ON DELETE`（与现有 schema 一致）；V1 不逐行删除；project 删除为文件级（§5 不变量 12）。
 
 ---
 
@@ -420,7 +441,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 **`createChapter`**
 
 - **Input**：`{projectId, manuscriptId, insertBeforeChapterId | null}`（Worker 注入 `newChapterId`、`now`）
-- **Preconditions**：manuscript 存在且属于 project 且 `status='active'`；若提供 `insertBeforeChapterId`，该章节存在、属于同一 manuscript、`status='active'`。插入位置为 append（`null`）时 `position = max + 1024`；insert-before-first 时 `position = first.position - 1024`（≤ 0 则 rebalance）；insert-before-X 时 `position = midpoint(prev(X), X)`（gap==1 则 rebalance）。rebalance 在同一事务内完成（§6.1）。
+- **Preconditions**：manuscript 存在且属于 project 且 `status='active'`（V1 恒 active）；若提供 `insertBeforeChapterId`，该章节存在、属于同一 manuscript。插入位置按 §6.1：append（`null`）→ `MAX(position)+GAP`；prepend（insert-before-first）→ `floor(first.position/2)`（撞 0 则 rebalance）；insert-before-X → `floor((prev(X).position + X.position)/2)`（gap==1 则 rebalance）。插入位置考虑**所有已占用 rank（含 archived）**（§5 不变量 10）；rebalance 在同一事务内完成（§6.1）。
 - **Transaction**：单个 `BEGIN IMMEDIATE`；插入章节行（`current_version_id = NULL`、`status='active'`）；更新 manuscript.updatedAt；COMMIT。
 - **Result**：`ChapterPublicData`（空章节，`currentVersionId = null`）。
 - **Errors**：`MANUSCRIPT_NOT_FOUND`、`MANUSCRIPT_STATE_CONFLICT`（稿件 archived）、`CHAPTER_NOT_FOUND`（insertBefore 目标跨稿件/不存在）、`VALIDATION_ERROR`。
@@ -435,14 +456,25 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 - **Transaction**（单个 `BEGIN IMMEDIATE`）：
   1. 读 chapter（存在/归属/active）+ 读 current pointer；
   2. CAS 验证 `current_version_id = expectedCurrentVersionId`（首版 `IS NULL`）→ 失败抛 `MANUSCRIPT_VERSION_CONFLICT`；
-  3. `versionNumber = current ? current.versionNumber + 1 : 1`；
-  4. `parentVersionId = current?.id ?? null`（即被编辑的基线版本，promote 到历史版本后保存时血缘正确）；
+  3. **版本号 = 章节内全局创建顺序**：`versionNumber = SELECT COALESCE(MAX(version_number), 0) + 1 FROM chapter_versions WHERE project_id = ? AND chapter_id = ?`（**同一事务内**计算；`UNIQUE(project_id, chapter_id, version_number)` 兜底并发）；
+  4. `parentVersionId = current?.id ?? null`（**编辑血缘**：被编辑的基线版本，与 versionNumber 无关；promote 历史版本后保存，parent = 该历史版本，编号继续 `max+1`）；
   5. `contentHash = sha256Utf8(content)`；插入 chapter_versions 行；
   6. CAS 更新 `chapters.current_version_id = newVersionId`（同谓词，二重保护）；
   7. 更新 `chapters.updated_at`、`manuscripts.updated_at`；COMMIT。
 - **Result**：`ChapterVersionPublicData`（含 content、contentHash、sourceType、provenance 字段）。
 - **Errors**：`CHAPTER_NOT_FOUND`、`MANUSCRIPT_STATE_CONFLICT`（归档章节）、`MANUSCRIPT_VERSION_CONFLICT`（CAS）、`VALIDATION_ERROR`。
 - **Idempotency**：**非幂等**（每次成功调用创建一个新版本）。重复防护：UI save-in-flight 锁（§9）；两个并发 save 指向同一基线时 CAS 只放行一个，另一个冲突回滚；`UNIQUE(project_id, chapter_id, version_number)` 兜底并发同号插入。AI 路径由 `uq_chapter_versions_task` 保证幂等（§11.3）。`clientRequestId` 去重机制显式列为未来 revisit（§13）——桌面单 worker + Renderer 串行保存下不需要。
+
+**版本号示例（promote 历史版本后保存，§5 不变量 6）**：
+
+```text
+已有 v1 → v2 → v3 → v4 → v5
+promote v2 为 current（chapters.current_version_id = v2.id）
+基于 v2 编辑并保存新版本
+→ versionNumber = MAX(1..5) + 1 = 6   （全局创建顺序，不重排既有编号）
+→ parentVersionId = v2                 （编辑血缘）
+→ chapters.current_version_id = v6.id
+```
 
 ---
 
@@ -460,11 +492,11 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 **`updateChapterOrder`**
 
 - **Input**：`{projectId, manuscriptId, chapterId, insertBeforeChapterId | null}`
-- **Preconditions**：manuscript 存在/归属/active；目标章节与 insertBefore 目标同一 manuscript 且 active。
-- **Transaction**：单个 `BEGIN IMMEDIATE`；计算目标 position（append / before-first / midpoint，gap==1 则 rebalance，§6.1）；更新该章节 `position`；更新 updatedAt；COMMIT。
+- **Preconditions**：manuscript 存在/归属/active；目标章节 M 与 insertBefore 目标 T 同一 manuscript。若 M 已是 T 的紧邻前驱（或 T 为首章且 M 为首章）→ no-op。
+- **Transaction**：单个 `BEGIN IMMEDIATE`；计算目标 position（append / prepend 减半 / midpoint，gap 耗尽则 rebalance，§6.1）；`UPDATE chapters SET position = target`（M 旧位置留作 gap，不触碰其他行，§5 不变量 11）；更新 updatedAt；COMMIT。
 - **Result**：`ChapterSummary[]`（完整新顺序，作为列表事实来源）。
 - **Errors**：`MANUSCRIPT_NOT_FOUND`、`MANUSCRIPT_STATE_CONFLICT`、`CHAPTER_NOT_FOUND`、`VALIDATION_ERROR`。
-- **Idempotency**：重复执行相同 move 收敛为 no-op（第二次目标即当前位置）；重排本身是 last-write-wins 语义，不携带 expectedVersion（单 worker 串行化下两次并发 move 都成功、后者覆盖前者），Renderer 以返回列表为准刷新（§9、§11）。
+- **Idempotency**：M 已在目标紧邻位置时 no-op 成功（§Preconditions）；重复执行相同 move 收敛为 no-op；重排本身是 last-write-wins 语义，不携带 expectedVersion（单 worker 串行化下两次并发 move 都成功、后者覆盖前者），Renderer 以返回列表为准刷新（§9、§11）。
 
 ---
 
@@ -472,7 +504,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 
 - **Input**：`{projectId, chapterId, expectedCurrentVersionId | null}`
 - **Preconditions**：chapter 存在/归属；CAS 匹配当前指针。archive 要求 `status='active'`；restore 要求 `status='archived'`（已是目标状态 → no-op 成功）。
-- **Transaction**：单个 `BEGIN IMMEDIATE`；CAS `UPDATE chapters SET status = :target WHERE ... AND current_version_id = :expected`（status 作为第二谓词）；更新 updatedAt；COMMIT。
+- **Transaction**：单个 `BEGIN IMMEDIATE`；CAS `UPDATE chapters SET status = :target WHERE ... AND current_version_id = :expected`（status 作为第二谓词）；**position 不变**（archive 保留原位置；restore 保留原位置、不重新分配，§5 不变量 10）；更新 updatedAt；COMMIT。
 - **Result**：`ChapterPublicData`。
 - **Errors**：`CHAPTER_NOT_FOUND`、`MANUSCRIPT_VERSION_CONFLICT`、`VALIDATION_ERROR`。
 - **Idempotency**：幂等——重复 archive 已归档章节返回成功；归档章节的 createChapterVersion/updateChapterOrder 返回 `MANUSCRIPT_STATE_CONFLICT`（不变量 8）。
@@ -496,6 +528,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 - **version 内容是否在 list 返回**：listChapterVersions **不含 content**（避免大正文进列表）；含 `{id, versionNumber, title, sourceType, createdAt, parentVersionId, creationContractVersionId, contentHash}`。content 仅 `getChapterVersion` 返回。
 - **重复请求 / idempotency**：见各操作规格；核心防护是 CAS 串行化 + UI 锁 + `uq_chapter_versions_task`（AI 幂等）。
 - **跨 project 与 not-found**：不区分，统一 NOT_FOUND（§7 开头）。
+- **Manuscript archive/restore**：V1 无 `archiveManuscript`/`restoreManuscript` 用例；`manuscripts.status` 为未来 reserved（§13）。chapter 的 archive/restore 是 V1 能力（§7.2）。
 
 ---
 
@@ -516,7 +549,7 @@ BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
 - [ ] 应用重启后数据仍存在（project.sqlite 持久化）。
 - [ ] 所有操作严格限定在当前 project（§5 不变量 1）。
 
-**V1 明确不需要**：AI 正文生成、Scene Planner、大纲、批量章节生成、实时协作、自动保存、富文本、版本 diff UI、版本 merge、分支稿件、评论和审稿、导出、全文搜索、移动端。
+**V1 明确不需要**：AI 正文生成、Scene Planner、大纲、批量章节生成、实时协作、自动保存、富文本、版本 diff UI、版本 merge、分支稿件、评论和审稿、导出、全文搜索、移动端、**稿件级 archive/restore（reserved，§13）**。
 
 > 完成标准只统计 MV1-A + MV1-B。**MV1-B 合并前不得把本能力标为 ✅**（roadmap 维护协议，§12、§18）。
 
@@ -599,8 +632,8 @@ V1 不提供自动合并。
 提交 createChapterVersion(expectedCurrentVersionId = A.id)
 事务（BEGIN IMMEDIATE）：
   CAS 验证 current_version_id == A.id          → 失败抛 MANUSCRIPT_VERSION_CONFLICT
-  versionNumber = A.versionNumber + 1
-  parentVersionId = A.id
+  versionNumber = COALESCE(MAX(version_number),0)+1   （章节内全局创建顺序，同事务）
+  parentVersionId = A.id                        （编辑血缘）
   contentHash = sha256Utf8(content)
   INSERT chapter_versions(B)                    → B 行
   UPDATE chapters SET current_version_id = B.id（同 CAS 谓词，二重保护）
@@ -625,7 +658,7 @@ V1 不提供自动合并。
 - CAS 失败已告知客户端冲突，客户端保留本地文本、刷新后重试即可，不需要后端保留任何中间态；
 - 不变量 5「CAS 失败不得悄悄覆盖」与不变量 9「历史不 hard-delete」共同指向：要么全成、要么全无，版本行只代表成功的保存。
 
-测试要求：并发两写仅一个成功；失败方无任何行残留；成功后 `versionNumber` 连续。
+测试要求：并发两写仅一个成功；失败方无任何行残留；成功方的 `versionNumber` 为该章当前 `MAX+1`，不重用既有编号（§14 必测场景 4）。
 
 ### 11.3 AI task 恢复（§14.3）
 
@@ -637,6 +670,7 @@ settle 语义（MV1-C）：
 4. **如何避免重复版本**：唯一约束（DB 层，非先查后插）+ 单事务原子 + task.resultJson 幂等重放。与 creation_contract_draft 的 proposal 幂等模式同构（该模式用 `uq_cc_proposals_task`）。
 5. **settle CAS 冲突**（生成期间用户已推进 current）：settle 的 `createChapterVersion` CAS 失败 → 事务回滚、不产生版本、task FAILED（错误码映射 `MANUSCRIPT_VERSION_CONFLICT` 的安全文案）。宁可失败重跑，绝不覆盖用户更新内容。
 6. **recovery 接入**：复用 worker 启动序列的 runner-kernel 模式（`recoverPendingChapterTasks`），`RUNNING` task 由 `reconcileTasks` 统一置 `TASK_INTERRUPTED`/`INVOCATION_INTERRUPTED`（现有机制，无需变更）。
+7. **版本号一致性**：settle 使用与用户保存相同的 `createChapterVersion`，版本号 = 章节内 `MAX+1`（同事务，§5 不变量 6）；promote 历史版本后 AI 再保存同样得到 `max+1`，不与既有编号冲突。
 
 ---
 
@@ -646,8 +680,8 @@ settle 语义（MV1-C）：
 
 ### MV1-A — Domain / Contracts / Database / Application
 
-- **Scope**：领域类型与校验（Manuscript/Chapter/ChapterVersion、闭合枚举、branded ID、validator）；概念 schema 的 migration（version 7）；repository 实现（ManuscriptTransactionPort + 各 repo）；application 全部读写用例（§7）；CAS、事务、rebalance 语义；完整单元/集成测试。
-- **Non-goals**：AI task；IPC；Renderer；不宣称产品能力完成。
+- **Scope**：领域类型与校验（Manuscript/Chapter/ChapterVersion、闭合枚举、branded ID、validator）；概念 schema 的 migration（version 7）；repository 实现（ManuscriptTransactionPort + 各 repo）；application 全部读写用例（§7）；CAS、事务、稀疏排序 + 数据级两阶段 rebalance（§6.1、不变量 18）；完整单元/集成测试。
+- **Non-goals**：AI task；IPC；Renderer；manuscript archive/restore（reserved，§13）；不宣称产品能力完成。
 - **Dependencies**：creation-contract C1 foundation（已合并）；grill foundation（已合并）。
 - **Changed modules**：`packages/domain`、`packages/contracts`（ErrorCode/DTO/validator）、`packages/database`（migration v7 + repositories）、`packages/application`（use cases + ports + errors）。
 - **Acceptance tests**：§14 中「后端」全部矩阵项（项目隔离、单稿、章节 create/list/order、版本不可变、CAS 成功/冲突、事务回滚、版本历史、promote 历史版本、archive/restore、跨章/跨 project 引用拒绝、确定性排序、大 Unicode 正文、restart 持久化、migration upgrade）。
@@ -680,37 +714,39 @@ settle 语义（MV1-C）：
 
 ### Decision Summary
 
-| Decision               | Chosen option                                                                           | Alternatives rejected               | Reason                                                               | Future revisit trigger            |
-| ---------------------- | --------------------------------------------------------------------------------------- | ----------------------------------- | -------------------------------------------------------------------- | --------------------------------- |
-| Manuscript cardinality | 每 project 至多一个 active + 多个 archived（partial unique index）                      | 多 active；一稿多本                 | V1 单稿满足产品；archived 可留多本；部分唯一索引是后续放开的最小代价 | 多稿/多卷产品需求                 |
-| Version granularity    | 单章 ChapterVersion                                                                     | 整本快照                            | 避免一次正文修改复制整本；正文只存在于章节版本                       | 整本导出/快照需求                 |
-| Title versioning       | title 属于 ChapterVersion 快照                                                          | title 存 Chapter 行                 | 改标题 = 保存新版本，与正文改动一致的版本语义                        | 标题独立于正文修订的需求          |
-| Current pointer        | `chapters.current_version_id` 列                                                        | 计算 MAX(version)；独立映射表       | promote 历史版本需要显式指针；指针天然属于 Chapter 行                | current 多指针/分支模型           |
-| CAS                    | `UPDATE ... WHERE current_version_id = expected`（首版 `IS NULL`）                      | 无 CAS；版本号 CAS                  | 与既有 expectedVersion 约定一致；指针 CAS 覆盖 promote 与 create     | 多人/多窗口协作                   |
-| Save transaction       | create + promote 同一 `BEGIN IMMEDIATE` 事务                                            | 分两步提交                          | 全成或全无；不产生孤儿版本                                           | review-gate 的 AI 未 promote 版本 |
-| Conflict result        | 整笔 rollback，不产生 C                                                                 | 保留 orphan C 不设 current          | 历史无孤儿；版本号单调；实现自由度最小                               | —                                 |
-| Chapter ordering       | 稀疏整数 rank + midpoint + 显式 rebalance（GAP=1024）                                   | 连续整数 position                   | 中间插入/重排 O(1) 单行写；绕开连续方案的瞬时唯一冲突                | 批量/并发重排需求出现             |
-| Archive/delete         | soft archive（status）+ append-only；无 hard-delete；project 删除文件级                 | 物理删除；ON DELETE CASCADE         | 版本历史永久保留；恢复可逆                                           | 导出/清理需求                     |
-| Content format         | UTF-8 plain text（原始字节，不规范化、不压缩、无 FTS）                                  | Markdown AST；富文本；blob/外部文件 | TEXT 事务一致性 + 字节保真；V1 无富文本/检索需求                     | 富文本、全文搜索                  |
-| Provenance             | 版本行内嵌 sourceType + taskId + invocationId + contractVersionId + parentVersionId     | 独立 provenance 表                  | 一行自带完整来源；无冗余查询                                         | 复杂血缘图查询                    |
-| Contract linkage       | Manuscript 记初始锚点；ChapterVersion 记生成时 contract version；历史不随 Contract 更新 | Contract 更新级联改写版本           | 历史版本不可变；可追溯性在版本行                                     | —                                 |
-| Scene Plan anchor      | chapter + baseChapterVersionId                                                          | 锚定版本；独立计划版本              | 稳定身份 + 内容基线                                                  | 计划跨版本复用需求                |
-| Implementation slicing | MV1-A / MV1-B / MV1-C                                                                   | 单 PR；UI 先行                      | 边界清晰；backend foundation 不算产品能力                            | —                                 |
-| Manuscript title CAS   | `expectedUpdatedAt` 时间戳 CAS                                                          | 单调 version 号                     | 元数据变更罕见；轻量足够                                             | 多窗口并发元数据编辑              |
+| Decision               | Chosen option                                                                                                                | Alternatives rejected                             | Reason                                                                                                 | Future revisit trigger            |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------- |
+| Manuscript cardinality | 每 project 至多一个 active；`archived` 为 reserved（partial unique index 是未来机制）                                        | 多 active；一稿多本                               | V1 单稿满足产品；archive/restore manuscript 不在 V1 用例                                               | 稿件级归档产品需求                |
+| Version granularity    | 单章 ChapterVersion                                                                                                          | 整本快照                                          | 避免一次正文修改复制整本；正文只存在于章节版本                                                         | 整本导出/快照需求                 |
+| Title versioning       | title 属于 ChapterVersion 快照                                                                                               | title 存 Chapter 行                               | 改标题 = 保存新版本，与正文改动一致的版本语义                                                          | 标题独立于正文修订的需求          |
+| Current pointer        | `chapters.current_version_id` 列                                                                                             | 计算 MAX(version)；独立映射表                     | promote 历史版本需要显式指针；指针天然属于 Chapter 行                                                  | current 多指针/分支模型           |
+| CAS                    | `UPDATE ... WHERE current_version_id = expected`（首版 `IS NULL`）                                                           | 无 CAS；版本号 CAS                                | 与既有 expectedVersion 约定一致；指针 CAS 覆盖 promote 与 create                                       | 多人/多窗口协作                   |
+| Save transaction       | create + promote 同一 `BEGIN IMMEDIATE` 事务                                                                                 | 分两步提交                                        | 全成或全无；不产生孤儿版本                                                                             | review-gate 的 AI 未 promote 版本 |
+| Conflict result        | 整笔 rollback，不产生 C                                                                                                      | 保留 orphan C 不设 current                        | 历史无孤儿；版本号单调；实现自由度最小                                                                 | —                                 |
+| Chapter ordering       | 稀疏整数 rank（覆盖所有章节含 archived）：首章 2048、prepend 减半、append +GAP、midpoint、数据级两阶段 rebalance（GAP=1024） | 连续整数 position；运行时 DDL rebalance           | 中间插入/prepend/重排 O(1) 单行写；rebalance 零运行时 DDL（不变量 18）；gap 耗尽才重排                 | 批量/并发重排需求出现             |
+| Archive/delete         | chapter soft archive（status）+ append-only；manuscript archive/restore reserved；project 删除文件级                         | 物理删除；ON DELETE CASCADE                       | 版本历史永久保留；chapter 恢复可逆；V1 无稿件级归档                                                    | 导出/清理需求；稿件级归档需求     |
+| Current pointer FK     | `chapters(project_id, id, current_version_id) → chapter_versions(project_id, chapter_id, id)`                                | `(project_id, manuscript_id, current_version_id)` | 因 `chapters.id = chapter_versions.chapter_id`；错误组合把 manuscript_id 误当 chapter_id，无法强制同章 | —                                 |
+| Version number         | 章节内全局创建顺序 `COALESCE(MAX(version_number),0)+1`（同事务）                                                             | `current.versionNumber + 1`                       | promote 历史版本后保存不与既有编号冲突；parent 单独表示编辑血缘                                        | 无                                |
+| Content format         | UTF-8 plain text（原始字节，不规范化、不压缩、无 FTS）                                                                       | Markdown AST；富文本；blob/外部文件               | TEXT 事务一致性 + 字节保真；V1 无富文本/检索需求                                                       | 富文本、全文搜索                  |
+| Provenance             | 版本行内嵌 sourceType + taskId + invocationId + contractVersionId + parentVersionId                                          | 独立 provenance 表                                | 一行自带完整来源；无冗余查询                                                                           | 复杂血缘图查询                    |
+| Contract linkage       | Manuscript 记初始锚点；ChapterVersion 记生成时 contract version；历史不随 Contract 更新                                      | Contract 更新级联改写版本                         | 历史版本不可变；可追溯性在版本行                                                                       | —                                 |
+| Scene Plan anchor      | chapter + baseChapterVersionId                                                                                               | 锚定版本；独立计划版本                            | 稳定身份 + 内容基线                                                                                    | 计划跨版本复用需求                |
+| Implementation slicing | MV1-A / MV1-B / MV1-C                                                                                                        | 单 PR；UI 先行                                    | 边界清晰；backend foundation 不算产品能力                                                              | —                                 |
+| Manuscript title CAS   | `expectedUpdatedAt` 时间戳 CAS                                                                                               | 单调 version 号                                   | 元数据变更罕见；轻量足够                                                                               | 多窗口并发元数据编辑              |
 
 ### Open Questions
 
 以下问题**不阻塞 MV1-A**，但必须给默认决定 + revisit 触发，不得留给实现 Agent 自由发挥：
 
-| 问题                                                    | 默认决定                                                                        | Revisit trigger                 |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------- |
-| AI 产出是否要「未 promote 待审核版本」（review-gate）？ | MV1-C 默认原子 create+promote，冲突则 task FAILED；review-gate 列为未来产品决策 | 产品要求「AI 输出先审后生效」时 |
-| createChapterVersion 是否需要对相同内容去重？           | 不自动去重；用户显式保存即建版本                                                | 无意义版本增多                  |
-| listChapters/listChapterVersions 是否需要分页？         | V1 不分页，确定性全量                                                           | 单章版本数 > 1000               |
-| `clientRequestId` 幂等键？                              | V1 不做；CAS + UI 锁 + task 唯一索引已覆盖                                      | 多窗口/断网重试场景出现         |
-| 批量导入章节（IMPORT sourceType）？                     | 保留枚举，V1 不实现导入用例                                                     | 导入需求                        |
-| 稿件级 archive（archive 整个 manuscript）？             | 保留 `manuscripts.status='archived'` 语义，V1 不实现用例                        | 归档整稿需求                    |
-| 导出/备份？                                             | 明确非目标                                                                      | 导出需求（roadmap M7）          |
+| 问题                                                    | 默认决定                                                                                                                                                                   | Revisit trigger                 |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| AI 产出是否要「未 promote 待审核版本」（review-gate）？ | MV1-C 默认原子 create+promote，冲突则 task FAILED；review-gate 列为未来产品决策                                                                                            | 产品要求「AI 输出先审后生效」时 |
+| createChapterVersion 是否需要对相同内容去重？           | 不自动去重；用户显式保存即建版本                                                                                                                                           | 无意义版本增多                  |
+| listChapters/listChapterVersions 是否需要分页？         | V1 不分页，确定性全量                                                                                                                                                      | 单章版本数 > 1000               |
+| `clientRequestId` 幂等键？                              | V1 不做；CAS + UI 锁 + task 唯一索引已覆盖                                                                                                                                 | 多窗口/断网重试场景出现         |
+| 批量导入章节（IMPORT sourceType）？                     | 保留枚举，V1 不实现导入用例                                                                                                                                                | 导入需求                        |
+| 稿件级 archive（archive 整个 manuscript）？             | `manuscripts.status='archived'` 为未来 reserved 字段；V1 无 `archiveManuscript`/`restoreManuscript` 用例，正常路径只存在一个 active；不宣称「支持多个 archived」为当前能力 | 归档整稿需求                    |
+| 导出/备份？                                             | 明确非目标                                                                                                                                                                 | 导出需求（roadmap M7）          |
 
 真正阻塞 MV1-A 的未决问题：**零**。
 
@@ -720,30 +756,50 @@ settle 语义（MV1-C）：
 
 测试矩阵（MV1-A/MV1-B/MV1-C 落点见「切片」列）：
 
-| 测试项                              | 覆盖                                                                                   | 切片  |
-| ----------------------------------- | -------------------------------------------------------------------------------------- | ----- |
-| Project isolation                   | 跨 project 读写 manuscript/chapter/version 返回 NOT_FOUND；复合 FK 拒绝跨 project 引用 | MV1-A |
-| One manuscript per project          | 第二个 active manuscript 插入失败；getOrCreate 并发只建一个                            | MV1-A |
-| Chapter create/list/order           | 追加、insert-before-first、insert-middle、append 顺序确定；list 确定性排序             | MV1-A |
-| Version immutability                | 创建后 UPDATE/DELETE 被 trigger 拒绝；hash 与内容一致                                  | MV1-A |
-| CAS success                         | 正常保存版本号连续、指针推进、parent 正确                                              | MV1-A |
-| CAS conflict                        | 并发两写仅一个成功；失败方无行残留；错误码 MANUSCRIPT_VERSION_CONFLICT                 | MV1-A |
-| Transaction rollback                | createChapterVersion 任一步失败整笔回滚（无版本行、无指针变化）                        | MV1-A |
-| Version history                     | listChapterVersions 确定性排序（version_number DESC, id ASC）、不含 content            | MV1-A |
-| Promote historical version          | 设为 current 后 current = 历史版本；再保存血缘 parent = 该历史版本；promote 幂等       | MV1-A |
-| Archive/restore                     | 归档章节不可接收新版本/重排；restore 后恢复；重复 archive no-op                        | MV1-A |
-| Invalid cross-chapter version       | promote 或 current 指向其他章节版本 → 拒绝（复合 FK + 应用校验）                       | MV1-A |
-| Invalid cross-project task/contract | AI provenance 引用其他 project 的 task/invocation/contract → FK 拒绝                   | MV1-A |
-| Deterministic ordering              | 相同数据下 list 输出字节级一致；次要排序键 id 生效                                     | MV1-A |
-| Large Unicode content               | 多字节/astral/组合字符正文 round-trip 保真；hash 确定；长度上限边界                    | MV1-A |
-| Restart persistence                 | 关闭重开后 manuscript/chapter/version 完整                                             | MV1-A |
-| Migration upgrade                   | v6 → v7 幂等迁移；旧项目打开正常；重新打开不重复迁移                                   | MV1-A |
-| Renderer unsaved changes            | dirty 标记、离开确认触发、切换章节提示                                                 | MV1-B |
-| Renderer conflict preservation      | CAS 冲突保留本地文本、刷新 current、用户决定重存/放弃                                  | MV1-B |
-| Accessibility                       | 章节列表/编辑器/历史列表键盘可达；live-region 成功/失败反馈；focus 管理                | MV1-B |
-| Task success                        | AI task settle 创建版本 + 推进 current 原子完成                                        | MV1-C |
-| Task failure/recovery               | settle CAS 冲突 → task FAILED 不改 current；崩溃重放幂等；重复执行不产生重复版本       | MV1-C |
-| Idempotency (task)                  | `uq_chapter_versions_task` 阻止同 task 双版本                                          | MV1-C |
+| 测试项                              | 覆盖                                                                                                                     | 切片  |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ----- |
+| Project isolation                   | 跨 project 读写 manuscript/chapter/version 返回 NOT_FOUND；复合 FK 拒绝跨 project 引用                                   | MV1-A |
+| One manuscript per project          | 第二个 active manuscript 插入失败；getOrCreate 并发只建一个                                                              | MV1-A |
+| Chapter create/list/order           | append/prepend（减半）/insert-middle/重排顺序确定；list 确定性排序；prepend 可持续（约 11 次后 rebalance 仍可继续）      | MV1-A |
+| Version immutability                | 创建后 UPDATE/DELETE 被 trigger 拒绝；hash 与内容一致                                                                    | MV1-A |
+| CAS success                         | 正常保存 versionNumber = `MAX+1`、指针推进、parent 正确                                                                  | MV1-A |
+| CAS conflict                        | 并发两写仅一个成功；失败方无行残留；错误码 MANUSCRIPT_VERSION_CONFLICT                                                   | MV1-A |
+| Transaction rollback                | createChapterVersion 任一步失败整笔回滚（无版本行、无指针变化）                                                          | MV1-A |
+| Version history                     | listChapterVersions 确定性排序（version_number DESC, id ASC）、不含 content                                              | MV1-A |
+| Promote historical version          | 设为 current 后 current = 历史版本；再保存血缘 parent = 该历史版本且 versionNumber = `max+1`；promote 幂等               | MV1-A |
+| Archive/restore                     | 归档章节不可接收新版本/重排；archive/restore 不改 position；重复 archive no-op；restore 后 position 唯一确定             | MV1-A |
+| Invalid cross-chapter version       | current pointer FK 拒绝其他 chapter 版本；promote 跨章 → 拒绝（复合 FK + 应用校验）                                      | MV1-A |
+| Current pointer FK (same chapter)   | current pointer FK 允许指向同章版本（`(project_id, id)` ↔ `(project_id, chapter_id)`）                                   | MV1-A |
+| Rebalance atomicity/no-DDL          | rebalance 失败整笔 rollback；唯一索引全程存在；不执行任何运行时 DROP/CREATE INDEX                                        | MV1-A |
+| Prepend → rebalance → prepend       | 连续 prepend 直到触发 rebalance；rebalance 后仍可继续 prepend                                                            | MV1-A |
+| Manuscript reserved semantics       | `manuscripts.status` 恒为 active；无 archiveManuscript/restoreManuscript 用例；与用例列表/完成标准/Decision Summary 一致 | MV1-A |
+| Invalid cross-project task/contract | AI provenance 引用其他 project 的 task/invocation/contract → FK 拒绝                                                     | MV1-A |
+| Deterministic ordering              | 相同数据下 list 输出字节级一致；次要排序键 id 生效                                                                       | MV1-A |
+| Large Unicode content               | 多字节/astral/组合字符正文 round-trip 保真；hash 确定；长度上限边界                                                      | MV1-A |
+| Restart persistence                 | 关闭重开后 manuscript/chapter/version 完整                                                                               | MV1-A |
+| Migration upgrade                   | v6 → v7 幂等迁移；旧项目打开正常；重新打开不重复迁移                                                                     | MV1-A |
+| Renderer unsaved changes            | dirty 标记、离开确认触发、切换章节提示                                                                                   | MV1-B |
+| Renderer conflict preservation      | CAS 冲突保留本地文本、刷新 current、用户决定重存/放弃                                                                    | MV1-B |
+| Accessibility                       | 章节列表/编辑器/历史列表键盘可达；live-region 成功/失败反馈；focus 管理                                                  | MV1-B |
+| Task success                        | AI task settle 创建版本 + 推进 current 原子完成                                                                          | MV1-C |
+| Task failure/recovery               | settle CAS 冲突 → task FAILED 不改 current；崩溃重放幂等；重复执行不产生重复版本                                         | MV1-C |
+| Idempotency (task)                  | `uq_chapter_versions_task` 阻止同 task 双版本                                                                            | MV1-C |
+
+### 阻断项修复后的必测场景
+
+以下场景必须作为 MV1-A 测试用例显式覆盖（对应 §6.1、§7.2、§5、§13 的冻结语义）：
+
+1. **current pointer FK 允许同章版本**：对章节 C 的版本 v，把 `chapters.current_version_id` 设为 `v.id` 成功（C 的 `(project_id, id)` 匹配 `chapter_versions` 的 `(project_id, chapter_id)`）。
+2. **current pointer FK 拒绝其他 chapter 版本**：把章节 C 的 current 指向章节 D 的版本 → FK 约束违反，整笔拒绝（§5 不变量 3）。
+3. **promote v2 后保存得到 v6**：`v1..v5` → promote v2 为 current → 基于 v2 保存 → 新版本 `versionNumber = 6`、`parentVersionId = v2`、`current_version_id = v6`（§7.2 示例、不变量 6）。
+4. **两个并发保存都从 v2 出发**：仅一个成功（CAS）；另一个抛 `MANUSCRIPT_VERSION_CONFLICT` 且无行残留；成功方编号 = 该章当前 `MAX+1`（§11.2）。
+5. **first chapter 前连续插入**：连续 prepend（2048 → 1024 → 512 → … → 1）全部成功（§6.1）。
+6. **prepend 触发 rebalance 后仍可继续 prepend**：prepend 到 position 1 后再 prepend → rebalance → 首章回 2048 → 继续 prepend 成功（§6.1）。
+7. **archive 章节后 active rebalance 无 position 冲突**：归档章节后触发 rebalance（覆盖全部章节含 archived）→ 无唯一冲突；archived 保留合法 position（§5 不变量 10）。
+8. **restore 的最终 position 确定且唯一**：restore 保留原 position（不重新分配），与既有 position 无冲突（§7.2）。
+9. **rebalance 失败整笔 rollback，唯一索引始终存在**：模拟第二阶段写入失败 → 全量回滚；`uq_chapters_project_manuscript_position` 全程存在，无 DDL（§6.1、不变量 18）。
+10. **运行时零 DDL**：排序 / 重排 / rebalance 代码路径不得包含 `DROP INDEX`/`CREATE INDEX`（静态或测试断言，§5 不变量 18）。
+11. **manuscript archive/restore reserved 语义**：无 `archiveManuscript`/`restoreManuscript` 用例；`manuscripts.status` 恒为 `'active'`；用例列表 / 完成标准 / Decision Summary 一致（§13）。
 
 ---
 
