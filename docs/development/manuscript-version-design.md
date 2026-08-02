@@ -1,10 +1,10 @@
 # Minimal Manuscript / Chapter Version 设计
 
-> 状态：设计文档（architecture/design-only），尚未实现。
+> 状态：设计文档（架构已冻结）。MV1-A（Domain / Contracts / Database / Application）已合并（PR #24，merge `814f1ba4266578e5d21a30e4cf560500e2cb0189`，migration v7）；MV1-B（IPC + Minimal Manuscript Renderer）实现中（PR OPEN，未合并）。
 > 基线：`876580b492eea04fbda71425621160b7da9c3527`（PR #22 merge）
 > 关联：`docs/architecture/creation-contract-design.md`、`docs/architecture/module-boundaries.md`、`docs/development/generation-quality-roadmap.md`
 
-本文档冻结「真实稿件与章节版本管理」的领域语义、数据模型、并发边界和最小产品纵向切片。**这是 architecture/design-only PR**：不实现代码、数据库迁移、IPC、Renderer 或 AI 生成。后续实现按 §12 拆分为 MV1-A / MV1-B / MV1-C 三个 PR。
+本文档冻结「真实稿件与章节版本管理」的领域语义、数据模型、并发边界和最小产品纵向切片。实现按 §12 拆分为 MV1-A / MV1-B / MV1-C 三个 PR；MV1-A 已合并，MV1-B 进行中（本分支记录），MV1-C 未开始。**MV1-B 合并前不得把本能力标为 ✅**（roadmap 维护协议，§8、§12、§18）。
 
 ## 目录
 
