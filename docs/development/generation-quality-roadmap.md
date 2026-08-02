@@ -349,13 +349,15 @@ Evaluation Harness → Scene Planner → Draft Generator
 - 执行 Grill-me；
 - 使用 AI 规划问题；
 - 在 UI 审核并接受问题计划；
+- 从已完成的 Grill 会话请求 AI Creation Contract 草案；
+- 在 UI 结构化审核并显式接受或拒绝 Creation Contract proposal；
+- 查看当前已接受的 Creation Contract version；
 - 后端管理 Creation Contract proposal / version；
 - 接受、拒绝、用户更新、Lock、Unlock；
 - 查看任务和模型调用状态。
 
 ### 现在还不能完整做
 
-- 从 UI 请求并审核 AI Creation Contract；
 - 维护真实稿件；
 - 生成大纲；
 - 生成章节和正文；
@@ -373,17 +375,17 @@ Evaluation Harness → Scene Planner → Draft Generator
 
 ## 七、当前执行状态
 
-| 字段                       | 值                                                                                                       |
-| -------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Last verified date         | 2026-08-02                                                                                               |
-| Verified main SHA          | `1e9cb851e2635d504b62e7691e6a67e73834e7d8`（PR #20 merge；PR #19 docs rebaseline 基线 `8c92d16` 已并入） |
-| Active implementation      | GQ2 Real Generation Experiment Runner（PR #21，未合并）                                                  |
-| Active PR                  | #21（feat/gq2-real-generation-runner，ready for review，未合并）                                         |
-| Last merged capability     | M1-C3 Minimal Contract Renderer（PR #20，merge `1e9cb85`，已进入 main；Accept Refresh 修复已包含）       |
-| Next product capability    | Minimal Manuscript / Chapter Version（稿件版本管理基础，§五 顺序 3）                                     |
-| Next quality capability    | GQ2 后续人工盲评（writing-evaluation validate --type ratings → aggregate）；GQ2 合并后再更新状态         |
-| Current largest risk       | 项目继续过度投资基础设施，而未建立真实生成质量实验闭环                                                   |
-| Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成（尚未验证）                                  |
+| 字段                       | 值                                                                                                         |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Last verified date         | 2026-08-02                                                                                                 |
+| Verified main SHA          | `1e9cb851e2635d504b62e7691e6a67e73834e7d8`（PR #20 merge；PR #19 docs rebaseline 基线 `8c92d16` 已并入）   |
+| Active implementation      | GQ2 Real Generation Experiment Runner（PR #21，未合并）                                                    |
+| Active PR                  | #21（feat/gq2-real-generation-runner，ready for review，未合并）                                           |
+| Last merged capability     | M1-C3 Minimal Contract Renderer（PR #20，merge `1e9cb85`，已进入 main；Accept Refresh 修复已包含）         |
+| Next product capability    | Minimal Manuscript / Chapter Version（稿件版本管理基础，§五 顺序 3）                                       |
+| Next quality capability    | GQ2 后续人工盲评（writing-evaluation validate --type ratings → aggregate）；GQ2 合并后再更新状态           |
+| Current largest risk       | 真实生成→自动评测→盲评 artifact 工程闭环已经建立，但尚未完成独立人工盲评，当前自动指标不能证明文章质量提升 |
+| Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成（尚未验证）                                    |
 
 ---
 
