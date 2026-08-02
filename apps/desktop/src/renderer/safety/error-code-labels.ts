@@ -34,6 +34,17 @@ export const ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
   GRILL_PLAN_PROPOSAL_NOT_FOUND: '问题规划提案不存在',
   GRILL_PLAN_PROPOSAL_NOT_ACCEPTABLE: '问题规划提案无法接受',
 
+  // ── 创作契约相关 ─────────────────────────────────────────────────
+  CONTRACT_VERSION_CONFLICT: '创作契约已在其他操作中更新，数据已自动刷新',
+  CONTRACT_PROPOSAL_STALE: '创作契约提案已过期，请重新生成',
+  CONTRACT_PROPOSAL_NOT_FOUND: '创作契约提案不存在',
+  CONTRACT_PROPOSAL_NOT_ACCEPTABLE: '创作契约提案无法操作',
+  CONTRACT_LOCK_CONFLICT: '操作与锁定字段冲突',
+  CONTRACT_MODEL_LOCK_VIOLATION: '模型输出修改了受保护字段',
+  CONTRACT_SCHEMA_UNSUPPORTED: '创作契约 schema 版本不支持',
+  CONTRACT_VALIDATION_FAILED: '创作契约输入验证失败',
+  CONTRACT_DRAFT_ALREADY_RUNNING: '创作契约任务已在进行中',
+
   // ── 通用 ─────────────────────────────────────────────────────────
   NETWORK_UNAVAILABLE: '网络不可用',
   WORKER_UNAVAILABLE: '数据服务不可用',

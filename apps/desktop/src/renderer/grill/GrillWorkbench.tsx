@@ -13,6 +13,8 @@ import { useGrillSession } from './useGrillSession';
 import { useGrillQuestions } from './useGrillQuestions';
 import { useGrillProposals } from './useGrillProposals';
 import { useGrillQuestionPlan, type GrillPlanAcceptContext } from './useGrillQuestionPlan';
+import { useContractDraft } from '../contract/useContractDraft';
+import { ContractDraftPanel } from '../contract/ContractDraftPanel';
 import { GrillSessionList } from './GrillSessionList';
 import { GrillSessionPanel } from './GrillSessionPanel';
 import { GrillQuestionDetail } from './GrillQuestionDetail';
@@ -81,6 +83,13 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
       await proposalsRefreshRef.current();
       return contextMatches();
     },
+  );
+
+  // Creation Contract — request draft, task polling, proposal review, accept/reject
+  const contractHook = useContractDraft(
+    projectId,
+    selectedSessionId,
+    sessionHook.session?.version ?? 0,
   );
 
   // 使用 ref 保持 getCurrentAnswers 的稳定引用，避免 loadAnswers 因 questionsHook 整体变化而重建
@@ -341,6 +350,29 @@ export function GrillWorkbench({ projectId }: GrillWorkbenchProps) {
                 isLoading={isAnyLoading}
                 error={questionPlanHook.error}
                 onClearError={questionPlanHook.clearError}
+              />
+              <ContractDraftPanel
+                projectId={projectId}
+                sessionId={selectedSessionId}
+                hasSession={true}
+                sessionStatus={sessionHook.session.status}
+                task={contractHook.task}
+                isPolling={contractHook.isPolling}
+                onRequestDraft={contractHook.requestDraft}
+                isRequesting={contractHook.isRequesting}
+                selectedProposal={contractHook.selectedProposal}
+                isLoadingProposals={contractHook.isLoadingProposals}
+                currentContract={contractHook.currentContract}
+                acceptedVersion={contractHook.acceptedVersion}
+                onAcceptProposal={contractHook.acceptProposal}
+                onRejectProposal={contractHook.rejectProposal}
+                isAccepting={contractHook.isAccepting}
+                isRejecting={contractHook.isRejecting}
+                isLoading={isAnyLoading}
+                error={contractHook.error}
+                conflictNotice={contractHook.conflictNotice}
+                onClearError={contractHook.clearError}
+                onClearConflictNotice={contractHook.clearConflictNotice}
               />
             </>
           ) : (

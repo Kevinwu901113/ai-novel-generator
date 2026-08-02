@@ -34,6 +34,7 @@ export function isTaskActive(status: string): boolean {
 const KNOWN_TASK_TYPE_LABELS: Record<string, string> = {
   MODEL_INVOCATION_TEST: '模型调用测试',
   GRILL_QUESTION_PLAN: 'Grill 问题规划',
+  CREATION_CONTRACT_DRAFT: '创作契约草案',
 };
 
 /**
