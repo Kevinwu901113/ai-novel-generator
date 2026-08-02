@@ -171,6 +171,18 @@ rename 到 `<dir>.gq2-bak-<run-id>/`；staging rename 为 final；成功后删�
   - `two-voice-dialogue` → SUCCEEDED（input 587 / output 779 tokens，latency 8155ms）；
   - 不生成 candidates / evaluation / blind；发布 private partial 诊断快照（manifest + case-results + logs）。
   - **观察**：MiMo V2.5 Pro 的 extended-thinking 在 `maxTokens=1024` 下可能耗尽输出预算，返回仅 thinking、无 text block 的响应 → gateway 判 `PROVIDER_RESPONSE_INVALID`。这是真实模型输出变异性，Runner 按设计如实记为失败（未伪装成功）。后续实验可在授权下评估提高 `--max-tokens` 或调整 provider thinking 参数。
-- **总付费调用**：4 次（1 smoke + 3 full），无自动重试。
-- **Q1**：**未达成**——full suite 未全成功，尚未以「全部 case 真实成功」演示闭环。**无质量提升结论。**
-- **Keychain 状态**：2026-08-02 晚些时候用户已在固定 service/account 配置密钥；此前 `LIVE_BLOCKED_KEY_NOT_CONFIGURED` 已解除（`hasSecret`=true）。
+- **Budget fix（2026-08-02）**：默认 `--max-tokens` 从 1024 上调到 **8192**（协议兼容修复，commit `926704a`）。
+  给 MiMo extended-thinking + 正文留出输出预算；不改 provider / model / 端点；不把 thinking 当正文；
+  无 text block 仍 fail closed；不引入自动重试；用户仍可用现有合法 `--max-tokens` 显式覆盖。
+- **Live v2 full suite（受控，3 次真实调用，预算 8192）**：**已执行，`COMPLETE`（exit 0）**。
+  `WRITING_EXPERIMENT_LIVE=1 run`（全 3 case，`--max-tokens 8192`，`--seed gq2-mimo-baseline-v2`）：
+  - 3/3 case **SUCCEEDED**（finishReason 均 `end_turn`），`FULL_SELECTION`，`satisfiesQ1=true`；
+  - 产出 output suite `gq1-baseline-v1--baseline-one-shot-v1--509ce56be488`（hash `8413f650…`）+
+    `evaluation.report.json/.md` + `blind.packet.json` + `blind.mapping.private.json`；
+  - aggregate：input 66 / output 3424 / cacheRead 1728 tokens，总 latency 24909ms（min 8141 / med 8148 / max 8620）；
+  - **Q1 engineering loop demonstrated with real MiMo candidates. No human quality conclusion exists.**
+- **Q1 累计**：v1（maxTokens=1024）→ `PARTIAL_FAILURE`（2/3 `PROVIDER_RESPONSE_INVALID`，未达成）；
+  v2（maxTokens=8192）→ `COMPLETE`，`satisfiesQ1=true`。**Q1=true 只表示真实生成→评测→盲评 artifact 的工程闭环完成，
+  不表示文章质量提高，无任何人工质量结论。**
+- **总付费调用**：7 次（v1 smoke 1 + v1 full 3 + v2 full 3），无自动重试。
+- **Keychain 状态**：2026-08-02 用户已在固定 service/account 配置密钥；此前 `LIVE_BLOCKED_KEY_NOT_CONFIGURED` 已解除（`hasSecret`=true）。

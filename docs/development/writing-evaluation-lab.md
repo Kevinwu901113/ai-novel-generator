@@ -296,9 +296,15 @@ interface WritingCandidateGeneratorPort {
 > `candidates` 只含本次真实生成的候选。GQ2 未合并时，真实 candidate 实验是否完成见
 > `docs/development/writing-experiment-runner.md` 当前状态。
 >
-> 受控真实实验（2026-08-02）：live smoke（`--max-cases 1`）成功产生 1 个真实 candidate；
-> 全量 `run`（3 case）`PARTIAL_FAILURE`（2/3 `PROVIDER_RESPONSE_INVALID`，finishReason `max_tokens`）。
-> 尚无完整 suite 的 evaluation / blind 产物；Q1 未达成；无质量提升结论。
+> 受控真实实验（2026-08-02）：
+>
+> - **v1（maxTokens=1024）**：live smoke（`--max-cases 1`）成功产生 1 个真实 candidate；
+>   全量 `run`（3 case）`PARTIAL_FAILURE`（2/3 `PROVIDER_RESPONSE_INVALID`，finishReason `max_tokens`）——
+>   无完整 suite 的 evaluation / blind，Q1 未达成。
+> - **v2（maxTokens=8192，预算修复 commit `926704a`）**：全量 `run`（3 case）`COMPLETE`，`satisfiesQ1=true`，
+>   产出完整 output suite + evaluation.report + blind.packet + blind.mapping。
+> - **Q1 engineering loop demonstrated with real MiMo candidates. No human quality conclusion exists.**
+> - GQ2 未合并时，真实 candidate 实验是否完成见 `docs/development/writing-experiment-runner.md` 当前状态。
 
 ## 十八、当前明确不能评估的内容
 
