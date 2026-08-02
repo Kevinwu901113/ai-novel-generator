@@ -71,6 +71,7 @@ import {
   getWorkerStatus,
   retryWorker,
 } from './worker-client.js';
+import { registerManuscriptIpcHandlers } from './manuscript-ipc.js';
 
 mark('process-start');
 
@@ -777,6 +778,13 @@ ipcMain.handle(
     })) as ContractVersionPublicData;
   },
 );
+
+// ── 稿件 IPC 处理器 ────────────────────────────────────────────────
+// Main 只做 validator + forwardToWorker + 输出 validator，不直接打开 SQLite。
+registerManuscriptIpcHandlers({
+  ipc: ipcMain,
+  forwardToWorker: (request) => forwardToWorker(request),
+});
 
 // ── Smoke test ────────────────────────────────────────────────────
 

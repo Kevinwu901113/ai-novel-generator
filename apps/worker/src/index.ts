@@ -106,6 +106,7 @@ import {
   type GrillPlanScheduleResult,
 } from './grill-plan-runner.js';
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
+import { dispatchManuscriptCommand, type ManuscriptHandlerContext } from './manuscript-handlers.js';
 import {
   scheduleContractDraftRun,
   settleContractDraftRunnerFailure,
@@ -1490,6 +1491,31 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
             runContractDraft(projectId, taskId),
         };
         data = dispatchContractCommand(request.command, request.payload, contractCtx);
+        break;
+      }
+      case 'manuscript.getOrCreateManuscript':
+      case 'manuscript.getManuscript':
+      case 'manuscript.listChapters':
+      case 'manuscript.getChapter':
+      case 'manuscript.getCurrentChapterVersion':
+      case 'manuscript.listChapterVersions':
+      case 'manuscript.getChapterVersion':
+      case 'manuscript.createChapter':
+      case 'manuscript.createChapterVersion':
+      case 'manuscript.promoteChapterVersion':
+      case 'manuscript.updateChapterOrder':
+      case 'manuscript.archiveChapter':
+      case 'manuscript.restoreChapter':
+      case 'manuscript.updateManuscriptTitle': {
+        if (!appDb) {
+          throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
+        }
+        const manuscriptCtx: ManuscriptHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchManuscriptCommand(request.command, request.payload, manuscriptCtx);
         break;
       }
       default:

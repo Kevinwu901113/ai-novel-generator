@@ -50,6 +50,20 @@ const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  MANUSCRIPT_GET_OR_CREATE: 'ipc:manuscript-get-or-create',
+  MANUSCRIPT_GET: 'ipc:manuscript-get',
+  MANUSCRIPT_LIST_CHAPTERS: 'ipc:manuscript-list-chapters',
+  MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
+  MANUSCRIPT_GET_CURRENT_CHAPTER_VERSION: 'ipc:manuscript-get-current-chapter-version',
+  MANUSCRIPT_LIST_CHAPTER_VERSIONS: 'ipc:manuscript-list-chapter-versions',
+  MANUSCRIPT_GET_CHAPTER_VERSION: 'ipc:manuscript-get-chapter-version',
+  MANUSCRIPT_CREATE_CHAPTER: 'ipc:manuscript-create-chapter',
+  MANUSCRIPT_CREATE_CHAPTER_VERSION: 'ipc:manuscript-create-chapter-version',
+  MANUSCRIPT_PROMOTE_CHAPTER_VERSION: 'ipc:manuscript-promote-chapter-version',
+  MANUSCRIPT_UPDATE_CHAPTER_ORDER: 'ipc:manuscript-update-chapter-order',
+  MANUSCRIPT_ARCHIVE_CHAPTER: 'ipc:manuscript-archive-chapter',
+  MANUSCRIPT_RESTORE_CHAPTER: 'ipc:manuscript-restore-chapter',
+  MANUSCRIPT_UPDATE_TITLE: 'ipc:manuscript-update-title',
 } as const;
 
 /**
@@ -104,6 +118,25 @@ import type {
   ContractVersionPublicData,
   ContractVersionSummary,
   ProposalPublicData,
+  GetOrCreateManuscriptInput,
+  GetManuscriptInput,
+  ListChaptersInput,
+  GetChapterInput,
+  GetCurrentChapterVersionInput,
+  ListChapterVersionsInput,
+  GetChapterVersionInput,
+  CreateChapterInput,
+  CreateChapterVersionInput,
+  PromoteChapterVersionInput,
+  UpdateChapterOrderInput,
+  ArchiveChapterInput,
+  RestoreChapterInput,
+  UpdateManuscriptTitleInput,
+  ManuscriptPublicData,
+  ChapterSummary,
+  ChapterPublicData,
+  ChapterVersionSummary,
+  ChapterVersionPublicData,
 } from '@ai-novel/contracts';
 
 /**
@@ -333,6 +366,74 @@ const desktopAPI: DesktopAPI = {
 
     async unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData> {
       return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_UNLOCK_FIELD, input);
+    },
+  },
+
+  manuscript: {
+    async getOrCreateManuscript(input: GetOrCreateManuscriptInput): Promise<ManuscriptPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_OR_CREATE, input);
+    },
+
+    async getManuscript(input: GetManuscriptInput): Promise<ManuscriptPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET, input);
+    },
+
+    async listChapters(input: ListChaptersInput): Promise<ReadonlyArray<ChapterSummary>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_LIST_CHAPTERS, input);
+    },
+
+    async getChapter(input: GetChapterInput): Promise<ChapterPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_CHAPTER, input);
+    },
+
+    async getCurrentChapterVersion(
+      input: GetCurrentChapterVersionInput,
+    ): Promise<ChapterVersionPublicData | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_CURRENT_CHAPTER_VERSION, input);
+    },
+
+    async listChapterVersions(
+      input: ListChapterVersionsInput,
+    ): Promise<ReadonlyArray<ChapterVersionSummary>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_LIST_CHAPTER_VERSIONS, input);
+    },
+
+    async getChapterVersion(input: GetChapterVersionInput): Promise<ChapterVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_CHAPTER_VERSION, input);
+    },
+
+    async createChapter(input: CreateChapterInput): Promise<ChapterPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_CREATE_CHAPTER, input);
+    },
+
+    async createChapterVersion(
+      input: CreateChapterVersionInput,
+    ): Promise<ChapterVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_CREATE_CHAPTER_VERSION, input);
+    },
+
+    async promoteChapterVersion(
+      input: PromoteChapterVersionInput,
+    ): Promise<ChapterVersionPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_PROMOTE_CHAPTER_VERSION, input);
+    },
+
+    async updateChapterOrder(
+      input: UpdateChapterOrderInput,
+    ): Promise<ReadonlyArray<ChapterSummary>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_UPDATE_CHAPTER_ORDER, input);
+    },
+
+    async archiveChapter(input: ArchiveChapterInput): Promise<ChapterPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_ARCHIVE_CHAPTER, input);
+    },
+
+    async restoreChapter(input: RestoreChapterInput): Promise<ChapterPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_RESTORE_CHAPTER, input);
+    },
+
+    async updateManuscriptTitle(input: UpdateManuscriptTitleInput): Promise<ManuscriptPublicData> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_UPDATE_TITLE, input);
     },
   },
 };

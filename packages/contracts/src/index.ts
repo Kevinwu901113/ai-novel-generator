@@ -255,6 +255,20 @@ export const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  MANUSCRIPT_GET_OR_CREATE: 'ipc:manuscript-get-or-create',
+  MANUSCRIPT_GET: 'ipc:manuscript-get',
+  MANUSCRIPT_LIST_CHAPTERS: 'ipc:manuscript-list-chapters',
+  MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
+  MANUSCRIPT_GET_CURRENT_CHAPTER_VERSION: 'ipc:manuscript-get-current-chapter-version',
+  MANUSCRIPT_LIST_CHAPTER_VERSIONS: 'ipc:manuscript-list-chapter-versions',
+  MANUSCRIPT_GET_CHAPTER_VERSION: 'ipc:manuscript-get-chapter-version',
+  MANUSCRIPT_CREATE_CHAPTER: 'ipc:manuscript-create-chapter',
+  MANUSCRIPT_CREATE_CHAPTER_VERSION: 'ipc:manuscript-create-chapter-version',
+  MANUSCRIPT_PROMOTE_CHAPTER_VERSION: 'ipc:manuscript-promote-chapter-version',
+  MANUSCRIPT_UPDATE_CHAPTER_ORDER: 'ipc:manuscript-update-chapter-order',
+  MANUSCRIPT_ARCHIVE_CHAPTER: 'ipc:manuscript-archive-chapter',
+  MANUSCRIPT_RESTORE_CHAPTER: 'ipc:manuscript-restore-chapter',
+  MANUSCRIPT_UPDATE_TITLE: 'ipc:manuscript-update-title',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -354,6 +368,28 @@ export interface ContractAPI {
   unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData>;
 }
 
+/** 稿件 API —— 通过 contextBridge 暴露给 Renderer（Minimal Manuscript Renderer，MV1-B） */
+export interface ManuscriptAPI {
+  getOrCreateManuscript(input: GetOrCreateManuscriptInput): Promise<ManuscriptPublicData>;
+  getManuscript(input: GetManuscriptInput): Promise<ManuscriptPublicData>;
+  listChapters(input: ListChaptersInput): Promise<ReadonlyArray<ChapterSummary>>;
+  getChapter(input: GetChapterInput): Promise<ChapterPublicData>;
+  getCurrentChapterVersion(
+    input: GetCurrentChapterVersionInput,
+  ): Promise<ChapterVersionPublicData | null>;
+  listChapterVersions(
+    input: ListChapterVersionsInput,
+  ): Promise<ReadonlyArray<ChapterVersionSummary>>;
+  getChapterVersion(input: GetChapterVersionInput): Promise<ChapterVersionPublicData>;
+  createChapter(input: CreateChapterInput): Promise<ChapterPublicData>;
+  createChapterVersion(input: CreateChapterVersionInput): Promise<ChapterVersionPublicData>;
+  promoteChapterVersion(input: PromoteChapterVersionInput): Promise<ChapterVersionPublicData>;
+  updateChapterOrder(input: UpdateChapterOrderInput): Promise<ReadonlyArray<ChapterSummary>>;
+  archiveChapter(input: ArchiveChapterInput): Promise<ChapterPublicData>;
+  restoreChapter(input: RestoreChapterInput): Promise<ChapterPublicData>;
+  updateManuscriptTitle(input: UpdateManuscriptTitleInput): Promise<ManuscriptPublicData>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -364,6 +400,7 @@ export interface DesktopAPI {
   tasks: TasksAPI;
   grill: GrillAPI;
   contract: ContractAPI;
+  manuscript: ManuscriptAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
