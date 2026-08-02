@@ -56,8 +56,10 @@ temp/
 .writing-evaluation-results/
 writing-evaluation-results/
 
-# Writing experiment artifacts (real model candidates stay local)
-artifacts/writing-experiments/
+# Writing experiment artifacts (real model candidates stay local).
+# The runner CLI runs via `pnpm --filter` (cwd = package dir), so `--output artifacts/...`
+# lands under <package>/artifacts/...; match at any depth to cover both locations.
+**/artifacts/writing-experiments/
 
 # Claude Code local settings
 .claude/settings.local.json

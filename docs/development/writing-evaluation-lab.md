@@ -295,6 +295,10 @@ interface WritingCandidateGeneratorPort {
 > 走 source/output suite 语义：source 的占位 candidate / expectedRelations 不混入 generated output suite；
 > `candidates` 只含本次真实生成的候选。GQ2 未合并时，真实 candidate 实验是否完成见
 > `docs/development/writing-experiment-runner.md` 当前状态。
+>
+> 受控真实实验（2026-08-02）：live smoke（`--max-cases 1`）成功产生 1 个真实 candidate；
+> 全量 `run`（3 case）`PARTIAL_FAILURE`（2/3 `PROVIDER_RESPONSE_INVALID`，finishReason `max_tokens`）。
+> 尚无完整 suite 的 evaluation / blind 产物；Q1 未达成；无质量提升结论。
 
 ## 十八、当前明确不能评估的内容
 

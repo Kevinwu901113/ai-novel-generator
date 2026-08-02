@@ -59,7 +59,7 @@ pnpm writing-experiment run \
 | keychainAccount | `api-key`                                            |
 
 值镜像 product `FIXED_PROVIDER_PROFILE`。未知 provider ID 在**任何 IO / 网络 / 生成之前**前置拒绝。
-禁止 `--api-key / --base-url / --model / --keychain-service / --keychain-account / --provider-file`——
+禁止 `--api-key / --base-url / --model / --keychain-service / --keychain-account / --provider-file / --provider`——
 不得让外部文件或 CLI 参数控制 secret selector 或网络端点。
 
 ## 四、Source / Output suite 语义
@@ -154,14 +154,18 @@ rename 到 `<dir>.gq2-bak-<run-id>/`；staging rename 为 final；成功后删�
 ## 十一、当前状态（2026-08-02）
 
 - **代码 + fake E2E**：完成，`pnpm check` 全绿（离线门禁通过）。
-- **Live smoke / full suite**：**未执行**。macOS Keychain 未配置 provider 密钥
-  （service `com.ai-novel-generator.provider.mimo-token-plan-cn` / account `api-key`），
-  状态 `LIVE_BLOCKED_KEY_NOT_CONFIGURED`。按协议不创建替代 secret、不要求 shell 传 key。
-- **Q1**：**未达成**——尚未以真实 MiMo candidate 演示闭环。无质量提升结论。
-- **恢复方式**：在 Keychain 配置好该 service/account 的密钥后，依次执行：
-  ```bash
-  WRITING_EXPERIMENT_LIVE=1 pnpm writing-experiment generate --suite /tmp/gq2-source-suite.json \
-    --output artifacts/writing-experiments/mimo-live-smoke-v1 --max-cases 1
-  WRITING_EXPERIMENT_LIVE=1 pnpm writing-experiment run --suite /tmp/gq2-source-suite.json \
-    --output artifacts/writing-experiments/mimo-gq2-baseline-v1 --seed gq2-mimo-baseline-v1
-  ```
+- **Live smoke（受控，1 次真实调用）**：**已执行并成功**。
+  `WRITING_EXPERIMENT_LIVE=1 generate --max-cases 1`（`mimo-token-plan-cn` / `mimo-v2.5-pro`，temp 0.7 / maxTokens 1024）：
+  - 1 次 provider invoke，`PARTIAL_SELECTION`，`satisfiesQ1=false`，无 output suite / evaluation / blind；
+  - case `restrained-reunion` SUCCEEDED（finishReason `end_turn`，input 645 / output 653 tokens，latency 8542ms）；
+  - 只产生 private case-results + manifest + logs（gitignored 目录）。
+- **Live full suite（受控，3 次真实调用）**：**已执行，`PARTIAL_FAILURE`（exit 2）**。
+  `WRITING_EXPERIMENT_LIVE=1 run`（全 3 case，`--seed gq2-mimo-baseline-v1`）：
+  - 3 次 provider invoke（每 case 恰 1 次，无重试），`FULL_SELECTION`，`satisfiesQ1=false`；
+  - `restrained-reunion` / `suspense-corridor` → **FAILED `PROVIDER_RESPONSE_INVALID`**（finishReason `max_tokens`，usage null）；
+  - `two-voice-dialogue` → SUCCEEDED（input 587 / output 779 tokens，latency 8155ms）；
+  - 不生成 candidates / evaluation / blind；发布 private partial 诊断快照（manifest + case-results + logs）。
+  - **观察**：MiMo V2.5 Pro 的 extended-thinking 在 `maxTokens=1024` 下可能耗尽输出预算，返回仅 thinking、无 text block 的响应 → gateway 判 `PROVIDER_RESPONSE_INVALID`。这是真实模型输出变异性，Runner 按设计如实记为失败（未伪装成功）。后续实验可在授权下评估提高 `--max-tokens` 或调整 provider thinking 参数。
+- **总付费调用**：4 次（1 smoke + 3 full），无自动重试。
+- **Q1**：**未达成**——full suite 未全成功，尚未以「全部 case 真实成功」演示闭环。**无质量提升结论。**
+- **Keychain 状态**：2026-08-02 晚些时候用户已在固定 service/account 配置密钥；此前 `LIVE_BLOCKED_KEY_NOT_CONFIGURED` 已解除（`hasSecret`=true）。
