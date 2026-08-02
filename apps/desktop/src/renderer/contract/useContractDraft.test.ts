@@ -130,6 +130,12 @@ const mockVersionV3: ContractVersionPublicData = {
   version: 3,
 };
 
+const mockVersionV4: ContractVersionPublicData = {
+  ...mockVersion,
+  id: 'version-000004',
+  version: 4,
+};
+
 // ── Mock DesktopAPI 工厂 ──────────────────────────────────────────
 
 function createMockAPI(
@@ -600,6 +606,176 @@ describe('useContractDraft', () => {
     expect(api.contract.acceptProposal).toHaveBeenCalledWith(
       expect.objectContaining({ expectedContractVersion: null }),
     );
+  });
+
+  it('初始 v3，Accept 前刷新返回 v4：payload 使用刷新后的 v4', async () => {
+    const api = setupDesktop(
+      createMockAPI({
+        getCurrent: vi
+          .fn()
+          .mockResolvedValueOnce(mockVersionV3)
+          .mockResolvedValueOnce(mockVersionV4),
+        listProposals: vi.fn().mockResolvedValue([mockProposal]),
+      }),
+    );
+    const { result } = renderHook(() => useContractDraft('proj-00000001', 'sess-00000001', 2));
+
+    await flushAsync();
+
+    let ok = false;
+    await act(async () => {
+      ok = await result.current.acceptProposal('prop-00000001');
+    });
+
+    expect(ok).toBe(true);
+    // 使用本次刷新返回的 v4，而不是 currentContractRef 中仍为 v3 的旧值
+    expect(api.contract.acceptProposal).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedContractVersion: 4 }),
+    );
+  });
+
+  it('刷新失败（getCurrent reject）：不调用 Accept', async () => {
+    const api = setupDesktop(
+      createMockAPI({
+        getCurrent: vi
+          .fn()
+          .mockResolvedValueOnce(mockVersionV3)
+          .mockRejectedValueOnce(
+            Object.assign(new Error('refresh failed at /Users/me/app'), { code: 'IPC_ERROR' }),
+          ),
+        listProposals: vi.fn().mockResolvedValue([mockProposal]),
+      }),
+    );
+    const { result } = renderHook(() => useContractDraft('proj-00000001', 'sess-00000001', 2));
+
+    await flushAsync();
+
+    let ok = true;
+    await act(async () => {
+      ok = await result.current.acceptProposal('prop-00000001');
+    });
+
+    expect(ok).toBe(false);
+    expect(api.contract.acceptProposal).not.toHaveBeenCalled();
+    // 刷新错误被安全上报（fallback，不含原始消息/路径）
+    expect(result.current.error).toBe('操作失败，请稍后重试');
+  });
+
+  it('刷新期间切换 project：不调用 Accept', async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const refreshPromise = new Promise((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const api = setupDesktop(
+      createMockAPI({
+        getCurrent: vi
+          .fn()
+          .mockResolvedValueOnce(mockVersionV3)
+          .mockImplementationOnce(() => refreshPromise)
+          .mockResolvedValue(mockVersionV4),
+        listProposals: vi.fn().mockResolvedValue([mockProposal]),
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ projectId }: { projectId: string | null }) =>
+        useContractDraft(projectId, 'sess-00000001', 2),
+      { initialProps: { projectId: 'proj-00000001' } },
+    );
+
+    await flushAsync();
+
+    act(() => {
+      void result.current.acceptProposal('prop-00000001');
+    });
+
+    // 刷新在途期间切换到另一 project → generation bump → 刷新结果 stale
+    rerender({ projectId: 'proj-00000002' });
+
+    await act(async () => {
+      resolveRefresh(mockVersionV4);
+    });
+
+    expect(api.contract.acceptProposal).not.toHaveBeenCalled();
+  });
+
+  it('刷新期间切换 session：不调用 Accept', async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const refreshPromise = new Promise((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const api = setupDesktop(
+      createMockAPI({
+        getCurrent: vi
+          .fn()
+          .mockResolvedValueOnce(mockVersionV3)
+          .mockImplementationOnce(() => refreshPromise)
+          .mockResolvedValue(mockVersionV4),
+        listProposals: vi.fn().mockResolvedValue([mockProposal]),
+      }),
+    );
+    const { result, rerender } = renderHook(
+      ({ sessionId }: { sessionId: string | null }) =>
+        useContractDraft('proj-00000001', sessionId, 2),
+      { initialProps: { sessionId: 'sess-00000001' } },
+    );
+
+    await flushAsync();
+
+    act(() => {
+      void result.current.acceptProposal('prop-00000001');
+    });
+
+    // 刷新在途期间切换到另一 session → generation bump → 刷新结果 stale
+    rerender({ sessionId: 'sess-00000002' });
+
+    await act(async () => {
+      resolveRefresh(mockVersionV4);
+    });
+
+    expect(api.contract.acceptProposal).not.toHaveBeenCalled();
+  });
+
+  it('刷新期间 proposal 被替换：不调用 Accept', async () => {
+    let resolveRefresh!: (value: unknown) => void;
+    const refreshPromise = new Promise((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const supersededProposal: ProposalPublicData = {
+      ...mockProposal,
+      id: 'prop-SUPERSEDED',
+      sectionsHash: 'c'.repeat(64),
+    };
+    const api = setupDesktop(
+      createMockAPI({
+        getCurrent: vi
+          .fn()
+          .mockResolvedValueOnce(mockVersionV3)
+          .mockImplementationOnce(() => refreshPromise)
+          .mockResolvedValue(mockVersionV4),
+        listProposals: vi
+          .fn()
+          .mockResolvedValueOnce([mockProposal])
+          .mockResolvedValue([supersededProposal]),
+      }),
+    );
+    const { result } = renderHook(() => useContractDraft('proj-00000001', 'sess-00000001', 2));
+
+    await flushAsync();
+
+    act(() => {
+      void result.current.acceptProposal('prop-00000001');
+    });
+
+    // 刷新在途期间 proposals 被重载（旧提案被替换）→ 本次 accept 的 context 失效
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    await act(async () => {
+      resolveRefresh(mockVersionV4);
+    });
+
+    expect(api.contract.acceptProposal).not.toHaveBeenCalled();
   });
 
   it('接受成功：acceptedVersion 使用返回的当前版本（事实来源）', async () => {

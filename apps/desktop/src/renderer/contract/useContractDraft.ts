@@ -70,6 +70,20 @@ interface MutationOperation {
   readonly sessionId: string;
 }
 
+/**
+ * refreshCurrent 的返回：本次请求实际取得并通过 generation/sequence 校验的结果。
+ * applied=true 时 current 即本次刷新返回的权威当前版本（可能是 null）；
+ * applied=false 表示刷新失败 / context 已切换 / 结果已被更新的请求取代。
+ */
+type RefreshCurrentResult =
+  | {
+      readonly applied: true;
+      readonly current: ContractVersionPublicData | null;
+    }
+  | {
+      readonly applied: false;
+    };
+
 export interface UseContractDraftResult {
   readonly task: TaskPublicData | null;
   readonly isPolling: boolean;
@@ -158,7 +172,9 @@ export function useContractDraft(
   currentContractRef.current = currentContract;
   const loadInitialRef = useRef<() => Promise<void>>(() => Promise.resolve());
   const loadProposalsRef = useRef<() => Promise<void>>(() => Promise.resolve());
-  const refreshCurrentRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const refreshCurrentRef = useRef<() => Promise<RefreshCurrentResult>>(() =>
+    Promise.resolve({ applied: false }),
+  );
 
   // ── requestPollNow ref（解决循环引用） ────────────────────────────
   const requestPollNowRef = useRef<() => void>(() => {});
@@ -310,19 +326,26 @@ export function useContractDraft(
   loadProposalsRef.current = loadProposals;
 
   // ── 刷新当前契约（project scope） ────────────────────────────────
-  const refreshCurrent = useCallback(async () => {
-    if (!projectId) return;
+  const refreshCurrent = useCallback(async (): Promise<RefreshCurrentResult> => {
+    if (!projectId) return { applied: false };
 
     const gen = generationRef.current;
     const seq = ++currentRequestSeqRef.current;
 
     try {
       const current = await window.desktop.contract.getCurrent({ projectId });
-      if (gen !== generationRef.current || seq !== currentRequestSeqRef.current) return;
+      if (gen !== generationRef.current || seq !== currentRequestSeqRef.current) {
+        // context 已切换 / 已被更新的请求取代：本次结果不可用
+        return { applied: false };
+      }
       setCurrentContract(current);
+      return { applied: true, current };
     } catch (err) {
-      if (gen !== generationRef.current || seq !== currentRequestSeqRef.current) return;
+      if (gen !== generationRef.current || seq !== currentRequestSeqRef.current) {
+        return { applied: false };
+      }
       setError(toSafeUserError(err, SAFE_ERROR_FALLBACK).message);
+      return { applied: false };
     }
   }, [projectId]);
 
@@ -432,8 +455,11 @@ export function useContractDraft(
       const owns = () => acceptOpRef.current === op && gen === generationRef.current;
 
       try {
-        // 提交前刷新一次当前契约，确保 expectedContractVersion 尽可能新（CAS 兜底）
-        await refreshCurrentRef.current();
+        // 提交前刷新一次当前契约，并直接使用本次刷新返回的版本构造 CAS payload。
+        // currentContractRef.current 要等下一次 render 才会更新，不能作为 payload 依据；
+        // 刷新失败 / context 切换 / 结果被取代时返回 applied=false，本次不接受。
+        const result = await refreshCurrentRef.current();
+        if (!result.applied) return false;
         if (!owns()) return false;
 
         const version = await window.desktop.contract.acceptProposal({
@@ -441,7 +467,7 @@ export function useContractDraft(
           proposalId,
           expectedProposalSectionsHash: proposal.sectionsHash,
           expectedGrillSessionVersion: currentSessionVersionRef.current,
-          expectedContractVersion: currentContractRef.current?.version ?? null,
+          expectedContractVersion: result.current?.version ?? null,
           operations: [],
         });
 

@@ -287,7 +287,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 
 | 能力                                 | 状态 | 说明                                                                                                             |
 | ------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------- |
-| Minimal Creation Contract Renderer   | 🟡   | PR #20（Draft，未合并）：最小 UI + 任务轮询 + 提案审核 + Accept/Reject + Current Version；Renderer 尚未进入 main |
+| Minimal Creation Contract Renderer   | 🟡   | PR #20（ready for review，未合并）：最小 UI + 任务轮询 + 提案审核 + Accept/Reject + Current Version；未进入 main |
 | Writing Evaluation Lab               | ✅   | PR #18 / merge `4eab0c14`（固定题库 + 多策略对比 + 评分体系）                                                    |
 | Real Generation Experiment Runner    | ⬜   | 真实模型 → 固定 suite → candidate artifacts → blind review                                                       |
 | Minimal Manuscript / Chapter Version | ⬜   | 稿件版本管理基础                                                                                                 |
@@ -377,8 +377,8 @@ Evaluation Harness → Scene Planner → Draft Generator
 | -------------------------- | ----------------------------------------------------------------------- |
 | Last verified date         | 2026-08-02                                                              |
 | Verified main SHA          | `8c92d16308a80d8c7d454f11b677ed0c8454124c`                              |
-| Active implementation      | M1-C3 Minimal Contract Renderer（PR #20，Draft 未合并）                 |
-| Active PR                  | #20（draft，未合并）                                                    |
+| Active implementation      | M1-C3 Minimal Contract Renderer（PR #20，ready for review 未合并）      |
+| Active PR                  | #20（ready for review，未合并）                                         |
 | Last merged capability     | GQ1 Writing Evaluation Lab Foundation（PR #18，`4eab0c14`）             |
 | Next product capability    | Minimal Contract Renderer（M1-C3，PR #20 进行中）                       |
 | Next quality capability    | Real Generation Experiment Runner（GQ2，可并行，尚未开始）              |
@@ -409,7 +409,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 | 2026-08-01 | PR #17 / `e84601f2`（已合并）                       | ✅     | M1-C2 AI task / process bridge                                            | 打通创作规格生成链路；尚无文章生成质量提升证据         | task-engine、runner、process bridge、SQLite concurrency、backend E2E（merge `e84601f2`）                                                                       | Minimal Contract Renderer 与 Writing Evaluation Lab 并行              |
 | 2026-08-01 | PR #18 / `900fd6eae71d164e095ada37a87d37556a59721d` | ✅     | GQ1 Writing Evaluation Lab foundation（固定题库 + 多策略对比 + 评分体系） | 建立评测骨架与完整性/隐私边界；尚无文章质量提升证据    | evaluation harness、fixtures、评分体系、artifact validators、atomic publication、派生路径角色身份校验、辅助路径保护、部分写入清理、293 tests；merge `4eab0c14` | 接入真实 generation candidate 实验；与 Minimal Contract Renderer 并行 |
 | 2026-08-01 | `dd04481` PR #16                                    | ✅     | Generation quality roadmap and progress ledger                            | 建立质量方向的权威路线和维护制度；尚无文章质量实验结果 | generation-quality-roadmap.md                                                                                                                                  | 合并后由所有 DeepSeek / MiMo 任务持续维护                             |
-| 2026-08-02 | `37bef0d` PR #20（Draft，未合并）                   | 🟡     | M1-C3 Minimal Contract Renderer（最小 UI 纵向切片）                       | 无；尚无文章质量提升证据                               | 任务轮询 + 提案审核 + Accept/Reject + Current Version；纯 Renderer，无 backend 变更；`pnpm check` 全绿（2357 passed）                                          | 合并后验收验证；GQ2 Real Generation Experiment Runner 并行进行        |
+| 2026-08-02 | `37bef0d` PR #20（ready for review，未合并）        | 🟡     | M1-C3 Minimal Contract Renderer（最小 UI 纵向切片）                       | 无；尚无文章质量提升证据                               | 任务轮询 + 提案审核 + Accept/Reject + Current Version；纯 Renderer，无 backend 变更；`pnpm check` 全绿（2357 passed）                                          | 合并后验收验证；GQ2 Real Generation Experiment Runner 并行进行        |
 
 ### 早期能力汇总基线
 
