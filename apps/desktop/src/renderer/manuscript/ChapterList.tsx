@@ -17,6 +17,8 @@ interface ChapterListProps {
   readonly includeArchived: boolean;
   readonly selectedChapterId: string | null;
   readonly isLoading: boolean;
+  /** 全局 mutation 锁：进行中时禁用章节选择/创建/移动/归档/恢复 */
+  readonly isBusy: boolean;
   readonly isCreating: boolean;
   readonly isReordering: boolean;
   readonly isArchiving: boolean;
@@ -34,6 +36,7 @@ export function ChapterList({
   includeArchived,
   selectedChapterId,
   isLoading,
+  isBusy,
   isCreating,
   isReordering,
   isArchiving,
@@ -50,6 +53,8 @@ export function ChapterList({
     (e: React.KeyboardEvent<HTMLUListElement>) => {
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
       if (chapters.length === 0) return;
+      // mutation 进行中禁用键盘切换章节
+      if (isBusy) return;
       e.preventDefault();
       const idx = chapters.findIndex((c) => c.id === selectedChapterId);
       let next = idx;
@@ -57,7 +62,7 @@ export function ChapterList({
       else next = idx <= 0 ? chapters.length - 1 : idx - 1;
       onSelect(chapters[next].id);
     },
-    [chapters, selectedChapterId, onSelect],
+    [chapters, selectedChapterId, onSelect, isBusy],
   );
 
   return (
@@ -69,7 +74,7 @@ export function ChapterList({
             type="button"
             className="btn btn-small"
             onClick={onCreate}
-            disabled={isCreating || isLoading}
+            disabled={isCreating || isLoading || isBusy}
             aria-busy={isCreating}
           >
             {isCreating ? '创建中…' : '新建章节'}
@@ -101,6 +106,7 @@ export function ChapterList({
                     className="chapter-list-item-button"
                     aria-current={isSelected ? 'page' : undefined}
                     onClick={() => onSelect(chapter.id)}
+                    disabled={isBusy}
                   >
                     <span className="chapter-title-text">{label}</span>
                     {chapter.status === 'archived' && (
@@ -118,7 +124,7 @@ export function ChapterList({
                           className="btn btn-icon"
                           aria-label={`上移章节：${label}`}
                           onClick={() => onMove(chapter.id, 'up')}
-                          disabled={isReordering || isArchiving || isRestoring}
+                          disabled={isReordering || isArchiving || isRestoring || isBusy}
                         >
                           ↑
                         </button>
@@ -127,7 +133,7 @@ export function ChapterList({
                           className="btn btn-icon"
                           aria-label={`下移章节：${label}`}
                           onClick={() => onMove(chapter.id, 'down')}
-                          disabled={isReordering || isArchiving || isRestoring}
+                          disabled={isReordering || isArchiving || isRestoring || isBusy}
                         >
                           ↓
                         </button>
@@ -136,7 +142,7 @@ export function ChapterList({
                           className="btn btn-small btn-muted"
                           aria-label={`归档章节：${label}`}
                           onClick={() => onArchive(chapter.id)}
-                          disabled={isReordering || isArchiving || isRestoring}
+                          disabled={isReordering || isArchiving || isRestoring || isBusy}
                         >
                           归档
                         </button>
@@ -147,7 +153,7 @@ export function ChapterList({
                         className="btn btn-small"
                         aria-label={`恢复章节：${label}`}
                         onClick={() => onRestore(chapter.id)}
-                        disabled={isReordering || isArchiving || isRestoring}
+                        disabled={isReordering || isArchiving || isRestoring || isBusy}
                       >
                         恢复
                       </button>

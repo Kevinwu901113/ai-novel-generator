@@ -27,15 +27,18 @@ import type {
 import { toSafeUserError } from '../safety/safe-error';
 import { registerManuscriptLeaveGuard } from './manuscript-leave-guard';
 
+/** CAS 冲突刷新状态：loading / ready / error 三态，不得用 serverCurrent=null 同时表达 loading/error/合法 null */
+export type ConflictRefreshStatus = 'loading' | 'ready' | 'error';
+
 /** CAS 冲突状态：保留本地 buffer，保存刷新后的服务器 current 供用户决策 */
 export interface ManuscriptConflict {
   readonly chapterId: string;
+  readonly refreshStatus: ConflictRefreshStatus;
   readonly serverCurrent: ChapterVersionPublicData | null;
 }
 
-/** 待确认的章节切换/离开动作 */
+/** 待确认的破坏性导航动作（章节切换 / 创建章节） */
 export interface PendingLeaveAction {
-  readonly title: string;
   readonly run: () => void;
 }
 
@@ -63,7 +66,7 @@ export interface UseManuscriptWorkbenchResult {
   readonly selectedChapterId: string | null;
   readonly selectedChapter: ChapterSummary | null;
   readonly selectChapter: (chapterId: string) => void;
-  readonly createChapter: () => Promise<boolean>;
+  readonly createChapter: () => void;
   readonly isCreatingChapter: boolean;
   readonly moveChapter: (chapterId: string, direction: 'up' | 'down') => Promise<boolean>;
   readonly isReordering: boolean;
@@ -91,12 +94,14 @@ export interface UseManuscriptWorkbenchResult {
   readonly saveAfterConflict: () => Promise<boolean>;
   readonly discardLocalChanges: () => void;
   readonly clearConflict: () => void;
+  readonly retryRefreshConflict: () => void;
   // 离开确认
   readonly pendingLeave: PendingLeaveAction | null;
   readonly confirmLeave: () => void;
   readonly cancelLeave: () => void;
   // 异步状态
   readonly isLoading: boolean;
+  readonly isMutationInFlight: boolean;
   readonly error: string | null;
   readonly clearError: () => void;
   readonly successMessage: string | null;
@@ -151,8 +156,6 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   editorTitleRef.current = editorTitle;
   const editorContentRef = useRef('');
   editorContentRef.current = editorContent;
-  const includeArchivedRef = useRef(false);
-  includeArchivedRef.current = includeArchived;
 
   // 编辑器输入 setter（用户编辑标记，防止加载结果覆盖用户输入）
   const updateEditorTitle = useCallback((value: string) => {
@@ -180,6 +183,18 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
 
   const dirtyRef = useRef(false);
   dirtyRef.current = isDirty;
+
+  // ── 全局 mutation 锁：任一 mutation 进行中时禁止启动第二个 ──────
+  const isMutationInFlight =
+    isSaving ||
+    isSavingTitle ||
+    isCreatingChapter ||
+    isReordering ||
+    isArchiving ||
+    isRestoring ||
+    isPromoting;
+  const isMutationInFlightRef = useRef(false);
+  isMutationInFlightRef.current = isMutationInFlight;
 
   // ── 章节列表（按 includeArchived 过滤显示）────────────────────────
   const chapters = useMemo(() => {
@@ -279,21 +294,33 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   // ── CAS 冲突处理：保留本地 buffer，刷新服务器 current ────────────
   const handleConflict = useCallback(
     async (chapterId: string, gen: number): Promise<void> => {
-      setConflict({ chapterId, serverCurrent: null });
+      setConflict({ chapterId, refreshStatus: 'loading', serverCurrent: null });
       try {
         const serverCurrent = await window.desktop.manuscript.getCurrentChapterVersion({
           projectId,
           chapterId,
         });
         if (gen !== generationRef.current) return;
-        setConflict({ chapterId, serverCurrent });
+        // 归属检查：刷新期间用户已切换章节则丢弃结果，不显示针对旧章节的冲突
+        if (selectedChapterIdRef.current !== chapterId) return;
+        setConflict({ chapterId, refreshStatus: 'ready', serverCurrent });
         void refreshVersions(gen, chapterId);
       } catch {
-        // 保留 serverCurrent=null 的冲突状态
+        if (gen !== generationRef.current) return;
+        if (selectedChapterIdRef.current !== chapterId) return;
+        // error 态：明确失败，不得永久停留在「正在刷新」
+        setConflict({ chapterId, refreshStatus: 'error', serverCurrent: null });
       }
     },
     [projectId, refreshVersions],
   );
+
+  /** 手动重新刷新冲突后的服务器 current（error 态提供重试） */
+  const retryRefreshConflict = useCallback((): void => {
+    const c = conflictRef.current;
+    if (!c) return;
+    void handleConflict(c.chapterId, generationRef.current);
+  }, [handleConflict]);
 
   // ── 初始加载 ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -355,7 +382,8 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   // ── 离开保护：beforeunload（关闭窗口）────────────────────────────
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent): void => {
-      if (dirtyRef.current) {
+      // mutation 进行中也要阻止关闭（dirtyRef / isMutationInFlightRef 为 ref，闭包稳定）
+      if (dirtyRef.current || isMutationInFlightRef.current) {
         e.preventDefault();
         e.returnValue = '';
       }
@@ -371,25 +399,28 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     if (!projectId) return;
     return registerManuscriptLeaveGuard({
       isDirty: () => dirtyRef.current,
+      isBusy: () => isMutationInFlightRef.current,
     });
   }, [projectId]);
 
-  // ── 章节切换（dirty 守卫）────────────────────────────────────────
+  // ── 统一破坏性导航守卫：dirty 时弹出离开确认，run 在确认后执行 ──
+  const navigateWithGuard = useCallback((run: () => void): void => {
+    if (dirtyRef.current) {
+      setPendingLeave({ run });
+      return;
+    }
+    run();
+  }, []);
+
+  // ── 章节切换（dirty 守卫；mutation 期间由 UI 禁用 + 归属检查兜底）─
   const selectChapter = useCallback(
     (chapterId: string) => {
       if (chapterId === selectedChapterIdRef.current) return;
-      if (dirtyRef.current) {
-        setPendingLeave({
-          title: '当前章节有未保存的修改，确定离开吗？',
-          run: () => {
-            void loadChapterData(generationRef.current, chapterId);
-          },
-        });
-        return;
-      }
-      void loadChapterData(generationRef.current, chapterId);
+      navigateWithGuard(() => {
+        void loadChapterData(generationRef.current, chapterId);
+      });
     },
-    [loadChapterData],
+    [navigateWithGuard, loadChapterData],
   );
 
   const confirmLeave = useCallback(() => {
@@ -408,7 +439,7 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   const saveChapterVersion = useCallback(async (): Promise<boolean> => {
     const ms = manuscriptRef.current;
     const chapter = allChaptersRef.current.find((c) => c.id === selectedChapterIdRef.current);
-    if (!ms || !chapter || isSaving) return false;
+    if (!ms || !chapter || isMutationInFlightRef.current) return false;
     if (chapter.status !== 'active') {
       setError('归档章节不能保存新版本');
       return false;
@@ -417,21 +448,40 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       setError('章节标题不能为空');
       return false;
     }
+    // 冲突期间：仅在 ready 时允许保存；strict 使用 serverCurrent?.id ?? null，不得 fallback 旧 current
+    const conflictState = conflictRef.current;
+    let expected: string | null;
+    if (conflictState) {
+      if (conflictState.refreshStatus !== 'ready') return false;
+      expected = conflictState.serverCurrent?.id ?? null;
+    } else {
+      expected = currentVersionRef.current?.id ?? null;
+    }
     const opGen = generationRef.current;
+    const opChapterId = chapter.id;
+    const opSeq = loadSeqRef.current;
     setIsSaving(true);
     setError(null);
     setSuccessMessage(null);
     try {
-      const expected =
-        (conflictRef.current?.serverCurrent ?? currentVersionRef.current)?.id ?? null;
       const version = await window.desktop.manuscript.createChapterVersion({
         projectId,
-        chapterId: chapter.id,
+        chapterId: opChapterId,
         title: editorTitleRef.current,
         content: editorContentRef.current,
         expectedCurrentVersionId: expected,
       });
-      if (opGen !== generationRef.current) return false;
+      if (
+        opGen !== generationRef.current ||
+        opSeq !== loadSeqRef.current ||
+        selectedChapterIdRef.current !== opChapterId
+      ) {
+        // 归属检查：结果仍属于该章节，但用户已离开当前章节。
+        // 后端成功结果保留，不写入其他章节 buffer；只刷新列表（不刷新
+        // 版本历史，避免覆盖当前选中章节的版本历史面板）。
+        void refreshChapters(opGen);
+        return false;
+      }
       // 后端返回值即事实来源
       setCurrentVersion(version);
       setEditorTitle(version.title);
@@ -440,32 +490,35 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       setConflict(null);
       setSuccessMessage(`已保存新版本 #${version.versionNumber}`);
       void refreshChapters(opGen);
-      void refreshVersions(opGen, chapter.id);
+      void refreshVersions(opGen, opChapterId);
       return true;
     } catch (err) {
-      if (opGen !== generationRef.current) return false;
+      if (opGen !== generationRef.current || opSeq !== loadSeqRef.current) return false;
       if (extractCode(err) === 'MANUSCRIPT_VERSION_CONFLICT') {
         // 保留本地 buffer，刷新服务器 current，不自动重试
         setError(null);
-        await handleConflict(chapter.id, opGen);
+        await handleConflict(opChapterId, opGen);
       } else {
         setError(toSafeUserError(err, '保存失败').message);
       }
       return false;
     } finally {
+      // 无论归属如何，mutation 锁必须释放（除非项目已切换）
       if (opGen === generationRef.current) setIsSaving(false);
     }
-  }, [projectId, isSaving, refreshChapters, refreshVersions, handleConflict]);
+  }, [projectId, refreshChapters, refreshVersions, handleConflict]);
 
-  const saveAfterConflict = useCallback(
-    (): Promise<boolean> => saveChapterVersion(),
-    [saveChapterVersion],
-  );
+  const saveAfterConflict = useCallback((): Promise<boolean> => {
+    const c = conflictRef.current;
+    // 非 ready 时确定性返回 false，且不得调用 IPC
+    if (!c || c.refreshStatus !== 'ready') return Promise.resolve(false);
+    return saveChapterVersion();
+  }, [saveChapterVersion]);
 
-  // ── 放弃本地修改并加载服务器版本 ─────────────────────────────────
+  // ── 放弃本地修改并加载服务器版本（仅 ready 状态允许）─────────────
   const discardLocalChanges = useCallback(() => {
     const c = conflictRef.current;
-    if (!c) return;
+    if (!c || c.refreshStatus !== 'ready') return;
     if (c.serverCurrent) {
       setEditorTitle(c.serverCurrent.title);
       setEditorContent(c.serverCurrent.content);
@@ -489,21 +542,38 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   const promoteChapterVersion = useCallback(
     async (versionId: string): Promise<boolean> => {
       const chapter = allChaptersRef.current.find((c) => c.id === selectedChapterIdRef.current);
-      if (!chapter || isPromoting) return false;
+      if (!chapter || isMutationInFlightRef.current) return false;
+      // 冲突期间：仅在 ready 时允许 promote，strict expected，不得 fallback 旧 current
+      const conflictState = conflictRef.current;
+      let expected: string | null;
+      if (conflictState) {
+        if (conflictState.refreshStatus !== 'ready') return false;
+        expected = conflictState.serverCurrent?.id ?? null;
+      } else {
+        expected = currentVersionRef.current?.id ?? null;
+      }
       const opGen = generationRef.current;
+      const opChapterId = chapter.id;
+      const opSeq = loadSeqRef.current;
       setIsPromoting(true);
       setError(null);
       setSuccessMessage(null);
       try {
-        const expected =
-          (conflictRef.current?.serverCurrent ?? currentVersionRef.current)?.id ?? null;
         const version = await window.desktop.manuscript.promoteChapterVersion({
           projectId,
-          chapterId: chapter.id,
+          chapterId: opChapterId,
           versionId,
           expectedCurrentVersionId: expected,
         });
-        if (opGen !== generationRef.current) return false;
+        if (
+          opGen !== generationRef.current ||
+          opSeq !== loadSeqRef.current ||
+          selectedChapterIdRef.current !== opChapterId
+        ) {
+          // 归属检查：仅刷新列表，不覆盖当前选中章节的版本历史面板
+          void refreshChapters(opGen);
+          return false;
+        }
         // promote 成功后编辑器加载被 promote 版本，dirty 重置
         setCurrentVersion(version);
         setEditorTitle(version.title);
@@ -512,13 +582,13 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
         setConflict(null);
         setSuccessMessage(`已将版本 #${version.versionNumber} 设为当前版本`);
         void refreshChapters(opGen);
-        void refreshVersions(opGen, chapter.id);
+        void refreshVersions(opGen, opChapterId);
         return true;
       } catch (err) {
-        if (opGen !== generationRef.current) return false;
+        if (opGen !== generationRef.current || opSeq !== loadSeqRef.current) return false;
         if (extractCode(err) === 'MANUSCRIPT_VERSION_CONFLICT') {
           setError(null);
-          await handleConflict(chapter.id, opGen);
+          await handleConflict(opChapterId, opGen);
         } else {
           setError(toSafeUserError(err, '切换版本失败').message);
         }
@@ -527,13 +597,13 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
         if (opGen === generationRef.current) setIsPromoting(false);
       }
     },
-    [projectId, isPromoting, refreshChapters, refreshVersions, handleConflict],
+    [projectId, refreshChapters, refreshVersions, handleConflict],
   );
 
   // ── 创建章节（append）────────────────────────────────────────────
-  const createChapter = useCallback(async (): Promise<boolean> => {
+  const performCreateChapter = useCallback(async (): Promise<boolean> => {
     const ms = manuscriptRef.current;
-    if (!ms || isCreatingChapter) return false;
+    if (!ms || isMutationInFlightRef.current) return false;
     const opGen = generationRef.current;
     setIsCreatingChapter(true);
     setError(null);
@@ -552,46 +622,58 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       return true;
     } catch (err) {
       if (opGen !== generationRef.current) return false;
+      // 创建失败：不切换章节，原章节 buffer 保留
       setError(toSafeUserError(err, '创建章节失败').message);
       return false;
     } finally {
       if (opGen === generationRef.current) setIsCreatingChapter(false);
     }
-  }, [projectId, isCreatingChapter, refreshChapters, loadChapterData]);
+  }, [projectId, refreshChapters, loadChapterData]);
 
-  // ── 上移/下移（仅 active 章节；insertBeforeChapterId 语义）───────
+  /** 新建章节入口：dirty 时弹离开确认，mutation 进行中直接拒绝 */
+  const requestCreateChapter = useCallback((): void => {
+    if (isMutationInFlightRef.current) {
+      setError('稿件操作正在进行，请完成后再试');
+      return;
+    }
+    navigateWithGuard(() => {
+      void performCreateChapter();
+    });
+  }, [navigateWithGuard, performCreateChapter]);
+
+  // ── 上移/下移（仅 active 序列；archived 只影响展示，永不影响计算）──
   const moveChapter = useCallback(
     async (chapterId: string, direction: 'up' | 'down'): Promise<boolean> => {
       const ms = manuscriptRef.current;
-      if (!ms || isReordering) return false;
-      const list = includeArchivedRef.current
-        ? allChaptersRef.current
-        : allChaptersRef.current.filter((c) => c.status === 'active');
-      const idx = list.findIndex((c) => c.id === chapterId);
-      if (idx < 0) return false;
-      if (direction === 'up' && idx === 0) return false;
-      if (direction === 'down' && idx === list.length - 1) return false;
-      // 上移：移动到紧邻前驱之前；下移：移动到后继的后继之前（末尾 append=null）
+      if (!ms || isMutationInFlightRef.current) return false;
+      // 移动语义只作用于 active 子序列，与 includeArchived 展示开关无关
+      const activeOrder = allChaptersRef.current.filter((c) => c.status === 'active');
+      const idx = activeOrder.findIndex((c) => c.id === chapterId);
+      if (idx < 0) return false; // 移动章节必须 active
+      if (direction === 'up' && idx === 0) return false; // 边界 no-op
+      if (direction === 'down' && idx === activeOrder.length - 1) return false; // 边界 no-op
+      // 上移目标必须 active；下移目标必须 active 或 null；archived 永不为 insertBefore
       const insertBeforeChapterId =
-        direction === 'up' ? list[idx - 1].id : idx + 2 < list.length ? list[idx + 2].id : null;
+        direction === 'up'
+          ? activeOrder[idx - 1].id
+          : idx + 2 < activeOrder.length
+            ? activeOrder[idx + 2].id
+            : null;
       const opGen = generationRef.current;
       setIsReordering(true);
       setError(null);
       setSuccessMessage(null);
       try {
-        const newOrder = await window.desktop.manuscript.updateChapterOrder({
+        await window.desktop.manuscript.updateChapterOrder({
           projectId,
           manuscriptId: ms.id,
           chapterId,
           insertBeforeChapterId,
         });
         if (opGen !== generationRef.current) return false;
-        // 后端返回列表即事实来源（active 子序列）；若显示归档则整体刷新
-        if (!includeArchivedRef.current) {
-          setAllChapters((prev) => [...newOrder, ...prev.filter((c) => c.status === 'archived')]);
-        } else {
-          await refreshChapters(opGen);
-        }
+        // 成功后始终以后端返回的完整全序列为准（listChapters includeArchived=true）
+        await refreshChapters(opGen);
+        if (opGen !== generationRef.current) return false;
         setSuccessMessage('章节顺序已更新');
         return true;
       } catch (err) {
@@ -603,14 +685,14 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
         if (opGen === generationRef.current) setIsReordering(false);
       }
     },
-    [projectId, isReordering, refreshChapters],
+    [projectId, refreshChapters],
   );
 
   // ── 归档 / 恢复 ──────────────────────────────────────────────────
   const archiveChapter = useCallback(
     async (chapterId: string): Promise<boolean> => {
       const chapter = allChaptersRef.current.find((c) => c.id === chapterId);
-      if (!chapter || isArchiving) return false;
+      if (!chapter || isMutationInFlightRef.current) return false;
       const opGen = generationRef.current;
       setIsArchiving(true);
       setError(null);
@@ -633,13 +715,13 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
         if (opGen === generationRef.current) setIsArchiving(false);
       }
     },
-    [projectId, isArchiving, refreshChapters],
+    [projectId, refreshChapters],
   );
 
   const restoreChapter = useCallback(
     async (chapterId: string): Promise<boolean> => {
       const chapter = allChaptersRef.current.find((c) => c.id === chapterId);
-      if (!chapter || isRestoring) return false;
+      if (!chapter || isMutationInFlightRef.current) return false;
       const opGen = generationRef.current;
       setIsRestoring(true);
       setError(null);
@@ -662,13 +744,13 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
         if (opGen === generationRef.current) setIsRestoring(false);
       }
     },
-    [projectId, isRestoring, refreshChapters],
+    [projectId, refreshChapters],
   );
 
   // ── 稿件标题（expectedUpdatedAt CAS）─────────────────────────────
   const saveManuscriptTitle = useCallback(async (): Promise<boolean> => {
     const ms = manuscriptRef.current;
-    if (!ms || isSavingTitle) return false;
+    if (!ms || isMutationInFlightRef.current) return false;
     const title = manuscriptTitleInput.trim();
     if (title.length === 0) {
       setError('稿件标题不能为空');
@@ -710,7 +792,7 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     } finally {
       if (opGen === generationRef.current) setIsSavingTitle(false);
     }
-  }, [projectId, isSavingTitle, manuscriptTitleInput]);
+  }, [projectId, manuscriptTitleInput]);
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -728,7 +810,7 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     selectedChapterId,
     selectedChapter,
     selectChapter,
-    createChapter,
+    createChapter: requestCreateChapter,
     isCreatingChapter,
     moveChapter,
     isReordering,
@@ -753,10 +835,12 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     saveAfterConflict,
     discardLocalChanges,
     clearConflict,
+    retryRefreshConflict,
     pendingLeave,
     confirmLeave,
     cancelLeave,
     isLoading,
+    isMutationInFlight,
     error,
     clearError,
     successMessage,

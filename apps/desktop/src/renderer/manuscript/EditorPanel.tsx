@@ -29,6 +29,8 @@ interface EditorPanelProps {
   readonly dirty: boolean;
   readonly currentVersion: { versionNumber: number; createdAt: string } | null;
   readonly isSaving: boolean;
+  /** 全局 mutation 锁：进行中时禁用保存类按钮 */
+  readonly isBusy: boolean;
   readonly isLoading: boolean;
   readonly onEditorTitleChange: (value: string) => void;
   readonly onEditorContentChange: (value: string) => void;
@@ -48,6 +50,7 @@ export function EditorPanel({
   dirty,
   currentVersion,
   isSaving,
+  isBusy,
   isLoading,
   onEditorTitleChange,
   onEditorContentChange,
@@ -84,6 +87,7 @@ export function EditorPanel({
             onClick={onSaveManuscriptTitle}
             disabled={
               isSavingTitle ||
+              isBusy ||
               manuscript === null ||
               !isManuscriptTitleDirty ||
               manuscriptTitleInput.trim().length === 0
@@ -131,6 +135,7 @@ export function EditorPanel({
             onChange={(e) => onEditorContentChange(e.target.value)}
             disabled={!canEdit}
             spellCheck={false}
+            maxLength={1_000_000}
           />
 
           <div className="editor-status-row">
@@ -150,7 +155,7 @@ export function EditorPanel({
             type="button"
             className="btn btn-primary save-version-btn"
             onClick={onSaveChapterVersion}
-            disabled={!canEdit || isSaving}
+            disabled={!canEdit || isSaving || isBusy}
             aria-busy={isSaving}
           >
             {isSaving ? '保存中…' : '保存新版本'}

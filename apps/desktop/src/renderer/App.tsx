@@ -11,7 +11,7 @@ import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from 
 import { GrillWorkbench } from './grill/GrillWorkbench';
 import { ManuscriptWorkbench } from './manuscript/ManuscriptWorkbench';
 import { ManuscriptLeaveDialog } from './manuscript/ManuscriptLeaveDialog';
-import { manuscriptHasDirty } from './manuscript/manuscript-leave-guard';
+import { manuscriptHasDirty, manuscriptIsBusy } from './manuscript/manuscript-leave-guard';
 import { TaskCenter } from './task-center/TaskCenter';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
@@ -183,8 +183,13 @@ export function App() {
     [isLoading, dataServiceStatus, loadProjects],
   );
 
-  // 切换项目 / 离开稿件工作区前检查未保存修改
+  // 切换项目 / 离开稿件工作区前检查未保存修改与进行中的 mutation
   const guardLeave = useCallback((run: () => void) => {
+    if (manuscriptIsBusy()) {
+      // mutation 进行中：不执行切换，不弹「放弃修改」绕过，给出安全可见反馈
+      setError('稿件操作正在进行，请完成后再离开');
+      return;
+    }
     if (manuscriptHasDirty()) {
       setPendingWorkbenchLeave({ run });
     } else {
@@ -200,10 +205,15 @@ export function App() {
     [guardLeave, performOpenProject],
   );
 
-  // 切换工作区视图（离开稿件工作区前检查 dirty）
+  // 切换工作区视图（离开稿件工作区前检查 dirty / busy）
   const handleSwitchWorkbench = useCallback(
     (target: 'grill' | 'manuscript') => {
       if (target === workbench) return;
+      if (manuscriptIsBusy()) {
+        // mutation 进行中：不执行切换，给出安全可见反馈
+        setError('稿件操作正在进行，请完成后再离开');
+        return;
+      }
       const run = () => setWorkbench(target);
       if (target === 'grill' && manuscriptHasDirty()) {
         setPendingWorkbenchLeave({ run });

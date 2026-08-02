@@ -11,6 +11,7 @@ import React from 'react';
 import { render, screen, cleanup, act, waitFor, fireEvent, within } from '@testing-library/react';
 import type { DesktopAPI } from '@ai-novel/contracts';
 import { App } from './App';
+import { createManuscriptStore } from './manuscript/test-manuscript-mock';
 
 // ── Mock 数据 ────────────────────────────────────────────────────────
 
@@ -31,6 +32,14 @@ const mockProviderState = {
   lastTestErrorCode: null,
   lastTestedAt: null,
   lastTestLatencyMs: null,
+};
+
+const mockProject2 = {
+  id: 'proj-00000002-aaaa-bbbb-cccc-dddddddddddd',
+  name: '测试项目二',
+  createdAt: '2024-01-03T00:00:00Z',
+  lastOpenedAt: '2024-01-04T00:00:00Z',
+  isMissing: false,
 };
 
 // ── 工具函数 ────────────────────────────────────────────────────────
@@ -684,6 +693,111 @@ describe('App 级别测试', () => {
         expect(apiKeyInput).toHaveFocus();
       },
       { timeout: 5000 },
+    );
+  });
+
+  // 15. save 进行中项目/工作区切换被阻止
+  it('save进行中项目/工作区切换被阻止', async () => {
+    const store = createManuscriptStore();
+    const api = createMockDesktopAPI({
+      manuscript: store.desktop,
+      projects: {
+        list: vi.fn().mockResolvedValue([mockProject1, mockProject2]),
+        create: vi.fn().mockResolvedValue({ id: 'proj-new-0001' }),
+        open: vi.fn().mockImplementation(async (input: { projectId: string }) => {
+          const p = input.projectId === mockProject2.id ? mockProject2 : mockProject1;
+          return {
+            id: p.id,
+            name: p.name,
+            createdAt: p.createdAt,
+            lastOpenedAt: p.lastOpenedAt,
+            status: 'active',
+          };
+        }),
+      },
+    });
+    setupDesktop(api);
+
+    await act(async () => {
+      render(<App />);
+    });
+
+    // 等待项目列表出现
+    await waitFor(
+      () => {
+        expect(
+          screen.getByRole('button', { name: new RegExp(mockProject1.name) }),
+        ).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 打开项目一
+    await act(async () => {
+      screen.getByRole('button', { name: new RegExp(mockProject1.name) }).click();
+    });
+    // 切换到稿件工作台
+    await waitFor(
+      () => {
+        expect(screen.getByRole('tab', { name: '稿件' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+    await act(async () => {
+      screen.getByRole('tab', { name: '稿件' }).click();
+    });
+    await waitFor(
+      () => {
+        expect(screen.getByLabelText('稿件标题')).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+
+    // 创建章节并编辑内容
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存内容' } });
+
+    // 延迟保存以观察 mutation 进行中状态
+    const original = store.desktop.createChapterVersion.bind(store.desktop);
+    let resolveSave!: (v: unknown) => void;
+    store.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveSave = () => resolve(original(input));
+      });
+    }) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+
+    // 尝试切换到 Grill-me：被阻止，给出安全可见反馈
+    await act(async () => {
+      screen.getByRole('tab', { name: 'Grill-me' }).click();
+    });
+    expect(screen.getByRole('tab', { name: 'Grill-me' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByText('稿件操作正在进行，请完成后再离开')).toBeInTheDocument();
+
+    // 尝试打开项目二：被阻止（当前项目仍是项目一）
+    await act(async () => {
+      screen.getByRole('button', { name: new RegExp(mockProject2.name) }).click();
+    });
+    const p1Btn = screen.getByRole('button', { name: new RegExp(mockProject1.name) });
+    const p2Btn = screen.getByRole('button', { name: new RegExp(mockProject2.name) });
+    expect(p1Btn).toHaveAttribute('aria-current', 'page');
+    expect(p2Btn).not.toHaveAttribute('aria-current');
+
+    // 保存完成后一切恢复
+    await act(async () => {
+      resolveSave({});
+    });
+    await waitFor(
+      () => {
+        expect(screen.getByRole('tab', { name: '稿件' })).toHaveAttribute('aria-selected', 'true');
+      },
+      { timeout: 10000 },
     );
   });
 });

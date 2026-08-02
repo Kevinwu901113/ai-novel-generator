@@ -46,21 +46,24 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
         </div>
       )}
 
-      {/* CAS 冲突横幅：保留本地 buffer，展示服务器 current 信息，不自动重试 */}
+      {/* CAS 冲突横幅：保留本地 buffer，刷新状态三态（loading/ready/error），不自动重试 */}
       {wb.conflict && (
         <div className="manuscript-conflict-banner" role="alert">
           <p className="manuscript-conflict-title">稿件已在其他操作中更新，数据已自动刷新。</p>
           <p className="manuscript-conflict-info">
-            {wb.conflict.serverCurrent
-              ? `服务器当前版本 #${wb.conflict.serverCurrent.versionNumber} · ${wb.conflict.serverCurrent.title}`
-              : '正在刷新服务器当前版本…'}
+            {wb.conflict.refreshStatus === 'loading' && '正在刷新服务器当前版本…'}
+            {wb.conflict.refreshStatus === 'ready' &&
+              (wb.conflict.serverCurrent
+                ? `服务器当前版本 #${wb.conflict.serverCurrent.versionNumber} · ${wb.conflict.serverCurrent.title}`
+                : '服务器当前版本为空（该章节尚无版本）')}
+            {wb.conflict.refreshStatus === 'error' && '服务器版本刷新失败，请重试。'}
           </p>
           <div className="manuscript-conflict-actions">
             <button
               type="button"
               className="btn btn-small"
               onClick={() => void wb.saveAfterConflict()}
-              disabled={wb.isSaving}
+              disabled={wb.isSaving || wb.conflict.refreshStatus !== 'ready'}
               aria-busy={wb.isSaving}
             >
               基于新版本再保存
@@ -69,9 +72,19 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
               type="button"
               className="btn btn-small btn-muted"
               onClick={wb.discardLocalChanges}
+              disabled={wb.conflict.refreshStatus !== 'ready'}
             >
               放弃本地修改并加载服务器版本
             </button>
+            {wb.conflict.refreshStatus === 'error' && (
+              <button
+                type="button"
+                className="btn btn-small btn-muted"
+                onClick={wb.retryRefreshConflict}
+              >
+                重新刷新服务器版本
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-small btn-muted"
@@ -95,12 +108,13 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
             includeArchived={wb.includeArchived}
             selectedChapterId={wb.selectedChapterId}
             isLoading={wb.isLoading}
+            isBusy={wb.isMutationInFlight}
             isCreating={wb.isCreatingChapter}
             isReordering={wb.isReordering}
             isArchiving={wb.isArchiving}
             isRestoring={wb.isRestoring}
             onSelect={wb.selectChapter}
-            onCreate={() => void wb.createChapter()}
+            onCreate={wb.createChapter}
             onMove={(chapterId, direction) => void wb.moveChapter(chapterId, direction)}
             onArchive={(chapterId) => void wb.archiveChapter(chapterId)}
             onRestore={(chapterId) => void wb.restoreChapter(chapterId)}
@@ -128,6 +142,7 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
               dirty={wb.dirty}
               currentVersion={wb.currentVersion}
               isSaving={wb.isSaving}
+              isBusy={wb.isMutationInFlight}
               isLoading={wb.isLoadingCurrent}
               onEditorTitleChange={wb.setEditorTitle}
               onEditorContentChange={wb.setEditorContent}
@@ -142,6 +157,7 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
             versions={wb.chapterVersions}
             currentVersionId={wb.currentVersion?.id ?? null}
             isPromoting={wb.isPromoting}
+            isBusy={wb.isMutationInFlight}
             isLoading={wb.isLoadingVersions}
             hasChapter={wb.selectedChapter !== null}
             onPromote={(versionId) => void wb.promoteChapterVersion(versionId)}

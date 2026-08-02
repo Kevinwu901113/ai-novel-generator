@@ -13,6 +13,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ManuscriptWorkbench } from './ManuscriptWorkbench';
+import {
+  useManuscriptWorkbench,
+  type UseManuscriptWorkbenchResult,
+} from './useManuscriptWorkbench';
 import { createManuscriptStore } from './test-manuscript-mock';
 import type { DesktopAPI } from '@ai-novel/contracts';
 
@@ -32,6 +36,76 @@ function chapterSelectButtons(): Array<HTMLButtonElement> {
   return screen
     .getAllByRole('button')
     .filter((b): b is HTMLButtonElement => b.querySelector('.chapter-title-text') !== null);
+}
+
+/** hook 级测试 harness：把 useManuscriptWorkbench 结果暴露到全局 wb 引用 */
+let wb: UseManuscriptWorkbenchResult | null = null;
+function WorkbenchHarness() {
+  const result = useManuscriptWorkbench('p1');
+  wb = result;
+  return null;
+}
+
+/**
+ * 按给定顺序 A/X/B/C 播种章节（A active、X archived、B/C active），
+ * 并给 active 章节保存版本以获得可区分标题（甲/乙/丙）。
+ * position：A=1000、X=1500、B=2000、C=3000。
+ */
+async function seedOrderedChapters(
+  mock: ReturnType<typeof createManuscriptStore>,
+  order: Array<'A' | 'X' | 'B' | 'C'>,
+): Promise<{ A: string; X: string; B: string; C: string }> {
+  await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+  const created: string[] = [];
+  for (let i = 0; i < order.length; i++) {
+    const ch = await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    created.push(ch.id);
+  }
+  const ids: { A: string; X: string; B: string; C: string } = { A: '', X: '', B: '', C: '' };
+  const titles: Record<string, string> = { A: '甲', X: '戌', B: '乙', C: '丙' };
+  order.forEach((name, i) => {
+    const ch = mock.store.chapters[i];
+    ch.position = (i + 1) * 1000 + (name === 'X' ? 500 : 0);
+    ch.status = name === 'X' ? 'archived' : 'active';
+    ids[name] = ch.id;
+  });
+  for (const name of order) {
+    if (name === 'X') continue;
+    const ch = mock.store.chapters.find((c) => c.id === ids[name])!;
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: ch.id,
+      title: titles[name],
+      content: `正文${name}`,
+      expectedCurrentVersionId: null,
+    });
+  }
+  return ids;
+}
+
+/** DOM 中可见章节顺序（按显示标题反查 chapter id；标题由 currentVersion 派生） */
+function visibleChapterIds(mock: ReturnType<typeof createManuscriptStore>): string[] {
+  const titleToId = new Map<string, string>();
+  for (const c of mock.store.chapters) {
+    const v = mock.store.versions.find((x) => x.id === c.currentVersionId);
+    const title = v?.title ?? '未命名章节';
+    titleToId.set(title, c.id);
+  }
+  return chapterSelectButtons().map((b) => {
+    const t = b.querySelector('.chapter-title-text')?.textContent?.trim() ?? '';
+    return titleToId.get(t) ?? '';
+  });
+}
+
+/** 后端刷新后的完整全序列（按 position 排序） */
+function expectedFullOrder(mock: ReturnType<typeof createManuscriptStore>): string[] {
+  return [...mock.store.chapters]
+    .sort((a, b) => a.position - b.position || a.id.localeCompare(b.id))
+    .map((c) => c.id);
 }
 
 describe('ManuscriptWorkbench', () => {
@@ -612,31 +686,31 @@ describe('ManuscriptWorkbench', () => {
     });
   });
 
-  it('22. archived 不作为排序目标（移动仅作用于 active）', async () => {
+  it('22. archived 不作为排序目标（B上移时 target 只能是 active A）', async () => {
     const mock = createManuscriptStore();
     setupDesktop(mock);
+    const ids = await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
     await act(async () => {
       render(<ManuscriptWorkbench projectId="p1" />);
     });
     await waitForLoaded();
-    // 创建第一章（含版本）与第二章
+    // 打开「显示已归档章节」（archived X 进入展示，但不得参与 move 计算）
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const orderSpy = vi.spyOn(mock.desktop, 'updateChapterOrder');
+    // B 上移：target 只能是 active A，绝不能是 archived X
     await act(async () => {
-      screen.getByRole('button', { name: '新建章节' }).click();
+      screen.getByRole('button', { name: '上移章节：乙' }).click();
     });
-    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
-    await act(async () => {
-      screen.getByRole('button', { name: '新建章节' }).click();
-    });
-    // 归档第一章（当前选中章）
-    const archiveButtons = screen.getAllByRole('button', { name: /归档章节/ });
-    await act(async () => {
-      archiveButtons[0].click();
-    });
-    await waitFor(() => expect(screen.getByText('章节已归档')).toBeInTheDocument());
-    // active 列表只剩第二章：其「上移」操作不能以归档章节为目标（insertBefore 由 active 列表计算）
-    const moveUp = screen.getAllByRole('button', { name: /上移章节/ });
-    // 至少存在一个 active 章节的上移按钮；点击不抛错（no-op 或正常返回）
-    expect(moveUp.length).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.getByText('章节顺序已更新')).toBeInTheDocument());
+    expect(orderSpy).toHaveBeenCalledTimes(1);
+    const payload = orderSpy.mock.calls[0][0] as {
+      chapterId: string;
+      insertBeforeChapterId: string | null;
+    };
+    expect(payload.chapterId).toBe(ids.B);
+    expect(payload.insertBeforeChapterId).toBe(ids.A);
+    expect(payload.insertBeforeChapterId).not.toBe(ids.X);
   });
 
   it('23. 稿件标题 CAS 保存与冲突', async () => {
@@ -778,5 +852,798 @@ describe('ManuscriptWorkbench', () => {
       .getAllByRole('listitem')
       .find((li) => li.querySelector('[aria-current="true"]'));
     expect(currentVersion).toBeDefined();
+  });
+
+  it('29. dirty时点击新建，不调用createChapter', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存内容' } });
+    expect(screen.getByText('有未保存的修改')).toBeInTheDocument();
+    const createSpy = vi.spyOn(mock.desktop, 'createChapter');
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    // 弹出离开确认，不调用后端
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('30. 点击继续编辑，正文和标题保持', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '新标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '正文内容' } });
+    const createSpy = vi.spyOn(mock.desktop, 'createChapter');
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: '继续编辑' }).click();
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('新标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('正文内容');
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('31. 点击放弃修改并离开，只创建一次', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存内容' } });
+    const createSpy = vi.spyOn(mock.desktop, 'createChapter');
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '放弃修改并离开' }).click();
+    });
+    // 只创建一次，并切换到新章节（editor 清空为未命名空章节）
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(chapterSelectButtons().length).toBe(2));
+    await waitFor(() => {
+      expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('');
+    });
+  });
+
+  it('32. 创建失败不丢本地buffer', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '旧标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '旧正文' } });
+    // 创建后端改为失败（仅对后续创建生效）
+    mock.desktop.createChapter = vi.fn().mockRejectedValue(new Error('创建章节失败')) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '放弃修改并离开' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/创建章节失败/)).toBeInTheDocument());
+    // 原章节 buffer 保留（不切换、不覆盖）
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('旧标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('旧正文');
+  });
+
+  it('33. clean状态创建不弹窗', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    const createSpy = vi.spyOn(mock.desktop, 'createChapter');
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    // clean 状态创建：直接创建，无确认对话框
+    await waitFor(() => expect(chapterSelectButtons().length).toBe(1));
+  });
+
+  it('34. 稿件标题dirty时创建也弹窗', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.change(screen.getByLabelText('稿件标题'), { target: { value: '未保存的稿件标题' } });
+    const createSpy = vi.spyOn(mock.desktop, 'createChapter');
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('35. archived重排：A下移不得使用X作为target', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    const ids = await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const orderSpy = vi.spyOn(mock.desktop, 'updateChapterOrder');
+    // A（第一个 active）下移：target 必须是 active 序列的 C，绝不能用 archived X
+    await act(async () => {
+      screen.getByRole('button', { name: '下移章节：甲' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('章节顺序已更新')).toBeInTheDocument());
+    const payload = orderSpy.mock.calls[0][0] as {
+      chapterId: string;
+      insertBeforeChapterId: string | null;
+    };
+    expect(payload.chapterId).toBe(ids.A);
+    expect(payload.insertBeforeChapterId).toBe(ids.C);
+    expect(payload.insertBeforeChapterId).not.toBe(ids.X);
+  });
+
+  it('36. archived重排：C上移target为B', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    const ids = await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const orderSpy = vi.spyOn(mock.desktop, 'updateChapterOrder');
+    await act(async () => {
+      screen.getByRole('button', { name: '上移章节：丙' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('章节顺序已更新')).toBeInTheDocument());
+    const payload = orderSpy.mock.calls[0][0] as {
+      chapterId: string;
+      insertBeforeChapterId: string | null;
+    };
+    expect(payload.chapterId).toBe(ids.C);
+    expect(payload.insertBeforeChapterId).toBe(ids.B);
+  });
+
+  it('37. archived重排：成功后完整列表顺序以后端刷新为准（含archived位置）', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const listSpy = vi.spyOn(mock.desktop, 'listChapters');
+    await act(async () => {
+      screen.getByRole('button', { name: '上移章节：乙' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('章节顺序已更新')).toBeInTheDocument());
+    // 成功后重新拉取完整列表（includeArchived=true）
+    expect(listSpy).toHaveBeenCalled();
+    const lastCall = listSpy.mock.calls[listSpy.mock.calls.length - 1][0] as {
+      includeArchived?: boolean;
+    };
+    expect(lastCall.includeArchived).toBe(true);
+    // DOM 顺序 = 后端刷新后的完整全序列（而非 [...newOrder, ...archived] 本地拼接）
+    await waitFor(() => {
+      expect(visibleChapterIds(mock)).toEqual(expectedFullOrder(mock));
+    });
+  });
+
+  it('38. archived重排：边界上移/下移为no-op且不调用后端', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const orderSpy = vi.spyOn(mock.desktop, 'updateChapterOrder');
+    // A 是第一个 active：上移为 no-op
+    await act(async () => {
+      screen.getByRole('button', { name: '上移章节：甲' }).click();
+    });
+    expect(orderSpy).not.toHaveBeenCalled();
+    // C 是最后一个 active：下移为 no-op
+    await act(async () => {
+      screen.getByRole('button', { name: '下移章节：丙' }).click();
+    });
+    expect(orderSpy).not.toHaveBeenCalled();
+  });
+
+  it('39. archived重排：updateChapterOrder payload 从不出现 archived ID', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    const ids = await seedOrderedChapters(mock, ['A', 'X', 'B', 'C']);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    await waitFor(() => expect(screen.getByText('已归档')).toBeInTheDocument());
+    const orderSpy = vi.spyOn(mock.desktop, 'updateChapterOrder');
+    await act(async () => {
+      screen.getByRole('button', { name: '上移章节：乙' }).click();
+    });
+    await waitFor(() => expect(orderSpy.mock.calls.length).toBe(1));
+    await act(async () => {
+      screen.getByRole('button', { name: '下移章节：甲' }).click();
+    });
+    await waitFor(() => expect(orderSpy.mock.calls.length).toBe(2));
+    for (const call of orderSpy.mock.calls) {
+      const payload = call[0] as { chapterId: string; insertBeforeChapterId: string | null };
+      expect(payload.chapterId).not.toBe(ids.X);
+      expect(payload.insertBeforeChapterId).not.toBe(ids.X);
+    }
+  });
+
+  it('40. 冲突loading期间重存/放弃按钮disabled且本地保留', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地未保存' } });
+    // 服务器推进 current
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    // 延迟冲突刷新
+    const origGet = mock.desktop.getCurrentChapterVersion.bind(mock.desktop);
+    let resolveRefresh!: (v: unknown) => void;
+    mock.desktop.getCurrentChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveRefresh = () => resolve(origGet(input));
+      });
+    }) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('正在刷新服务器当前版本…')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: '基于新版本再保存' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '放弃本地修改并加载服务器版本' })).toBeDisabled();
+    // loading 期间本地 title/content 保留
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('本地未保存');
+    await act(async () => {
+      resolveRefresh({});
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+  });
+
+  it('41. 冲突刷新成功为version时使用新version ID', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地未保存' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+    const createSpy = vi.spyOn(mock.desktop, 'createChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '基于新版本再保存' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/已保存新版本 #2/)).toBeInTheDocument());
+    const payload = createSpy.mock.calls[createSpy.mock.calls.length - 1][0] as {
+      expectedCurrentVersionId: string | null;
+    };
+    // strict 使用刷新后的服务器 current ID（ver-1）
+    expect(payload.expectedCurrentVersionId).toBe('ver-1');
+  });
+
+  it('42. 刷新成功且服务器current合法为null时使用expected=null', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: 'v1' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/已保存新版本 #1/)).toBeInTheDocument());
+    // 模拟另一客户端：服务器 currentVersionId 指向不存在的版本 → 刷新结果合法为 null
+    mock.store.chapters[0].currentVersionId = 'ghost-ver';
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地新内容' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本为空/)).toBeInTheDocument());
+    const createSpy = vi.spyOn(mock.desktop, 'createChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '基于新版本再保存' }).click();
+    });
+    const payload = createSpy.mock.calls[createSpy.mock.calls.length - 1][0] as {
+      expectedCurrentVersionId: string | null;
+    };
+    // 不得 fallback 到旧 current（ver-1）；服务器 current 为 null 时 expected 必须为 null
+    expect(payload.expectedCurrentVersionId).toBeNull();
+  });
+
+  it('43. 刷新失败时不fallback旧current且createChapterVersion次数不增加', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地未保存' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    // 冲突刷新失败
+    mock.desktop.getCurrentChapterVersion = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('网络错误'), { code: 'NETWORK' })) as never;
+    const createSpy = vi.spyOn(mock.desktop, 'createChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByText('服务器版本刷新失败，请重试。')).toBeInTheDocument(),
+    );
+    // 触发冲突的那一次保存调用
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    // error 态本地 buffer 保留
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('本地未保存');
+    // 编辑器「保存新版本」点击不得 fallback 旧 current 提交 IPC
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    // 冲突横幅按钮 disabled
+    expect(screen.getByRole('button', { name: '基于新版本再保存' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '放弃本地修改并加载服务器版本' })).toBeDisabled();
+  });
+
+  it('44. 手动重新刷新成功后才可保存', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地未保存' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    // 第一次刷新失败，后续成功
+    const origGet = mock.desktop.getCurrentChapterVersion.bind(mock.desktop);
+    let attempt = 0;
+    mock.desktop.getCurrentChapterVersion = vi.fn((input: unknown) => {
+      attempt++;
+      if (attempt === 1) {
+        return Promise.reject(Object.assign(new Error('网络错误'), { code: 'NETWORK' }));
+      }
+      return origGet(input);
+    }) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByText('服务器版本刷新失败，请重试。')).toBeInTheDocument(),
+    );
+    // 手动重新刷新服务器版本
+    await act(async () => {
+      screen.getByRole('button', { name: '重新刷新服务器版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+    // 刷新成功后才可基于新 current 保存
+    await act(async () => {
+      screen.getByRole('button', { name: '基于新版本再保存' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/已保存新版本 #2/)).toBeInTheDocument());
+  });
+
+  it('45. 冲突刷新失败后横幅不永久停留在「正在刷新」', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    mock.desktop.getCurrentChapterVersion = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('网络错误'), { code: 'NETWORK' })) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByText('服务器版本刷新失败，请重试。')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('正在刷新服务器当前版本…')).not.toBeInTheDocument();
+  });
+
+  it('46. 冲突全程保留本地title/content（loading→ready→error）', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地未保存' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    const origGet = mock.desktop.getCurrentChapterVersion.bind(mock.desktop);
+    let resolveRefresh!: (v: unknown) => void;
+    mock.desktop.getCurrentChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveRefresh = () => resolve(origGet(input));
+      });
+    }) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('正在刷新服务器当前版本…')).toBeInTheDocument());
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('本地未保存');
+    // ready 后仍保留
+    await act(async () => {
+      resolveRefresh({});
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('本地未保存');
+  });
+
+  it('47. save进行中章节按钮disabled', async () => {
+    const mock = createManuscriptStore();
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveFn: (v: unknown) => void = () => {};
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveFn = () => resolve(original(input));
+      });
+    }) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    // mutation 进行中：章节选择按钮全部 disabled
+    for (const b of chapterSelectButtons()) {
+      expect(b).toBeDisabled();
+    }
+    await act(async () => {
+      resolveFn({});
+    });
+  });
+
+  it('48. save进行中新建章节disabled', async () => {
+    const mock = createManuscriptStore();
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveFn: (v: unknown) => void = () => {};
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveFn = () => resolve(original(input));
+      });
+    }) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    expect(screen.getByRole('button', { name: '新建章节' })).toBeDisabled();
+    await act(async () => {
+      resolveFn({});
+    });
+  });
+
+  it('49. save进行中版本promote disabled', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: 'v1' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/已保存新版本 #1/)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: 'v2' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/已保存新版本 #2/)).toBeInTheDocument());
+    // 延迟下一次保存
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveFn: (v: unknown) => void = () => {};
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveFn = () => resolve(original(input));
+      });
+    }) as never;
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: 'v3' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    // mutation 进行中：promote 按钮全部 disabled
+    const promoteButtons = screen.getAllByRole('button', { name: '设为当前版本' });
+    expect(promoteButtons.length).toBeGreaterThan(0);
+    for (const b of promoteButtons) {
+      expect(b).toBeDisabled();
+    }
+    await act(async () => {
+      resolveFn({});
+    });
+  });
+
+  it('51. 模拟绕过UI导致selected chapter改变后，旧save完成不得污染新章节editor', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+    const chA = await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    const chB = await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveSave!: (v: unknown) => void;
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveSave = () => resolve(original(input));
+      });
+    }) as never;
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(2));
+    expect(wb!.selectedChapterId).toBe(chA.id);
+    await act(async () => {
+      wb!.setEditorTitle('A标题');
+      wb!.setEditorContent('A未保存内容');
+    });
+    expect(wb!.dirty).toBe(true);
+    // 保存 A（延迟），此时 mutation 进行中
+    const savePromise = wb!.saveChapterVersion();
+    // 绕过 UI 直接切换章节（dirty → 先出现离开确认）
+    await act(async () => {
+      wb!.selectChapter(chB.id);
+    });
+    expect(wb!.pendingLeave).not.toBeNull();
+    await act(async () => {
+      wb!.confirmLeave();
+    });
+    await waitFor(() => expect(wb!.selectedChapterId).toBe(chB.id));
+    // B 加载为空
+    expect(wb!.editorContent).toBe('');
+    // 旧 save 完成
+    await act(async () => {
+      resolveSave({});
+    });
+    const result = await savePromise;
+    expect(result).toBe(false);
+    // A 的保存结果不得写入 B 的 editor buffer
+    expect(wb!.editorContent).toBe('');
+    expect(wb!.editorTitle).toBe('');
+  });
+
+  it('52. 重复点击只产生一次后端mutation', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+    await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveSave!: (v: unknown) => void;
+    let calls = 0;
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      calls++;
+      return new Promise((resolve) => {
+        resolveSave = () => resolve(original(input));
+      });
+    }) as never;
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(1));
+    await act(async () => {
+      wb!.setEditorTitle('标题');
+      wb!.setEditorContent('内容');
+    });
+    let p1: Promise<boolean> | undefined;
+    await act(async () => {
+      p1 = wb!.saveChapterVersion();
+    });
+    // mutation 锁已生效：第二次保存立即返回 false，不产生第二次后端调用
+    let r2 = false;
+    await act(async () => {
+      r2 = await wb!.saveChapterVersion();
+    });
+    expect(r2).toBe(false);
+    expect(calls).toBe(1);
+    await act(async () => {
+      resolveSave({});
+    });
+    const r1 = await p1!;
+    expect(r1).toBe(true);
+    expect(calls).toBe(1);
+  });
+
+  it('53. mutation失败后全部锁恢复', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+    await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    let attempts = 0;
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      attempts++;
+      if (attempts === 1) {
+        return Promise.reject(Object.assign(new Error('数据库错误'), { code: 'DATABASE' }));
+      }
+      return original(input);
+    }) as never;
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(1));
+    await act(async () => {
+      wb!.setEditorTitle('标题');
+      wb!.setEditorContent('内容');
+    });
+    // 第一次保存失败
+    let r1: boolean | null = null;
+    await act(async () => {
+      r1 = await wb!.saveChapterVersion();
+    });
+    expect(r1).toBe(false);
+    expect(wb!.error).toContain('数据库错误');
+    // 锁已恢复：第二次保存可正常执行
+    let r2: boolean | null = null;
+    await act(async () => {
+      r2 = await wb!.saveChapterVersion();
+    });
+    expect(r2).toBe(true);
+    expect(attempts).toBe(2);
   });
 });

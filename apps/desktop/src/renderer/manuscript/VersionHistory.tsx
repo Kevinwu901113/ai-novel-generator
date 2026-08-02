@@ -13,6 +13,8 @@ interface VersionHistoryProps {
   readonly versions: ReadonlyArray<ChapterVersionSummary>;
   readonly currentVersionId: string | null;
   readonly isPromoting: boolean;
+  /** 全局 mutation 锁：进行中时禁用 promote */
+  readonly isBusy: boolean;
   readonly isLoading: boolean;
   readonly hasChapter: boolean;
   readonly onPromote: (versionId: string) => void;
@@ -22,6 +24,7 @@ export function VersionHistory({
   versions,
   currentVersionId,
   isPromoting,
+  isBusy,
   isLoading,
   hasChapter,
   onPromote,
@@ -73,7 +76,7 @@ export function VersionHistory({
                     type="button"
                     className="btn btn-small btn-muted"
                     onClick={() => onPromote(version.id)}
-                    disabled={isPromoting}
+                    disabled={isPromoting || isBusy}
                   >
                     设为当前版本
                   </button>
