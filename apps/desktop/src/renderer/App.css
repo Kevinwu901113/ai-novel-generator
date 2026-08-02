@@ -2544,3 +2544,612 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* ── 创作契约面板 ──────────────────────────────────────────────── */
+
+.contract-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.contract-panel-header {
+  display: flex;
+  align-items: center;
+}
+
+.contract-panel-heading {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+/* 请求区域 */
+.contract-request-section {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.contract-request-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+}
+
+.contract-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 冲突横幅 */
+.contract-conflict-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #fef3c7;
+  color: #92400e;
+  font-size: 13px;
+  border-radius: 4px;
+  border: 1px solid #fde68a;
+}
+
+.contract-conflict-banner button {
+  background: none;
+  border: none;
+  color: #92400e;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-conflict-banner {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #78350f;
+  }
+
+  .contract-conflict-banner button {
+    color: #fcd34d;
+  }
+}
+
+/* 错误提示 */
+.contract-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  font-size: 13px;
+  border-radius: 4px;
+  border: 1px solid #fecaca;
+}
+
+.contract-error button {
+  background: none;
+  border: none;
+  color: #b91c1c;
+  cursor: pointer;
+  padding: 2px 4px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-error {
+    background-color: #2d0a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+
+  .contract-error button {
+    color: #fca5a5;
+  }
+}
+
+/* 任务状态区域 */
+.contract-task-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+}
+
+.contract-task-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-task-heading:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.contract-task-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.contract-task-id {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: var(--color-text-secondary);
+}
+
+.contract-task-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  background-color: var(--color-bg);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.contract-task-status-badge.status-pending {
+  background-color: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+.contract-task-status-badge.status-running {
+  background-color: #dbeafe;
+  color: #1e40af;
+  border-color: #93c5fd;
+}
+
+.contract-task-status-badge.status-succeeded {
+  background-color: #d1fae5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+
+.contract-task-status-badge.status-failed {
+  background-color: #fef2f2;
+  color: #991b1b;
+  border-color: #fca5a5;
+}
+
+.contract-task-status-badge.status-cancelled {
+  background-color: #f3f4f6;
+  color: #4b5563;
+  border-color: #d1d5db;
+}
+
+.contract-task-status-badge.status-stale {
+  background-color: #fef3c7;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-task-status-badge.status-pending {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #92400e;
+  }
+
+  .contract-task-status-badge.status-running {
+    background-color: #172554;
+    color: #93c5fd;
+    border-color: #1e40af;
+  }
+
+  .contract-task-status-badge.status-succeeded {
+    background-color: #052e16;
+    color: #6ee7b7;
+    border-color: #065f46;
+  }
+
+  .contract-task-status-badge.status-failed {
+    background-color: #450a0a;
+    color: #fca5a5;
+    border-color: #991b1b;
+  }
+
+  .contract-task-status-badge.status-cancelled {
+    background-color: #1f2937;
+    color: #d1d5db;
+    border-color: #4b5563;
+  }
+
+  .contract-task-status-badge.status-stale {
+    background-color: #451a03;
+    color: #fcd34d;
+    border-color: #92400e;
+  }
+}
+
+.contract-polling-indicator {
+  font-size: 14px;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.contract-task-error {
+  font-size: 12px;
+  color: #b91c1c;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-task-error {
+    color: #fca5a5;
+  }
+}
+
+.contract-task-hint {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+/* 提案加载 / 空状态 */
+.contract-loading {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  padding: 8px 0;
+}
+
+.contract-empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.contract-empty-state .empty-hint {
+  margin-top: 0;
+}
+
+/* 提案区域 */
+.contract-proposal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contract-current-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.contract-proposal-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-proposal-heading:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.contract-proposal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.contract-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 10px;
+}
+
+.contract-status-badge.status-proposed {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.contract-status-badge.status-accepted {
+  color: #16a34a;
+  background-color: #dcfce7;
+}
+
+.contract-status-badge.status-rejected {
+  color: #b91c1c;
+  background-color: #fef2f2;
+}
+
+.contract-status-badge.status-superseded,
+.contract-status-badge.status-stale {
+  color: #6b7280;
+  background-color: #f3f4f6;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-status-badge.status-proposed {
+    color: #fbbf24;
+    background-color: #451a03;
+  }
+
+  .contract-status-badge.status-accepted {
+    color: #22c55e;
+    background-color: #052e16;
+  }
+
+  .contract-status-badge.status-rejected {
+    color: #fca5a5;
+    background-color: #450a0a;
+  }
+
+  .contract-status-badge.status-superseded,
+  .contract-status-badge.status-stale {
+    color: #9ca3af;
+    background-color: #1f2937;
+  }
+}
+
+/* 提案操作 */
+.contract-proposal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border);
+}
+
+.contract-proposal-actions .btn-primary {
+  padding: 6px 16px;
+  font-size: 13px;
+}
+
+.contract-proposal-actions .btn-small:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Current Version 区域 */
+.contract-current-version-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contract-current-version-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-current-version-heading:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.contract-current-version-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 结构化 sections */
+.contract-sections-view {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.contract-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.contract-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.contract-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.contract-field-value {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.contract-field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.contract-field-longtext {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.7;
+  margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+}
+
+.contract-field-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.contract-field-list-item {
+  font-size: 13px;
+  color: var(--color-text);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* 子卡片（主角 / 配角） */
+.contract-sub-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+}
+
+.contract-sub-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-lock-marker {
+  font-size: 11px;
+  line-height: 1;
+}
+
+/* 锁定字段 */
+.contract-locks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contract-locks-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.contract-lock-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.contract-lock-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: #92400e;
+  background-color: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .contract-lock-tag {
+    color: #fcd34d;
+    background-color: #451a03;
+    border-color: #78350f;
+  }
+}
+
+.contract-locks-empty {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 字段来源 */
+.contract-provenance summary {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.contract-provenance-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contract-provenance-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  background-color: var(--color-bg-secondary);
+  border-radius: 4px;
+  border: 1px solid var(--color-border);
+}
+
+.contract-provenance-key {
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.contract-provenance-source {
+  font-size: 12px;
+  color: var(--color-text);
+}
+
+.contract-provenance-rationale {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+/* focus-visible 样式 */
+.contract-panel button:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}

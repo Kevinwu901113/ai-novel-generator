@@ -285,29 +285,29 @@ Evaluation Harness → Scene Planner → Draft Generator
 
 #### 生成质量能力
 
-| 能力                                 | 状态 | 说明                                                          |
-| ------------------------------------ | ---- | ------------------------------------------------------------- |
-| Minimal Creation Contract Renderer   | ⬜   | Contract 后端已有，需最小 UI                                  |
-| Writing Evaluation Lab               | ✅   | PR #18 / merge `4eab0c14`（固定题库 + 多策略对比 + 评分体系） |
-| Real Generation Experiment Runner    | ⬜   | 真实模型 → 固定 suite → candidate artifacts → blind review    |
-| Minimal Manuscript / Chapter Version | ⬜   | 稿件版本管理基础                                              |
-| Scene Planner                        | ⬜   | 从章节目标到场景卡片                                          |
-| Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                                             |
-| Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示）                              |
-| Character Voice Critic               | ⬜   | 人物声音一致性和区分度                                        |
-| AI-Smell Critic                      | ⬜   | 基于 taxonomy 的自动检测                                      |
-| Targeted Rewriter                    | ⬜   | 定点修订，非整章重写                                          |
-| Writer Preference Profile            | ⬜   | 用户偏好建模和可执行约束                                      |
-| Story State Ledger                   | ⬜   | 权威事实账本                                                  |
-| Chapter Summary / Fact Extraction    | ⬜   | 章节摘要和事实抽取                                            |
-| Retrieval Context Engine             | ⬜   | 动态检索上下文                                                |
-| Outline Proposal / Version           | ⬜   | 大纲生成和版本管理                                            |
-| Long-form Generation                 | ⬜   | 长篇持续生成                                                  |
-| Continuity Detection                 | ⬜   | 连续性检测                                                    |
-| Review / Fix Workflow                | ⬜   | 审稿和定点修复流程                                            |
-| PlotPilot Product Integration        | ⬜   | PlotPilot 产品级接入                                          |
-| Export / Backup / Recovery           | ⬜   | 导出、备份、恢复                                              |
-| Real Novel Quality Acceptance        | ⬜   | 真实作品质量验收                                              |
+| 能力                                 | 状态 | 说明                                                                                                             |
+| ------------------------------------ | ---- | ---------------------------------------------------------------------------------------------------------------- |
+| Minimal Creation Contract Renderer   | 🟡   | PR #20（ready for review，未合并）：最小 UI + 任务轮询 + 提案审核 + Accept/Reject + Current Version；未进入 main |
+| Writing Evaluation Lab               | ✅   | PR #18 / merge `4eab0c14`（固定题库 + 多策略对比 + 评分体系）                                                    |
+| Real Generation Experiment Runner    | ⬜   | 真实模型 → 固定 suite → candidate artifacts → blind review                                                       |
+| Minimal Manuscript / Chapter Version | ⬜   | 稿件版本管理基础                                                                                                 |
+| Scene Planner                        | ⬜   | 从章节目标到场景卡片                                                                                             |
+| Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                                                                                                |
+| Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示）                                                                                 |
+| Character Voice Critic               | ⬜   | 人物声音一致性和区分度                                                                                           |
+| AI-Smell Critic                      | ⬜   | 基于 taxonomy 的自动检测                                                                                         |
+| Targeted Rewriter                    | ⬜   | 定点修订，非整章重写                                                                                             |
+| Writer Preference Profile            | ⬜   | 用户偏好建模和可执行约束                                                                                         |
+| Story State Ledger                   | ⬜   | 权威事实账本                                                                                                     |
+| Chapter Summary / Fact Extraction    | ⬜   | 章节摘要和事实抽取                                                                                               |
+| Retrieval Context Engine             | ⬜   | 动态检索上下文                                                                                                   |
+| Outline Proposal / Version           | ⬜   | 大纲生成和版本管理                                                                                               |
+| Long-form Generation                 | ⬜   | 长篇持续生成                                                                                                     |
+| Continuity Detection                 | ⬜   | 连续性检测                                                                                                       |
+| Review / Fix Workflow                | ⬜   | 审稿和定点修复流程                                                                                               |
+| PlotPilot Product Integration        | ⬜   | PlotPilot 产品级接入                                                                                             |
+| Export / Backup / Recovery           | ⬜   | 导出、备份、恢复                                                                                                 |
+| Real Novel Quality Acceptance        | ⬜   | 真实作品质量验收                                                                                                 |
 
 ---
 
@@ -376,12 +376,12 @@ Evaluation Harness → Scene Planner → Draft Generator
 | 字段                       | 值                                                                      |
 | -------------------------- | ----------------------------------------------------------------------- |
 | Last verified date         | 2026-08-02                                                              |
-| Verified main SHA          | `4eab0c14a889647b7057e4688bd2e76b508a9ec9`                              |
-| Active implementation      | 无正在开发的已确认 PR；下一步为 M1-C3 与 GQ2                            |
-| Active PR                  | None                                                                    |
+| Verified main SHA          | `8c92d16308a80d8c7d454f11b677ed0c8454124c`                              |
+| Active implementation      | M1-C3 Minimal Contract Renderer（PR #20，ready for review 未合并）      |
+| Active PR                  | #20（ready for review，未合并）                                         |
 | Last merged capability     | GQ1 Writing Evaluation Lab Foundation（PR #18，`4eab0c14`）             |
-| Next product capability    | Minimal Contract Renderer（M1-C3）                                      |
-| Next quality capability    | Real Generation Experiment Runner（GQ2）                                |
+| Next product capability    | Minimal Contract Renderer（M1-C3，PR #20 进行中）                       |
+| Next quality capability    | Real Generation Experiment Runner（GQ2，可并行，尚未开始）              |
 | Current largest risk       | 项目继续过度投资基础设施，而未建立真实生成质量实验闭环                  |
 | Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成（尚未验证） |
 
@@ -409,6 +409,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 | 2026-08-01 | PR #17 / `e84601f2`（已合并）                       | ✅     | M1-C2 AI task / process bridge                                            | 打通创作规格生成链路；尚无文章生成质量提升证据         | task-engine、runner、process bridge、SQLite concurrency、backend E2E（merge `e84601f2`）                                                                       | Minimal Contract Renderer 与 Writing Evaluation Lab 并行              |
 | 2026-08-01 | PR #18 / `900fd6eae71d164e095ada37a87d37556a59721d` | ✅     | GQ1 Writing Evaluation Lab foundation（固定题库 + 多策略对比 + 评分体系） | 建立评测骨架与完整性/隐私边界；尚无文章质量提升证据    | evaluation harness、fixtures、评分体系、artifact validators、atomic publication、派生路径角色身份校验、辅助路径保护、部分写入清理、293 tests；merge `4eab0c14` | 接入真实 generation candidate 实验；与 Minimal Contract Renderer 并行 |
 | 2026-08-01 | `dd04481` PR #16                                    | ✅     | Generation quality roadmap and progress ledger                            | 建立质量方向的权威路线和维护制度；尚无文章质量实验结果 | generation-quality-roadmap.md                                                                                                                                  | 合并后由所有 DeepSeek / MiMo 任务持续维护                             |
+| 2026-08-02 | `37bef0d` PR #20（ready for review，未合并）        | 🟡     | M1-C3 Minimal Contract Renderer（最小 UI 纵向切片）                       | 无；尚无文章质量提升证据                               | 任务轮询 + 提案审核 + Accept/Reject + Current Version；纯 Renderer，无 backend 变更；`pnpm check` 全绿（2357 passed）                                          | 合并后验收验证；GQ2 Real Generation Experiment Runner 并行进行        |
 
 ### 早期能力汇总基线
 

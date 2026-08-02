@@ -39,6 +39,7 @@ describe('taskTypeLabel', () => {
   it('返回已知类型的中文标签', () => {
     expect(taskTypeLabel('MODEL_INVOCATION_TEST')).toBe('模型调用测试');
     expect(taskTypeLabel('GRILL_QUESTION_PLAN')).toBe('Grill 问题规划');
+    expect(taskTypeLabel('CREATION_CONTRACT_DRAFT')).toBe('创作契约草案');
   });
 
   it('未知类型使用安全 fallback', () => {
@@ -236,6 +237,76 @@ describe('presentTaskResult', () => {
   it('GRILL_QUESTION_PLAN 固定文本', () => {
     expect(presentTaskResult('GRILL_QUESTION_PLAN', { anything: true })).toBe('规划任务结果已保存');
     expect(presentTaskResult('GRILL_QUESTION_PLAN', null)).toBe('规划任务结果已保存');
+  });
+
+  it('CREATION_CONTRACT_DRAFT 有效白名单结果显示', () => {
+    const result = presentTaskResult('CREATION_CONTRACT_DRAFT', {
+      proposalId: 'prop-00000001',
+      schemaVersion: 1,
+      baseGrillSessionVersion: 2,
+      baseContractVersion: null,
+      sectionCount: 17,
+    });
+    expect(result).toContain('创作契约草案已生成');
+    expect(result).toContain('17');
+  });
+
+  it('CREATION_CONTRACT_DRAFT 只展示白名单字段，不泄露 proposalId 完整值', () => {
+    const result = presentTaskResult('CREATION_CONTRACT_DRAFT', {
+      proposalId: 'prop-00000001',
+      schemaVersion: 1,
+      baseGrillSessionVersion: 2,
+      baseContractVersion: 3,
+      sectionCount: 5,
+    });
+    expect(result).not.toContain('prop-00000001');
+    expect(result).not.toContain('schemaVersion');
+    expect(result).not.toContain('2');
+  });
+
+  it('CREATION_CONTRACT_DRAFT 额外字段被拒绝（白名单校验）', () => {
+    expect(
+      presentTaskResult('CREATION_CONTRACT_DRAFT', {
+        proposalId: 'prop-00000001',
+        schemaVersion: 1,
+        baseGrillSessionVersion: 2,
+        baseContractVersion: null,
+        sectionCount: 5,
+        sections: { premise: 'secret' },
+      }),
+    ).toBeNull();
+  });
+
+  it('CREATION_CONTRACT_DRAFT 无效字段类型被拒绝', () => {
+    expect(
+      presentTaskResult('CREATION_CONTRACT_DRAFT', {
+        proposalId: 'prop-00000001',
+        schemaVersion: '1' as unknown as number,
+        baseGrillSessionVersion: 2,
+        baseContractVersion: null,
+        sectionCount: 5,
+      }),
+    ).toBeNull();
+    expect(
+      presentTaskResult('CREATION_CONTRACT_DRAFT', {
+        proposalId: 'prop-00000001',
+        schemaVersion: 1,
+        baseGrillSessionVersion: 2,
+        baseContractVersion: null,
+        sectionCount: -1,
+      }),
+    ).toBeNull();
+    expect(
+      presentTaskResult('CREATION_CONTRACT_DRAFT', {
+        proposalId: 'prop-00000001',
+        schemaVersion: 1,
+        baseGrillSessionVersion: 0,
+        baseContractVersion: null,
+        sectionCount: 5,
+      }),
+    ).toBeNull();
+    expect(presentTaskResult('CREATION_CONTRACT_DRAFT', null)).toBeNull();
+    expect(presentTaskResult('CREATION_CONTRACT_DRAFT', undefined)).toBeNull();
   });
 
   it('未知类型有 result 时显示通用文本', () => {
