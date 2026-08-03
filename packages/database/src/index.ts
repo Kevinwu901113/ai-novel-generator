@@ -99,4 +99,5 @@ export {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 export { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
+export { ResearchBundleRepositoryImpl } from './research-repositories.js';
 export { sha256Utf8 } from './creation-contract-repositories.js';

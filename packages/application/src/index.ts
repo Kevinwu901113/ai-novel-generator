@@ -388,6 +388,15 @@ export {
   propagateCreationSpecInvalidation,
 } from './idea-intake.js';
 
+// ── Web Research（GE-4）─────────────────────────────────────────
+
+export type {
+  ResearchBundleRepositoryPort,
+  ExecuteResearchDeps,
+  ExecuteResearchInput,
+} from './research.js';
+export { executeResearch, getResearchBundle } from './research.js';
+
 // ── Graph Walking Skeleton（GE-2）────────────────────────────────
 
 export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';

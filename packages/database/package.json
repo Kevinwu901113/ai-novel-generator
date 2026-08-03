@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@ai-novel/application": "workspace:*",
-    "@ai-novel/domain": "workspace:*"
+    "@ai-novel/domain": "workspace:*",
+    "@ai-novel/research-engine": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.8.0"

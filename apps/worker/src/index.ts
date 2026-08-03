@@ -108,6 +108,11 @@ import {
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
 import { dispatchGraphCommand, type GraphHandlerContext } from './graph-handlers.js';
 import { dispatchIntakeCommand } from './intake-handlers.js';
+import {
+  createFakeResearchProvider,
+  dispatchResearchCommand,
+  type ResearchHandlerContext,
+} from './research-handlers.js';
 import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
 import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
@@ -1555,6 +1560,16 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           clock: createClock(),
         };
         data = dispatchIntakeCommand(request.command, request.payload, intakeCtx);
+        break;
+      }
+      case 'research.execute': {
+        const provider = createFakeResearchProvider();
+        const researchCtx: ResearchHandlerContext = {
+          getProjectDb,
+          search: provider.search,
+          fetch: provider.fetch,
+        };
+        data = await dispatchResearchCommand(request.command, request.payload, researchCtx);
         break;
       }
       default:

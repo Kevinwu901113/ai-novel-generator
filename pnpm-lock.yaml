@@ -93,6 +93,9 @@ importers:
       '@ai-novel/model-gateway':
         specifier: workspace:*
         version: link:../../packages/model-gateway
+      '@ai-novel/research-engine':
+        specifier: workspace:*
+        version: link:../../packages/research-engine
       '@ai-novel/secret-store':
         specifier: workspace:*
         version: link:../../packages/secret-store
@@ -140,6 +143,9 @@ importers:
       '@ai-novel/domain':
         specifier: workspace:*
         version: link:../domain
+      '@ai-novel/research-engine':
+        specifier: workspace:*
+        version: link:../research-engine
     devDependencies:
       typescript:
         specifier: ^5.8.0
@@ -169,6 +175,9 @@ importers:
       '@ai-novel/domain':
         specifier: workspace:*
         version: link:../domain
+      '@ai-novel/research-engine':
+        specifier: workspace:*
+        version: link:../research-engine
     devDependencies:
       typescript:
         specifier: ^5.8.0

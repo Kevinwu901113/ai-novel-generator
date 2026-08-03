@@ -31,6 +31,7 @@ import {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
+import { ResearchBundleRepositoryImpl } from './research-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -761,6 +762,27 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON graph_run_commands(run_id);
     `,
   },
+  {
+    version: 9,
+    sql: `
+      -- ── ResearchBundle（GE-4）────────────────────────────────────
+      -- 必要调研的问题计划、来源、事实笔记与结论；版本化（append bundle 新版本）。
+      CREATE TABLE IF NOT EXISTS research_bundles (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        depth TEXT NOT NULL CHECK (depth IN ('none','light','deep')),
+        bundle_json TEXT NOT NULL CHECK (json_valid(bundle_json)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, id, version),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_research_bundles_project_created
+        ON research_bundles(project_id, created_at);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1240,6 +1262,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly graphRunRepo: GraphRunRepositoryImpl;
   private readonly graphRunCommandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly graphRunTransaction: GraphRunTransactionPortImpl;
+  private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1271,6 +1294,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.graphRunRepo = new GraphRunRepositoryImpl(this.db);
     this.graphRunCommandLogRepo = new GraphRunCommandLogRepositoryImpl(this.db);
     this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
+    this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1351,6 +1375,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getIdeaIntakeAnswerPort(): IdeaIntakeAnswerPortImpl {
     return new IdeaIntakeAnswerPortImpl(this.db);
+  }
+
+  getResearchBundleRepository(): ResearchBundleRepositoryImpl {
+    return this.researchBundleRepo;
   }
 
   transaction<T>(fn: () => T): T {

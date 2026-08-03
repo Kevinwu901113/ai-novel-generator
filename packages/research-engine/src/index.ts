@@ -1,8 +1,29 @@
 /**
  * @ai-novel/research-engine
  *
- * 原作和人物资料研究引擎。
- * 本阶段仅建立包结构，不实现具体功能。
+ * Web Research 端口、安全边界与 ResearchBundle 编排（GE-4）。
+ * 产品 1.0 不建设知识图谱、通用 RAG 平台或无限自动搜索。
  */
 
+export type {
+  ResearchDepth,
+  SearchResult,
+  FetchedDocument,
+  WebSearchPort,
+  WebFetchPort,
+  ResearchQuestion,
+  ResearchSourceRecord,
+  FactNote,
+  ResearchBundle,
+  ResearchInput,
+} from './research-types.js';
+
+export { validateResearchTargetUrl, isSafeSourceUrl } from './security.js';
+
+export { dependsOnRealWorldFacts, determineResearchDepth } from './depth.js';
+
+export { orchestrateResearch } from './orchestrator.js';
+export type { ResearchOrchestratorDeps, OrchestrateInput } from './orchestrator.js';
+
+/** 包已加载（替代原 stub 标记） */
 export const RESEARCH_ENGINE_PACKAGE_LOADED = true;
