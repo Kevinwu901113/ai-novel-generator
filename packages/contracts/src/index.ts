@@ -2791,3 +2791,7 @@ export function isValidChapterPublicData(data: unknown): data is ChapterPublicDa
   if (obj.currentVersion === null) return true;
   return isValidChapterVersionSummary(obj.currentVersion);
 }
+
+// ── Idea-to-Novel Graph 跨进程契约 ─────────────────────────────────
+
+export * from './idea-to-novel-graph.js';

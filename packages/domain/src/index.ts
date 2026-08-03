@@ -273,3 +273,13 @@ export * from './creation-contract.js';
 // ── 稿件 / 章节 / 章节版本领域模型 ────────────────────────────────
 
 export * from './manuscript.js';
+
+// ── Idea-to-Novel Graph 定义与转移 ───────────────────────────────
+
+export * from './idea-to-novel-graph.js';
+export * from './idea-to-novel-graph-state.js';
+export * from './idea-to-novel-graph-state-validation.js';
+export * from './idea-to-novel-graph-invalidation.js';
+export * from './idea-to-novel-graph-transitions.js';
+export * from './idea-to-novel-graph-stages.js';
+export * from './idea-to-novel-graph-validator.js';
