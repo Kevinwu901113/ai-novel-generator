@@ -1,4 +1,4 @@
-# AI Novel Generator — Writing-first Product Direction
+# AI Novel Generator — Idea-to-Novel Product Direction (V1)
 
 > Status: ACCEPTED
 > Effective date: 2026-08-03
@@ -7,132 +7,137 @@
 本文档是项目产品方向的最高级别权威来源。
 
 - roadmap、architecture 和 feature 设计不得与本文档冲突；
-- 如旧文档仍描述 Grill-first 或 Contract-first 流程，以本文档为准；
-- 本次决策是 controlled pivot，不是推倒重写。
+- 如旧文档仍描述 Grill-first、Contract-first 或纯 Writer-first 流程，以本文档为准；
+- 本次决策是在 controlled pivot 基础上的进一步校正，不是推倒重写，也不是回退到 Contract-first。
 
 ---
 
 ## 1. Executive Decision
 
-项目采用：
+项目继续采用：
 
 ```text
 Controlled Pivot
 ```
 
-核心决定：
+产品 1.0 的目标是：
 
 ```text
-保留现有技术底座；
-停止以 Grill-me、Creation Contract、任务阶段和工程状态为中心继续扩张；
-重启产品层和用户旅程；
-把产品改造成 Writing-first 小说创作工具；
-把复杂状态、检索、Agent 和质量治理下沉为 Narrative Engine。
+快速收集用户想法，
+进行必要程度的联网调研，
+然后按照用户要求的形式生成小说。
 ```
+
+新的产品定位：
+
+```text
+Idea-to-Novel
+```
+
+核心价值不是让用户快速进入空白编辑器，而是：
+
+```text
+以尽可能低的表达成本
+将用户的模糊想法
+转化为经过必要调研
+并符合其形式要求的小说。
+```
+
+编辑器仍然存在，但主要用于：
+
+- 查看生成结果；
+- 修改正文；
+- 调整后续方向；
+- 重新生成；
+- 继续生成；
+- 导出作品。
+
+它不是产品 1.0 唯一入口。
 
 一句话产品定义：
 
-> AI Novel Generator 首先是一款作者愿意长期使用的小说编辑器，其次才是一套叙事引擎和 Agent 系统。
+> AI Novel Generator 首先帮助用户以尽可能低的表达成本，把模糊想法变成经过必要调研、符合其形式要求的小说，其次才是一款小说编辑器和叙事引擎。
 
 核心架构表达：
 
 ```text
-Writer Workspace
+Idea Intake（低表达成本入口）
++
+Web Research（必要程度的联网调研）
++
+Story Blueprint（故事蓝图）
++
+Manuscript Workspace（查看 / 修改 / 继续生成 / 导出）
 +
 Narrative Engine
 ```
 
-前台产品主要参考：
+保留的既有决定（技术底座见第 12 节）：
 
 ```text
-The Story Nexus
-Novelcrafter
-Sudowrite
-AugmentedQuill
-NovelAI
-```
-
-后台叙事引擎主要参考：
-
-```text
-PlotPilot
-novel-studio
-StoryWriter
-```
-
-不是复制任何单一项目，而是采用：
-
-```text
-The Story Nexus 式 editor-first 前台
-+
-PlotPilot 式 narrative-engine 后台
+Controlled Pivot
+保留当前仓库和技术底座
+保留 Domain / Application / Infrastructure 分层
+保留 Renderer / Preload / Main / Worker 边界
+保留 MV1-A Manuscript 基础
+复杂引擎能力不直接暴露成工程控制台
+PlotPilot 不是本地 source of truth
+PR #25 不按 product-complete 合并
 ```
 
 ---
 
-## 2. Why the Pivot Is Necessary
+## 2. Why the Further Correction Is Necessary
 
-当前项目已经形成较强的工程底座，但产品体验发生偏航。
+上一轮 controlled pivot 把产品方向校正为 Writing-first，建立了 "打开项目即进入正文编辑器" 的产品心智。
 
-当前用户感知更接近：
+但纯 Writer-first 入口仍然假设：
 
-```text
-Agent 控制台
-契约审批系统
-任务状态工作台
-数据库和模型调用监控界面
-```
+- 用户已经知道自己要写什么；
+- 用户已经完成想法到创作要求之间的转化；
+- 编辑器是用户旅程的起点。
 
-而目标应是：
+这些假设对已有项目和深度作者成立，却不利于产品 1.0 的核心场景：**用户只有一段模糊想法**。
 
-```text
-小说稿件
-章节编辑
-故事规划
-人物和世界资料
-AI 写作协作
-连续性和质量帮助
-```
-
-已经出现的具体偏航：
-
-- 打开项目后默认进入 Grill-me，而不是正文；
-- 用户先面对需求澄清、问题规划和创作契约；
-- 数据库状态、任务活动、Token 和模型调用占据长期界面；
-- "契约是否完成"被错误地表现为创作开始的门禁；
-- 作者需要理解 Pipeline、Proposal 和 Stage，才能使用系统；
-- 技术安全和可审计性被误当成了产品主体验。
-
-正确关系应为：
+产品 1.0 的核心问题不是 "如何让作者更顺畅地进入编辑器"，而是：
 
 ```text
-写作是主流程；
-Grill-me 是可选辅助；
-Story Bible 是资料层；
-Contract snapshot 是内部实现；
-Agent pipeline 是后台或高级能力。
+如何以尽可能低的表达成本，
+把用户的模糊想法，
+转化为经过必要调研、符合其形式要求的小说。
 ```
+
+因此，入口从 "打开即进入编辑器" 进一步校正为 "告诉我你想写什么"。
+
+本次校正不是回退到 Contract-first：
+
+- 不作为强制用户流程的是：Grill-me 工程化需求澄清、Creation Contract 审批门禁、任务状态工作台；
+- 产品 1.0 仍不把数据库状态、Token、Invocation、proposal、session 状态机等暴露给普通用户；
+- 工程化的状态、检索、Agent 和质量治理继续下沉为 Narrative Engine。
 
 ---
 
-## 3. Product North Star
+## 3. Product North Star — 产品 1.0 主流程
 
-用户打开一个项目后，系统应帮助其完成以下主循环：
+产品 1.0 主流程：
 
 ```text
-打开项目
-→ 进入当前章节
-→ 写正文
-→ 调用 AI 续写、改写、讨论或规划
-→ 查看必要的一致性和质量提示
-→ 接受、修改或拒绝 AI 建议
-→ 保存版本
-→ 继续写作
+用户输入初始想法
+→ 系统抽取已有要求
+→ 只追问必要问题
+→ 形成可编辑创作要求
+→ 判断是否需要联网调研
+→ 用户查看或调整调研计划
+→ 执行必要调研并保留来源
+→ 形成可用于创作的Research Bundle
+→ 设计故事蓝图
+→ 按用户指定形式生成小说
+→ 用户查看、修改、继续生成或导出
 ```
 
-任何基础设施都必须服务于该循环。
+任何基础设施都必须服务于该主流程。
 
-产品成功不是：
+产品 1.0 成功不是：
 
 - 数据库约束足够多；
 - Contract 字段足够完整；
@@ -140,41 +145,44 @@ Agent pipeline 是后台或高级能力。
 - Token 统计足够详细；
 - Pipeline 自动运行足够长。
 
-产品成功是：
+产品 1.0 成功是：
 
-- 用户能立即开始写；
-- AI 能够理解当前故事；
-- AI 输出符合作者意图；
-- 长篇写作不遗忘关键事实；
-- AI 不会静默覆盖作者内容；
-- 用户最终得到可读、完整且一致的作品。
+- 用户只输入一段模糊想法，就能以最少追问开始创作旅程；
+- 必要的联网调研形成可追溯、可修正的 Research Bundle，而不是黑盒检索；
+- 创作要求与故事蓝图清晰、可编辑，用户始终掌握权威信息；
+- 系统按用户指定形式生成至少一个完整章节；
+- 用户能查看、修改、继续生成并导出作品；
+- 用户原始想法和手写内容不会丢失，重启后能恢复最近工作。
 
 ---
 
 ## 4. Non-negotiable Product Principles
 
-### 4.1 Editor First
+### 4.1 Low-Cost Expression Entry
 
-项目打开后默认进入稿件编辑器。
+"项目打开后默认进入稿件编辑器" 不再是绝对要求。
+
+- 新建项目默认入口是"告诉我你想写什么"；
+- 已有项目可根据状态返回想法、调研、规划、生成或稿件阶段；
+- 正文编辑器仍是稿件阶段的主要界面。
 
 不得默认进入：
 
-- Grill-me；
-- Dashboard；
-- Contract；
-- Task activity；
-- Pipeline 状态；
+- 工程化 Grill-me 工作台；
+- Dashboard / 任务控制台；
+- Contract 审批页；
+- Task activity / Pipeline 状态；
 - 开发者诊断。
 
 目标：
 
 ```text
-从打开项目到开始输入正文不超过一次点击。
+从用户说出模糊想法到形成可编辑创作要求，所需追问尽可能少。
 ```
 
-### 4.2 Prose Is the Primary Surface
+### 4.2 Prose Is the Primary Surface in Manuscript Stage
 
-桌面主界面应采用：
+稿件阶段仍是正文为主：
 
 ```text
 左侧：章节、场景和结构
@@ -182,23 +190,21 @@ Agent pipeline 是后台或高级能力。
 右侧：AI 助手和故事资料
 ```
 
-正文编辑区域应始终是最主要的视觉区域。
+正文编辑区域在稿件阶段应始终是最主要的视觉区域。
 
 ### 4.3 Use Author Language
 
 用户侧动作使用：
 
 ```text
-续写
-改写
-扩写
-压缩
-润色
-加强对话
-增加感官细节
-规划下一场
-讨论剧情
-检查连续性
+告诉我你想写什么
+接着写
+改这段
+重新生成
+规划下一章
+查资料
+调整后续方向
+导出
 ```
 
 普通用户不应被迫理解：
@@ -211,34 +217,39 @@ Proposal status
 Context packet
 Pipeline node
 Model routing
+session 状态机
+question-plan proposal
+契约完成度
+数据库和 Token 状态
 ```
 
 ### 4.4 Structure Must Not Block Writing
 
-故事设定、人物资料、大纲和 Grill-me 全部是可选脚手架。
+故事设定、人物资料、大纲、调研资料和创作访谈全部是可选脚手架。
 
 用户可以：
 
 ```text
-直接开始写
+直接粘贴已有设定，跳过追问
 ```
 
 也可以选择：
 
 ```text
-帮我完善故事
+帮我一步步理清想法
 ```
 
-两条路径同等有效。
+两条路径同等有效，产品 1.0 优先保证低表达成本路径。
 
 ### 4.5 AI Proposes, User Controls Authoritative Content
 
 AI 不能静默覆盖：
 
+- 用户原始想法；
 - 稿件正文；
 - 章节标题；
-- 正式故事设定；
-- 正式大纲；
+- 正式创作要求（CreationSpec）；
+- 正式故事蓝图；
 - 用户固定的写作偏好。
 
 AI 写作结果必须允许用户：
@@ -291,153 +302,246 @@ AI 写作结果必须允许用户：
 
 ---
 
-## 5. Target Product Information Architecture
+## 5. Five Core Objects of Product 1.0
 
-一级产品视图：
-
-```text
-Write
-Plan
-Story
-Review
-```
-
-### Write
-
-包含：
-
-- 章节列表；
-- 正文编辑器；
-- 章节标题；
-- 保存和版本历史；
-- AI 写作动作；
-- 专注模式；
-- 字数和基础写作状态。
-
-### Plan
-
-包含：
+产品 1.0 围绕五个核心对象组织：
 
 ```text
-Act
-Chapter
-Scene
+CreationSpec
+ResearchBundle
+StoryBlueprint
+Manuscript
+GenerationRun
 ```
 
-用于：
+可以在用户侧使用中文名称，但内部概念必须清晰：
 
-- 故事结构；
-- 章节目标；
-- 场景卡；
-- 情节线；
-- 节奏规划。
+| 内部概念       | 用户侧名称 | 说明                                                               |
+| -------------- | ---------- | ------------------------------------------------------------------ |
+| CreationSpec   | 创作要求   | 抽取用户已表达要求 + 少量必要追问后，形成的可编辑结构化创作要求    |
+| ResearchBundle | 调研资料包 | 必要联网调研的问题计划、来源、事实笔记与结论，带来源记录           |
+| StoryBlueprint | 故事蓝图   | 故事前提、人物、关系、世界背景、冲突、情节线、章节结构等创作蓝图   |
+| Manuscript     | 稿件       | 按章组织的正文，用户查看、修改、继续生成与导出的对象               |
+| GenerationRun  | 生成记录   | 一次章节生成从内部场景计划到写入稿件的运行记录，用于理解与控制生成 |
 
-### Story
+### 5.1 CreationSpec（创作要求）
 
-取代用户侧的 Creation Contract 概念。
+至少包含：
+
+```text
+题材与类型
+目标读者
+篇幅或章节目标
+作品形式
+叙事视角
+基调
+节奏
+语言偏好
+必须包含
+必须避免
+内容边界
+生成方式
+```
+
+内部可保留结构化 snapshot 与版本思想，但在 1.0 不作为审批、字段锁或契约完成门禁。
+
+### 5.2 ResearchBundle（调研资料包）
 
 包含：
 
-- 故事简介；
-- 人物；
-- 地点；
-- 世界规则；
-- 物品；
-- 关系；
-- 伏笔；
-- 秘密；
-- 内容边界；
-- 写作风格；
-- 必须包含；
-- 避免事项。
+- 调研触发判断结果；
+- 调研问题计划；
+- 每个问题的来源列表；
+- 事实笔记；
+- 调研结论。
 
-### Review
+生成时只注入与当前创作相关的调研内容；来源错误时允许删除或排除。
 
-包含：
+产品 1.0 不设计复杂知识图谱。
 
-- 连续性检查；
-- 人物一致性；
-- 情节推进；
-- 语言问题；
-- AI 味；
-- 重复内容；
-- 定点修订建议；
-- 质量趋势。
+### 5.3 StoryBlueprint（故事蓝图）
+
+至少包含：
+
+```text
+核心前提
+主角与关键人物
+主要关系
+世界背景
+主要冲突
+结局方向
+主要情节线
+章节结构
+每章目标
+```
+
+### 5.4 Manuscript（稿件）
+
+按章组织，支持查看、编辑、重新生成、局部重写、继续生成与导出。
+
+### 5.5 GenerationRun（生成记录）
+
+记录一次章节生成运行，让用户理解并控制生成过程，但不暴露工程实现细节。
 
 ---
 
-## 6. Product Role of Grill-me
+## 6. Web Research — 一级产品能力
 
-Grill-me 保留，但降级为可选的故事教练。
+联网调研是产品 1.0 的一级能力，不是可选附加。
 
-用户侧名称建议：
+### 6.1 三档调研强度
+
+调研强度分成三档：
 
 ```text
-帮我完善故事
+无需调研
+轻量调研
+深度调研
 ```
 
-适用场景：
+### 6.2 强度决定因素
 
-- 用户只有模糊创意；
-- 补充人物动机；
-- 发现世界观缺口；
-- 讨论情节选择；
-- 写作卡住；
-- 检查故事设定是否完整。
+调研强度由以下因素决定：
 
-Grill-me 不得：
+- 题材是否依赖现实事实；
+- 用户是否要求真实性；
+- 是否涉及具体时代、地域、职业或事件；
+- 现有输入是否已经足够；
+- 调研成本与创作收益。
 
-- 成为项目默认首页；
-- 成为开始写作的前置条件；
-- 决定项目是否允许进入稿件；
-- 长期占据一级导航；
-- 要求用户完成所有问题；
-- 把"契约完成"作为产品成功指标。
+### 6.3 调研流程
+
+- 判断是否需要调研；
+- 形成调研问题计划；
+- 用户查看、调整（增加、删除、跳过）问题；
+- 执行搜索并记录来源；
+- 形成事实笔记；
+- 汇总为 ResearchBundle；
+- 生成时只注入相关研究内容；
+- 来源错误时允许删除或排除。
+
+产品 1.0 不设计复杂知识图谱。
 
 ---
 
-## 7. Product Role of Creation Contract
+## 7. Product Role of Grill-me — Idea Intake / 创作访谈
+
+Grill-me 从工程化需求澄清工作台，重构为自然对话式 Idea Intake / 创作访谈。
+
+它是产品 1.0 核心资产：
+
+```text
+用户输入初始想法
+→ 系统抽取用户已表达的要求
+→ 只追问必要问题
+→ 形成可编辑创作要求
+```
+
+原则：
+
+- 只追问缺失且值得追问的信息；
+- 问题数量应尽可能少；
+- 用户可随时跳过问题；
+- 用户可粘贴已有设定直接开始；
+- 访谈结束即生成可编辑 CreationSpec；
+- 用户可以直接修改创作要求。
+
+Grill-me 不得向用户暴露：
+
+```text
+session 状态机
+question-plan proposal
+task / invocation
+contract 完成度
+数据库和 Token 状态
+```
+
+---
+
+## 8. Product Role of Creation Contract — 创作要求
+
+用户侧名称：
+
+```text
+创作要求
+```
 
 废弃以下用户侧产品形态：
 
 ```text
-强制 Creation Contract 流程
+强制 Creation Contract 审批流程
 Contract 审批页面
 Contract 完成门禁
+逐字段 accept 流程
 大量 Lock / Proposal / Version 术语
 ```
 
 保留以下内部思想：
 
-- 明确的权威故事设定；
-- 用户输入优先于 AI 建议；
-- 不可变 snapshot；
+- 明确的权威创作要求；
+- 结构化 snapshot；
 - 版本和 provenance；
 - 生成时可复现的 context 基线；
 - 用户确认内容不可被静默覆盖。
 
-前台将 Creation Contract 拆解为：
+内部仍可保留结构化 snapshot 和版本思想，但：
 
 ```text
-Story Bible
-Writer Preferences
-Content Boundaries
-Plan
+不以审批、字段锁和契约完成门禁作为 1.0 主体验
 ```
-
-内部仍可生成：
-
-```text
-StoryContextSnapshot
-```
-
-用于模型调用、审计和可复现性。
-
-普通作者不需要直接管理 snapshot hash、proposal status 或 lock event。
 
 ---
 
-## 8. Authority Model
+## 9. Target Product Information Architecture
+
+一级产品视图按用户旅程阶段组织：
+
+```text
+Idea（告诉我你想写什么 / 创作访谈）
+Research（调研资料包）
+Blueprint（故事蓝图）
+Manuscript（稿件）
+```
+
+### Idea
+
+- 初始想法输入（自由文本）；
+- 多轮补充；
+- 跳过问题；
+- 直接粘贴已有设定；
+- 选择目标作品形式；
+- 可编辑创作要求（CreationSpec）。
+
+### Research
+
+- 调研强度判断结果；
+- 调研问题计划；
+- 用户增加、删除、跳过问题；
+- 来源记录；
+- 事实笔记；
+- ResearchBundle 查看与修正。
+
+### Blueprint
+
+- 核心前提；
+- 人物与关系；
+- 世界背景；
+- 冲突与情节线；
+- 章节结构与每章目标。
+
+### Manuscript
+
+- 章节目录；
+- 正文查看与编辑；
+- 重新生成章节；
+- 局部重写；
+- 继续生成下一章；
+- 修改后续方向；
+- TXT 和 Markdown 导出。
+
+---
+
+## 10. Authority Model
 
 系统数据分成三级。
 
@@ -445,14 +549,17 @@ StoryContextSnapshot
 
 必须由用户显式保存或接受：
 
+- 用户原始想法；
 - 稿件正文；
 - 章节标题；
-- Story Bible 正式内容；
+- 正式创作要求（CreationSpec）；
+- 正式故事蓝图；
 - 人物和世界规则；
 - 正式大纲；
 - 正式场景计划；
 - 用户写作偏好；
-- 内容边界。
+- 内容边界；
+- 正式调研资料（ResearchBundle 中用户确认的部分）。
 
 AI 不能静默修改。
 
@@ -490,28 +597,30 @@ AI 不能静默修改。
 
 ---
 
-## 9. Target Technical Architecture
+## 11. Target Technical Architecture
 
 ```text
 ┌──────────────────────────────────────────────┐
-│ Writer Workspace                             │
-│ Write / Plan / Story / Review                │
+│ Idea-to-Novel User Journey                   │
+│ Idea / Research / Blueprint / Manuscript     │
 └──────────────────────┬───────────────────────┘
                        │ typed user intent
 ┌──────────────────────▼───────────────────────┐
 │ Authoring Application                        │
-│ Manuscript / Story Bible / Plan / AI Actions │
+│ Idea Intake / Research Bundle / Blueprint /  │
+│ Manuscript / AI Actions                      │
 └──────────────────────┬───────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────┐
 │ Authoritative Story Store                    │
-│ Manuscript / Bible / Plan / Preferences      │
+│ CreationSpec / ResearchBundle / Blueprint /  │
+│ Manuscript / Preferences                     │
 └──────────────────────┬───────────────────────┘
                        │
 ┌──────────────────────▼───────────────────────┐
 │ Narrative Engine                             │
 │ Context Assembly                             │
-│ Scene Planner                                │
+│ Scene Planner（R4 内部生成能力）              │
 │ Draft Generator                              │
 │ Critics                                      │
 │ Targeted Rewriter                            │
@@ -525,9 +634,11 @@ AI 不能静默修改。
 └──────────────────────────────────────────────┘
 ```
 
+复杂引擎能力不应直接暴露成工程控制台。
+
 ---
 
-## 10. Existing Assets to Preserve
+## 12. Existing Assets to Preserve
 
 ### Preserve Without Product Redesign
 
@@ -596,9 +707,11 @@ MV1-A 是有效的写作产品基础，不属于偏航内容。
 - Grill-me 在产品中的位置；
 - 整体视觉和作者心智模型。
 
+PR #25 的资产在 Replacement PR 建立前保持待处理状态（见第 13 节）。
+
 ---
 
-## 11. PR #25 Decision
+## 13. PR #25 Decision
 
 PR #25 不得按当前形态直接作为 "Minimal Manuscript 产品完成" 合并。
 
@@ -610,240 +723,164 @@ Draft
 Not merged
 ```
 
-原因不是其技术实现完全无效，而是：
+原因：
 
 ```text
-产品入口和信息架构不符合 Writing-first 方向。
+产品入口和信息架构不符合 Idea-to-Novel 方向。
 ```
 
 处理方式：
 
-### Replacement PR A — Manuscript Transport Foundation
-
-从 PR #25 提取并独立验证：
-
-- contracts；
-- typed IPC；
-- preload；
-- Main handlers；
-- Worker dispatch；
-- backend E2E；
-- restart persistence。
-
-该 PR 合并后状态仍为：
-
-```text
-🧱 foundation
-```
-
-不得标记完整产品能力。
-
-### Replacement PR B — Writer-first Workspace
-
-选择性复用 PR #25 的 Renderer 逻辑，但基于新的产品壳重新实现：
-
-- 项目打开后默认进入 Write；
-- 正文位于视觉中心；
-- Grill-me 降级；
-- 开发状态隐藏；
-- 右侧变为 AI 助手或轻量故事资料；
-- 无 AI 时仍是一款可正常使用的小说编辑器。
-
-当两个 replacement PR 建立并验证后：
-
-```text
-关闭 PR #25
-标记 superseded
-不直接 merge
-```
+- PR #25 保持 Draft，等待后续资产处理；
+- Replacement Manuscript Transport PR 暂缓，不按产品 1.0 优先拆分目标处理；
+- 产品 1.0 完成前优先构建真实纵向链路（Idea Intake → Web Research → Blueprint → Chapter Generation）；
+- PR #25 的可复用资产仍可在后续 Replacement PR 中选择性复用。
 
 禁止通过 rebase 或历史改写把 PR #25 强行变成新产品方向。
 
 ---
 
-## 12. Revised Technical Roadmap
+## 14. Protection Capability Priority
 
-### R0 — Product Reset
+产品 1.0 暂不优先投入复杂保护能力。
+
+降低优先级：
+
+```text
+复杂 CAS 冲突 UX
+字段级 lock
+严格 proposal 不可变展示
+逐字段 accept
+完整 provenance UI
+多人协同
+版本分支与合并
+复杂审计中心
+```
+
+产品 1.0 仍必须保留最低安全线：
+
+```text
+用户原始想法不会丢失
+用户手写正文不会被生成结果静默覆盖
+应用重启后能够恢复最近工作
+```
+
+现有后端 CAS、不可变版本和事务能力不删除，只是不再作为主要产品投资方向。
+
+---
+
+## 15. Revised Technical Roadmap
+
+```text
+R0.1 — Idea-to-Novel V1 Direction Clarification
+R1 — Idea Intake V1
+R2 — Web Research V1
+R3 — Story Blueprint V1
+R4 — Chapter Generation V1
+R5 — Manuscript Review and Export
+R6 — Long-form Narrative Engine
+```
+
+### R0.1 — Idea-to-Novel V1 Direction Clarification
 
 目标：
 
 - 建立本文档；
-- 冻结 Scene Planner 开发；
-- 冻结新的付费质量实验；
-- 拆分 PR #25；
+- 校正 Writer-first 入口为 Idea-to-Novel；
+- 明确五个核心对象与三档调研；
 - 重写 roadmap；
-- 定义 Writer Workspace 和 Narrative Engine 边界。
+- 冻结新的付费质量实验；
+- PR #25 保持 Draft，Replacement Manuscript Transport PR 暂缓。
 
 完成标准：
 
-- 项目中的所有活动路线均引用本文档；
-- 没有进行中的工作仍把 Grill-me 或 Creation Contract 当作默认入口；
-- PR #25 有明确 replacement 计划。
+- 所有活动路线均引用本文档；
+- 没有进行中的工作仍把 Grill-me / Contract-first / 纯 Writer-first 当作唯一默认入口；
+- 产品 1.0 完成前优先构建真实纵向链路。
 
-### R1 — Writer-first Workspace
-
-交付：
-
-- 打开项目默认进入稿件；
-- 创建和切换章节；
-- 正文编辑器；
-- 显式保存；
-- 版本历史；
-- promote；
-- 归档和恢复；
-- 重启持久化；
-- 基础导出；
-- 专注写作模式。
-
-此阶段不要求模型调用。
-
-完成标准：
-
-```text
-项目打开到开始输入正文不超过一次点击；
-正文区域占据主工作区至少 60%；
-普通模式不显示数据库、Token 和 Task 统计；
-真实 UI 人工验收通过。
-```
-
-### R2 — Story Bible and Lightweight Planning
+### R1 — Idea Intake V1
 
 交付：
 
-- 人物；
-- 地点；
-- 世界规则；
-- 关系；
-- 物品；
-- 伏笔；
-- 故事简介；
-- 内容边界；
-- 幕、章节目标和场景卡。
+- "告诉我你想写什么"入口；
+- 自由文本、多轮补充、跳过问题、直接粘贴已有设定、选择作品形式；
+- 抽取用户已表达的信息；
+- 只追问必要问题；
+- 生成可编辑 CreationSpec；
+- 用户修改创作要求。
 
-首版以用户手动维护为主，不自动修改权威资料。
+此阶段可包含少量模型调用，但不要求联网调研。
 
-### R3 — AI Writing Actions V1
+### R2 — Web Research V1
 
-首批动作：
+交付：
 
-```text
-续写
-改写选中内容
-扩写
-讨论剧情
-```
+- 调研触发判断（三档）；
+- 调研问题计划；
+- 用户增加、删除、跳过问题；
+- 搜索来源记录；
+- 事实笔记；
+- ResearchBundle；
+- 生成时只注入相关研究内容。
 
-调用流程：
+### R3 — Story Blueprint V1
 
-```text
-用户选择或光标位置
-+ 当前章节
-+ 故事简介
-+ 相关人物
-+ 最近上下文
-→ AI proposal
-→ 预览
-→ 用户接受或拒绝
-→ 创建 ChapterVersion
-```
+交付：
 
-完成后必须执行比较盲评：
+- 核心前提；
+- 主角与关键人物；
+- 主要关系；
+- 世界背景；
+- 主要冲突；
+- 结局方向；
+- 主要情节线；
+- 章节结构；
+- 每章目标。
 
-```text
-baseline-one-shot-v1
-vs
-AI Writing Actions V1
-```
+### R4 — Chapter Generation V1
 
-### R4 — Scene Planner
-
-交付可编辑 Scene Card：
-
-- 场景目标；
-- 冲突；
-- 登场人物；
-- 地点；
-- POV；
-- 必须发生；
-- 禁止发生；
-- 结束状态。
-
-Planner 只生成 proposal，不直接覆盖正式计划。
-
-### R5 — Narrative State and Context Engine
-
-建立：
+交付：
 
 ```text
-NarrativeEnginePort
+章节目标
+→ 内部场景计划
+→ 分场景生成
+→ 章节组合
+→ 基础检查
+→ 定点修订
+→ 写入稿件
 ```
 
-首批接口：
+Scene Planner 是 R4 内部的生成能力，不要求先做成独立复杂产品页面。
 
-```text
-buildContextPacket
-planScene
-generateDraft
-reviewDraft
-updateDerivedState
-```
+### R5 — Manuscript Review and Export
 
-维护：
+交付：
 
+- 章节目录；
+- 正文查看与编辑；
+- 重新生成章节；
+- 局部重写；
+- 继续生成下一章；
+- 修改后续方向；
+- TXT 和 Markdown 导出。
+
+### R6 — Long-form Narrative Engine
+
+交付：
+
+- 长篇持续生成；
 - 章节摘要链；
 - 人物状态；
-- 人物知识范围；
-- 关系变化；
-- 事件时间线；
-- 物品归属；
-- 伏笔；
-- 未解决剧情线；
-- 动态历史检索。
+- 连续性检测；
+- 动态检索上下文；
+- 高级质量治理循环。
 
 PlotPilot 作为可选 adapter，不成为本地 source of truth。
 
-### R6 — Quality Governance Loop
-
-流水线：
-
-```text
-Scene Brief
-→ Draft
-→ Structural Critic
-→ Character Critic
-→ Continuity Critic
-→ AI-Smell Critic
-→ Targeted Rewrite
-→ User Preview
-```
-
-重点质量目标：
-
-- 降低 AI 味；
-- 提高语言自然度；
-- 提高继续阅读欲望；
-- 提高情节推进；
-- 减少重复和解释过度；
-- 维持人物与事实连续性。
-
-### R7 — Preference Learning and Advanced Automation
-
-最后再实现：
-
-- Writer Preference Profile；
-- 从接受、拒绝和用户改写中学习；
-- 故事线 DAG；
-- 高级多 Agent Pipeline；
-- 批量生成；
-- 无人值守生成；
-- 自动伏笔治理；
-- 长期质量趋势。
-
-这些属于高级能力，不得重新阻塞基础写作流程。
-
 ---
 
-## 13. Quality Strategy
+## 16. Quality Strategy
 
 继续保留 Generation Evaluation Harness。
 
@@ -899,7 +936,7 @@ AI 味
 语言自然度
 ```
 
-下一次付费质量实验只能在新的 AI 写作 pipeline 形成后启动：
+新的付费质量实验继续暂缓，直到真实纵向链路（Idea Intake → Web Research → Blueprint → Chapter Generation）形成后启动：
 
 ```text
 每 case 至少 2 个候选；
@@ -911,7 +948,7 @@ baseline vs new pipeline；
 
 ---
 
-## 14. Explicitly Rejected Directions
+## 17. Explicitly Rejected Directions
 
 以下方向被明确否决：
 
@@ -947,9 +984,15 @@ baseline vs new pipeline；
 Minimal Manuscript ✅
 ```
 
-### Scene Planner Before Writer Workspace
+### Pure Writer-first as the Sole Entry
 
-在 R1 Writer-first Workspace 完成前，不得启动 Scene Planner 正式实现。
+不得把 "打开项目即进入空白编辑器" 作为产品 1.0 唯一入口。
+
+产品 1.0 默认入口是"告诉我你想写什么"；编辑器是稿件阶段的主要界面，不是唯一入口。
+
+### Scene Planner Before Chapter Generation
+
+在 R4 Chapter Generation V1 之前，不得把 Scene Planner 独立启动为复杂产品页面。它是 R4 内部生成能力。
 
 ### Expose Engine Internals as UX
 
@@ -957,11 +1000,11 @@ Minimal Manuscript ✅
 
 ---
 
-## 15. Decision Summary
+## 18. Decision Summary
 
 ```text
 Strategy:
-Controlled Pivot
+Controlled Pivot（进一步校正为 Idea-to-Novel）
 
 Repository:
 Keep
@@ -973,42 +1016,44 @@ MV1-A:
 Keep
 
 PR #25:
-Draft, split, then supersede
+Draft，保持不合并，等待后续资产处理
 
 Renderer:
-Major product-layer reset
+Idea-to-Novel 纵向切片
 
 Default project entry:
-Write
+新建项目：告诉我你想写什么
+已有项目：按状态返回想法 / 调研 / 规划 / 生成 / 稿件阶段
 
 Grill-me:
-Optional story coach
+Idea Intake / 创作访谈（1.0 核心资产）
 
 Creation Contract:
-Remove mandatory user-facing workflow;
-retain internal snapshot/provenance concepts
+用户侧改称"创作要求"；
+保留内部 snapshot / version；
+不以审批、字段锁和门禁作为 1.0 主体验
 
-Story data UX:
-Story Bible + Plan + Preferences
+Web Research:
+一级产品能力（无需 / 轻量 / 深度调研）
+
+Scene Planner:
+R4 内部生成能力
+
+Protection capabilities:
+降低优先级，保留最低安全线
 
 Narrative engine:
 Internal service layer
 
 PlotPilot:
-Optional NarrativeEngine adapter,
-not UI,
+Optional NarrativeEngine adapter，
+not UI，
 not source of truth
 
 Next product milestone:
-R1 Writer-first Workspace
-
-Scene Planner:
-Deferred until R1–R3 foundations exist
-
-Next quality experiment:
-Deferred until AI Writing Actions V1 exists
+R1 Idea Intake V1
 ```
 
 最终原则：
 
-> 先成为一款优秀的小说编辑器，再把 PlotPilot 级别的叙事引擎藏到编辑器背后。
+> 以尽可能低的表达成本，把用户的模糊想法，转化为经过必要调研、符合其形式要求的小说；编辑器是稿件阶段的主要界面，但不是产品 1.0 唯一入口。
