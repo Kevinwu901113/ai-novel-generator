@@ -283,3 +283,4 @@ export * from './idea-to-novel-graph-invalidation.js';
 export * from './idea-to-novel-graph-transitions.js';
 export * from './idea-to-novel-graph-stages.js';
 export * from './idea-to-novel-graph-validator.js';
+export * from './story-blueprint.js';

@@ -32,6 +32,7 @@ import {
 } from './graph-run-repositories.js';
 import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
 import { ResearchBundleRepositoryImpl } from './research-repositories.js';
+import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -783,6 +784,27 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON research_bundles(project_id, created_at);
     `,
   },
+  {
+    version: 10,
+    sql: `
+      -- ── StoryBlueprint（GE-5）────────────────────────────────────
+      -- 故事蓝图版本化：核心前提/人物/关系/世界/冲突/结局/情节线/章节结构。
+      CREATE TABLE IF NOT EXISTS story_blueprints (
+        id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        blueprint_json TEXT NOT NULL CHECK (json_valid(blueprint_json)),
+        accepted INTEGER NOT NULL DEFAULT 0 CHECK (accepted IN (0, 1)),
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, id),
+        UNIQUE (project_id, id, version),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_story_blueprints_project_created
+        ON story_blueprints(project_id, created_at);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1263,6 +1285,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly graphRunCommandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly graphRunTransaction: GraphRunTransactionPortImpl;
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
+  private readonly blueprintRepo: StoryBlueprintRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1295,6 +1318,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.graphRunCommandLogRepo = new GraphRunCommandLogRepositoryImpl(this.db);
     this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
+    this.blueprintRepo = new StoryBlueprintRepositoryImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1379,6 +1403,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getResearchBundleRepository(): ResearchBundleRepositoryImpl {
     return this.researchBundleRepo;
+  }
+
+  getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {
+    return this.blueprintRepo;
   }
 
   transaction<T>(fn: () => T): T {
