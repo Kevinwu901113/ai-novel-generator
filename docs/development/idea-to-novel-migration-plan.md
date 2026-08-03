@@ -7,20 +7,30 @@
 > **文件所有权**：本文档由审计 Agent（Agent B）独占。Agent A 并行负责
 > `PRODUCT_DIRECTION.md`、`docs/product/idea-to-novel-v1.md`、
 > `docs/development/generation-quality-roadmap.md`、`README.md`。
-> 两组文件零交集；本文档等待 Agent A 方向文档完成后进行交叉校验。
+> 两组文件零交集。
+>
+> **交叉校验状态（已完成）**：Agent A 方向文档已通过 PR #27 合并。本迁移计划已对照
+> `PRODUCT_DIRECTION.md`（Idea-to-Novel Product Direction V1）与
+> `docs/product/idea-to-novel-v1.md`（产品 1.0 纵向切片规格）完成交叉校验——两者对
+> Grill-me→Idea Intake、Creation Contract→CreationSpec、Web Research / ResearchBundle、
+> StoryBlueprint、GenerationRun、Manuscript 的定位与本计划的迁移决策一致。
+> **代码审计 base 仍为 `964f4644`**（未伪称重新审计代码）；对齐基线 main SHA 见 §0。
 
 ## 0. 审计元信息
 
-| 项          | 值                                                           |
-| ----------- | ------------------------------------------------------------ |
-| 审计日期    | 2026-08-03                                                   |
-| 审计 base   | `964f4644b57b106773b6760f61253c3f3aac2755`（`origin/main`）  |
-| PR #25      | `feat: minimal manuscript editor`，Draft / OPEN / **未合并** |
-| PR #25 head | `5d80ff20e59bd67e4c0b028b63f88e1531261926`                   |
-| PR #25 base | `814f1ba4266578e5d21a30e4cf560500e2cb0189`                   |
-| PR #25 规模 | 27 个文件，+6586 / -22                                       |
-| 代码变更    | 0（本审计只读）                                              |
-| 模型调用    | 0                                                            |
+| 项                | 值                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| 审计日期          | 2026-08-03                                                                                       |
+| 代码审计 base     | `964f4644b57b106773b6760f61253c3f3aac2755`（审计时 `origin/main`；**保持不变，未重新审计**）     |
+| 对齐基线 main SHA | `55c09572d7d7481e493308da9581cc7d3a69ce5e`（PR #27 合并后，2026-08-03）                          |
+| PR #25            | `feat: minimal manuscript editor`，Draft / OPEN / **未合并**                                     |
+| PR #25 head       | `5d80ff20e59bd67e4c0b028b63f88e1531261926`                                                       |
+| PR #25 base       | `814f1ba4266578e5d21a30e4cf560500e2cb0189`                                                       |
+| PR #25 规模       | 27 个文件，+6586 / -22                                                                           |
+| Agent A 方向文档  | 已通过 PR #27 合并（PRODUCT_DIRECTION.md / idea-to-novel-v1.md / generation-quality-roadmap.md） |
+| 交叉校验          | 已完成（对照 `PRODUCT_DIRECTION.md` 与 `docs/product/idea-to-novel-v1.md`）                      |
+| 代码变更          | 0（本审计只读）                                                                                  |
+| 模型调用          | 0                                                                                                |
 
 ## 1. 产品 1.0 目标与主链
 
@@ -436,8 +446,9 @@ Evaluation Harness 由两部分构成：
 > `BACKEND_ONLY` / `DEFER` / `REMOVE_FROM_DEFAULT_UX` / `SUPERSEDE`。
 
 > Phase：C1 = Cycle 1（Idea Intake），C2 = Cycle 2（Web Research + Blueprint），
-> C3 = Cycle 3（Generation + Manuscript UI）。Owner：A = Agent A（产品方向 + Renderer/壳），
-> B = Agent B（Domain/Application/Database/Worker/Transport）。
+> C3 = Cycle 3（Generation + Manuscript）。Owner 按 Cycle 纵向能力分工（见 §6）：
+> A = Agent A（C1 前台/壳；C2 Web Research 纵向切片；C3 Manuscript 纵向切片），
+> B = Agent B（C1 后端复用；C2 Story Blueprint 纯核心；C3 Chapter Generation 核心 pipeline）。
 
 ### 4.1 Idea Intake（复用自 Grill-me，R1 不新建数据模型）
 
@@ -505,12 +516,12 @@ Evaluation Harness 由两部分构成：
 
 | Asset / Path                                                                           | Current Role                                          | Evidence                       | Reuse Decision        | Target 1.0 Role        | Required Change               | Phase | Owner | Deps | Risk |
 | -------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------ | --------------------- | ---------------------- | ----------------------------- | ----- | ----- | ---- | ---- |
-| `packages/domain/src/manuscript.ts`                                                    | manuscript 领域模型                                   | migration v7 全链              | `KEEP_AS_IS`          | Manuscript 领域        | 无                            | C3    | B     | P9   | 低   |
-| `packages/application/src/manuscript*.ts`                                              | 7 读 + 8 写用例（BEGIN IMMEDIATE + CAS + provenance） | `manuscript-mutations.ts`      | `KEEP_AS_IS`          | Manuscript 应用        | 无                            | C3    | B     | P9   | 低   |
-| `packages/database/src/project-database.ts`（v7 表）                                   | manuscripts/chapters/chapter_versions                 | `:581`                         | `KEEP_AS_IS`          | 已在 main，无需迁移    | 无                            | C3    | B     | —    | 低   |
-| `packages/contracts/src/index.ts`（manuscript DTO/校验器）                             | 已合并到 main                                         | `:2177-2792`                   | `KEEP_AS_IS`          | manuscript contracts   | 无                            | C3    | B     | P9   | 低   |
-| PR25 `packages/contracts/src/index.ts`（14 通道 + ManuscriptAPI）                      | 通道注册表 + API 表面                                 | diff +37                       | `REUSE_WITH_RENAME`   | manuscript transport   | 消除通道字符串三处重复        | C3    | B     | P9   | 低   |
-| PR25 main/preload/worker transport（`manuscript-ipc.ts`、`manuscript-handlers.ts` 等） | typed IPC 全链                                        | diff                           | `REUSE_WITH_REFACTOR` | manuscript transport   | 与 contract handlers 统一重构 | C3    | B     | P9   | 中   |
+| `packages/domain/src/manuscript.ts`                                                    | manuscript 领域模型                                   | migration v7 全链              | `KEEP_AS_IS`          | Manuscript 领域        | 无                            | C3    | A     | P9   | 低   |
+| `packages/application/src/manuscript*.ts`                                              | 7 读 + 8 写用例（BEGIN IMMEDIATE + CAS + provenance） | `manuscript-mutations.ts`      | `KEEP_AS_IS`          | Manuscript 应用        | 无                            | C3    | A     | P9   | 低   |
+| `packages/database/src/project-database.ts`（v7 表）                                   | manuscripts/chapters/chapter_versions                 | `:581`                         | `KEEP_AS_IS`          | 已在 main，无需迁移    | 无                            | C3    | A     | —    | 低   |
+| `packages/contracts/src/index.ts`（manuscript DTO/校验器）                             | 已合并到 main                                         | `:2177-2792`                   | `KEEP_AS_IS`          | manuscript contracts   | 无                            | C3    | A     | P9   | 低   |
+| PR25 `packages/contracts/src/index.ts`（14 通道 + ManuscriptAPI）                      | 通道注册表 + API 表面                                 | diff +37                       | `REUSE_WITH_RENAME`   | manuscript transport   | 消除通道字符串三处重复        | C3    | A     | P9   | 低   |
+| PR25 main/preload/worker transport（`manuscript-ipc.ts`、`manuscript-handlers.ts` 等） | typed IPC 全链                                        | diff                           | `REUSE_WITH_REFACTOR` | manuscript transport   | 与 contract handlers 统一重构 | C3    | A     | P9   | 中   |
 | PR25 `useManuscriptWorkbench.ts`                                                       | dirty/CAS/buffer 核心 hook                            | diff（882 行）                 | `KEEP_AS_IS`          | Manuscript Review hook | 无；补 POSITION_OVERFLOW 特判 | C3    | A     | P10  | 中   |
 | PR25 renderer 面板（ChapterList/EditorPanel/VersionHistory/Workbench/LeaveDialog）     | 三栏 UI                                               | diff                           | `KEEP_AS_IS`          | Manuscript Review UI   | 无；由 1.0 壳装配             | C3    | A     | P10  | 低   |
 | PR25 `manuscript-leave-guard.ts`                                                       | 离开守卫（dirty/busy）                                | diff（明确不持久化未保存正文） | `KEEP_AS_IS`          | 离开安全               | 与 App shell guard 集成       | C3    | A     | P10  | 中   |
@@ -608,14 +619,14 @@ backend"——Cycle 1 按层分工，Cycle 2/3 按**纵向能力切片**分工�
 
 ### 6.1 共享热点：单一 owner 或先后顺序
 
-| 热点                 | 文件                                                                                                       | 策略                                                                                                   | Owner                               |
-| -------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------- |
-| `packages/contracts` | `packages/contracts/src/index.ts`                                                                          | 每个 Cycle 开始时先冻结该 Cycle 的契约提交；**禁止同时修改**，一方冻结、另一方只读消费                 | 按 Cycle 指定单 owner（见 6.2–6.4） |
-| 数据库迁移注册表     | `packages/database/src/project-database.ts`（`PROJECT_MIGRATIONS`）、`app-database.ts`（`APP_MIGRATIONS`） | 版本号顺序追加；**并行时禁止同时追加**，后合入方 rebase 后接续。**R1 默认不新增**（复用现有 grill 表） | 每个 Cycle 单 owner（C2 = Agent A） |
-| Worker root dispatch | `apps/worker/src/index.ts`                                                                                 | 命令组 append-only；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰                         | 每个 Cycle 单 owner（C2 = Agent A） |
-| Main IPC 注册        | `apps/desktop/src/main/index.ts`                                                                           | 新 handler append；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰                          | 每个 Cycle 单 owner（C2 = Agent A） |
-| App shell            | `apps/desktop/src/renderer/App.tsx`、`main.tsx`、`App.css`                                                 | **Agent A 独占**；Agent B 的 UI 组件作为叶子组件交付，由 shell 装配                                    | Agent A                             |
-| roadmap              | `docs/development/generation-quality-roadmap.md`                                                           | 权威文档，**Agent A 独占**                                                                             | Agent A                             |
+| 热点                 | 文件                                                                                                       | 策略                                                                                                                                 | Owner                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `packages/contracts` | `packages/contracts/src/index.ts`                                                                          | 每个 Cycle 开始时先冻结该 Cycle 的契约提交；**禁止同时修改同一区段**，一方冻结、另一方只读消费                                       | 按 Cycle 指定单 owner（见 6.2–6.4）；C3 按区段 A（manuscript）/ B（generation） |
+| 数据库迁移注册表     | `packages/database/src/project-database.ts`（`PROJECT_MIGRATIONS`）、`app-database.ts`（`APP_MIGRATIONS`） | 版本号顺序追加；**并行时禁止同时追加**，后合入方 rebase 后接续。**R1 默认不新增**（复用现有 grill 表）                               | 每个 Cycle 单 owner（C2 = Agent A；C3 = Agent B，Chapter Generation）           |
+| Worker root dispatch | `apps/worker/src/index.ts`                                                                                 | 命令组 append-only；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰；C3 期间 Agent B 在 Manuscript Transport 合并前不触碰 | 每个 Cycle 单 owner（C2 = Agent A；C3 = Agent A）                               |
+| Main IPC 注册        | `apps/desktop/src/main/index.ts`                                                                           | 新 handler append；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰；C3 期间 Agent B 在 Manuscript Transport 合并前不触碰  | 每个 Cycle 单 owner（C2 = Agent A；C3 = Agent A）                               |
+| App shell            | `apps/desktop/src/renderer/App.tsx`、`main.tsx`、`App.css`                                                 | **Agent A 独占**；Agent B 的 UI 组件作为叶子组件交付，由 shell 装配                                                                  | Agent A                                                                         |
+| roadmap              | `docs/development/generation-quality-roadmap.md`                                                           | 权威文档，**Agent A 独占**                                                                                                           | Agent A                                                                         |
 
 ### 6.2 Cycle 1：Idea Intake
 
@@ -671,20 +682,30 @@ backend"——Cycle 1 按层分工，Cycle 2/3 按**纵向能力切片**分工�
 ### 6.4 Cycle 3：Generation 与 Manuscript 并行（纵向分工）
 
 - **契约冻结**：`Generation`（章节生成 / review/rewrite 通道）+ `Manuscript`（移植自 PR #25）通道。
-- **Agent A —— Manuscript transport + Review UI**（本 Cycle 拥有 manuscript 相关
-  contracts / migration registry / Worker/Main 接线）：
-  - 移植 PR #25 transport（contracts 通道 + Main/preload/worker）
+- **Agent A —— Manuscript transport + Review UI**（**拥有 Manuscript contracts、
+  Worker/Main transport 与 App shell**）：
+  - `packages/contracts/`（manuscript 通道 + `ManuscriptAPI` 契约）
+  - `apps/desktop/src/main/`、`apps/desktop/src/preload/`、`apps/worker/src/`（manuscript
+    transport：移植 PR #25 的 Main handlers / preload allowlist / Worker dispatch）
   - 移植 PR #25 renderer（`useManuscriptWorkbench`、ChapterList、EditorPanel、VersionHistory、
     dirty/CAS/buffer 安全）
   - App shell 装配；导出入口
-- **Agent B —— Chapter Generation 核心 pipeline**：
+- **Agent B —— Chapter Generation 核心 pipeline**（**拥有 Chapter Generation 的
+  database migration registry**）：
   - `packages/task-engine/`（章节生成任务）
   - `packages/application/`（prompt 组装）
-  - `packages/database/`（生成产物落库，新 migration）
+  - `packages/database/`（**生成产物表 + 新 migration，归 Agent B**）
   - R1–R3 使用**现有非流式 Model Gateway + 严格解析 + 轮询**；取消与阶段进度在 R4 增加
     （见 §7 修正四）
-- **共享热点单一 owner**：`packages/contracts`、迁移注册表、`apps/worker/src/index.ts`、
-  `apps/desktop/src/main/index.ts`（各 Cycle 单 owner，见 6.1）、App shell（A）、roadmap（A）。
+- **共享热点单一 owner（本 Cycle）**：
+  - `packages/contracts`（manuscript 契约 → **A**；generation 契约 → **B**；双方各自冻结，
+    **禁止同时修改同一区段**）；
+  - `apps/worker/src/index.ts`（Worker root dispatch）→ **A（manuscript）**；
+  - `apps/desktop/src/main/index.ts`（Main IPC root）→ **A（manuscript）**；
+  - `packages/database/src/project-database.ts` 迁移注册表 → **B（Chapter Generation 新 migration）**；
+  - App shell → **A**；roadmap → **A**。
+  - **Agent B 在 Manuscript Transport 合并前，不修改 Worker root、Main IPC root 或
+    manuscript contracts**；Agent A 在 Generation 迁移合并前，不在该迁移注册表区段追加。
 
 ## 7. 推荐的代码 PR 序列
 
