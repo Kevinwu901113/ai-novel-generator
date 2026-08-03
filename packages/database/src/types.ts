@@ -213,6 +213,8 @@ export interface ProjectDatabaseManager {
   getGraphRunTransaction(): import('./graph-run-transaction.js').GraphRunTransactionPortImpl;
   /** 获取 Idea Intake 权威 answer 存储端口（GE-1，grill_answers） */
   getIdeaIntakeAnswerPort(): import('./graph-run-repositories.js').IdeaIntakeAnswerPortImpl;
+  /** 获取 ResearchBundle 仓库（GE-4，migration v9） */
+  getResearchBundleRepository(): import('./research-repositories.js').ResearchBundleRepositoryImpl;
   /** 执行事务（BEGIN 延迟写锁，适合先读后写路径） */
   transaction<T>(fn: () => T): T;
   /** 执行事务（BEGIN IMMEDIATE，执行前立即获得写锁，适合最终原子提交） */

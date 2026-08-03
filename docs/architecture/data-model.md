@@ -36,6 +36,7 @@
 | v6  | 重建 `tasks`（加 `CREATION_CONTRACT_DRAFT`）；`uq_cc_proposals_task` / `uq_cc_proposals_invocation`                         |
 | v7  | `manuscripts`、`chapters`、`chapter_versions`（STRICT、复合 PK/FK、部分唯一 active-manuscript、append-only 触发器）         |
 | v8  | **GE-1**：`graph_runs`（统一 run 状态，kind 判别）+ `graph_run_commands`（幂等日志）                                        |
+| v9  | **GE-4**：`research_bundles`（ResearchBundle 版本化：问题计划/来源/事实笔记/结论）                                          |
 
 ## 3. 权威对象与存储
 

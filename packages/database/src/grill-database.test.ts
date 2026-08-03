@@ -55,7 +55,7 @@ describe('Grill 迁移', () => {
 
     const raw = new DatabaseSync(dbPath);
     const migrator = new SQLiteMigrator(raw);
-    expect(migrator.getCurrentVersion()).toBe(8);
+    expect(migrator.getCurrentVersion()).toBe(9);
     raw.close();
   });
 
