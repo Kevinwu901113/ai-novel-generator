@@ -11,11 +11,8 @@
  * 纯函数 —— 不访问时间、UUID、文件系统、数据库或模型。
  */
 
-import type {
-  ArtifactKind,
-  ArtifactRef,
-  IdeaToNovelGraphRunState,
-} from './idea-to-novel-graph-state.js';
+import type { ArtifactKind } from './idea-to-novel-graph.js';
+import type { ArtifactRef, IdeaToNovelGraphRunState } from './idea-to-novel-graph-state.js';
 
 /**
  * 权威 artifact 的失效依赖顺序（严格单向）。

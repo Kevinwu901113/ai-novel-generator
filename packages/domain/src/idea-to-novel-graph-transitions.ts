@@ -3,11 +3,16 @@
  *
  * 纯函数，不访问时间、UUID、文件系统、数据库或模型。
  *
+ * 执行语义全部从 Graph Definition 读取（节点输出契约 / humanDecisionType /
+ * budgetResetPolicy / joinAggregationPolicy / terminalStatus），Graph 外部不持有权威映射。
+ *
  * 语义要点：
+ * - `assertValidTransitionState`：公开 transition 的前置不变量，非法 state fail-closed；
  * - `canTraverseEdge`：条件边是否成立（源节点成功 + 闭合条件匹配 + 预算可用/耗尽）；
  * - `routesFrom`：一个已成功源节点实际会走的边（有界循环优先于耗尽出口）；
  * - `computeNextFrontier`：从成功源出发，计算下一批应激活的节点；
- * - `applyNodeSuccess`：推进一个节点完成，维护 frontier / 预算 / loop 回环重置；
+ * - `aggregateJoinOutcome`：JOIN 节点从策略声明的来源确定性聚合结果，拒绝调用方伪造；
+ * - `applyNodeSuccess`：推进一个节点完成，强制节点输出契约，维护 frontier / 预算 / loop 回环重置；
  * - `applyNodeFailure`：节点硬失败 → 运行终止 failed；
  * - `requestHumanDecision` / `applyHumanDecision`：人工中断节点的挂起与决议。
  *
@@ -16,41 +21,44 @@
  * - 重入 loop 时，把循环体（loop body）节点重置为 pending 并清除其产出，
  *   保证下一轮循环体内的节点（如三个 Critic）可以重新执行；
  * - 已消费边（`consumedEdges`）防止 loop 体外部（如 DRAFT→Critic）在循环回环时再次触发；
- * - 预算耗尽时走 `X_budget: exhausted` 出口。
+ * - 预算耗尽时走 `X_budget: exhausted` 出口（人工升级节点，而非自动接受）。
  */
 
 import {
+  aggregateCritiqueVerdict,
   BUDGET_CONDITION_NAMES,
-  BLUEPRINT_USER_GATE,
   budgetKeyForCondition,
-  CANDIDATE_GATE,
-  COLLECT_ANSWER,
-  DRAFT,
   getLoopBudgetMax,
+  isGraphConditionName,
   isGraphConditionOutcome,
   isTerminalKind,
   type BlueprintGateDecision,
   type CandidateGateDecision,
+  type EscalationDecision,
   type GraphNodeId,
   type GraphNodeOutcome,
+  type GraphRunTerminalStatus,
+  type HumanDecisionType,
   type IdeaToNovelGraphEdgeDefinition,
+  type IdeaToNovelGraphNodeDefinition,
   type IdeaToNovelGraphV1,
   type LoopBudgetConditionName,
   type LoopBudgetKey,
 } from './idea-to-novel-graph.js';
-import type {
-  ArtifactRef,
-  GraphRunTerminalStatus,
-  HumanDecisionType,
-  IdeaToNovelGraphRunState,
-  PendingHumanDecision,
+import {
+  ARTIFACT_KINDS,
+  LOOP_BUDGET_KEYS,
+  isValidGraphNodeStatus,
+  type ArtifactRef,
+  type IdeaToNovelGraphRunState,
+  type PendingHumanDecision,
 } from './idea-to-novel-graph-state.js';
 import { applyArtifactChange } from './idea-to-novel-graph-invalidation.js';
 
 // ── 节点成功推进选项 ────────────────────────────────────────────
 
 export interface ApplyNodeSuccessOptions {
-  /** 决策节点产出（闭合判别联合） */
+  /** 决策节点产出（闭合判别联合）—— JOIN 节点不接受调用方提供 */
   readonly outcome?: GraphNodeOutcome;
   /** 节点产生的权威 artifact 引用（同时触发级联失效） */
   readonly artifactRef?: ArtifactRef;
@@ -72,25 +80,113 @@ export type HumanDecisionInput =
       readonly nodeId: GraphNodeId;
       readonly decisionType: 'candidate_gate';
       readonly outcome: CandidateGateDecision;
+    }
+  | {
+      readonly nodeId: GraphNodeId;
+      readonly decisionType: 'escalation';
+      readonly outcome: EscalationDecision;
     };
 
-/** 人工决策类型 → 节点（闭合映射，键使用导出的品牌常量） */
-export const HUMAN_DECISION_TYPE_BY_NODE: Readonly<Record<string, HumanDecisionType>> = {
-  [COLLECT_ANSWER]: 'answer_question',
-  [BLUEPRINT_USER_GATE]: 'blueprint_gate',
-  [CANDIDATE_GATE]: 'candidate_gate',
-};
+// ── 前置不变量（公开 transition 先验证）──────────────────────────
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
 /**
- * 某些节点成功时重置的预算。
- *
- * - DRAFT 之后重设 rewrite / candidateRewrite（新一轮草稿获得全新的自动改写预算）；
- * - CANDIDATE_GATE 之后重设 rewrite（用户明确要求改写 = 新一轮评审，critique 改写预算刷新）。
+ * 校验运行状态与 Graph 的一致性。非法 state 直接抛错（fail-closed，不部分推进）。
  */
-const BUDGET_RESETS_ON_NODE_SUCCESS: Readonly<Record<string, ReadonlyArray<LoopBudgetKey>>> = {
-  [DRAFT]: ['rewrite', 'candidateRewrite'],
-  [CANDIDATE_GATE]: ['rewrite'],
-};
+export function assertValidTransitionState(
+  graph: IdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunState,
+): void {
+  if (state.graphId !== graph.id || state.graphVersion !== graph.version) {
+    throw new Error('state.graphId/version 与 graph 不一致');
+  }
+  if (state.terminalStatus !== null) {
+    throw new Error('run 已终止，不能继续推进');
+  }
+  if (!isRecord(state.nodeStatuses)) throw new Error('nodeStatuses 必须是非空对象');
+
+  const knownIds = new Set<GraphNodeId>(graph.nodes.map((n) => n.id));
+  for (const node of graph.nodes) {
+    if (!(node.id in state.nodeStatuses)) {
+      throw new Error(`nodeStatuses 缺少节点 ${node.id}`);
+    }
+    if (!isValidGraphNodeStatus(state.nodeStatuses[node.id])) {
+      throw new Error(`节点 ${node.id} 的状态非法`);
+    }
+  }
+  for (const id of Object.keys(state.nodeStatuses)) {
+    if (!knownIds.has(id as GraphNodeId)) {
+      throw new Error(`nodeStatuses 含未知节点 ${id}`);
+    }
+  }
+
+  // activeFrontier ↔ active/waiting_for_human status 双向一致
+  if (!Array.isArray(state.activeFrontier)) throw new Error('activeFrontier 必须是数组');
+  const frontierSet = new Set<GraphNodeId>(state.activeFrontier);
+  if (frontierSet.size !== state.activeFrontier.length) {
+    throw new Error('activeFrontier 不允许重复');
+  }
+  const expectedFrontier = graph.nodes.filter((n) => {
+    const s = state.nodeStatuses[n.id];
+    return s === 'active' || s === 'waiting_for_human';
+  });
+  if (expectedFrontier.length !== frontierSet.size) {
+    throw new Error('activeFrontier 与节点状态不一致');
+  }
+  for (const n of expectedFrontier) {
+    if (!frontierSet.has(n.id)) throw new Error(`frontier 缺少 active 节点 ${n.id}`);
+  }
+
+  // pending decision 一致性
+  if (state.pendingHumanDecision !== null) {
+    const pd = state.pendingHumanDecision;
+    if (!knownIds.has(pd.nodeId)) throw new Error('pending decision 节点未知');
+    if (state.nodeStatuses[pd.nodeId] !== 'waiting_for_human') {
+      throw new Error('pending decision 节点状态应为 waiting_for_human');
+    }
+    if (!frontierSet.has(pd.nodeId)) throw new Error('pending decision 节点应在 frontier');
+    const node = graph.nodes.find((n) => n.id === pd.nodeId);
+    if (!node || node.humanDecisionType !== pd.decisionType) {
+      throw new Error('pending decision 类型与节点 humanDecisionType 不一致');
+    }
+  }
+
+  // attemptBudget key set 完整
+  if (!isRecord(state.attemptBudget)) throw new Error('attemptBudget 必须是非空对象');
+  for (const key of LOOP_BUDGET_KEYS) {
+    if (!(key in state.attemptBudget)) throw new Error(`attemptBudget 缺少预算 ${key}`);
+    const n = state.attemptBudget[key];
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0) {
+      throw new Error(`预算 ${key} 计数非法`);
+    }
+  }
+  for (const key of Object.keys(state.attemptBudget)) {
+    if (!LOOP_BUDGET_KEYS.includes(key as LoopBudgetKey)) {
+      throw new Error(`attemptBudget 含未知预算 ${key}`);
+    }
+  }
+
+  // artifact slots 完整
+  if (!isRecord(state.artifacts)) throw new Error('artifacts 必须是非空对象');
+  for (const kind of ARTIFACT_KINDS) {
+    if (!(kind in state.artifacts)) throw new Error(`artifacts 缺少槽位 ${kind}`);
+    const ref = state.artifacts[kind];
+    if (ref !== null && ref.kind !== kind) throw new Error(`artifacts.${kind} 引用不匹配`);
+  }
+
+  // nodeOutcomes 合法
+  if (!isRecord(state.nodeOutcomes)) throw new Error('nodeOutcomes 必须是非空对象');
+  for (const [nodeId, outcome] of Object.entries(state.nodeOutcomes)) {
+    const o = outcome as GraphNodeOutcome;
+    if (!isGraphConditionName(o.condition)) throw new Error(`节点 ${nodeId} 的 outcome 条件未知`);
+    if (!isGraphConditionOutcome(o.condition, o.value)) {
+      throw new Error(`节点 ${nodeId} 的 outcome 取值非法`);
+    }
+  }
+}
 
 // ── 边条件判定 ──────────────────────────────────────────────────
 
@@ -154,12 +250,6 @@ export function canTraverseEdge(
 
 // ── 路径可达性 ──────────────────────────────────────────────────
 
-/**
- * 在"去掉其它 loop-back 边"的受限图上计算可达性。
- *
- * 只保留当前 loop 边 `currentLoopEdgeId`，去掉其它 loop-back 边，
- * 避免其它循环（如 regenerate / candidateRewrite）把循环体外节点拉进本循环体。
- */
 function pathExistsRestricted(
   graph: IdeaToNovelGraphV1,
   from: GraphNodeId,
@@ -273,6 +363,49 @@ export function computeNextFrontier(
   return result;
 }
 
+// ── JOIN 确定性聚合 ─────────────────────────────────────────────
+
+/**
+ * 从 joinAggregationPolicy 声明的来源确定性聚合 JOIN 节点结果。
+ *
+ * - 来源必须恰好为策略声明的集合、无重复、每个来源都产出指定 condition；
+ * - 空数组 / 缺项 / 重复来源 / 非法 outcome 一律 fail-closed（抛错）；
+ * - 全 pass 才 pass，否则 needs_rewrite。
+ */
+export function aggregateJoinOutcome(
+  graph: IdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunState,
+  joinNodeId: GraphNodeId,
+): GraphNodeOutcome {
+  const node = graph.nodes.find((n) => n.id === joinNodeId);
+  if (!node) throw new Error(`join 节点不存在: ${joinNodeId}`);
+  const policy = node.joinAggregationPolicy;
+  if (!policy) throw new Error(`join 节点 ${joinNodeId} 缺少 joinAggregationPolicy`);
+  if (policy.kind !== 'critique_verdict') {
+    throw new Error(`join 节点 ${joinNodeId} 的聚合策略不支持: ${policy.kind}`);
+  }
+  if (policy.rule !== 'all_pass_or_needs_rewrite') {
+    throw new Error(`join 节点 ${joinNodeId} 的聚合规则不支持: ${policy.rule}`);
+  }
+  const sources = [...policy.sources];
+  if (sources.length !== 3) {
+    throw new Error(`join ${joinNodeId} 来源数量必须恰好为 3，实际 ${sources.length}`);
+  }
+  if (new Set(sources).size !== sources.length) {
+    throw new Error(`join ${joinNodeId} 来源不允许重复`);
+  }
+  const criticOutcomes: GraphNodeOutcome[] = [];
+  for (const src of sources) {
+    const outcome = state.nodeOutcomes[src];
+    if (!outcome) throw new Error(`join 来源 ${src} 缺少产出`);
+    if (outcome.condition !== 'critique_verdict') {
+      throw new Error(`join 来源 ${src} 的 condition 非法: ${outcome.condition}`);
+    }
+    criticOutcomes.push(outcome);
+  }
+  return { condition: 'critique_verdict', value: aggregateCritiqueVerdict(criticOutcomes) };
+}
+
 // ── 内部状态变更辅助 ────────────────────────────────────────────
 
 function incrementBudget(
@@ -330,6 +463,49 @@ function resetLoopBody(
   return unconsumeEdges({ ...state, nodeStatuses, nodeOutcomes }, internalEdgeIds);
 }
 
+// ── 输出契约校验 ────────────────────────────────────────────────
+
+function assertOutcomeMatchesContract(
+  node: IdeaToNovelGraphNodeDefinition,
+  outcome: GraphNodeOutcome | undefined,
+): void {
+  const expected = node.output.requiredOutcomeCondition;
+  if (expected === null) {
+    if (outcome !== undefined) {
+      throw new Error(`节点 ${node.id} 不接受多余 outcome`);
+    }
+    return;
+  }
+  if (outcome === undefined) throw new Error(`节点 ${node.id} 缺少必需 outcome: ${expected}`);
+  if (outcome.condition !== expected) {
+    throw new Error(
+      `节点 ${node.id} 的 outcome 条件 ${outcome.condition} 与契约 ${expected} 不匹配`,
+    );
+  }
+  if (!isGraphConditionOutcome(expected, outcome.value)) {
+    throw new Error(`节点 ${node.id} 的 outcome 取值非法`);
+  }
+}
+
+function assertArtifactMatchesContract(
+  node: IdeaToNovelGraphNodeDefinition,
+  artifactRef: ArtifactRef | undefined,
+): void {
+  const expected = node.output.allowedArtifactKind;
+  if (expected === null) {
+    if (artifactRef !== undefined) {
+      throw new Error(`节点 ${node.id} 不允许产出 artifact`);
+    }
+    return;
+  }
+  if (artifactRef === undefined) throw new Error(`节点 ${node.id} 缺少必需 artifact: ${expected}`);
+  if (artifactRef.kind !== expected) {
+    throw new Error(
+      `节点 ${node.id} 的 artifact kind ${artifactRef.kind} 与契约 ${expected} 不匹配`,
+    );
+  }
+}
+
 // ── 节点完成推进（内部共享）──────────────────────────────────────
 
 function completeNode(
@@ -345,20 +521,31 @@ function completeNode(
     throw new Error(`节点 ${nodeId} 不在活跃 frontier，不能完成`);
   }
 
+  // JOIN 节点：不接受调用方伪造的 outcome，从策略来源确定性聚合
+  let effectiveOutcome = opts.outcome;
+  if (node.joinAggregationPolicy) {
+    if (opts.outcome !== undefined) {
+      throw new Error(`join 节点 ${nodeId} 不接受调用方伪造的 outcome`);
+    }
+    effectiveOutcome = aggregateJoinOutcome(graph, state, nodeId);
+  }
+  assertOutcomeMatchesContract(node, effectiveOutcome);
+  assertArtifactMatchesContract(node, opts.artifactRef);
+
   let next: IdeaToNovelGraphRunState = {
     ...state,
     nodeStatuses: { ...state.nodeStatuses, [nodeId]: 'succeeded' },
   };
-  if (opts.outcome) {
-    next = { ...next, nodeOutcomes: { ...next.nodeOutcomes, [nodeId]: opts.outcome } };
+  if (effectiveOutcome !== undefined) {
+    next = { ...next, nodeOutcomes: { ...next.nodeOutcomes, [nodeId]: effectiveOutcome } };
   }
   if (opts.artifactRef) {
     next = applyArtifactChange(next, opts.artifactRef);
   }
 
-  // 节点成功触发的预算重置（DRAFT 之后重设 rewrite / candidateRewrite）
-  const resets = BUDGET_RESETS_ON_NODE_SUCCESS[nodeId];
-  if (resets) {
+  // 节点成功触发的预算重置（执行语义来自 node.budgetResetPolicy）
+  const resets = node.budgetResetPolicy ?? [];
+  if (resets.length > 0) {
     const budget = { ...next.attemptBudget };
     for (const key of resets) budget[key] = 0;
     next = { ...next, attemptBudget: budget };
@@ -401,7 +588,11 @@ function completeNode(
   next = { ...next, nodeStatuses, activeFrontier: [...frontier] };
 
   if (isTerminalKind(node.kind)) {
-    return { ...next, activeFrontier: [], terminalStatus: 'completed' };
+    return {
+      ...next,
+      activeFrontier: [],
+      terminalStatus: node.terminalStatus ?? 'completed',
+    };
   }
   return next;
 }
@@ -412,7 +603,8 @@ function completeNode(
  * 应用一次节点成功。
  *
  * - 人工交互节点（CLARIFY_ANSWER / USER_GATE）必须走 applyHumanDecision；
- * - 其余节点直接推进。
+ * - JOIN 节点结果由聚合策略计算，不接受调用方伪造；
+ * - 强制节点输出契约。
  */
 export function applyNodeSuccess(
   graph: IdeaToNovelGraphV1,
@@ -420,6 +612,7 @@ export function applyNodeSuccess(
   nodeId: GraphNodeId,
   opts?: ApplyNodeSuccessOptions,
 ): IdeaToNovelGraphRunState {
+  assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
   if (node.kind === 'CLARIFY_ANSWER' || node.kind === 'USER_GATE') {
@@ -439,6 +632,7 @@ export function applyNodeFailure(
   state: IdeaToNovelGraphRunState,
   nodeId: GraphNodeId,
 ): IdeaToNovelGraphRunState {
+  assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
   const status = state.nodeStatuses[nodeId];
@@ -463,17 +657,20 @@ export function requestHumanDecision(
   nodeId: GraphNodeId,
   decisionType: HumanDecisionType,
 ): IdeaToNovelGraphRunState {
+  assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
+  if (node.kind !== 'CLARIFY_ANSWER' && node.kind !== 'USER_GATE') {
+    throw new Error(`节点 ${nodeId} 不是人工交互节点`);
+  }
   if (state.nodeStatuses[nodeId] !== 'active') {
     throw new Error(`节点 ${nodeId} 不在活跃 frontier，不能请求人工决策`);
   }
   if (state.pendingHumanDecision !== null) {
     throw new Error('已存在待处理的人工决策');
   }
-  const expected = HUMAN_DECISION_TYPE_BY_NODE[nodeId];
-  if (!expected || expected !== decisionType) {
-    throw new Error(`节点 ${nodeId} 的人工决策类型应为 ${String(expected)}`);
+  if (node.humanDecisionType === undefined || node.humanDecisionType !== decisionType) {
+    throw new Error(`节点 ${nodeId} 的人工决策类型应为 ${String(node.humanDecisionType)}`);
   }
   const pending: PendingHumanDecision = { nodeId, decisionType };
   return {
@@ -483,20 +680,17 @@ export function requestHumanDecision(
   };
 }
 
-function assertGateOutcome(condition: 'blueprint_gate' | 'candidate_gate', value: unknown): void {
-  if (!isGraphConditionOutcome(condition, value)) {
-    throw new Error(`人工门禁决策非法: ${condition} = ${String(value)}`);
-  }
-}
-
 /**
  * 应用一次人工决策，把人工交互节点完成。
+ *
+ * 门禁/升级节点的 outcome 条件由节点输出契约（requiredOutcomeCondition）决定。
  */
 export function applyHumanDecision(
   graph: IdeaToNovelGraphV1,
   state: IdeaToNovelGraphRunState,
   decision: HumanDecisionInput,
 ): IdeaToNovelGraphRunState {
+  assertValidTransitionState(graph, state);
   const pending = state.pendingHumanDecision;
   if (!pending) throw new Error('没有待处理的人工决策');
   if (pending.nodeId !== decision.nodeId) {
@@ -505,16 +699,26 @@ export function applyHumanDecision(
   if (pending.decisionType !== decision.decisionType) {
     throw new Error(`决策类型不匹配: 期望 ${pending.decisionType}，收到 ${decision.decisionType}`);
   }
+  const node = graph.nodes.find((n) => n.id === decision.nodeId);
+  if (!node) throw new Error(`节点不存在: ${decision.nodeId}`);
+  if (node.humanDecisionType !== decision.decisionType) {
+    throw new Error(
+      `节点 ${node.id} 的 humanDecisionType 为 ${String(node.humanDecisionType)}，不接受 ${decision.decisionType}`,
+    );
+  }
 
   let opts: ApplyNodeSuccessOptions = {};
-  if (decision.decisionType === 'answer_question') {
-    // 回答内容为数据，不进共享状态；仅推进节点
-  } else if (decision.decisionType === 'blueprint_gate') {
-    assertGateOutcome('blueprint_gate', decision.outcome);
-    opts = { outcome: { condition: 'blueprint_gate', value: decision.outcome } };
-  } else {
-    assertGateOutcome('candidate_gate', decision.outcome);
-    opts = { outcome: { condition: 'candidate_gate', value: decision.outcome } };
+  if (decision.decisionType !== 'answer_question') {
+    // 门禁 / 升级：outcome 条件来自节点输出契约
+    const condition = node.output.requiredOutcomeCondition;
+    if (condition === null) {
+      throw new Error(`节点 ${node.id} 没有 requiredOutcomeCondition 却要求 outcome`);
+    }
+    if (!isGraphConditionOutcome(condition, decision.outcome)) {
+      throw new Error(`决策取值非法: ${condition} = ${String(decision.outcome)}`);
+    }
+    // condition 已通过 isGraphConditionOutcome 校验，取值为对应闭合枚举成员
+    opts = { outcome: { condition, value: decision.outcome } as GraphNodeOutcome };
   }
 
   const cleared: IdeaToNovelGraphRunState = { ...state, pendingHumanDecision: null };

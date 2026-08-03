@@ -199,7 +199,7 @@ describe('定义损坏 → fail closed', () => {
     expectCode(graph, 'INVALID_LOOP_MAX');
   });
 
-  it('重复 loop 预算键', () => {
+  it('同一预算键的 loop 边 maxIterations 不一致', () => {
     const selfLoop: IdeaToNovelGraphEdgeDefinition = {
       id: 'rewrite-self-loop' as never,
       from: 'REWRITE' as never,
@@ -210,18 +210,18 @@ describe('定义损坏 → fail closed', () => {
     };
     expectCode(
       { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, selfLoop] },
-      'DUPLICATE_LOOP_BUDGET',
+      'LOOP_MAX_INCONSISTENT',
     );
   });
 
-  it('预算缺少耗尽出口', () => {
+  it('预算耗尽出口未绑定到对应 loop source', () => {
     const graph = {
       ...IDEA_TO_NOVEL_GRAPH_V1,
       edges: IDEA_TO_NOVEL_GRAPH_V1.edges.filter(
         (e) => e.id !== 'critique-join--candidate-gate-budget-exhausted',
       ),
     };
-    expectCode(graph, 'MISSING_BUDGET_EXIT');
+    expectCode(graph, 'BUDGET_EXIT_NOT_BOUND');
   });
 
   it('未知条件名', () => {
@@ -346,10 +346,13 @@ describe('定义损坏 → fail closed', () => {
   });
 
   it('没有终止节点', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'EXPORT_READY', { kind: 'GENERATE' }),
-      'MISSING_TERMINAL_NODE',
-    );
+    const graph = {
+      ...IDEA_TO_NOVEL_GRAPH_V1,
+      nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map((n) =>
+        n.kind === 'TERMINAL' ? { ...n, kind: 'GENERATE' as never } : n,
+      ),
+    };
+    expectCode(graph, 'MISSING_TERMINAL_NODE');
   });
 
   it('malformed 输入返回 MALFORMED_GRAPH 且不抛异常', () => {
@@ -443,6 +446,141 @@ describe('定义损坏 → fail closed', () => {
     };
     expect(() => validateIdeaToNovelGraphV1(graph)).not.toThrow();
     expect(validateIdeaToNovelGraphV1(graph).some((e) => e.code === 'UNKNOWN_CONDITION')).toBe(
+      true,
+    );
+  });
+});
+
+describe('REWORK：validator 强化', () => {
+  it('终止节点禁止出口边', () => {
+    const extraEdge: IdeaToNovelGraphEdgeDefinition = {
+      id: 'export--draft' as never,
+      from: 'EXPORT_READY' as never,
+      to: 'DRAFT' as never,
+      kind: 'fixed',
+      mode: 'exclusive',
+    };
+    expectCode(
+      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, extraEdge] },
+      'TERMINAL_HAS_OUTGOING_EDGE',
+    );
+  });
+
+  it('JOIN kind 缺 join 声明；非 JOIN 声明 join', () => {
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', { join: undefined }),
+      'JOIN_KIND_WITHOUT_JOIN',
+    );
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { join: { requiredIncoming: 2 } }),
+      'NON_JOIN_WITH_JOIN',
+    );
+  });
+
+  it('joinAggregationPolicy 来源与 join 入边不匹配', () => {
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', {
+        joinAggregationPolicy: {
+          kind: 'critique_verdict',
+          sources: ['DRAFT', 'REWRITE', 'CHAPTER_PLAN'] as never,
+          rule: 'all_pass_or_needs_rewrite',
+        },
+      }),
+      'JOIN_POLICY_MISMATCH',
+    );
+  });
+
+  it('exact-key：node / edge / output 的未知键被拒', () => {
+    const node = nodeById(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT')!;
+    expectCode(
+      {
+        ...IDEA_TO_NOVEL_GRAPH_V1,
+        nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map((n) => (n.id === 'DRAFT' ? { ...n, bogus: 1 } : n)),
+      },
+      'UNKNOWN_NODE_KEY',
+    );
+    expectCode(
+      {
+        ...IDEA_TO_NOVEL_GRAPH_V1,
+        edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
+          e.id === 'idea-capture--spec-extract' ? { ...e, bogus: 1 } : e,
+        ),
+      },
+      'UNKNOWN_EDGE_KEY',
+    );
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', {
+        output: { ...node.output, bogus: 1 } as never,
+      }),
+      'UNKNOWN_OUTPUT_KEY',
+    );
+  });
+
+  it('移除全部 loop 边后仍存在环 → 拒绝', () => {
+    // CANDIDATE_GATE→CHAPTER_PLAN 是一条非 loop 反向边，形成纯非 loop 环
+    const extra: IdeaToNovelGraphEdgeDefinition = {
+      id: 'candidate-gate--chapter-plan-non-loop' as never,
+      from: 'CANDIDATE_GATE' as never,
+      to: 'CHAPTER_PLAN' as never,
+      kind: 'fixed',
+      mode: 'exclusive',
+    };
+    expectCode(
+      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, extra] },
+      'CYCLE_AFTER_LOOP_REMOVAL',
+    );
+  });
+
+  it('输出契约不一致（outputRequired true 但无输出类型）', () => {
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', {
+        output: {
+          requiredOutcomeCondition: null,
+          allowedArtifactKind: null,
+          outputRequired: true,
+        } as never,
+      }),
+      'INVALID_OUTPUT_CONTRACT',
+    );
+  });
+
+  it('原型键作为条件名 / 节点 id 被拒（fail-closed）', () => {
+    const graph = {
+      ...IDEA_TO_NOVEL_GRAPH_V1,
+      nodes: [
+        ...IDEA_TO_NOVEL_GRAPH_V1.nodes,
+        {
+          id: '__proto__' as never,
+          kind: 'TERMINAL' as never,
+          label: 'p',
+          output: {
+            requiredOutcomeCondition: null,
+            allowedArtifactKind: null,
+            outputRequired: false,
+          },
+        },
+      ],
+    };
+    expect(() => validateIdeaToNovelGraphV1(graph)).not.toThrow();
+    expect(
+      validateIdeaToNovelGraphV1(graph).some((e) => e.code === 'INVALID_STAGE_PROJECTION'),
+    ).toBe(true);
+    // __proto__ 作为条件名 → UNKNOWN_CONDITION
+    const condGraph = {
+      ...IDEA_TO_NOVEL_GRAPH_V1,
+      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
+        e.id === 'research-decision--blueprint-generate-none'
+          ? {
+              ...e,
+              requiredOutcomes: [
+                { condition: '__proto__' as never, expectedOutcome: 'none' as never },
+              ],
+            }
+          : e,
+      ),
+    };
+    expect(() => validateIdeaToNovelGraphV1(condGraph)).not.toThrow();
+    expect(validateIdeaToNovelGraphV1(condGraph).some((e) => e.code === 'UNKNOWN_CONDITION')).toBe(
       true,
     );
   });

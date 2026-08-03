@@ -33,7 +33,12 @@ import {
   CANDIDATE_GATE,
   MANUSCRIPT_COMMIT,
   EXPORT_READY,
+  BLUEPRINT_ESCALATION,
+  CANDIDATE_ESCALATION,
+  RUN_CANCELLED,
+  RUN_BLOCKED,
   createWorkflowRunId,
+  type GraphId,
   type GraphNodeId,
   type GraphNodeOutcome,
 } from './idea-to-novel-graph.js';
@@ -52,6 +57,7 @@ import {
   terminalStatusOf,
   canTraverseEdge,
   computeNextFrontier,
+  aggregateJoinOutcome,
   type ApplyNodeSuccessOptions,
   type HumanDecisionInput,
 } from './idea-to-novel-graph-transitions.js';
@@ -103,9 +109,8 @@ function criticsAll(
       outcome: { condition: 'critique_verdict', value: verdict } satisfies GraphNodeOutcome,
     });
   }
-  s = success(s, CRITIQUE_JOIN, {
-    outcome: { condition: 'critique_verdict', value: verdict } satisfies GraphNodeOutcome,
-  });
+  // CRITIQUE_JOIN 不接受调用方 verdict，由聚合策略从三个 Critic 确定性计算
+  s = success(s, CRITIQUE_JOIN);
   return s;
 }
 
@@ -182,9 +187,7 @@ describe('无需调研分支（全链 completed）', () => {
     });
     expect(frontierOf(s)).toEqual([CRITIQUE_JOIN]); // 3/3 → join
 
-    s = success(s, CRITIQUE_JOIN, {
-      outcome: { condition: 'critique_verdict', value: 'pass' },
-    });
+    s = success(s, CRITIQUE_JOIN);
     expect(frontierOf(s)).toEqual([CANDIDATE_GATE]);
 
     s = requestHumanDecision(G, s, CANDIDATE_GATE, 'candidate_gate');
@@ -546,5 +549,263 @@ describe('computeNextFrontier 与 frontier 一致性', () => {
       (id) => s.nodeStatuses[id] === 'active' || s.nodeStatuses[id] === 'waiting_for_human',
     );
     expect(derived).toBe(true);
+  });
+});
+
+describe('预算耗尽人工升级（不自动接受）', () => {
+  function blueprintGateExhausted(): IdeaToNovelGraphRunState {
+    let s = intakeComplete(fresh());
+    s = success(s, RESEARCH_DECISION, {
+      outcome: { condition: 'research_decision', value: 'none' },
+    });
+    s = success(s, BLUEPRINT_GENERATE, { artifactRef: artifactRef('storyBlueprint', 'bp-1') });
+    for (let i = 0; i < 3; i++) {
+      s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+      s = applyHumanDecision(G, s, {
+        nodeId: BLUEPRINT_USER_GATE,
+        decisionType: 'blueprint_gate',
+        outcome: 'request_rewrite',
+      });
+      s = success(s, BLUEPRINT_GENERATE, {
+        artifactRef: artifactRef('storyBlueprint', `bp-${i + 2}`),
+      });
+    }
+    // 第 4 次 request_rewrite → blueprintRewrite 耗尽 → BLUEPRINT_ESCALATION（而非 CHAPTER_PLAN）
+    s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_USER_GATE,
+      decisionType: 'blueprint_gate',
+      outcome: 'request_rewrite',
+    });
+    return s;
+  }
+
+  it('blueprintRewrite 耗尽 → 进入 BLUEPRINT_ESCALATION，而非自动 CHAPTER_PLAN', () => {
+    const s = blueprintGateExhausted();
+    expect(s.attemptBudget.blueprintRewrite).toBe(3);
+    expect(frontierOf(s)).toEqual([BLUEPRINT_ESCALATION]);
+    expect(s.activeFrontier).not.toContain(CHAPTER_PLAN);
+  });
+
+  it('升级节点 accept_current → CHAPTER_PLAN（用户显式接受）', () => {
+    let s = blueprintGateExhausted();
+    s = requestHumanDecision(G, s, BLUEPRINT_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'accept_current',
+    });
+    expect(frontierOf(s)).toEqual([CHAPTER_PLAN]);
+  });
+
+  it('升级节点 cancel → RUN_CANCELLED → terminal cancelled', () => {
+    let s = blueprintGateExhausted();
+    s = requestHumanDecision(G, s, BLUEPRINT_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'cancel',
+    });
+    expect(frontierOf(s)).toEqual([RUN_CANCELLED]);
+    s = success(s, RUN_CANCELLED);
+    expect(terminalStatusOf(s)).toBe('cancelled');
+  });
+
+  it('升级节点 continue_later → RUN_BLOCKED → terminal blocked（可恢复）', () => {
+    let s = blueprintGateExhausted();
+    s = requestHumanDecision(G, s, BLUEPRINT_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'continue_later',
+    });
+    s = success(s, RUN_BLOCKED);
+    expect(terminalStatusOf(s)).toBe('blocked');
+  });
+
+  it('升级节点 modify_requirements → 回 SPEC_EXTRACT（specRevision 预算 +1）', () => {
+    let s = blueprintGateExhausted();
+    s = requestHumanDecision(G, s, BLUEPRINT_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'modify_requirements',
+    });
+    expect(frontierOf(s)).toEqual([SPEC_EXTRACT]);
+    expect(s.attemptBudget.specRevision).toBe(1);
+  });
+
+  it('candidateRewrite 耗尽 → CANDIDATE_ESCALATION，而非自动 MANUSCRIPT_COMMIT', () => {
+    const g = reachedCandidateGate();
+    let s: IdeaToNovelGraphRunState = {
+      ...g,
+      attemptBudget: { ...g.attemptBudget, candidateRewrite: 5 },
+    };
+    s = applyHumanDecision(G, s, {
+      nodeId: CANDIDATE_GATE,
+      decisionType: 'candidate_gate',
+      outcome: 'request_rewrite',
+    });
+    expect(frontierOf(s)).toEqual([CANDIDATE_ESCALATION]);
+    expect(s.activeFrontier).not.toContain(MANUSCRIPT_COMMIT);
+  });
+
+  it('regenerate 耗尽 → CANDIDATE_ESCALATION；accept_current → 用户显式接受才写入稿件', () => {
+    const g = reachedCandidateGate();
+    let s: IdeaToNovelGraphRunState = {
+      ...g,
+      attemptBudget: { ...g.attemptBudget, regenerate: 5 },
+    };
+    s = applyHumanDecision(G, s, {
+      nodeId: CANDIDATE_GATE,
+      decisionType: 'candidate_gate',
+      outcome: 'reject',
+    });
+    expect(frontierOf(s)).toEqual([CANDIDATE_ESCALATION]);
+    s = requestHumanDecision(G, s, CANDIDATE_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: CANDIDATE_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'accept_current',
+    });
+    expect(frontierOf(s)).toEqual([MANUSCRIPT_COMMIT]);
+  });
+});
+
+describe('节点输出契约强制', () => {
+  it('缺少必需 outcome → 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() => success(s, RESEARCH_DECISION)).toThrow();
+  });
+
+  it('outcome 条件与节点契约不匹配 → 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() =>
+      success(s, RESEARCH_DECISION, {
+        outcome: { condition: 'research_valid', value: 'valid' },
+      }),
+    ).toThrow();
+  });
+
+  it('多余 outcome（节点不产出条件）→ 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() =>
+      success(s, RESEARCH_PLAN, { outcome: { condition: 'research_decision', value: 'none' } }),
+    ).toThrow();
+  });
+
+  it('缺少必需 artifact → 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() => success(s, BLUEPRINT_GENERATE)).toThrow();
+  });
+
+  it('artifact kind 与节点契约不匹配 → 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() =>
+      success(s, DRAFT, { artifactRef: artifactRef('storyBlueprint', 'bp-x') }),
+    ).toThrow();
+  });
+
+  it('不允许 artifact 的节点产出 artifact → 拒绝', () => {
+    const s = intakeComplete(fresh());
+    expect(() =>
+      success(s, CHAPTER_PLAN, { artifactRef: artifactRef('manuscript', 'ms-x') }),
+    ).toThrow();
+  });
+});
+
+describe('Critique Join 确定性聚合', () => {
+  function reachJoinActive(): IdeaToNovelGraphRunState {
+    let s = reachDraft(fresh());
+    s = success(s, DRAFT, { artifactRef: artifactRef('generationRun', 'gen-1') });
+    s = success(s, CONTINUITY_CRITIC, {
+      outcome: { condition: 'critique_verdict', value: 'pass' },
+    });
+    s = success(s, STYLE_CRITIC, { outcome: { condition: 'critique_verdict', value: 'pass' } });
+    s = success(s, REQUIREMENT_CRITIC, {
+      outcome: { condition: 'critique_verdict', value: 'pass' },
+    });
+    return s; // CRITIQUE_JOIN active
+  }
+
+  it('JOIN 不接受调用方伪造的 outcome → 拒绝', () => {
+    const s = reachJoinActive();
+    expect(() =>
+      success(s, CRITIQUE_JOIN, { outcome: { condition: 'critique_verdict', value: 'pass' } }),
+    ).toThrow();
+  });
+
+  it('全 pass 才 pass，否则 needs_rewrite（从三个来源确定性计算）', () => {
+    let s = reachJoinActive();
+    s = success(s, CRITIQUE_JOIN);
+    expect(frontierOf(s)).toEqual([CANDIDATE_GATE]); // all pass → pass
+
+    const mixed = reachJoinActive();
+    const s2 = success(
+      {
+        ...mixed,
+        nodeOutcomes: {
+          ...mixed.nodeOutcomes,
+          [STYLE_CRITIC]: { condition: 'critique_verdict', value: 'needs_rewrite' },
+        },
+      },
+      CRITIQUE_JOIN,
+    );
+    expect(frontierOf(s2)).toEqual([REWRITE]); // needs_rewrite → rewrite loop
+  });
+
+  it('来源缺项 fail-closed → 抛错', () => {
+    const s = reachJoinActive();
+    const missing = {
+      ...s,
+      nodeOutcomes: { ...s.nodeOutcomes },
+    };
+    delete (missing.nodeOutcomes as Record<string, unknown>)[STYLE_CRITIC];
+    expect(() => aggregateJoinOutcome(G, missing, CRITIQUE_JOIN)).toThrow();
+  });
+});
+
+describe('transition 前置不变量', () => {
+  it('state.graphId/version 与 graph 不一致 → 拒绝', () => {
+    const s = { ...fresh(), graphId: 'other' as GraphId };
+    expect(() => success(s, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') })).toThrow();
+  });
+
+  it('run 已终止 → 拒绝', () => {
+    const s = { ...fresh(), terminalStatus: 'completed' as const };
+    expect(() => success(s, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') })).toThrow();
+  });
+
+  it('activeFrontier 与节点状态不一致 → 拒绝', () => {
+    const s = { ...fresh(), activeFrontier: [] };
+    expect(() => success(s, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') })).toThrow();
+  });
+
+  it('nodeStatuses 缺节点 → 拒绝', () => {
+    const s = fresh();
+    const nodeStatuses = Object.fromEntries(
+      Object.entries(s.nodeStatuses).filter(([id]) => id !== DRAFT),
+    ) as unknown as IdeaToNovelGraphRunState['nodeStatuses'];
+    expect(() =>
+      success({ ...s, nodeStatuses }, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') }),
+    ).toThrow();
+  });
+
+  it('pending decision 与节点状态不一致 → 拒绝', () => {
+    const s = {
+      ...fresh(),
+      pendingHumanDecision: { nodeId: CANDIDATE_GATE, decisionType: 'candidate_gate' as const },
+    };
+    expect(() => success(s, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') })).toThrow();
+  });
+
+  it('attemptBudget 缺预算键 → 拒绝', () => {
+    const s = fresh();
+    const attemptBudget = Object.fromEntries(
+      Object.entries(s.attemptBudget).filter(([k]) => k !== 'rewrite'),
+    ) as unknown as IdeaToNovelGraphRunState['attemptBudget'];
+    expect(() =>
+      success({ ...s, attemptBudget }, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') }),
+    ).toThrow();
   });
 });

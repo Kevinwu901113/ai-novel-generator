@@ -32,6 +32,10 @@ import {
   CANDIDATE_GATE,
   MANUSCRIPT_COMMIT,
   EXPORT_READY,
+  BLUEPRINT_ESCALATION,
+  CANDIDATE_ESCALATION,
+  RUN_CANCELLED,
+  RUN_BLOCKED,
   type GraphNodeId,
   type IdeaToNovelGraphV1,
 } from './idea-to-novel-graph.js';
@@ -68,6 +72,10 @@ export const NODE_TO_WORKFLOW_STAGE_V1: Readonly<Record<string, WorkflowStage>> 
   [CANDIDATE_GATE]: 'generate',
   [MANUSCRIPT_COMMIT]: 'manuscript',
   [EXPORT_READY]: 'done',
+  [BLUEPRINT_ESCALATION]: 'blueprint',
+  [CANDIDATE_ESCALATION]: 'generate',
+  [RUN_CANCELLED]: 'done',
+  [RUN_BLOCKED]: 'done',
 };
 
 /** 阶段闭合枚举校验 */
@@ -83,8 +91,13 @@ export function isValidWorkflowStage(value: unknown): value is WorkflowStage {
   );
 }
 
-/** 查询某节点的阶段；未映射时返回 undefined（validator 用于 fail-closed） */
+/**
+ * 查询某节点的阶段；未映射时返回 undefined（validator 用于 fail-closed）。
+ *
+ * 使用 hasOwnProperty 防止原型键（__proto__ / constructor / toString）命中继承属性。
+ */
 export function workflowStageForNodeId(nodeId: GraphNodeId): WorkflowStage | undefined {
+  if (!Object.prototype.hasOwnProperty.call(NODE_TO_WORKFLOW_STAGE_V1, nodeId)) return undefined;
   return NODE_TO_WORKFLOW_STAGE_V1[nodeId];
 }
 

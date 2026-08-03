@@ -11,9 +11,11 @@
  */
 
 import type {
+  ArtifactKind,
   GraphId,
   GraphNodeId,
   GraphNodeOutcome,
+  GraphRunTerminalStatus,
   GraphVersion,
   IdeaToNovelGraphV1,
   LoopBudgetKey,
@@ -33,19 +35,7 @@ export type GraphNodeStatus =
   | 'skipped' // 跳过（保留，V1 不使用）
   | 'cancelled'; // 取消
 
-/** 运行终止状态 */
-export type GraphRunTerminalStatus = 'completed' | 'failed' | 'cancelled';
-
-// ── Artifact 引用（闭合判别联合）────────────────────────────────
-
-/** Artifact 类型 —— 权威内容对象的种类 */
-export type ArtifactKind =
-  | 'idea' // 初始想法
-  | 'creationSpec' // 创作要求（CreationSpec）
-  | 'researchBundle' // 调研资料包
-  | 'storyBlueprint' // 故事蓝图
-  | 'generationRun' // 生成记录
-  | 'manuscript'; // 稿件
+// Artifact 引用（闭合判别联合）────────────────────────────────
 
 export type IdeaArtifactId = string & { readonly __brand: 'IdeaArtifactId' };
 export type CreationSpecArtifactId = string & { readonly __brand: 'CreationSpecArtifactId' };
@@ -109,15 +99,14 @@ export function artifactRef(kind: ArtifactKind, rawId: string): ArtifactRef {
 /**
  * 待处理的人工决策。
  *
- * `decisionType` 是闭合枚举：answer_question（自由文本回答）与两个人工门禁。
- * 门禁的合法取值由对应条件枚举决定，在 `applyHumanDecision` 中校验。
+ * `decisionType` 是闭合枚举：answer_question（自由文本回答）、两个人工门禁与人工升级。
+ * 门禁/升级的合法取值由对应条件枚举决定，在 `applyHumanDecision` 中校验。
  */
 export type PendingHumanDecision =
   | { readonly nodeId: GraphNodeId; readonly decisionType: 'answer_question' }
   | { readonly nodeId: GraphNodeId; readonly decisionType: 'blueprint_gate' }
-  | { readonly nodeId: GraphNodeId; readonly decisionType: 'candidate_gate' };
-
-export type HumanDecisionType = PendingHumanDecision['decisionType'];
+  | { readonly nodeId: GraphNodeId; readonly decisionType: 'candidate_gate' }
+  | { readonly nodeId: GraphNodeId; readonly decisionType: 'escalation' };
 
 // ── 共享状态 ────────────────────────────────────────────────────
 
@@ -227,6 +216,7 @@ export const LOOP_BUDGET_KEYS: readonly LoopBudgetKey[] = [
   'rewrite',
   'candidateRewrite',
   'regenerate',
+  'specRevision',
 ];
 
 /** 节点状态闭合枚举校验 */
@@ -244,5 +234,7 @@ export function isValidGraphNodeStatus(value: unknown): value is GraphNodeStatus
 
 /** 终止状态闭合枚举校验 */
 export function isValidGraphRunTerminalStatus(value: unknown): value is GraphRunTerminalStatus {
-  return value === 'completed' || value === 'failed' || value === 'cancelled';
+  return (
+    value === 'completed' || value === 'failed' || value === 'cancelled' || value === 'blocked'
+  );
 }

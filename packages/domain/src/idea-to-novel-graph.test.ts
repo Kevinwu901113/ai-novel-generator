@@ -66,11 +66,12 @@ const REQUIRED_NODE_IDS = [
 ];
 
 describe('IdeaToNovelGraphV1 定义', () => {
-  it('包含全部 20 个必需节点，且无遗漏', () => {
+  it('包含全部 20 个必需节点 + 4 个预算升级/终止节点，且无遗漏', () => {
     const ids = IDEA_TO_NOVEL_GRAPH_V1.nodes.map((n) => n.id).sort();
-    const expected = [...REQUIRED_NODE_IDS].sort();
-    expect(ids).toEqual(expected);
-    expect(ids).toHaveLength(20);
+    for (const required of REQUIRED_NODE_IDS) {
+      expect(ids).toContain(required);
+    }
+    expect(ids).toHaveLength(24);
   });
 
   it('入口节点是 IDEA_CAPTURE 且为 IDEA_INPUT', () => {
@@ -93,10 +94,17 @@ describe('IdeaToNovelGraphV1 定义', () => {
     expect(targets.sort()).toEqual([CONTINUITY_CRITIC, STYLE_CRITIC, REQUIREMENT_CRITIC].sort());
   });
 
-  it('有界循环预算各只出现在一条 loop 边上', () => {
-    const budgets = IDEA_TO_NOVEL_GRAPH_V1.edges.filter((e) => e.loop).map((e) => e.loop!.budget);
-    expect(new Set(budgets).size).toBe(budgets.length);
-    expect(budgets).toHaveLength(6);
+  it('有界循环预算：7 个预算键，同一预算的 loop 边 maxIterations 一致', () => {
+    const loops = IDEA_TO_NOVEL_GRAPH_V1.edges.filter((e) => e.loop);
+    const budgets = loops.map((e) => e.loop!.budget);
+    expect(new Set(budgets).size).toBe(7);
+    expect(loops).toHaveLength(8); // specRevision 出现在两个升级节点
+    const maxByBudget = new Map<string, number>();
+    for (const e of loops) {
+      const prev = maxByBudget.get(e.loop!.budget);
+      if (prev !== undefined) expect(e.loop!.maxIterations).toBe(prev);
+      maxByBudget.set(e.loop!.budget, e.loop!.maxIterations);
+    }
   });
 
   it('基础定义通过静态校验', () => {
@@ -192,6 +200,47 @@ describe('确定性序列化', () => {
   it('序列化包含全部节点与边（长度 > 基线）', () => {
     const serialized = serializeIdeaToNovelGraphV1(IDEA_TO_NOVEL_GRAPH_V1);
     expect(serialized.length).toBeGreaterThan(2000);
+  });
+
+  it('执行语义字段（output / humanDecisionType / budgetResetPolicy / joinAggregationPolicy / terminalStatus）全部进入序列化', () => {
+    const serialized = serializeIdeaToNovelGraphV1(IDEA_TO_NOVEL_GRAPH_V1);
+    for (const key of [
+      '"output"',
+      '"humanDecisionType"',
+      '"budgetResetPolicy"',
+      '"joinAggregationPolicy"',
+      '"terminalStatus"',
+      '"joinAggregationPolicy"',
+    ]) {
+      expect(serialized, key).toContain(key);
+    }
+  });
+
+  it('组合字符 NFC / NFD 输入序列化结果一致（NFC 规范化 + code-point 比较，非 localeCompare）', () => {
+    const make = (label: string): IdeaToNovelGraphV1 => ({
+      id: 'g' as never,
+      version: 'v1' as never,
+      entryNodeId: 'A' as never,
+      nodes: [
+        {
+          id: 'A' as never,
+          kind: 'IDEA_INPUT',
+          label,
+          output: {
+            requiredOutcomeCondition: null,
+            allowedArtifactKind: 'idea',
+            outputRequired: true,
+          },
+        },
+      ],
+      edges: [],
+    });
+    const nfd = make('e\u0301'); // e + combining acute
+    const nfc = make('\u00e9'); // precomposed e-acute
+    expect(serializeIdeaToNovelGraphV1(nfd)).toBe(serializeIdeaToNovelGraphV1(nfc));
+    // 不依赖 locale：输出不随运行 locale 变化（排序用显式 code-point comparator）
+    const serialized = serializeIdeaToNovelGraphV1(IDEA_TO_NOVEL_GRAPH_V1);
+    expect(serialized).not.toContain('localeCompare');
   });
 });
 

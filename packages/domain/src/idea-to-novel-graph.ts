@@ -17,6 +17,8 @@
  * 权威规格：docs/product/idea-to-novel-v1.md、docs/development/idea-to-novel-migration-plan.md。
  */
 
+import { codePointCompare } from './creation-contract.js';
+
 // ── 品牌类型 ─────────────────────────────────────────────────────
 
 /** Graph 全局稳定标识 */
@@ -106,11 +108,26 @@ export type CandidateGateDecision = 'accept' | 'reject' | 'request_rewrite';
 /** 审查结论 */
 export type CritiqueVerdict = 'pass' | 'needs_rewrite';
 
+/** 人工升级决策（预算耗尽时用户必须显式选择） */
+export type EscalationDecision =
+  'accept_current' | 'modify_requirements' | 'cancel' | 'continue_later';
+
+/** 运行终止状态 */
+export type GraphRunTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'blocked';
+
+/** 人工决策类型（人工节点声明；由 transition 从 Graph 读取） */
+export type HumanDecisionType =
+  'answer_question' | 'blueprint_gate' | 'candidate_gate' | 'escalation';
+
+/** 权威 artifact 种类（闭合集合） */
+export type ArtifactKind =
+  'idea' | 'creationSpec' | 'researchBundle' | 'storyBlueprint' | 'generationRun' | 'manuscript';
+
 /**
  * 有界循环预算键。
  *
- * 每个键对应一条 loop-back 边，最多重入 `maxIterations` 次；
- * 预算耗尽时必须存在 `X_budget: exhausted` 的出口边。
+ * 每个键对应一条或多条 loop-back 边，最多重入 `maxIterations` 次；
+ * 预算耗尽时必须存在从对应 loop source 出发的 `X_budget: exhausted` 出口边。
  */
 export type LoopBudgetKey =
   | 'clarification'
@@ -118,7 +135,8 @@ export type LoopBudgetKey =
   | 'blueprintRewrite'
   | 'rewrite'
   | 'candidateRewrite'
-  | 'regenerate';
+  | 'regenerate'
+  | 'specRevision';
 
 /** 预算耗尽条件名：`<key>_budget` */
 export type LoopBudgetConditionName =
@@ -127,7 +145,8 @@ export type LoopBudgetConditionName =
   | 'blueprint_rewrite_budget'
   | 'rewrite_budget'
   | 'candidate_rewrite_budget'
-  | 'regenerate_budget';
+  | 'regenerate_budget'
+  | 'spec_revision_budget';
 
 /** 全部条件名（含预算条件） */
 export type GraphConditionName =
@@ -142,7 +161,9 @@ export type GraphConditionName =
   | 'rewrite_budget'
   | 'candidate_gate'
   | 'candidate_rewrite_budget'
-  | 'regenerate_budget';
+  | 'regenerate_budget'
+  | 'escalation_decision'
+  | 'spec_revision_budget';
 
 /** 每个条件名的闭合取值集合 —— 条件边只允许引用这里的值（as const 保留字面量类型） */
 export const GRAPH_CONDITION_OUTCOMES = {
@@ -158,6 +179,8 @@ export const GRAPH_CONDITION_OUTCOMES = {
   candidate_gate: ['accept', 'reject', 'request_rewrite'],
   candidate_rewrite_budget: ['available', 'exhausted'],
   regenerate_budget: ['available', 'exhausted'],
+  escalation_decision: ['accept_current', 'modify_requirements', 'cancel', 'continue_later'],
+  spec_revision_budget: ['available', 'exhausted'],
 } as const satisfies Readonly<Record<GraphConditionName, readonly string[]>>;
 
 /** 某条件名对应的闭合取值联合（字面量类型） */
@@ -174,6 +197,7 @@ export const LOOP_BUDGET_CONDITION_BY_KEY: Readonly<
   rewrite: 'rewrite_budget',
   candidateRewrite: 'candidate_rewrite_budget',
   regenerate: 'regenerate_budget',
+  specRevision: 'spec_revision_budget',
 };
 
 /** 预算条件名集合（用于在 transition 中把预算条件路由到 state.attemptBudget） */
@@ -341,6 +365,31 @@ export interface LoopDeclaration {
   readonly maxIterations: number;
 }
 
+/**
+ * 节点输出契约：节点成功时被允许/要求产出什么。
+ *
+ * - `requiredOutcomeCondition`：节点必须产出的条件结果（或 null = 不产出条件结果）；
+ * - `allowedArtifactKind`：节点允许产出的权威 artifact 种类（或 null = 不产出 artifact）；
+ * - `outputRequired`：节点成功时必须产出至少一种输出。
+ */
+export interface GraphNodeOutputContract {
+  readonly requiredOutcomeCondition: GraphConditionName | null;
+  readonly allowedArtifactKind: ArtifactKind | null;
+  readonly outputRequired: boolean;
+}
+
+/**
+ * join 聚合策略：JOIN 节点如何从指定来源确定性聚合结果。
+ *
+ * 只支持 critique_verdict 聚合：恰好 `sources` 指定的全部来源、来源唯一、
+ * 每个来源都必须产出 `critique_verdict`；全 pass 才 pass，否则 needs_rewrite。
+ */
+export interface JoinAggregationPolicy {
+  readonly kind: 'critique_verdict';
+  readonly sources: ReadonlyArray<GraphNodeId>;
+  readonly rule: 'all_pass_or_needs_rewrite';
+}
+
 /** 节点定义 */
 export interface IdeaToNovelGraphNodeDefinition {
   readonly id: GraphNodeId;
@@ -351,6 +400,16 @@ export interface IdeaToNovelGraphNodeDefinition {
   readonly promptId?: StablePromptId;
   /** fan-in join 声明：`requiredIncoming` 必须是进入本节点的 join 边数（>=2） */
   readonly join?: { readonly requiredIncoming: number };
+  /** 输出契约（执行语义，参与序列化） */
+  readonly output: GraphNodeOutputContract;
+  /** 人工决策类型（仅人工节点声明） */
+  readonly humanDecisionType?: HumanDecisionType;
+  /** 节点成功时重置的预算（执行语义，参与序列化） */
+  readonly budgetResetPolicy?: ReadonlyArray<LoopBudgetKey>;
+  /** join 聚合策略（仅 JOIN 节点声明） */
+  readonly joinAggregationPolicy?: JoinAggregationPolicy;
+  /** 终止状态（仅 TERMINAL 节点声明） */
+  readonly terminalStatus?: GraphRunTerminalStatus;
 }
 
 /** 边定义 */
@@ -400,6 +459,10 @@ const NODE_IDS = {
   CANDIDATE_GATE: 'CANDIDATE_GATE',
   MANUSCRIPT_COMMIT: 'MANUSCRIPT_COMMIT',
   EXPORT_READY: 'EXPORT_READY',
+  BLUEPRINT_ESCALATION: 'BLUEPRINT_ESCALATION',
+  CANDIDATE_ESCALATION: 'CANDIDATE_ESCALATION',
+  RUN_CANCELLED: 'RUN_CANCELLED',
+  RUN_BLOCKED: 'RUN_BLOCKED',
 } as const satisfies Record<string, string>;
 
 export const IDEA_CAPTURE = createGraphNodeId(NODE_IDS.IDEA_CAPTURE);
@@ -422,120 +485,194 @@ export const REWRITE = createGraphNodeId(NODE_IDS.REWRITE);
 export const CANDIDATE_GATE = createGraphNodeId(NODE_IDS.CANDIDATE_GATE);
 export const MANUSCRIPT_COMMIT = createGraphNodeId(NODE_IDS.MANUSCRIPT_COMMIT);
 export const EXPORT_READY = createGraphNodeId(NODE_IDS.EXPORT_READY);
+export const BLUEPRINT_ESCALATION = createGraphNodeId(NODE_IDS.BLUEPRINT_ESCALATION);
+export const CANDIDATE_ESCALATION = createGraphNodeId(NODE_IDS.CANDIDATE_ESCALATION);
+export const RUN_CANCELLED = createGraphNodeId(NODE_IDS.RUN_CANCELLED);
+export const RUN_BLOCKED = createGraphNodeId(NODE_IDS.RUN_BLOCKED);
 
 const p = (id: string): StablePromptId => createStablePromptId(id);
+
+const out = (
+  requiredOutcomeCondition: GraphConditionName | null,
+  allowedArtifactKind: ArtifactKind | null,
+): GraphNodeOutputContract => ({
+  requiredOutcomeCondition,
+  allowedArtifactKind,
+  outputRequired: requiredOutcomeCondition !== null || allowedArtifactKind !== null,
+});
+
+const noOut = out(null, null);
 
 const NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
   {
     id: IDEA_CAPTURE,
     kind: 'IDEA_INPUT',
     label: '想法捕获',
+    output: out(null, 'idea'),
   },
   {
     id: SPEC_EXTRACT,
     kind: 'EXTRACT',
     label: '创作要求抽取',
     promptId: p('prompt:spec-extract-v1'),
+    output: out('clarification_remaining', 'creationSpec'),
   },
   {
     id: ASK_QUESTION,
     kind: 'CLARIFY_ASK',
     label: '追问',
     promptId: p('prompt:ask-question-v1'),
+    output: noOut,
   },
   {
     id: COLLECT_ANSWER,
     kind: 'CLARIFY_ANSWER',
     label: '收集回答',
+    humanDecisionType: 'answer_question',
+    output: noOut,
   },
   {
     id: RESEARCH_DECISION,
     kind: 'DECISION',
     label: '调研强度判断',
+    output: out('research_decision', null),
   },
   {
     id: RESEARCH_PLAN,
     kind: 'PLAN',
     label: '调研问题规划',
     promptId: p('prompt:research-plan-v1'),
+    output: noOut,
   },
   {
     id: RESEARCH_EXECUTE,
     kind: 'RESEARCH',
     label: '调研执行',
+    output: out(null, 'researchBundle'),
   },
   {
     id: RESEARCH_VALIDATE,
     kind: 'DECISION',
     label: '调研校验',
+    output: out('research_valid', null),
   },
   {
     id: BLUEPRINT_GENERATE,
     kind: 'GENERATE',
     label: '蓝图生成',
     promptId: p('prompt:blueprint-generate-v1'),
+    output: out(null, 'storyBlueprint'),
   },
   {
     id: BLUEPRINT_USER_GATE,
     kind: 'USER_GATE',
     label: '蓝图人工确认',
+    humanDecisionType: 'blueprint_gate',
+    output: out('blueprint_gate', null),
   },
   {
     id: CHAPTER_PLAN,
     kind: 'PLAN',
     label: '章节规划',
     promptId: p('prompt:chapter-plan-v1'),
+    output: noOut,
   },
   {
     id: DRAFT,
     kind: 'GENERATE',
     label: '章节草稿生成',
     promptId: p('prompt:draft-generate-v1'),
+    output: out(null, 'generationRun'),
+    budgetResetPolicy: ['rewrite', 'candidateRewrite'],
   },
   {
     id: CONTINUITY_CRITIC,
     kind: 'CRITIC',
     label: '连续性审查',
     promptId: p('prompt:continuity-critic-v1'),
+    output: out('critique_verdict', null),
   },
   {
     id: STYLE_CRITIC,
     kind: 'CRITIC',
     label: '风格审查',
     promptId: p('prompt:style-critic-v1'),
+    output: out('critique_verdict', null),
   },
   {
     id: REQUIREMENT_CRITIC,
     kind: 'CRITIC',
     label: '要求符合审查',
     promptId: p('prompt:requirement-critic-v1'),
+    output: out('critique_verdict', null),
   },
   {
     id: CRITIQUE_JOIN,
     kind: 'JOIN',
     label: '审查汇合',
     join: { requiredIncoming: 3 },
+    output: out('critique_verdict', null),
+    joinAggregationPolicy: {
+      kind: 'critique_verdict',
+      sources: [CONTINUITY_CRITIC, STYLE_CRITIC, REQUIREMENT_CRITIC],
+      rule: 'all_pass_or_needs_rewrite',
+    },
   },
   {
     id: REWRITE,
     kind: 'REWRITE',
     label: '定点改写',
     promptId: p('prompt:rewrite-v1'),
+    output: noOut,
   },
   {
     id: CANDIDATE_GATE,
     kind: 'USER_GATE',
     label: '候选稿人工确认',
+    humanDecisionType: 'candidate_gate',
+    output: out('candidate_gate', null),
+    budgetResetPolicy: ['rewrite'],
   },
   {
     id: MANUSCRIPT_COMMIT,
     kind: 'COMMIT',
     label: '写入稿件',
+    output: out(null, 'manuscript'),
   },
   {
     id: EXPORT_READY,
     kind: 'TERMINAL',
     label: '可导出',
+    output: noOut,
+    terminalStatus: 'completed',
+  },
+  {
+    id: BLUEPRINT_ESCALATION,
+    kind: 'USER_GATE',
+    label: '蓝图预算耗尽人工升级',
+    humanDecisionType: 'escalation',
+    output: out('escalation_decision', null),
+  },
+  {
+    id: CANDIDATE_ESCALATION,
+    kind: 'USER_GATE',
+    label: '候选稿预算耗尽人工升级',
+    humanDecisionType: 'escalation',
+    output: out('escalation_decision', null),
+  },
+  {
+    id: RUN_CANCELLED,
+    kind: 'TERMINAL',
+    label: '已取消',
+    output: noOut,
+    terminalStatus: 'cancelled',
+  },
+  {
+    id: RUN_BLOCKED,
+    kind: 'TERMINAL',
+    label: '已阻塞（可恢复）',
+    output: noOut,
+    terminalStatus: 'blocked',
   },
 ];
 
@@ -682,11 +819,52 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     loop: { budget: 'blueprintRewrite', maxIterations: 3 },
   },
   {
-    id: createGraphEdgeId('blueprint-user-gate--chapter-plan-budget-exhausted'),
+    id: createGraphEdgeId('blueprint-user-gate--blueprint-escalation-budget-exhausted'),
     from: BLUEPRINT_USER_GATE,
-    to: CHAPTER_PLAN,
+    to: BLUEPRINT_ESCALATION,
     kind: 'conditional',
     requiredOutcomes: [cond('blueprint_rewrite_budget', 'exhausted')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('blueprint-escalation--chapter-plan-accept'),
+    from: BLUEPRINT_ESCALATION,
+    to: CHAPTER_PLAN,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'accept_current')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('blueprint-escalation--spec-extract-modify'),
+    from: BLUEPRINT_ESCALATION,
+    to: SPEC_EXTRACT,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'modify_requirements')],
+    mode: 'exclusive',
+    loop: { budget: 'specRevision', maxIterations: 3 },
+  },
+  {
+    id: createGraphEdgeId('blueprint-escalation--run-cancelled'),
+    from: BLUEPRINT_ESCALATION,
+    to: RUN_CANCELLED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'cancel')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('blueprint-escalation--run-blocked'),
+    from: BLUEPRINT_ESCALATION,
+    to: RUN_BLOCKED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'continue_later')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('blueprint-escalation--run-blocked-spec-exhausted'),
+    from: BLUEPRINT_ESCALATION,
+    to: RUN_BLOCKED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('spec_revision_budget', 'exhausted')],
     mode: 'exclusive',
   },
   // ── Generation：Draft + 三 Critic 并行 + join ─────────────────
@@ -813,19 +991,60 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     loop: { budget: 'candidateRewrite', maxIterations: 5 },
   },
   {
-    id: createGraphEdgeId('candidate-gate--manuscript-commit-candidate-rewrite-exhausted'),
+    id: createGraphEdgeId('candidate-gate--candidate-escalation-candidate-rewrite-exhausted'),
     from: CANDIDATE_GATE,
-    to: MANUSCRIPT_COMMIT,
+    to: CANDIDATE_ESCALATION,
     kind: 'conditional',
     requiredOutcomes: [cond('candidate_rewrite_budget', 'exhausted')],
     mode: 'exclusive',
   },
   {
-    id: createGraphEdgeId('candidate-gate--manuscript-commit-regenerate-exhausted'),
+    id: createGraphEdgeId('candidate-gate--candidate-escalation-regenerate-exhausted'),
     from: CANDIDATE_GATE,
-    to: MANUSCRIPT_COMMIT,
+    to: CANDIDATE_ESCALATION,
     kind: 'conditional',
     requiredOutcomes: [cond('regenerate_budget', 'exhausted')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('candidate-escalation--manuscript-commit-accept'),
+    from: CANDIDATE_ESCALATION,
+    to: MANUSCRIPT_COMMIT,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'accept_current')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('candidate-escalation--spec-extract-modify'),
+    from: CANDIDATE_ESCALATION,
+    to: SPEC_EXTRACT,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'modify_requirements')],
+    mode: 'exclusive',
+    loop: { budget: 'specRevision', maxIterations: 3 },
+  },
+  {
+    id: createGraphEdgeId('candidate-escalation--run-cancelled'),
+    from: CANDIDATE_ESCALATION,
+    to: RUN_CANCELLED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'cancel')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('candidate-escalation--run-blocked'),
+    from: CANDIDATE_ESCALATION,
+    to: RUN_BLOCKED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('escalation_decision', 'continue_later')],
+    mode: 'exclusive',
+  },
+  {
+    id: createGraphEdgeId('candidate-escalation--run-blocked-spec-exhausted'),
+    from: CANDIDATE_ESCALATION,
+    to: RUN_BLOCKED,
+    kind: 'conditional',
+    requiredOutcomes: [cond('spec_revision_budget', 'exhausted')],
     mode: 'exclusive',
   },
   // ── Commit → 终止 ─────────────────────────────────────────────
@@ -860,7 +1079,8 @@ export type GraphNodeOutcome =
   | { readonly condition: 'research_valid'; readonly value: ResearchVerdict }
   | { readonly condition: 'blueprint_gate'; readonly value: BlueprintGateDecision }
   | { readonly condition: 'candidate_gate'; readonly value: CandidateGateDecision }
-  | { readonly condition: 'critique_verdict'; readonly value: CritiqueVerdict };
+  | { readonly condition: 'critique_verdict'; readonly value: CritiqueVerdict }
+  | { readonly condition: 'escalation_decision'; readonly value: EscalationDecision };
 
 // ── 只读辅助 ────────────────────────────────────────────────────
 
@@ -892,46 +1112,67 @@ export function aggregateCritiqueVerdict(
 
 // ── 确定性序列化 ────────────────────────────────────────────────
 
+function nfc(s: string): string {
+  return s.normalize('NFC');
+}
+
 function canonicalRequirement(r: EdgeOutcomeRequirement): string {
-  return `${r.condition}=${r.expectedOutcome}`;
+  return nfc(`${r.condition}=${r.expectedOutcome}`);
 }
 
 /**
  * 把 Graph 定义为稳定 JSON 字符串。
  *
- * - 节点/边按 id 排序；
- * - 字段顺序固定；
- * - 条件注册表按条件名排序。
- * 对结构相同但键序不同的输入产生相同输出（确定性）。
+ * 排序使用仓库统一规则 `codePointCompare`（NFC 规范化 + Unicode code point），
+ * 不使用 localeCompare，跨 locale / 输入编码稳定。
+ * 节点/边按 id 排序；节点与边的执行语义字段（output / humanDecisionType /
+ * budgetResetPolicy / joinAggregationPolicy / terminalStatus）全部参与序列化。
  */
 export function serializeIdeaToNovelGraphV1(graph: IdeaToNovelGraphV1): string {
   const nodes = [...graph.nodes]
     .map((n) => ({
-      id: n.id,
+      id: nfc(n.id),
       kind: n.kind,
-      label: n.label,
+      label: nfc(n.label),
       promptId: n.promptId ?? null,
+      output: {
+        requiredOutcomeCondition: n.output.requiredOutcomeCondition,
+        allowedArtifactKind: n.output.allowedArtifactKind,
+        outputRequired: n.output.outputRequired,
+      },
+      humanDecisionType: n.humanDecisionType ?? null,
+      budgetResetPolicy: n.budgetResetPolicy
+        ? [...n.budgetResetPolicy].sort(codePointCompare)
+        : null,
       join: n.join ?? null,
+      joinAggregationPolicy: n.joinAggregationPolicy
+        ? {
+            kind: n.joinAggregationPolicy.kind,
+            sources: [...n.joinAggregationPolicy.sources].sort(codePointCompare),
+            rule: n.joinAggregationPolicy.rule,
+          }
+        : null,
+      terminalStatus: n.terminalStatus ?? null,
     }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => codePointCompare(a.id, b.id));
   const edges = [...graph.edges]
     .map((e) => ({
-      id: e.id,
-      from: e.from,
-      to: e.to,
+      id: nfc(e.id),
+      from: nfc(e.from),
+      to: nfc(e.to),
       kind: e.kind,
-      requiredOutcomes: (e.requiredOutcomes ?? []).map(canonicalRequirement).sort(),
+      requiredOutcomes: (e.requiredOutcomes ?? []).map(canonicalRequirement).sort(codePointCompare),
       mode: e.mode,
       loop: e.loop ?? null,
     }))
-    .sort((a, b) => a.id.localeCompare(b.id));
+    .sort((a, b) => codePointCompare(a.id, b.id));
   const conditions = (Object.keys(GRAPH_CONDITION_OUTCOMES) as GraphConditionName[])
-    .sort()
+    .sort(codePointCompare)
     .map((name) => ({ name, outcomes: GRAPH_CONDITION_OUTCOMES[name] }));
   const payload = {
-    id: graph.id,
-    version: graph.version,
-    entryNodeId: graph.entryNodeId,
+    id: nfc(graph.id),
+    version: nfc(graph.version),
+    entryNodeId: nfc(graph.entryNodeId),
     nodes,
     edges,
     conditions,

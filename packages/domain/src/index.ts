@@ -278,6 +278,7 @@ export * from './manuscript.js';
 
 export * from './idea-to-novel-graph.js';
 export * from './idea-to-novel-graph-state.js';
+export * from './idea-to-novel-graph-state-validation.js';
 export * from './idea-to-novel-graph-invalidation.js';
 export * from './idea-to-novel-graph-transitions.js';
 export * from './idea-to-novel-graph-stages.js';
