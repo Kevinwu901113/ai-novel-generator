@@ -308,10 +308,11 @@ gate 决策、终态）。
 
 ## 15. 当前推进位置
 
-- **当前阶段**：GE-2（双 Graph Walking Skeleton）已完成；GE-3 待启动。
+- **当前阶段**：GE-3（真实 Idea Intake + CreationSpec）后端已完成；GE-4 待启动。
+  GE-3 前端（自然对话式 Idea Intake 页 + CreationSpec 编辑器）为后续步骤。
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
-- **下一步**：GE-3 — 真实 Idea Intake + CreationSpec 节点。
-- **验收标准**：本文件 §8 的 GE-3 退出条件。
+- **下一步**：GE-4 — 真实 Web Research + ResearchBundle。
+- **验收标准**：本文件 §9 的 GE-4 退出条件。
 
 ## 16. 已删除的历史资料
 

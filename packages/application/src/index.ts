@@ -371,11 +371,22 @@ export {
   getRunProgress,
   advanceNode,
   failNode,
+  applyArtifactChange,
   requestHumanDecision,
   applyHumanDecision,
   listRuns,
   recoverInFlightRuns,
 } from './graph-run.js';
+export type { ApplyArtifactChangeInput } from './graph-run.js';
+
+// ── Idea Intake（GE-3）──────────────────────────────────────────
+
+export type { IdeaIntakeDeps, PropagateSpecInvalidationResult } from './idea-intake.js';
+export {
+  createIntakeSessionFromIdea,
+  getActiveIntakeSession,
+  propagateCreationSpecInvalidation,
+} from './idea-intake.js';
 
 // ── Graph Walking Skeleton（GE-2）────────────────────────────────
 
