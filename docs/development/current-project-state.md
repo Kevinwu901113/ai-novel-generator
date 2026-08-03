@@ -1,214 +1,153 @@
-# Current Project State — Idea-to-Novel 基线
+# Current Project State — Idea-to-Novel Graph Engineering 基线
 
-> 本文档是仓库唯一项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、
-> 用户旅程、可复用资产、未合并参考资产、当前目标状态、决策与初始化 Ready Queue。
-> 状态文档版本：1（2026-08-03）。当前 PR 期间本文件由初始化 Agent 独占修改。合并后由项目负责人维护，仅在目标状态、能力矩阵或 Ready Queue 发生实质变化时更新。
+> 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
+> 权威 Graph 基线、当前推进位置与验证基线。
+> 状态文档版本：2（2026-08-04）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
 
 ## 0. Snapshot Metadata
 
-| 项                 | 值                                                                                                                                                                                                                                                        |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本       | 1                                                                                                                                                                                                                                                         |
-| 初始化日期         | 2026-08-03                                                                                                                                                                                                                                                |
-| 基线 main 完整 SHA | `e3e067f95ea601e081729aad07700aa7ead21d3a`                                                                                                                                                                                                                |
-| 基线来源           | PR #28 标准 merge commit（parents `55c09572…` + `ed20524e…`）后 fetch 的 `origin/main`                                                                                                                                                                    |
-| 代码核验范围       | apps/desktop（main/preload/renderer）、apps/worker、apps/writing-experiment-runner、packages（domain/application/database/contracts/model-gateway/task-engine/secret-store/writing-evaluation/plotpilot-adapter 及 stub 包）、数据库 migration、CI 工作流 |
-| CI/本地验证状态    | 见 §10（`pnpm check`、`git diff --check`、CI 相同 macOS package smoke）                                                                                                                                                                                   |
+| 项              | 值                                                                                                                   |
+| --------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 2                                                                                                                    |
+| 更新日期        | 2026-08-04                                                                                                           |
+| 基线 main SHA   | `54c6b314bf00c0203895e54fd4253871de672261`（PR #32 合并后，含两张权威 Graph）                                        |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含新增 graph 模块）、数据库 migration v1–v7、CI |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）                                                                          |
 
-## 1. Product Objective
-
-产品方向（已合并，`PRODUCT_DIRECTION.md` / `docs/product/idea-to-novel-v1.md`）：
+## 1. 权威层级
 
 ```text
-模糊想法
-→ 必要澄清
-→ 必要调研
-→ 故事蓝图
-→ 小说生成
-→ 稿件修改
-→ 导出
+L1  PRODUCT_DIRECTION.md                        产品方向（最高权威）
+L2  docs/product/idea-to-novel-v1.md            产品 1.0 纵向切片规格
+L3  packages/domain/src/idea-to-novel-graph.ts  流程权威：IdeaToNovelProjectGraphV1 + ChapterGenerationGraphV1
+L4  docs/development/*                          graph-engineering-roadmap / 本文档 / module-boundaries / decision-log …
 ```
 
-一句话：以尽可能低的表达成本，把用户的模糊想法转化为经过必要调研、符合其形式要求的小说；
-编辑器是稿件阶段的主要界面，但不是产品 1.0 唯一入口。
+详见 `docs/development/graph-engineering-roadmap.md` §1。任何"当前状态 / 下一步 / 验收标准"在本仓库只有一个答案。
 
 ## 2. What Main Actually Provides
 
-状态只表示 main 上代码实际存在与否，不表示产品验收通过。依据：真实代码、测试与 migration，不从文档/PR 标题推测。
-
 ### AVAILABLE
 
-| 能力                      | 实际证据路径                                                                                                                                                                                                                                                 | 当前作用                                                                               | 主要缺口                                                                                                                                     | 下一目标状态处理                                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Project lifecycle         | `packages/application/create-project.ts`、`open-project.ts`、`list-projects.ts`；`apps/worker/src/index.ts`（reconcile/reconcileTasks）                                                                                                                      | 项目创建/打开/列表/启动恢复，app.sqlite 索引 + 项目目录 project.sqlite                 | 无产品级入口引导（默认进 Grill 工作台）                                                                                                      | 保留；产品入口改为 Idea Intake 后重排 App shell                  |
-| Grill / questioning       | `packages/domain/grill.ts`、`packages/application/grill-session.ts`、`packages/database/grill-repositories.ts`、`apps/worker/src/grill-handlers.ts`、`apps/desktop/src/renderer/grill/*`                                                                     | 会话生命周期、问题/回答/提案、问题规划提案，完整后端+UI                                | `grill.markQuestionAsked` 为死链（main IPC 与 preload 暴露，worker dispatch `apps/worker/src/index.ts:1379` 无该 case）；UI 暴露大量工程状态 | 重构为 Idea Intake / 创作访谈；补 dispatch case                  |
-| Creation Contract         | `packages/domain/creation-contract.ts`、`packages/application/creation-contract*.ts`、`packages/database/creation-contract-*`（migration v4–v6）、`apps/worker/src/contract-handlers.ts`、`contract-draft-runner.ts`、`apps/desktop/src/renderer/contract/*` | 契约提案/版本/current 指针/字段锁/CAS 事务，草案任务调模型，UI 支持接受/拒绝/更新/锁定 | 以审批门禁为主体验，不符合 1.0；术语暴露                                                                                                     | 内部复用为 CreationSpec 的 snapshot/version 基座，不作为审批门禁 |
-| Task Engine               | `packages/task-engine/`（`MODEL_INVOCATION_TEST`/`GRILL_QUESTION_PLAN`/`CREATION_CONTRACT_DRAFT`）、tasks 表 + dedupe + 启动恢复                                                                                                                             | 长任务建模：claim/CAS/dedupe/恢复 PENDING/RUNNING                                      | 仅 3 种任务类型，无生成/调研任务                                                                                                             | 作为所有 AI 任务的底座，新增 research/generation 任务类型        |
-| Model Gateway             | `packages/model-gateway/index.ts`                                                                                                                                                                                                                            | Anthropic 兼容网关，`invokeModel` + `testConnection`，MiMo V2.5 Pro                    | 单一 provider 模型形态；无 Provider 抽象                                                                                                     | 保留非流式调用 + 严格解析，暂不建多 Provider 平台                |
-| Manuscript domain/backend | `packages/domain/manuscript.ts`、`packages/application/manuscript*.ts`、`packages/database/manuscript-repositories.ts`、`manuscript-transaction.ts`、migration v7、`packages/contracts/src/index.ts` manuscript 类型/校验器                                  | 章/章节版本/CAS/position/不可变版本 数据与用例，已测试                                 | 无 transport、无 renderer、无产品面                                                                                                          | 保留为权威稿件存储；transport 从 PR #25 选择性移植               |
-| Evaluation harness        | `packages/writing-evaluation/`（evaluate/blind/ai-smell/metrics/…）、`apps/writing-experiment-runner/`（CLI，`WRITING_EXPERIMENT_LIVE` 门控）                                                                                                                | 真实生成评测 lab，离线/受控运行                                                        | 仅评测 CLI，不接产品                                                                                                                         | 保留；用于 STATE_A fixture 生成质量基线                          |
-| Packaged application      | `apps/desktop/package.json`（electron-packager + `smoke-test`）、`.github/workflows/ci.yml`                                                                                                                                                                  | macOS arm64 打包 + 冒烟测试（CI 通过）                                                 | 无发布渠道                                                                                                                                   | 保留                                                             |
+| 能力                 | 实际证据路径                                                                                                                                 | 当前作用                                                                                                                                                                           | 下一目标状态处理                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| **权威 Graph 定义**  | `packages/domain/src/idea-to-novel-graph*.ts`（PR #32 已合并）                                                                               | IdeaToNovelProjectGraphV1（16 节点/36 边）+ ChapterGenerationGraphV1（13 节点/23 边）+ 纯 transition / graph-aware 校验 / 失效传播 / WorkflowStage 投影；contracts DTO；175 项测试 | 唯一流程权威；GE-1 在其上建运行时内核                                                |
+| Project lifecycle    | `packages/application/create-project.ts`、`open-project.ts`、`list-projects.ts`                                                              | 项目创建/打开/列表/启动恢复                                                                                                                                                        | 保留；产品入口随 GE-3 改为 Idea Intake                                               |
+| Grill / questioning  | `packages/domain/grill.ts`、`application/grill-session.ts`、`database/grill-repositories.ts`、`worker/grill-handlers.ts`、`renderer/grill/*` | 会话/问题/回答/提案全链路                                                                                                                                                          | GE-3 适配为 Idea Intake；修复 `grill.listQuestions` / `grill.markQuestionAsked` 死链 |
+| Creation Contract    | `packages/domain/creation-contract.ts`、`application/creation-contract*.ts`、DB v4–v6、`worker/contract-handlers.ts`、`renderer/contract/*`  | 契约提案/版本/current 指针/字段锁/CAS                                                                                                                                              | GE-3 复用快照/版本/provenance 为 CreationSpec 基座，废弃审批门禁                     |
+| Task Engine          | `packages/task-engine/`                                                                                                                      | 持久化长任务：MODEL_INVOCATION_TEST / GRILL_QUESTION_PLAN / CREATION_CONTRACT_DRAFT；CAS claim + 启动恢复                                                                          | GE-2+ 作为所有 AI 执行器底座                                                         |
+| Model Gateway        | `packages/model-gateway/`                                                                                                                    | Anthropic 兼容 `invokeModel` + `testConnection`，MiMo V2.5 Pro                                                                                                                     | 保留非流式 + 严格解析；GE-6 接入生成                                                 |
+| Manuscript backend   | `packages/domain/manuscript.ts`、`application/manuscript*.ts`、DB v7、contracts manuscript 类型                                              | 章/章节版本/CAS/position/不可变版本                                                                                                                                                | GE-7 接 transport/renderer                                                           |
+| Evaluation harness   | `packages/writing-evaluation/`、`apps/writing-experiment-runner/`                                                                            | 离线确定性评测 + LIVE 门控实验                                                                                                                                                     | GE-9 质量基线                                                                        |
+| Packaged application | `apps/desktop`（electron-packager + smoke-test）                                                                                             | macOS arm64 打包 + 冒烟测试                                                                                                                                                        | 保留                                                                                 |
 
-### PARTIAL
+### PARTIAL / STUB
 
-| 能力                 | 实际证据路径                                                                             | 当前作用                                                  | 主要缺口                                               | 下一目标状态处理                               |
-| -------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
-| Idea capture         | `CreateProjectRegion.tsx`（name + initialIdea）、`create-project.ts`                     | 仅新建项目时存 initial_idea                               | 无 Idea Intake 流程，无多轮追问/抽取                   | R1 复用时把 initial_idea 播种进 intake session |
-| CreationSpecDraft    | `creation-contract-request.ts` + `contract-draft-runner.ts`（`CREATION_CONTRACT_DRAFT`） | 产出的是 Creation Contract 字段草案，非 CreationSpec 对象 | 对象形态与 1.0 的 CreationSpec 不同                    | 复用草案管线，冻结 CreationSpec 契约           |
-| CreationSpecSnapshot | `creation_contract_versions` + `creation-contract-snapshot-validation.ts`                | snapshot/version 机制存在，命名 contract                  | 不是 CreationSpec 形状                                 | 复用版本/provenance，重新命名                  |
-| PlotPilot            | `packages/plotpilot-adapter/`（lifecycle.ts、sse-cancellation.test.ts）                  | 外部 PlotPilot sidecar adapter（spawn/SSE）               | 未接产品；按方向为可选 adapter，非本地 source of truth | 保持可选，不建强依赖                           |
+| 能力                          | 状态               | 说明                                                               |
+| ----------------------------- | ------------------ | ------------------------------------------------------------------ |
+| Idea capture                  | PARTIAL            | `projects.initial_idea` 已落库；未播种进 intake session；GE-3 处理 |
+| CreationSpecDraft             | PARTIAL            | 现有 CREATION_CONTRACT_DRAFT 草案管线可复用；对象形态在 GE-3 冻结  |
+| Manuscript transport/renderer | MISSING（main 无） | PR #25 参考资产；GE-7 选择性移植                                   |
+| Web Research / ResearchBundle | MISSING            | `packages/research-engine` 为 stub；GE-4                           |
+| StoryBlueprint                | MISSING            | GE-5                                                               |
+| Chapter Generation            | MISSING            | GE-6                                                               |
+| Export                        | MISSING            | `packages/import-export` 为 stub；GE-7                             |
+| PlotPilot                     | PARTIAL            | 可选 adapter foundation；不进入关键路径                            |
 
-### MISSING
+### 已知死链（GE-3 修复）
 
-| 能力                 | 证据路径（缺失）                                                                               | 说明                       | 下一目标状态处理                              |
-| -------------------- | ---------------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------- |
-| Web Research         | `packages/research-engine/src/index.ts`（仅 `RESEARCH_ENGINE_PACKAGE_LOADED` 桩）              | 无搜索/抓取/来源记录       | P4/P5（port + orchestration），含 V1 安全边界 |
-| ResearchBundle       | 无 domain/表/契约                                                                              | 无调研资料包对象           | 冻结 ResearchBundle 契约，新 migration        |
-| StoryBlueprint       | 无 domain/表/契约                                                                              | 无蓝图对象                 | P7 蓝图聚合 + 生成任务                        |
-| Chapter Generation   | 无 generation task/表/UI                                                                       | 无章节生成                 | P8 章节生成 pipeline（CAS 不覆盖正文）        |
-| Manuscript transport | `apps/worker/src/`、`apps/desktop/src/main/`、`apps/desktop/src/preload/` 均无 manuscript 引用 | 无 IPC/worker/preload 通道 | P9 从 PR #25 移植                             |
-| Manuscript renderer  | `apps/desktop/src/renderer/` 无 manuscript/ 目录                                               | 无稿件编辑 UI              | P10 从 PR #25 选择性移植                      |
-| Export               | `packages/import-export/src/index.ts`（仅 `IMPORT_EXPORT_PACKAGE_LOADED` 桩）                  | 无导出                     | P11 TXT/Markdown 导出                         |
-
-### REFERENCE_ONLY
-
-| 能力                           | 状态          | 处理       |
-| ------------------------------ | ------------- | ---------- |
-| Manuscript transport（PR #25） | 未合并，见 §5 | 选择性移植 |
-| Manuscript renderer（PR #25）  | 未合并，见 §5 | 选择性移植 |
+- `grill.listQuestions`：channel/preload/main 都在，worker 顶层 dispatch 无 case → 运行时 `VALIDATION_ERROR`。
+- `grill.markQuestionAsked`：同上；worker `dispatchGrillCommand` 也无 case。
 
 ## 3. Current User Journey
 
-打包应用实际能走到（`apps/desktop/src/renderer/App.tsx`）：
+打包应用当前实际走到（`apps/desktop/src/renderer/App.tsx`）：
 
 ```text
-启动 → 健康检查 + 数据服务轮询
-→ 项目列表 / 提供商状态加载
-→ 无当前项目：新建项目表单（名称 + 初始想法）→ 创建/打开
-→ 有当前项目：进入 Grill 工作台（"Grill-me 需求澄清"）
-   ├─ 左栏：GrillSessionList（创建/选择会话）
-   ├─ 中栏：GrillSessionPanel（start/pause/resume/complete/abandon，
-   │        add/markAsked/skip/supersede 问题）+
-   │        GrillQuestionPlanPanel（请求问题规划任务 → 接受提案）+
-   │        ContractDraftPanel（请求创作契约草案任务 → 接受/拒绝提案）
-   ├─ 右栏：GrillQuestionDetail（回答、创建/审阅提案）
-   └─ 顶部：GrillDiagnostics（开发态诊断）
-→ 右栏状态面板：本地存储 / 数据服务 / 当前阶段 / 项目状态 / TaskCenter / 模型服务（ProviderRegion）
+启动 → 健康检查 → 项目列表 → 新建项目（名称 + 初始想法）→ 打开
+→ 有项目：Grill 工作台（GrillSessionList / GrillSessionPanel / GrillQuestionPlanPanel / ContractDraftPanel）
+→ 右栏：状态面板（ProviderRegion / TaskCenter / GrillDiagnostics）
 ```
 
-用户现在能完成：新建/打开项目；配置并测试模型提供商；管理 Grill 会话与问答；请求问题规划并接受；
-请求创作契约草案并接受/拒绝、查看/编辑/锁定契约字段；查看任务中心。
+旅程在 **Creation Contract 之后停止**：无 Idea Intake 产品流程、无 Web Research、无 StoryBlueprint、无章节生成、
+无稿件编辑器、无导出。这些正是 GE-3..GE-7 的目标。
 
-旅程在 **Creation Contract 之后停止**。以下均不存在：Idea Intake 产品流程、Web Research、
-StoryBlueprint、章节生成、稿件编辑器（Manuscript renderer）、导出。工程控制台包括
-`GrillDiagnostics`、`ProviderRegion`（连接测试）、`TaskCenter`、契约提案/审批 UI——这些是工程面，不是 1.0 产品面。
+## 4. Canonical Assets（复用路线）
 
-## 4. Canonical Assets
-
-main 上可复用、但需要改造后才能等同于目标产品对象的资产：
-
-- **Grill** → Idea Intake / 创作访谈（对话式，隐藏状态机/提案/任务细节）。
-- **Creation Contract** → CreationSpec（保留 snapshot/version/provenance，废弃审批门禁与字段锁主体验）。
-- **Task Engine** → 所有 AI 长任务底座（research/generation 任务类型在此基础上扩展）。
-- **Model Gateway** → 非流式调用 + 严格解析 + 轮询（R1–R3 使用，R4 再补取消/阶段进度）。
-- **Manuscript backend**（MV1-A）→ 权威稿件存储；transport/renderer 从 PR #25 移植后接入。
-- **Evaluation** → 生成质量基线；STATE_A fixture 生成后用于判断"fixture 生成"是否达标。
+- **Grill** → GE-3 适配为 Idea Intake（对话式，隐藏状态机/提案/任务细节；复用 `grill_*` 表）。
+- **Creation Contract** → GE-3 作为 CreationSpec（保留 snapshot/version/provenance，废弃审批门禁/字段锁主体验）。
+- **Task Engine** → GE-2+ 所有 AI 执行器底座（graph 节点执行器作为持久化任务）。
+- **Model Gateway** → 非流式 + 严格解析 + 轮询。
+- **Manuscript backend**（MV1-A）→ GE-7 权威稿件存储；transport/renderer 移植。
+- **Evaluation** → GE-9 质量基线。
 
 ## 5. Non-Main Reference Assets
 
-- **PR #25**（`feat/manuscript-renderer-mv1b`，head `5d80ff20e59bd67e4c0b028b63f88e1531261926`，27 文件 +6586/−22）
-  - 状态：REFERENCE_ONLY
-  - 处理：保持 Draft、不合并、不继续开发；仅当 manuscript transport/renderer 资产进入后续 PR 且逐文件核对无遗漏后才可标记 superseded
-  - 用途：后续选择性移植 Manuscript transport（contracts 通道+`ManuscriptAPI`、main `manuscript-ipc.ts`、preload allowlist、worker `manuscript-handlers.ts`）与 renderer（`useManuscriptWorkbench.ts`、ChapterList、EditorPanel、VersionHistory、dirty/CAS/buffer 安全）
-  - 不把其中能力记为 main 已实现；App shell/默认入口等产品壳不随其迁移
+- **PR #25**（`feat/manuscript-renderer-mv1b`）：保持 Draft / 不合并 / 不关闭；GE-7 从其中选择性移植 transport + renderer 资产。
+- 不把 PR #25 能力记为 main 已实现。
 
 ## 6. Current Target State
 
-唯一目标状态：**STATE_A_EXECUTABLE_SPINE**（可执行主链）。
-
-完成条件：
+**唯一目标状态**：Product 1.0 真实纵向链路（GE-8 端到端验收通过）：
 
 ```text
-输入想法
-→ fixture 调研
-→ fixture 蓝图
-→ fixture 生成
-→ 真实 Manuscript 写入
-→ 编辑
-→ TXT/Markdown 导出
+输入想法 → Idea Intake → CreationSpec → 必要调研 → ResearchBundle → StoryBlueprint
+→ 完整章节生成 → 用户修改 → 继续生成 → TXT/Markdown 导出
 ```
 
-允许 fixture，但必须使用真实的：产品页面、核心 contracts、跨进程 API、持久化、Manuscript、Export、重启恢复。
+在 GE-8 之前允许 fixture/确定性 executor，但必须使用真实的：Graph 状态机内核、核心 contracts、跨进程 API、持久化、
+Manuscript、Export、重启恢复。
 
 ## 7. Locked Decisions
 
 ```text
 - 不按时间估算推进；以门禁和依赖推进
-- 两个 Agent 各自最多一个主要工作包
-- 共享热点只有一个 Owner
+- 任何 Graph 状态变化只能经 Domain transition
+- WorkflowStage 永不作为权威状态
+- 生成候选 ≠ 权威稿件；仅 MANUSCRIPT_COMMIT 后可写 Manuscript
+- 人工 Gate 处不得自动接受或提交
 - 不建立长期集成分支
 - 不提前建设多 Provider、任务 DAG 或复杂 Agent 平台
 - 不静默覆盖用户正文（CAS / 版本化 / 显式写入）
 - 未合并 PR 不计入 main 能力
 ```
 
-## 8. Initial Ready Queue
+## 8. Current Position（推进位置）
 
 ```text
-READY:
-  Agent B — Canonical Spine Contract Freeze
-    WorkflowStage / ResearchBundle / StoryBlueprint / GenerationRun
-    正式 validator
-    Renderer 可消费的 DesktopAPI 形状
-
-READY_WITH_CONSTRAINT:
-  Agent A — Product Spine Preparation
-    Renderer 实际结构审计
-    App shell 拆分计划
-    Idea / Research / Blueprint / Generation / Manuscript 页面骨架
-    不得建立私有核心类型；等待 Agent B 契约冻结后正式接入
-
-BLOCKED:
-  持久化
-  fixture transport
-  真实 Idea Intake
-  真实 Web Research
-  真实 Blueprint
-  真实 Generation
+GE-0 权威文档收束      → 执行中（本文档所在 PR）
+GE-1 Durable Runtime   → 下一步（前置：GE-0）
+GE-2 Walking Skeleton  → 待开始
+GE-3..GE-7 真实节点    → 待开始
+GE-8 端到端验收        → 待开始
+GE-9 质量增强          → 待开始
 ```
 
-## 9. Shared Hotspots
+详见 `docs/development/graph-engineering-roadmap.md` §5–§15。
 
-同一时刻只能有一个 Owner；每次重新调度可变更 Owner。
+## 9. Shared Hotspots（单一 owner）
 
 ```text
-packages/contracts            → Agent B
-database migration registry   → Agent B
-Worker root dispatch          → Agent B
-Main IPC registration         → Agent B
-Preload API                   → Agent B
-App shell                     → Agent A
-Renderer product pages        → Agent A
+packages/domain（graph 模块）   → 已合并，冻结（PR #32）
+packages/application（GraphRunService） → GE-1
+packages/database（migration 注册表）    → 每 GE 单 owner 追加
+packages/contracts（IPC 通道）            → 每 GE 单 owner 追加
+apps/worker（root dispatch）             → 每 GE 单 owner 追加
+apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 ```
 
 ## 10. Verification Baseline
 
-与 CI 相同的验证，实际执行结果（本初始化工作树，未设置 `WRITING_EXPERIMENT_LIVE`）：
+与 CI 相同的验证，本地实际执行结果（未设置 `WRITING_EXPERIMENT_LIVE`）：
 
-| 项                  | 命令                                                                                            | 结果                                                                          |
-| ------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `pnpm check`        | `format:check && lint && build && typecheck && test`                                            | PASS（exit 0）                                                                |
-| `git diff --check`  | —                                                                                               | PASS（exit 0）                                                                |
-| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test`（与 `ci.yml` macos-package 相同） | PASS（见下方执行记录）                                                        |
-| 测试 passed/skipped | `pnpm test` 输出                                                                                | Test Files 96 passed / 1 skipped（97）；Tests 2599 passed / 6 skipped（2605） |
+| 项                  | 命令                                                          | 结果                                                                            |
+| ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0）                                                                  |
+| `git diff --check`  | —                                                             | PASS                                                                            |
+| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁                                                           |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 103 passed / 1 skipped（104）；Tests 2774 passed / 6 skipped（2780） |
 
-macOS package smoke 执行记录（与 `ci.yml` macos-package 相同命令）：
-
-```text
-pnpm package
-pnpm --filter @ai-novel/desktop smoke-test
-```
-
-测试通过 ≠ 产品验收通过。
+测试通过 ≠ 产品验收通过（GE-8 才是验收）。

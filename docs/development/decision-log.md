@@ -336,6 +336,163 @@
 
 **状态**：已确认
 
+### 2026-07-28 任务和调用记录在 project.sqlite
+
+**背景**：需要决定 tasks 和 model_invocations 的数据位置。
+
+**决策**：tasks 和 model_invocations 表放在 project.sqlite，随项目数据管理（migration 2）。
+
+**理由**：任务属于具体项目；项目备份应包含任务历史；便于项目迁移恢复。
+
+**影响**：UNIQUE(task_id, attempt_number) 防重复；prompt 不持久化只存 hash。
+
+**状态**：已确认（原记于 `technical-decisions.md` 决策 18，本日志合并）
+
+### 2026-07-28 prompt 不持久化
+
+**背景**：需要确定 prompt 的存储策略。
+
+**决策**：prompt 不写入任何数据库、日志或测试快照；数据库只保存 promptHash（SHA-256 hex）和 promptLength。
+
+**理由**：prompt 可能含敏感内容；用户创作内容不应泄露；避免不必要的数据保留。
+
+**影响**：request_metadata_json 只含安全元数据；错误消息不含 prompt。
+
+**状态**：已确认（原记于决策 19，本日志合并）
+
+### 2026-07-28 CAS claim 防止并发执行
+
+**背景**：需要防止多个 Worker 并发执行同一任务。
+
+**决策**：任务领取使用 compare-and-set：`UPDATE tasks SET status='RUNNING' WHERE id=? AND status='PENDING'`，受影响行数≠1 视为冲突。
+
+**理由**：不依赖进程内 mutex；SQLite 是 source of truth。
+
+**影响**：每次执行前从数据库重新读取任务状态。
+
+**状态**：已确认（原记于决策 20，本日志合并）
+
+### 2026-07-28 token 统计语义
+
+**背景**：provider 可能不返回 usage。
+
+**决策**：null token 统计时按 0 处理，但不改写数据库中的 null。
+
+**理由**：统计需要数值聚合；保留 null 表示"未知"而非"0"。
+
+**影响**：`COALESCE(SUM(COALESCE(input_tokens,0)),0)` 聚合；总 token 上游缺失时不自行推断。
+
+**状态**：已确认（原记于决策 21，本日志合并）
+
+### 2026-07-28 任务恢复策略
+
+**背景**：应用崩溃后数据库可能遗留 RUNNING 状态。
+
+**决策**：Worker 启动时将 RUNNING 任务恢复为 FAILED（TASK_INTERRUPTED），不自动重新执行。
+
+**理由**：明确标记中断；避免意外消耗配额。
+
+**影响**：RUNNING task/invocation 在同一事务恢复为 FAILED；PENDING 保持 PENDING。
+
+**状态**：已确认（原记于决策 22，本日志合并）
+
+---
+
+## 2026-08 决策
+
+### 2026-08-04 采用 Graph Engineering 为唯一执行模型
+
+**背景**：Idea-to-Novel 产品主链需要显式、可验证、可恢复的流程权威；旧 M0–M8 / R0.1–R6 / P1–P11 规划彼此冲突且均为工程阶段式描述。
+
+**决策**：以两张权威 Graph——IdeaToNovelProjectGraphV1（project）与 ChapterGenerationGraphV1（chapter）——为唯一流程依据，
+按 GE-0..GE-9 阶段推进（见 `graph-engineering-roadmap.md`）。不再沿用旧 M0–M8、Grill-first、Contract-first、Writer-first
+或按 package/页面分割的施工顺序。
+
+**理由**：Graph 定义节点/转移/人工 Gate/预算/循环/终态/失效传播，是把"模糊想法→小说"主链变成可持久化、可恢复、可验收状态机的最小权威层。
+
+**影响**：新路线取代旧规划文档（后者删除）；所有新工程按 Graph 状态机推进。
+
+**状态**：已确认
+
+### 2026-08-04 确立权威层级
+
+**背景**：仓库存在多份互相冲突的方向/路线/状态文档。
+
+**决策**：确立 L1 PRODUCT_DIRECTION.md → L2 docs/product/idea-to-novel-v1.md → L3 Graph Definitions → L4 docs/development/*。
+低层不得与高层冲突；任何"当前状态/下一步/验收标准"只有一个答案。
+
+**理由**：产品方向、产品 1.0 纵向规格、流程权威、工程文档分层，避免旧流程文档与 Graph 冲突。
+
+**影响**：`current-project-state.md` 为唯一状态文档；`graph-engineering-roadmap.md` 为唯一路线文档。
+
+**状态**：已确认
+
+### 2026-08-04 两张权威 Graph 合入 main（PR #32）
+
+**背景**：Graph 定义在分支开发完成并通过多轮评审；本地 main 曾滞后于 origin/main。
+
+**决策**：以 `54c6b31`（PR #32 merge）为 Graph 权威基线；两张 Graph 及其纯 transition/校验/失效传播进入 main，
+作为 GE-1 运行时内核的唯一依据。
+
+**理由**：`pnpm check` PASS（103 files / 2774 tests）；175 项 Graph 测试；无 DB/任务/IPC/Renderer 改动。
+
+**影响**：main 新增 `packages/domain/src/idea-to-novel-graph*.ts` 与 `packages/contracts/src/idea-to-novel-graph.ts`。
+
+**状态**：已确认
+
+### 2026-08-04 任何 Graph 状态变化只能经 Domain transition
+
+**背景**：运行时内核需要保证状态机不被绕过。
+
+**决策**：GraphRunService 的硬不变量：load → `validateGraphRunState` → 纯 domain transition → `validateGraphRunState` →
+CAS 原子持久化。Renderer / Worker / Task Engine 均不得直接拼装或修改 Graph state；`WorkflowStage` 永不作为权威状态。
+
+**理由**：只有 domain transition 承载图/预算/join/终态语义；绕过会导致状态不合法。
+
+**影响**：GE-1 起所有 mutation 走同一管线；执行器结果必须回到 service 经 transition。
+
+**状态**：已确认
+
+### 2026-08-04 UI 隐藏 Graph 内部状态
+
+**背景**：PRODUCT_DIRECTION 要求基础设施不可见。
+
+**决策**：UI 只显示用户当前需要理解与操作的内容；不暴露 Graph 控制台、节点调试器、Token 或任务内部状态。
+
+**理由**：避免工程化状态成为产品负担（PRODUCT_DIRECTION §4.7 / §14）。
+
+**影响**：contracts 只暴露 run progress 投影；executor 面命令 worker 内部用。
+
+**状态**：已确认
+
+### 2026-08-04 删除被取代的旧规划文档
+
+**背景**：多份旧规划文档与权威层级冲突。
+
+**决策**：删除 `roadmap.md`、`generation-quality-roadmap.md`、`idea-to-novel-migration-plan.md`、`current-state.md`、
+`docs/product/PRD.md`、`docs/architecture/state-machine.md`、`docs/architecture/technical-decisions.md`
+（后者的决策已并入本日志）。
+
+**理由**：旧路线已降级为历史资料；删除使"当前状态/下一步/验收标准"只有一个答案；git 历史可追溯。
+
+**影响**：见 `graph-engineering-roadmap.md` §16。
+
+**状态**：已确认
+
+### 2026-08-04 已知问题：manuscript invalidation 注释与行为不一致
+
+**背景**：`idea-to-novel-graph-invalidation.ts` 头注释称"manuscript 不因任何上游变化失效"，但 Chapter order
+`['generationRun','manuscript']` 使 generationRun 变化确实把 manuscript 加入 invalidatedArtifacts。
+
+**决策**：接受当前行为（generationRun 变化会失效 manuscript，需重新提交），由 GE-7（MANUSCRIPT_COMMIT）解决
+语义与文档一致性问题；不在此 PR 改动已合并 domain。
+
+**理由**：行为正确性由测试锁定；注释问题延后到稿件提交闭环时一并澄清。
+
+**影响**：GE-7 需明确"生成候选失效 vs 已提交稿件"的边界。
+
+**状态**：待 GE-7 处理
+
 ---
 
 ## 待确认决策

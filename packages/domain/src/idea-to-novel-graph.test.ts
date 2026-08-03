@@ -3,7 +3,7 @@
  *
  * 覆盖：
  * - Project Graph 节点集合（16）与边集合；不包含 chapter generation 节点；
- * - Chapter Graph 节点集合（14）与边集合；不包含 Idea / Research 节点；
+ * - Chapter Graph 节点集合（13）与边集合；不包含 Idea / Research 节点；
  * - 条件闭合枚举注册表完整性；
  * - Graph 与 Prompt 分离（只引用稳定 prompt ID，不含 prompt 文本）；
  * - 确定性序列化（两张 Graph 分别提供）；

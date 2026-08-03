@@ -1,295 +1,58 @@
 # 数据模型
 
-## 核心实体
+> 本文档是数据模型的**简明索引**。**DB migration 是数据模型的唯一事实来源**：
+> `packages/database/src/app-database.ts`（`APP_MIGRATIONS`）与 `packages/database/src/project-database.ts`
+> （`PROJECT_MIGRATIONS`）。领域模型见 `packages/domain/src/*.ts`。
+> 流程权威是 L3 Graph Definitions（`packages/domain/src/idea-to-novel-graph.ts`）；run 状态持久化见 GE-1（migration v8）。
 
-### Project（项目）
+## 1. 数据库分层
 
-项目是顶层容器，包含所有创作相关数据。
+- **app.sqlite**：应用级索引与配置，`<userData>/app.sqlite`。
+- **project.sqlite**：单个项目正式数据，`<userData>/projects/<project-id>/project.sqlite`。
+- project.sqlite 是项目正式数据来源；app.sqlite 仅用于项目列表与快速定位。
+- Utility Process 是数据库唯一写入者；同步 SQLite 调用只在 Worker/Utility Process 运行。
+- 所有时间使用 UTC ISO 8601。
 
-```typescript
-interface Project {
-  id: ProjectId;
-  title: string;
-  status: ProjectStatus;
-  createdAt: string;
-  updatedAt: string;
-  metadata: ProjectMetadata;
-}
-```
+## 2. Migration 清单
 
-### Chapter（章节）
+### APP_MIGRATIONS（app.sqlite）
 
-章节是正文的组织单位。
+| v   | 内容                                        |
+| --- | ------------------------------------------- |
+| v1  | `schema_migrations`、`projects`（项目索引） |
+| v2  | `project_creations`（创建阶段跟踪）         |
+| v3  | `provider_profiles`                         |
+| v4  | 重建 `provider_profiles`（CHECK 约束）      |
 
-```typescript
-interface Chapter {
-  id: string;
-  projectId: ProjectId;
-  title: string;
-  order: number;
-  status: ChapterStatus;
-  content: string; // 版本化
-  createdAt: string;
-  updatedAt: string;
-}
-```
+### PROJECT_MIGRATIONS（project.sqlite）
 
-### Character（人物）
+| v   | 内容                                                                                                                        |
+| --- | --------------------------------------------------------------------------------------------------------------------------- |
+| v1  | `schema_migrations`、`project_metadata`                                                                                     |
+| v2  | `tasks` + `model_invocations`（token/usage/latency、CHECK、UNIQUE(task_id, attempt_number)）                                |
+| v3  | `grill_sessions`、`grill_questions`、`grill_answers`、`grill_inference_proposals`                                           |
+| v4  | 重建 `tasks`（加 `GRILL_QUESTION_PLAN`、`dedupe_key` + 部分唯一索引）；`grill_question_plan_proposals`                      |
+| v5  | 父表复合唯一索引；creation-contract 表（`creation_contract_proposals` / `_versions` / `_current` / `_lock_events`）+ 触发器 |
+| v6  | 重建 `tasks`（加 `CREATION_CONTRACT_DRAFT`）；`uq_cc_proposals_task` / `uq_cc_proposals_invocation`                         |
+| v7  | `manuscripts`、`chapters`、`chapter_versions`（STRICT、复合 PK/FK、部分唯一 active-manuscript、append-only 触发器）         |
+| v8  | **GE-1**：`graph_runs`（统一 run 状态，kind 判别）+ `graph_run_commands`（幂等日志）                                        |
 
-人物是故事中的角色。
+## 3. 权威对象与存储
 
-```typescript
-interface Character {
-  id: string;
-  projectId: ProjectId;
-  name: string;
-  description: string;
-  traits: string[];
-  relationships: Relationship[];
-  createdAt: string;
-  updatedAt: string;
-}
-```
+| 权威对象                                       | 用户侧名称               | 存储                                                      | 状态                              |
+| ---------------------------------------------- | ------------------------ | --------------------------------------------------------- | --------------------------------- |
+| Project                                        | 项目                     | app.sqlite `projects` + project.sqlite `project_metadata` | ✅                                |
+| Grill Session / Question / Answer              | Idea Intake（GE-3 改名） | project.sqlite `grill_*`                                  | ✅（GE-3 适配）                   |
+| CreationSpec（来自 Creation Contract）         | 创作要求                 | project.sqlite `creation_contract_*`                      | ✅（GE-3 冻结 CreationSpec 形态） |
+| Manuscript / Chapter / ChapterVersion          | 稿件                     | project.sqlite v7                                         | ✅ 后端                           |
+| Graph Run（ProjectRun / ChapterGenerationRun） | 生成记录                 | project.sqlite v8（GE-1）                                 | GE-1                              |
+| ResearchBundle                                 | 调研资料包               | GE-4 新 migration                                         | GE-4                              |
+| StoryBlueprint                                 | 故事蓝图                 | GE-5 新 migration                                         | GE-5                              |
 
-### Task（任务）
+## 4. 安全与写入约束
 
-任务是 AI 执行的工作单元。
-
-```typescript
-interface Task {
-  id: string;
-  projectId: ProjectId;
-  type: TaskType;
-  status: TaskStatus;
-  input: TaskInput;
-  output: TaskOutput | null;
-  modelId: string;
-  tokenUsage: TokenUsage;
-  createdAt: string;
-  updatedAt: string;
-}
-```
-
-## 版本化数据
-
-以下数据需要版本化管理：
-
-- 正文内容（Chapter.content）
-- 创作契约
-- 章节规划
-- 项目状态
-
-### 版本记录
-
-```typescript
-interface Version {
-  id: string;
-  entityType: string;
-  entityId: string;
-  data: unknown;
-  createdAt: string;
-  reason: string;
-  parentVersionId: string | null;
-}
-```
-
-## 用户文字保护
-
-用户手动编辑的文字默认受保护：
-
-- AI 不得覆盖用户文字
-- 修改用户文字需要明确确认
-- 版本历史记录所有修改
-
-## 本地存储结构
-
-```
-项目目录/
-├── project.json          # 项目配置
-├── chapters/             # 章节内容
-│   ├── 001-chapter.md
-│   └── 002-chapter.md
-├── characters/           # 人物资料
-│   ├── character-1.json
-│   └── character-2.json
-├── contracts/            # 创作契约
-│   └── contract-v1.md
-├── plans/                # 章节规划
-│   └── plan-v1.json
-├── tasks/                # 任务记录
-│   └── tasks.json
-└── versions/             # 版本历史
-    └── versions.json
-```
-
-## API Key 管理
-
-API Key 不进入项目备份：
-
-- 存储在 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
-- app.sqlite 只保存非敏感 provider profile（不含 API Key）
-- 项目备份时排除 API Key
-- Windows/Linux Keychain 尚未实现
-
-## M1-A 数据模型
-
-### 数据库分层
-
-- **app.sqlite**：应用级项目索引，存储在 `<userData>/app.sqlite`
-- **project.sqlite**：单个项目数据，存储在 `<userData>/projects/<project-id>/project.sqlite`
-
-project.sqlite 是项目的正式数据来源。app.sqlite 仅用于项目列表和快速定位。
-
-### app.sqlite Schema
-
-```sql
-CREATE TABLE schema_migrations (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE projects (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  initial_idea TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'idea',
-  project_directory TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  last_opened_at TEXT
-) STRICT;
-
-CREATE TABLE project_creations (
-  project_id TEXT PRIMARY KEY,
-  temp_directory_name TEXT NOT NULL,
-  final_directory_name TEXT NOT NULL,
-  phase TEXT NOT NULL DEFAULT 'preparing',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE provider_profiles (
-  id TEXT PRIMARY KEY,
-  provider_type TEXT NOT NULL,
-  display_name TEXT NOT NULL,
-  base_url TEXT NOT NULL,
-  model TEXT NOT NULL,
-  keychain_service TEXT NOT NULL,
-  keychain_account TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  last_tested_at TEXT,
-  last_test_status TEXT,
-  last_test_error_code TEXT,
-  last_test_latency_ms INTEGER
-) STRICT;
-```
-
-### project.sqlite Schema
-
-```sql
-CREATE TABLE schema_migrations (
-  version INTEGER PRIMARY KEY,
-  applied_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE project_metadata (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  initial_idea TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'idea',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
-) STRICT;
-
-CREATE TABLE tasks (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  task_type TEXT NOT NULL,
-  status TEXT NOT NULL,
-  input_version_json TEXT NOT NULL,
-  payload_json TEXT NOT NULL,
-  result_json TEXT,
-  error_code TEXT,
-  error_message TEXT,
-  attempt_count INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  stale_at TEXT,
-  cancelled_at TEXT,
-  CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST')),
-  CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
-  CHECK (attempt_count >= 0),
-  CHECK (json_valid(input_version_json)),
-  CHECK (json_valid(payload_json)),
-  CHECK (result_json IS NULL OR json_valid(result_json))
-) STRICT;
-
-CREATE TABLE model_invocations (
-  id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  task_id TEXT NOT NULL,
-  provider_profile_id TEXT NOT NULL,
-  model TEXT NOT NULL,
-  status TEXT NOT NULL,
-  attempt_number INTEGER NOT NULL,
-  request_kind TEXT NOT NULL,
-  prompt_hash TEXT NOT NULL,
-  request_metadata_json TEXT NOT NULL,
-  response_metadata_json TEXT,
-  input_tokens INTEGER,
-  output_tokens INTEGER,
-  cache_read_tokens INTEGER,
-  cache_write_tokens INTEGER,
-  total_tokens INTEGER,
-  latency_ms INTEGER,
-  finish_reason TEXT,
-  error_code TEXT,
-  error_message TEXT,
-  provider_request_id TEXT,
-  created_at TEXT NOT NULL,
-  started_at TEXT,
-  finished_at TEXT,
-  FOREIGN KEY (task_id) REFERENCES tasks(id),
-  CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED')),
-  CHECK (attempt_number >= 1),
-  CHECK (length(prompt_hash) = 64),
-  CHECK (json_valid(request_metadata_json)),
-  CHECK (response_metadata_json IS NULL OR json_valid(response_metadata_json)),
-  CHECK (input_tokens IS NULL OR input_tokens >= 0),
-  CHECK (output_tokens IS NULL OR output_tokens >= 0),
-  CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
-  CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
-  CHECK (total_tokens IS NULL OR total_tokens >= 0),
-  CHECK (latency_ms IS NULL OR latency_ms >= 0)
-) STRICT;
-
-CREATE UNIQUE INDEX idx_invocations_task_attempt_unique
-  ON model_invocations(task_id, attempt_number);
-```
-
-### 项目目录结构
-
-```
-<userData>/
-├── app.sqlite
-└── projects/
-    └── <project-id>/
-        ├── project.sqlite
-        ├── assets/
-        ├── sources/
-        ├── snapshots/
-        ├── exports/
-        └── temp/
-```
-
-### SQLite 配置
-
-- `PRAGMA foreign_keys = ON`
-- `PRAGMA journal_mode = WAL`
-- `PRAGMA busy_timeout = 5000`
-- STRICT tables
-- 所有时间使用 UTC ISO 8601
+- API Key 不进入任何 SQLite（macOS Keychain：`com.ai-novel-generator.provider.mimo-token-plan-cn`）。
+- prompt 不持久化；只存 SHA-256 hash。
+- STRICT 表、WAL、foreign_keys、busy_timeout；所有 mutation 走 BEGIN IMMEDIATE 事务。
+- 用户手写正文不得被静默覆盖（CAS / 不可变版本 / 显式写入）。
+- Graph run 状态变化只能经 Domain transition（见 `module-boundaries.md` §0）。

@@ -10,6 +10,15 @@
 - 如旧文档仍描述 Grill-first、Contract-first 或纯 Writer-first 流程，以本文档为准；
 - 本次决策是在 controlled pivot 基础上的进一步校正，不是推倒重写，也不是回退到 Contract-first。
 
+## 0. 权威层级
+
+产品方向（本文档）→ 产品 1.0 纵向切片（`docs/product/idea-to-novel-v1.md`）→ **流程权威 Graph Definitions**
+（`packages/domain/src/idea-to-novel-graph.ts`：IdeaToNovelProjectGraphV1 + ChapterGenerationGraphV1）→ 工程文档
+（`docs/development/graph-engineering-roadmap.md` / `current-project-state.md` / `module-boundaries.md` / `decision-log.md`）。
+
+- 两张 Graph 是 Idea-to-Novel 主链的**唯一流程依据**：节点、转移、人工 Gate、预算、循环、终态、失效传播以其为准。
+- 低层不得与高层冲突；任何"当前状态 / 下一步 / 验收标准"在仓库中只有一个答案。
+
 ---
 
 ## 1. Executive Decision
