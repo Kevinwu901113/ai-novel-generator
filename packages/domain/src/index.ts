@@ -273,3 +273,8 @@ export * from './creation-contract.js';
 // ── 稿件 / 章节 / 章节版本领域模型 ────────────────────────────────
 
 export * from './manuscript.js';
+
+// ── Idea-to-Novel 可执行主链 Spine 领域模型 ───────────────────────
+// WorkflowStage / ResearchBundle / StoryBlueprint / GenerationRun
+
+export * from './spine.js';

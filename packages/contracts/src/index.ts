@@ -10,6 +10,8 @@
  * - 不暴露堆栈信息给 Renderer
  */
 
+import type { WorkflowAPI, ResearchAPI, BlueprintAPI, GenerationAPI } from './spine.js';
+
 // ── 错误码 ────────────────────────────────────────────────────────
 
 /** 应用错误码 */
@@ -255,6 +257,14 @@ export const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  // Idea-to-Novel 可执行主链 Spine 通道（STATE_A 契约冻结，仅定义名称，不接线）
+  WORKFLOW_GET_CURRENT: 'ipc:workflow-get-current',
+  RESEARCH_GET_CURRENT: 'ipc:research-get-current',
+  RESEARCH_CREATE_FIXTURE: 'ipc:research-create-fixture',
+  BLUEPRINT_GET_CURRENT: 'ipc:blueprint-get-current',
+  BLUEPRINT_CREATE_FIXTURE: 'ipc:blueprint-create-fixture',
+  GENERATION_GET_CURRENT_RUN: 'ipc:generation-get-current-run',
+  GENERATION_RUN_FIXTURE: 'ipc:generation-run-fixture',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -354,7 +364,14 @@ export interface ContractAPI {
   unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData>;
 }
 
-/** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
+/**
+ * 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer。
+ *
+ * `workflow / research / blueprint / generation` 为 STATE_A 契约冻结的
+ * Idea-to-Novel 可执行主链 Spine API 形状。本 PR 仅冻结接口与 DTO/validator，
+ * 不接线 preload / Main / Worker，因此四个命名空间为**可选**（preload 尚未实现）。
+ * transport 接线 PR 将其改为必填。
+ */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
   getDataServiceStatus(): Promise<DataServiceStatusResponse>;
@@ -364,6 +381,10 @@ export interface DesktopAPI {
   tasks: TasksAPI;
   grill: GrillAPI;
   contract: ContractAPI;
+  workflow?: WorkflowAPI;
+  research?: ResearchAPI;
+  blueprint?: BlueprintAPI;
+  generation?: GenerationAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -1056,6 +1077,16 @@ export interface ContractVersionPublicData {
   readonly createdAt: string;
   readonly createdBy: ContractVersionCreatedBy;
 }
+
+/**
+ * CreationSpec 权威快照的产品级公共视图。
+ *
+ * 复用现有 Creation Contract 版本化快照（`ContractVersionPublicData`）作为
+ * CreationSpecSnapshot —— 不复制第二套完整 CreationSpec 数据模型
+ * （见 docs/development/idea-to-novel-migration-plan.md §3.2）。
+ * ResearchBundle / StoryBlueprint 的 `creationSpecVersionId` 即引用该快照的 id。
+ */
+export type CreationSpecSnapshotDTO = ContractVersionPublicData;
 
 export interface ContractVersionSummary {
   readonly id: string;
@@ -1876,6 +1907,12 @@ export function isValidContractVersionPublicData(data: unknown): data is Contrac
     VALID_CREATED_BY.has(obj.createdBy)
   );
 }
+
+/**
+ * CreationSpecSnapshot 校验器 —— 复用现有 Creation Contract snapshot 校验器，
+ * 不复制第二套模型。
+ */
+export const isValidCreationSpecSnapshotDTO = isValidContractVersionPublicData;
 
 export function isValidProposalPublicData(data: unknown): data is ProposalPublicData {
   if (typeof data !== 'object' || data === null) return false;
@@ -2791,3 +2828,9 @@ export function isValidChapterPublicData(data: unknown): data is ChapterPublicDa
   if (obj.currentVersion === null) return true;
   return isValidChapterVersionSummary(obj.currentVersion);
 }
+
+// ── Idea-to-Novel 可执行主链 Spine 契约 ───────────────────────────
+// WorkflowStage / ResearchBundle / StoryBlueprint / GenerationRun
+// 的 DTO、Input、校验器与 DesktopAPI 命名空间。
+
+export * from './spine.js';
