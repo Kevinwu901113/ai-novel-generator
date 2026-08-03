@@ -136,18 +136,32 @@ export interface GenerationTargetPublicData {
 }
 
 /**
- * 生成结果（显式结构，不是任意 JSON）。
- * STATE_A 不实现提交，committed 恒为 false，三个目标 id 恒为 null。
+ * 生成结果（显式结构，不是任意 JSON；`committed` 判别联合）。
+ *
+ * 与 domain `GenerationRunResult` 相同的判别联合语义：
+ * - `committed: false`：未提交，三个 id 必须为 null（STATE_A fixture 只产该分支）；
+ * - `committed: true`：已提交，三个 id 必须存在（未来 Manuscript 提交 use case 产生）。
+ * 非法交叉组合被 validator 拒绝。
  */
-export interface GenerationRunResultPublicData {
-  readonly proposedTitle: string;
-  readonly proposedContent: string;
-  readonly sourceType: GenerationSourceType;
-  readonly committed: boolean;
-  readonly manuscriptId: string | null;
-  readonly chapterId: string | null;
-  readonly chapterVersionId: string | null;
-}
+export type GenerationRunResultPublicData =
+  | {
+      readonly proposedTitle: string;
+      readonly proposedContent: string;
+      readonly sourceType: GenerationSourceType;
+      readonly committed: false;
+      readonly manuscriptId: null;
+      readonly chapterId: null;
+      readonly chapterVersionId: null;
+    }
+  | {
+      readonly proposedTitle: string;
+      readonly proposedContent: string;
+      readonly sourceType: GenerationSourceType;
+      readonly committed: true;
+      readonly manuscriptId: string;
+      readonly chapterId: string;
+      readonly chapterVersionId: string;
+    };
 
 /** GenerationRun 公开数据 */
 export interface GenerationRunPublicData {
@@ -176,10 +190,10 @@ export interface GetCurrentResearchBundleInput {
   readonly projectId: string;
 }
 
-export interface CreateResearchFixtureInput {
+export interface StartResearchInput {
   readonly projectId: string;
   readonly creationSpecVersionId: string;
-  /** 缺省为 LIGHT；显式传入可演示 DEEP/NONE */
+  /** 缺省为 LIGHT；显式传入可表达 NONE/DEEP */
   readonly mode?: ResearchMode;
 }
 
@@ -187,7 +201,7 @@ export interface GetCurrentStoryBlueprintInput {
   readonly projectId: string;
 }
 
-export interface CreateStoryBlueprintFixtureInput {
+export interface GenerateStoryBlueprintInput {
   readonly projectId: string;
   readonly creationSpecVersionId: string;
   readonly researchBundleId: string;
@@ -197,13 +211,17 @@ export interface GetCurrentGenerationRunInput {
   readonly projectId: string;
 }
 
-export interface RunGenerationFixtureInput {
+export interface StartGenerationInput {
   readonly projectId: string;
   readonly storyBlueprintId: string;
 }
 
-// ── DesktopAPI 命名空间（Renderer 可消费的产品 API 形状）────────────
+// ── Spine API 命名空间（Renderer 可消费的产品 API 形状）─────────────
 // 只冻结接口形状；preload / Main / Worker 接线不属于本 PR。
+//
+// 命名使用实现无关的业务动词（start / generate），不暴露 fixture 术语：
+// 后续由依赖注入决定底层使用 FixtureResearchProvider 还是 RealResearchProvider，
+// Renderer 与 DesktopAPI 不需要知道底层是 fixture 还是真实实现。
 
 export interface WorkflowAPI {
   getCurrent(input: GetCurrentWorkflowInput): Promise<WorkflowStage>;
@@ -211,17 +229,32 @@ export interface WorkflowAPI {
 
 export interface ResearchAPI {
   getCurrent(input: GetCurrentResearchBundleInput): Promise<ResearchBundlePublicData | null>;
-  createFixture(input: CreateResearchFixtureInput): Promise<ResearchBundlePublicData>;
+  start(input: StartResearchInput): Promise<ResearchBundlePublicData>;
 }
 
 export interface BlueprintAPI {
   getCurrent(input: GetCurrentStoryBlueprintInput): Promise<StoryBlueprintPublicData | null>;
-  createFixture(input: CreateStoryBlueprintFixtureInput): Promise<StoryBlueprintPublicData>;
+  generate(input: GenerateStoryBlueprintInput): Promise<StoryBlueprintPublicData>;
 }
 
 export interface GenerationAPI {
   getCurrentRun(input: GetCurrentGenerationRunInput): Promise<GenerationRunPublicData | null>;
-  runFixture(input: RunGenerationFixtureInput): Promise<GenerationRunPublicData>;
+  start(input: StartGenerationInput): Promise<GenerationRunPublicData>;
+}
+
+/**
+ * Spine API 聚合接口 —— 必填的 Renderer 可消费主链能力。
+ *
+ * 本 PR 导出必填聚合但**不**把它并入 `DesktopAPI`（preload 尚未实现，保持
+ * DesktopAPI 当前真实形状）。transport 接线 PR 原子性地改为
+ * `interface DesktopAPI extends SpineAPI` 并实现 Preload / Main / Worker，
+ * 从加入 DesktopAPI 的第一刻起即真实且必填。
+ */
+export interface SpineAPI {
+  workflow: WorkflowAPI;
+  research: ResearchAPI;
+  blueprint: BlueprintAPI;
+  generation: GenerationAPI;
 }
 
 // ── 校验助手（自包含，与 index.ts 的 hasContractExactKeys 同强度）─────
@@ -242,10 +275,6 @@ function isSpineId(value: unknown): value is string {
   if (value.length === 0) return false;
   if (value !== value.trim()) return false;
   return spineCodePointLength(value) <= SPINE_ID_MAX_LENGTH;
-}
-
-function isNullableSpineId(value: unknown): boolean {
-  return value === null || isSpineId(value);
 }
 
 /** 标题/名称：trim 非空、≤ 200 code points */
@@ -342,9 +371,10 @@ function hasSpineAllowedKeys(
 
 /**
  * 严格 http(s) URL（不依赖 `new URL`，contracts 包 lib 无 DOM）。
- * 契约层范围：协议、空白、credentials、host、端口、长度。
- * 网络安全边界（localhost/私网/重定向等）属于 research-engine Web Research V1
- * 验收门禁，见 docs/development/idea-to-novel-migration-plan.md §3.7。
+ * 契约层范围：协议、空白、credentials、非空 host（含 `http://:80` 拒绝）、
+ * 合法端口（1–65535）、IPv6 字面量、长度。
+ * 网络安全边界（localhost/私网/DNS 重绑定/重定向等）属于 research-engine
+ * Web Research V1 验收门禁，见 docs/development/idea-to-novel-migration-plan.md §3.7。
  */
 function isSpineHttpUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
@@ -362,19 +392,35 @@ function isSpineHttpUrl(value: unknown): value is string {
   if (authority.length === 0) return false;
   if (authority.includes('@')) return false;
   if (/[^a-zA-Z0-9.:\-[\]]/.test(authority)) return false;
+  if (!authority.startsWith('[') && (authority.includes('[') || authority.includes(']'))) {
+    return false;
+  }
   if (authority.startsWith('[')) {
+    // IPv6 字面量：[host]（[:port] 可选）；空 `[]` 拒绝
     const close = authority.indexOf(']');
     if (close <= 1) return false;
     const after = authority.slice(close + 1);
-    if (after !== '' && !/^:\d+$/.test(after)) return false;
+    if (after !== '') {
+      if (!/^:\d+$/.test(after)) return false;
+      if (!isSpinePortInRange(after.slice(1))) return false;
+    }
     return true;
   }
   const colon = authority.lastIndexOf(':');
   if (colon !== -1) {
-    const port = authority.slice(colon + 1);
-    if (port.length === 0 || !/^\d+$/.test(port)) return false;
+    const host = authority.slice(0, colon);
+    if (host.length === 0) return false;
+    if (host.includes(':')) return false;
+    if (!isSpinePortInRange(authority.slice(colon + 1))) return false;
   }
   return true;
+}
+
+/** 端口必须在 1–65535 合法范围 */
+function isSpinePortInRange(port: string): boolean {
+  if (!/^\d+$/.test(port)) return false;
+  const n = Number(port);
+  return Number.isSafeInteger(n) && n >= 1 && n <= 65_535;
 }
 
 // ── 枚举值校验 ─────────────────────────────────────────────────────
@@ -633,8 +679,8 @@ export function isValidGenerationRunResultPublicData(
 ): data is GenerationRunResultPublicData {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return (
-    hasSpineExactKeys(obj, [
+  if (
+    !hasSpineExactKeys(obj, [
       'proposedTitle',
       'proposedContent',
       'sourceType',
@@ -642,15 +688,24 @@ export function isValidGenerationRunResultPublicData(
       'manuscriptId',
       'chapterId',
       'chapterVersionId',
-    ]) &&
-    isSpineTitle(obj.proposedTitle) &&
-    isSpineContent(obj.proposedContent) &&
-    isGenerationSourceTypeValue(obj.sourceType) &&
-    typeof obj.committed === 'boolean' &&
-    isNullableSpineId(obj.manuscriptId) &&
-    isNullableSpineId(obj.chapterId) &&
-    isNullableSpineId(obj.chapterVersionId)
-  );
+    ]) ||
+    !isSpineTitle(obj.proposedTitle) ||
+    !isSpineContent(obj.proposedContent) ||
+    !isGenerationSourceTypeValue(obj.sourceType)
+  ) {
+    return false;
+  }
+  if (obj.committed === true) {
+    // committed=true：三个 id 必须存在
+    return (
+      isSpineId(obj.manuscriptId) && isSpineId(obj.chapterId) && isSpineId(obj.chapterVersionId)
+    );
+  }
+  if (obj.committed === false) {
+    // committed=false：三个 id 必须为 null
+    return obj.manuscriptId === null && obj.chapterId === null && obj.chapterVersionId === null;
+  }
+  return false;
 }
 
 export function isValidGenerationRunPublicData(data: unknown): data is GenerationRunPublicData {
@@ -709,9 +764,7 @@ export function isValidGetCurrentResearchBundleInput(
   return hasSpineExactKeys(obj, ['projectId']) && isSpineId(obj.projectId);
 }
 
-export function isValidCreateResearchFixtureInput(
-  data: unknown,
-): data is CreateResearchFixtureInput {
+export function isValidStartResearchInput(data: unknown): data is StartResearchInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   if (
@@ -736,9 +789,9 @@ export function isValidGetCurrentStoryBlueprintInput(
   return hasSpineExactKeys(obj, ['projectId']) && isSpineId(obj.projectId);
 }
 
-export function isValidCreateStoryBlueprintFixtureInput(
+export function isValidGenerateStoryBlueprintInput(
   data: unknown,
-): data is CreateStoryBlueprintFixtureInput {
+): data is GenerateStoryBlueprintInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   return (
@@ -757,7 +810,7 @@ export function isValidGetCurrentGenerationRunInput(
   return hasSpineExactKeys(obj, ['projectId']) && isSpineId(obj.projectId);
 }
 
-export function isValidRunGenerationFixtureInput(data: unknown): data is RunGenerationFixtureInput {
+export function isValidStartGenerationInput(data: unknown): data is StartGenerationInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
   return (

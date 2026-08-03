@@ -27,13 +27,14 @@ import {
   isValidBlueprintChapterPublicData,
   isValidGetCurrentWorkflowInput,
   isValidGetCurrentResearchBundleInput,
-  isValidCreateResearchFixtureInput,
+  isValidStartResearchInput,
   isValidGetCurrentStoryBlueprintInput,
-  isValidCreateStoryBlueprintFixtureInput,
+  isValidGenerateStoryBlueprintInput,
   isValidGetCurrentGenerationRunInput,
-  isValidRunGenerationFixtureInput,
+  isValidStartGenerationInput,
   isValidCreationSpecSnapshotDTO,
   type DesktopAPI,
+  type SpineAPI,
   type ContractVersionPublicData,
   type WorkflowAPI,
   type ResearchAPI,
@@ -43,9 +44,9 @@ import {
   type StoryBlueprintPublicData,
   type GenerationRunPublicData,
   type GetCurrentWorkflowInput,
-  type CreateResearchFixtureInput,
-  type CreateStoryBlueprintFixtureInput,
-  type RunGenerationFixtureInput,
+  type StartResearchInput,
+  type GenerateStoryBlueprintInput,
+  type StartGenerationInput,
 } from './index.js';
 
 const TS = '2026-08-03T00:00:00.000Z';
@@ -320,6 +321,71 @@ describe('isValidGenerationRunPublicData', () => {
     ).toBe(false);
   });
 
+  it('result 判别联合：committed=true 合法分支通过', () => {
+    expect(
+      isValidGenerationRunPublicData({
+        ...validGenerationRun,
+        result: {
+          proposedTitle: '第一章',
+          proposedContent: '正文……',
+          sourceType: 'AI_GENERATION',
+          committed: true,
+          manuscriptId: 'm1',
+          chapterId: 'c1',
+          chapterVersionId: 'v1',
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it('result 判别联合：两个非法交叉组合拒绝', () => {
+    // committed=true 但 manuscriptId 为 null
+    expect(
+      isValidGenerationRunPublicData({
+        ...validGenerationRun,
+        result: {
+          proposedTitle: 't',
+          proposedContent: 'c',
+          sourceType: 'AI_GENERATION',
+          committed: true,
+          manuscriptId: null,
+          chapterId: 'c1',
+          chapterVersionId: 'v1',
+        },
+      }),
+    ).toBe(false);
+    // committed=false 但携带了 id
+    expect(
+      isValidGenerationRunPublicData({
+        ...validGenerationRun,
+        result: {
+          proposedTitle: 't',
+          proposedContent: 'c',
+          sourceType: 'AI_GENERATION',
+          committed: false,
+          manuscriptId: 'm1',
+          chapterId: 'c1',
+          chapterVersionId: 'v1',
+        },
+      }),
+    ).toBe(false);
+    // committed=true 但缺 chapterVersionId
+    expect(
+      isValidGenerationRunPublicData({
+        ...validGenerationRun,
+        result: {
+          proposedTitle: 't',
+          proposedContent: 'c',
+          sourceType: 'AI_GENERATION',
+          committed: true,
+          manuscriptId: 'm1',
+          chapterId: 'c1',
+          chapterVersionId: null,
+        },
+      }),
+    ).toBe(false);
+  });
+
   it('result=null 时不允许其他结果字段混入', () => {
     expect(isValidGenerationRunPublicData({ ...validGenerationRun, result: null })).toBe(true);
     expect(isValidGenerationRunPublicData({ ...validGenerationRun, result: {} })).toBe(false);
@@ -328,16 +394,16 @@ describe('isValidGenerationRunPublicData', () => {
 
 describe('Input DTO 严格校验', () => {
   const validGetCurrent: GetCurrentWorkflowInput = { projectId: 'proj-1' };
-  const validCreateResearch: CreateResearchFixtureInput = {
+  const validStartResearch: StartResearchInput = {
     projectId: 'proj-1',
     creationSpecVersionId: 'spec-1',
   };
-  const validCreateBlueprint: CreateStoryBlueprintFixtureInput = {
+  const validGenerateBlueprint: GenerateStoryBlueprintInput = {
     projectId: 'proj-1',
     creationSpecVersionId: 'spec-1',
     researchBundleId: 'rb-1',
   };
-  const validRunFixture: RunGenerationFixtureInput = {
+  const validStartGeneration: StartGenerationInput = {
     projectId: 'proj-1',
     storyBlueprintId: 'bp-1',
   };
@@ -354,9 +420,9 @@ describe('Input DTO 严格校验', () => {
       validator: isValidGetCurrentResearchBundleInput,
     },
     {
-      name: 'research.createFixture',
-      valid: validCreateResearch,
-      validator: isValidCreateResearchFixtureInput,
+      name: 'research.start',
+      valid: validStartResearch,
+      validator: isValidStartResearchInput,
     },
     {
       name: 'blueprint.getCurrent',
@@ -364,9 +430,9 @@ describe('Input DTO 严格校验', () => {
       validator: isValidGetCurrentStoryBlueprintInput,
     },
     {
-      name: 'blueprint.createFixture',
-      valid: validCreateBlueprint,
-      validator: isValidCreateStoryBlueprintFixtureInput,
+      name: 'blueprint.generate',
+      valid: validGenerateBlueprint,
+      validator: isValidGenerateStoryBlueprintInput,
     },
     {
       name: 'generation.getCurrentRun',
@@ -374,9 +440,9 @@ describe('Input DTO 严格校验', () => {
       validator: isValidGetCurrentGenerationRunInput,
     },
     {
-      name: 'generation.runFixture',
-      valid: validRunFixture,
-      validator: isValidRunGenerationFixtureInput,
+      name: 'generation.start',
+      valid: validStartGeneration,
+      validator: isValidStartGenerationInput,
     },
   ];
 
@@ -428,27 +494,23 @@ describe('Input DTO 严格校验', () => {
     });
   }
 
-  it('createResearchFixture：mode 可选且必须闭合', () => {
-    expect(isValidCreateResearchFixtureInput({ ...validCreateResearch, mode: 'DEEP' })).toBe(true);
-    expect(isValidCreateResearchFixtureInput({ ...validCreateResearch, mode: 'HEAVY' })).toBe(
-      false,
-    );
-    expect(isValidCreateResearchFixtureInput({ ...validCreateResearch, mode: undefined })).toBe(
-      true,
-    );
+  it('research.start：mode 可选且必须闭合', () => {
+    expect(isValidStartResearchInput({ ...validStartResearch, mode: 'DEEP' })).toBe(true);
+    expect(isValidStartResearchInput({ ...validStartResearch, mode: 'HEAVY' })).toBe(false);
+    expect(isValidStartResearchInput({ ...validStartResearch, mode: undefined })).toBe(true);
   });
 
-  it('createResearchFixture：creationSpecVersionId 必填', () => {
-    const { creationSpecVersionId: _c, ...missing } = validCreateResearch;
+  it('research.start：creationSpecVersionId 必填', () => {
+    const { creationSpecVersionId: _c, ...missing } = validStartResearch;
     void _c;
-    expect(isValidCreateResearchFixtureInput(missing)).toBe(false);
+    expect(isValidStartResearchInput(missing)).toBe(false);
   });
 
-  it('createBlueprintFixture / runFixture：引用 ID 必填且非空', () => {
+  it('blueprint.generate / generation.start：引用 ID 必填且非空', () => {
     expect(
-      isValidCreateStoryBlueprintFixtureInput({ ...validCreateBlueprint, researchBundleId: '' }),
+      isValidGenerateStoryBlueprintInput({ ...validGenerateBlueprint, researchBundleId: '' }),
     ).toBe(false);
-    expect(isValidRunGenerationFixtureInput({ ...validRunFixture, storyBlueprintId: ' ' })).toBe(
+    expect(isValidStartGenerationInput({ ...validStartGeneration, storyBlueprintId: ' ' })).toBe(
       false,
     );
   });
@@ -490,47 +552,42 @@ describe('CreationSpecSnapshotDTO 复用现有 Creation Contract snapshot', () =
   });
 });
 
-describe('DesktopAPI type parity 与 IPC 通道', () => {
-  it('DesktopAPI 包含 workflow/research/blueprint/generation 命名空间', () => {
-    const assertShape = (_api: DesktopAPI): void => {
+describe('SpineAPI 聚合 / DesktopAPI 形状 / IPC 通道', () => {
+  it('SpineAPI 是必填聚合，方法使用实现无关的中性动词', () => {
+    const assertShape = (_api: SpineAPI): void => {
       void _api;
     };
     const workflow: WorkflowAPI = { getCurrent: async () => 'IDEA' };
     const research: ResearchAPI = {
       getCurrent: async () => null,
-      createFixture: async () => validResearchBundle,
+      start: async () => validResearchBundle,
     };
     const blueprint: BlueprintAPI = {
       getCurrent: async () => null,
-      createFixture: async () => validStoryBlueprint,
+      generate: async () => validStoryBlueprint,
     };
     const generation: GenerationAPI = {
       getCurrentRun: async () => null,
-      runFixture: async () => validGenerationRun,
+      start: async () => validGenerationRun,
     };
     expect(typeof workflow.getCurrent).toBe('function');
     expect(typeof research.getCurrent).toBe('function');
-    expect(typeof research.createFixture).toBe('function');
+    expect(typeof research.start).toBe('function');
     expect(typeof blueprint.getCurrent).toBe('function');
-    expect(typeof blueprint.createFixture).toBe('function');
+    expect(typeof blueprint.generate).toBe('function');
     expect(typeof generation.getCurrentRun).toBe('function');
-    expect(typeof generation.runFixture).toBe('function');
-    assertShape({
-      workflow,
-      research,
-      blueprint,
-      generation,
-    } as DesktopAPI);
+    expect(typeof generation.start).toBe('function');
+    // SpineAPI 聚合必须要求全部四个命名空间（必填）
+    assertShape({ workflow, research, blueprint, generation });
   });
 
-  it('spine 命名空间为可选 —— 未接线的 preload（无 spine 命名空间）仍满足 DesktopAPI', () => {
-    // 编译期断言：workflow/research/blueprint/generation 在 DesktopAPI 上均为可选
-    // （transport 接线 PR 之前，preload 不实现它们仍可通过类型检查）。
-    type WorkflowOptional = undefined extends DesktopAPI['workflow'] ? true : false;
-    type ResearchOptional = undefined extends DesktopAPI['research'] ? true : false;
-    type BlueprintOptional = undefined extends DesktopAPI['blueprint'] ? true : false;
-    type GenerationOptional = undefined extends DesktopAPI['generation'] ? true : false;
-    const checks: [WorkflowOptional, ResearchOptional, BlueprintOptional, GenerationOptional] = [
+  it('SpineAPI 命名空间必填（transport 接线 PR 前作为独立聚合导出）', () => {
+    // 编译期断言：SpineAPI 的四个属性均不含 undefined
+    type WorkflowRequired = undefined extends SpineAPI['workflow'] ? false : true;
+    type ResearchRequired = undefined extends SpineAPI['research'] ? false : true;
+    type BlueprintRequired = undefined extends SpineAPI['blueprint'] ? false : true;
+    type GenerationRequired = undefined extends SpineAPI['generation'] ? false : true;
+    const checks: [WorkflowRequired, ResearchRequired, BlueprintRequired, GenerationRequired] = [
       true,
       true,
       true,
@@ -539,18 +596,40 @@ describe('DesktopAPI type parity 与 IPC 通道', () => {
     expect(checks).toEqual([true, true, true, true]);
   });
 
-  it('IPC 频道包含全部 spine 通道（前缀正确、无接线）', () => {
+  it('DesktopAPI 保持当前真实形状，不含 Spine API（未接线前不污染公共类型）', () => {
+    // 编译期断言：DesktopAPI 不暴露 workflow/research/blueprint/generation
+    type WorkflowAbsent = 'workflow' extends keyof DesktopAPI ? false : true;
+    type ResearchAbsent = 'research' extends keyof DesktopAPI ? false : true;
+    type BlueprintAbsent = 'blueprint' extends keyof DesktopAPI ? false : true;
+    type GenerationAbsent = 'generation' extends keyof DesktopAPI ? false : true;
+    const checks: [WorkflowAbsent, ResearchAbsent, BlueprintAbsent, GenerationAbsent] = [
+      true,
+      true,
+      true,
+      true,
+    ];
+    expect(checks).toEqual([true, true, true, true]);
+  });
+
+  it('IPC 频道包含全部 spine 通道（前缀正确、中性命名、无接线）', () => {
     const channels = Object.values(IPC_CHANNELS);
     for (const ch of [
       'ipc:workflow-get-current',
       'ipc:research-get-current',
-      'ipc:research-create-fixture',
+      'ipc:research-start',
       'ipc:blueprint-get-current',
-      'ipc:blueprint-create-fixture',
+      'ipc:blueprint-generate',
       'ipc:generation-get-current-run',
-      'ipc:generation-run-fixture',
+      'ipc:generation-start',
     ]) {
       expect(channels).toContain(ch);
+    }
+  });
+
+  it('IPC 频道不包含 fixture 术语', () => {
+    const channels = Object.values(IPC_CHANNELS);
+    for (const ch of channels) {
+      expect(ch).not.toMatch(/fixture/);
     }
   });
 
@@ -573,5 +652,48 @@ describe('DTO 辅助校验器（嵌套）', () => {
     expect(
       isValidBlueprintChapterPublicData({ ...validStoryBlueprint.chapters[0], order: -1 }),
     ).toBe(false);
+  });
+});
+
+describe('URL 严格校验（空 host / 端口范围）', () => {
+  const sourceWithUrl = (url: string): unknown => ({
+    ...validResearchBundle.sources[0],
+    url,
+  });
+
+  it('拒绝空 host 与端口（authority 只有 :port）', () => {
+    for (const bad of ['http://:80', 'https://:443/path', 'http://:65535/']) {
+      expect(isValidResearchSourcePublicData(sourceWithUrl(bad))).toBe(false);
+    }
+  });
+
+  it('拒绝空 IPv6 字面量与非法括号', () => {
+    for (const bad of ['http://[]', 'https://[]/x', 'http://foo[bar]/x']) {
+      expect(isValidResearchSourcePublicData(sourceWithUrl(bad))).toBe(false);
+    }
+  });
+
+  it('拒绝越界 / 非法端口', () => {
+    for (const bad of [
+      'http://example.com:99999',
+      'http://example.com:0',
+      'http://example.com:65536',
+      'http://example.com:',
+      'http://example.com:abc',
+      'http://2001:db8::1/',
+    ]) {
+      expect(isValidResearchSourcePublicData(sourceWithUrl(bad))).toBe(false);
+    }
+  });
+
+  it('接受合法端口边界与 IPv6 字面量', () => {
+    for (const good of [
+      'http://example.com:1/a',
+      'https://example.com:65535/a',
+      'http://[2001:db8::1]/a',
+      'http://[2001:db8::1]:8080/a',
+    ]) {
+      expect(isValidResearchSourcePublicData(sourceWithUrl(good))).toBe(true);
+    }
   });
 });

@@ -10,8 +10,6 @@
  * - 不暴露堆栈信息给 Renderer
  */
 
-import type { WorkflowAPI, ResearchAPI, BlueprintAPI, GenerationAPI } from './spine.js';
-
 // ── 错误码 ────────────────────────────────────────────────────────
 
 /** 应用错误码 */
@@ -257,14 +255,15 @@ export const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
-  // Idea-to-Novel 可执行主链 Spine 通道（STATE_A 契约冻结，仅定义名称，不接线）
+  // Idea-to-Novel 可执行主链 Spine 通道（STATE_A 契约冻结，仅定义名称，不接线；
+  // 命名中性，不暴露 fixture 术语）
   WORKFLOW_GET_CURRENT: 'ipc:workflow-get-current',
   RESEARCH_GET_CURRENT: 'ipc:research-get-current',
-  RESEARCH_CREATE_FIXTURE: 'ipc:research-create-fixture',
+  RESEARCH_START: 'ipc:research-start',
   BLUEPRINT_GET_CURRENT: 'ipc:blueprint-get-current',
-  BLUEPRINT_CREATE_FIXTURE: 'ipc:blueprint-create-fixture',
+  BLUEPRINT_GENERATE: 'ipc:blueprint-generate',
   GENERATION_GET_CURRENT_RUN: 'ipc:generation-get-current-run',
-  GENERATION_RUN_FIXTURE: 'ipc:generation-run-fixture',
+  GENERATION_START: 'ipc:generation-start',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -367,10 +366,9 @@ export interface ContractAPI {
 /**
  * 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer。
  *
- * `workflow / research / blueprint / generation` 为 STATE_A 契约冻结的
- * Idea-to-Novel 可执行主链 Spine API 形状。本 PR 仅冻结接口与 DTO/validator，
- * 不接线 preload / Main / Worker，因此四个命名空间为**可选**（preload 尚未实现）。
- * transport 接线 PR 将其改为必填。
+ * 保持当前真实形状，不包含 Spine API。Spine 主链能力以必填聚合接口
+ * `SpineAPI` 单独导出（见 spine.ts）；transport 接线 PR 再原子性地改为
+ * `interface DesktopAPI extends SpineAPI` 并实现 Preload / Main / Worker。
  */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -381,10 +379,6 @@ export interface DesktopAPI {
   tasks: TasksAPI;
   grill: GrillAPI;
   contract: ContractAPI;
-  workflow?: WorkflowAPI;
-  research?: ResearchAPI;
-  blueprint?: BlueprintAPI;
-  generation?: GenerationAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -1085,6 +1079,11 @@ export interface ContractVersionPublicData {
  * CreationSpecSnapshot —— 不复制第二套完整 CreationSpec 数据模型
  * （见 docs/development/idea-to-novel-migration-plan.md §3.2）。
  * ResearchBundle / StoryBlueprint 的 `creationSpecVersionId` 即引用该快照的 id。
+ *
+ * 注意：本别名只是 **STATE_A 兼容视图**。现有 `ContractVersionPublicData` 尚不
+ * 具备完整 CreationSpec V1 字段（作品形式 / 语言偏好 / 生成方式等仍为 PARTIAL），
+ * 将在真实 Idea Intake 工作包中通过明确的 schema 决策补齐。不得据此宣称已冻结
+ * 最终 CreationSpec V1；本 PR 不新增这些字段、不新增 migration。
  */
 export type CreationSpecSnapshotDTO = ContractVersionPublicData;
 
@@ -1910,7 +1909,7 @@ export function isValidContractVersionPublicData(data: unknown): data is Contrac
 
 /**
  * CreationSpecSnapshot 校验器 —— 复用现有 Creation Contract snapshot 校验器，
- * 不复制第二套模型。
+ * 不复制第二套模型。STATE_A 兼容视图，完整 CreationSpec V1 字段仍为 PARTIAL。
  */
 export const isValidCreationSpecSnapshotDTO = isValidContractVersionPublicData;
 

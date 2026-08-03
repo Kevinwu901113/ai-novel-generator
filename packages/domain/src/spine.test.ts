@@ -488,6 +488,17 @@ describe('parseResearchSource（URL 严格校验）', () => {
       'https:///a',
       'https://example.com:abc/a',
       'https://example.com:',
+      // 空 host + 端口（authority 只有 :port）
+      'http://:80',
+      'https://:443/path',
+      // 空 IPv6 字面量
+      'http://[]',
+      // 端口越界
+      'http://example.com:99999',
+      'http://example.com:0',
+      'http://example.com:65536',
+      // 未加括号的 IPv6 冒号（非 IPv6 字面量不允许冒号）
+      'http://2001:db8::1/',
     ]) {
       expect(() =>
         parseResearchSource({
@@ -498,6 +509,20 @@ describe('parseResearchSource（URL 严格校验）', () => {
           fetchedAt: TS,
         }),
       ).toThrow();
+    }
+  });
+
+  it('接受合法端口（1–65535 边界）', () => {
+    for (const url of ['http://example.com:1/a', 'https://example.com:65535/a']) {
+      expect(() =>
+        parseResearchSource({
+          id: 's1',
+          url,
+          canonicalUrl: 'https://example.com/a',
+          title: 't',
+          fetchedAt: TS,
+        }),
+      ).not.toThrow();
     }
   });
 
@@ -530,15 +555,62 @@ describe('嵌套解析函数', () => {
     ).toThrow();
   });
 
-  it('parseGenerationRunResult', () => {
-    expect(parseGenerationRunResult(validGenerationRun.result).proposedTitle).toBe('第一章');
+  it('parseGenerationRunResult：committed=false 分支（未提交，三个 id 必须 null）', () => {
+    const result = parseGenerationRunResult(validGenerationRun.result);
+    expect(result.committed).toBe(false);
+    expect(result.manuscriptId).toBeNull();
+    expect(result.chapterId).toBeNull();
+    expect(result.chapterVersionId).toBeNull();
+  });
+
+  it('parseGenerationRunResult：committed=true 分支（已提交，三个 id 必须存在）', () => {
+    const committed: Record<string, unknown> = {
+      ...validGenerationRun.result,
+      committed: true,
+      manuscriptId: 'm1',
+      chapterId: 'c1',
+      chapterVersionId: 'v1',
+    };
+    const result = parseGenerationRunResult(committed);
+    expect(result.committed).toBe(true);
+    expect(result.manuscriptId).toBe('m1');
+  });
+
+  it('parseGenerationRunResult：非法交叉组合拒绝（true 带 null / false 带 id）', () => {
+    // committed=true 但 manuscriptId 为 null
     expect(() =>
       parseGenerationRunResult({
         ...validGenerationRun.result,
-        chapterId: null,
-        manuscriptId: 'm1',
+        committed: true,
+        manuscriptId: null,
+        chapterId: 'c1',
+        chapterVersionId: 'v1',
       }),
-    ).not.toThrow();
+    ).toThrow();
+    // committed=false 但携带了 id
+    expect(() =>
+      parseGenerationRunResult({
+        ...validGenerationRun.result,
+        committed: false,
+        manuscriptId: 'm1',
+        chapterId: 'c1',
+        chapterVersionId: 'v1',
+      }),
+    ).toThrow();
+    // committed=true 但缺某个 id
+    expect(() =>
+      parseGenerationRunResult({
+        ...validGenerationRun.result,
+        committed: true,
+        manuscriptId: 'm1',
+        chapterId: 'c1',
+        chapterVersionId: null,
+      }),
+    ).toThrow();
+  });
+
+  it('parseGenerationRunResult：非对象拒绝', () => {
     expect(() => parseGenerationRunResult(null as unknown as Record<string, unknown>)).toThrow();
+    expect(() => parseGenerationRunResult('x' as unknown as Record<string, unknown>)).toThrow();
   });
 });

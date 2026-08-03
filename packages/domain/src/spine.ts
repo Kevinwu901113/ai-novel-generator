@@ -491,21 +491,35 @@ export interface GenerationTarget {
 }
 
 /**
- * 生成结果 —— 显式结构，不是任意 JSON。
+ * 生成结果 —— 显式结构，不是任意 JSON；`committed` 判别联合。
  *
- * 表达：拟写入 Manuscript 的标题与正文、来源类型、是否已提交、
+ * 表达：拟写入 Manuscript 的标题与正文、来源类型、是否已提交，
  * 以及提交后对应的 manuscriptId / chapterId / chapterVersionId。
- * STATE_A 不实现提交，因此 committed 恒为 false，三个 id 恒为 null。
+ *
+ * 不变量由类型 + 解析函数共同执行：
+ * - `committed: false`：未提交，三个 id 必须为 null（STATE_A fixture 只产该分支）；
+ * - `committed: true`：已提交，三个 id 必须存在（由未来 Manuscript 提交 use case 产生）。
+ * 非法交叉组合（true 带 null、false 带 id）被解析函数拒绝。
  */
-export interface GenerationRunResult {
-  readonly proposedTitle: string;
-  readonly proposedContent: string;
-  readonly sourceType: GenerationSourceType;
-  readonly committed: boolean;
-  readonly manuscriptId: string | null;
-  readonly chapterId: string | null;
-  readonly chapterVersionId: string | null;
-}
+export type GenerationRunResult =
+  | {
+      readonly proposedTitle: string;
+      readonly proposedContent: string;
+      readonly sourceType: GenerationSourceType;
+      readonly committed: false;
+      readonly manuscriptId: null;
+      readonly chapterId: null;
+      readonly chapterVersionId: null;
+    }
+  | {
+      readonly proposedTitle: string;
+      readonly proposedContent: string;
+      readonly sourceType: GenerationSourceType;
+      readonly committed: true;
+      readonly manuscriptId: string;
+      readonly chapterId: string;
+      readonly chapterVersionId: string;
+    };
 
 /**
  * GenerationRun —— 每次章节生成作为一次运行记录。
@@ -555,20 +569,34 @@ export function parseGenerationRunResult(input: unknown): GenerationRunResult {
   const proposedTitle = parseTitle(obj.proposedTitle, 'proposedTitle');
   const proposedContent = parseContent(obj.proposedContent, 'proposedContent');
   const sourceType = parseGenerationSourceType(obj.sourceType);
-  if (typeof obj.committed !== 'boolean') {
+  if (obj.committed === true) {
+    const manuscriptId = parseStrictId(obj.manuscriptId, 'manuscriptId');
+    const chapterId = parseStrictId(obj.chapterId, 'chapterId');
+    const chapterVersionId = parseStrictId(obj.chapterVersionId, 'chapterVersionId');
+    return {
+      proposedTitle,
+      proposedContent,
+      sourceType,
+      committed: true,
+      manuscriptId,
+      chapterId,
+      chapterVersionId,
+    };
+  }
+  if (obj.committed !== false) {
     throw new Error('committed 必须是布尔值');
   }
-  const manuscriptId = parseNullableStrictId(obj.manuscriptId, 'manuscriptId');
-  const chapterId = parseNullableStrictId(obj.chapterId, 'chapterId');
-  const chapterVersionId = parseNullableStrictId(obj.chapterVersionId, 'chapterVersionId');
+  if (obj.manuscriptId !== null || obj.chapterId !== null || obj.chapterVersionId !== null) {
+    throw new Error('committed=false 时 manuscriptId/chapterId/chapterVersionId 必须为 null');
+  }
   return {
     proposedTitle,
     proposedContent,
     sourceType,
-    committed: obj.committed,
-    manuscriptId,
-    chapterId,
-    chapterVersionId,
+    committed: false,
+    manuscriptId: null,
+    chapterId: null,
+    chapterVersionId: null,
   };
 }
 
@@ -675,11 +703,6 @@ function parseStrictId(value: unknown, label: string): string {
   return requireStrictId(value, label);
 }
 
-function parseNullableStrictId(value: unknown, label: string): string | null {
-  if (value === null) return null;
-  return parseStrictId(value, label);
-}
-
 function parseStrictIdArray(value: unknown, label: string): ReadonlyArray<string> {
   if (!Array.isArray(value)) throw new Error(`${label} 必须是数组`);
   return value.map((item, index) => parseStrictId(item, `${label}[${index}]`));
@@ -774,10 +797,11 @@ function parseStringArray(value: unknown, label: string, max: number): string[] 
  * 严格 http(s) URL 校验（不依赖 `new URL`，domain 包 lib 无 DOM）。
  *
  * 校验范围（契约层）：http/https 协议、无首尾/内部空白、无 URL credentials、
- * 非空 host、合法端口、长度上限。
+ * 非空 host（含 `http://:80` 拒绝）、合法端口（1–65535）、IPv6 字面量、长度上限。
  * 不覆盖的安全边界（属于 research-engine Web Research V1 验收门禁，见
  * docs/development/idea-to-novel-migration-plan.md §3.7）：localhost/loopback/
- * 私网拒绝、重定向后重新校验、响应字节限制等 —— 由后续 fetch 端口实现承载。
+ * 私网拒绝、重定向后重新校验、DNS 重绑定、响应字节限制等 —— 由后续 fetch
+ * 端口实现承载。
  */
 function parseHttpUrl(value: unknown, label: string): string {
   if (typeof value !== 'string') throw new Error(`${label} 必须是字符串`);
@@ -802,18 +826,37 @@ function parseHttpUrl(value: unknown, label: string): string {
   if (authority.length === 0) throw new Error(`${label} 缺少 host`);
   if (authority.includes('@')) throw new Error(`${label} 不允许 URL credentials`);
   if (/[^a-zA-Z0-9.:\-[\]]/.test(authority)) throw new Error(`${label} host 含非法字符`);
+  if (!authority.startsWith('[') && (authority.includes('[') || authority.includes(']'))) {
+    throw new Error(`${label} host 含非法括号`);
+  }
   if (authority.startsWith('[')) {
-    // IPv6 字面量：[...]（[:port] 可选）
+    // IPv6 字面量：[host]（[:port] 可选）；空 `[]` 拒绝
     const close = authority.indexOf(']');
     if (close <= 1) throw new Error(`${label} 非法 IPv6 host`);
     const after = authority.slice(close + 1);
-    if (after !== '' && !/^:\d+$/.test(after)) throw new Error(`${label} 非法端口`);
+    if (after !== '') {
+      if (!/^:\d+$/.test(after)) throw new Error(`${label} 非法端口`);
+      assertPortInRange(after.slice(1), label);
+    }
     return value;
   }
   const colon = authority.lastIndexOf(':');
   if (colon !== -1) {
+    const host = authority.slice(0, colon);
+    if (host.length === 0) throw new Error(`${label} 缺少 host`);
+    if (host.includes(':')) throw new Error(`${label} 非 IPv6 字面量不允许未加括号的冒号`);
     const port = authority.slice(colon + 1);
-    if (port.length === 0 || !/^\d+$/.test(port)) throw new Error(`${label} 非法端口`);
+    if (port.length === 0) throw new Error(`${label} 非法端口`);
+    assertPortInRange(port, label);
   }
   return value;
+}
+
+/** 端口必须在 1–65535 合法范围 */
+function assertPortInRange(port: string, label: string): void {
+  if (!/^\d+$/.test(port)) throw new Error(`${label} 非法端口`);
+  const n = Number(port);
+  if (!Number.isSafeInteger(n) || n < 1 || n > 65_535) {
+    throw new Error(`${label} 端口必须在 1–65535 之间`);
+  }
 }
