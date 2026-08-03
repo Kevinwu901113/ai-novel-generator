@@ -1,5 +1,10 @@
 # 文章生成质量路线与进度总账
 
+> **Product direction has been reset by `/PRODUCT_DIRECTION.md`.**
+> Where this roadmap conflicts with that document,
+> `/PRODUCT_DIRECTION.md` is authoritative.
+> 产品方向已被仓库根目录 `/PRODUCT_DIRECTION.md` 重置为 Writing-first；本文档中的旧 Grill-first / Contract-first 主链不再是强制用户路径。
+
 > **文档定位**：本文件是文章生成质量方向的权威路线和进度记录。
 >
 > - `docs/development/roadmap.md` 主要记录工程交付里程碑（M0–M8 切片状态）。
@@ -24,7 +29,9 @@
 9. 保留用户控制权和完整修改历史；
 10. 最终导出一篇可读、完整、一致的真实作品。
 
-### 完整主链
+### 完整主链（Historical direction — superseded as a mandatory user flow）
+
+> 旧版 Grill-first 强制流程。依据 `/PRODUCT_DIRECTION.md`：写作是主流程，Grill-me 是可选辅助；该链不再作为强制用户路径，仅保留为历史参考。
 
 ```
 初始想法
@@ -215,6 +222,8 @@
 
 ### 主线 A：权威数据和用户护栏
 
+> 依据 `/PRODUCT_DIRECTION.md`：此链作为后台/内部实现保留，不再是产品默认用户流程。
+
 ```
 Grill → Contract → Outline Version → Manuscript Version
 → Proposal / Accept / Reject → Lock / User Protection
@@ -290,8 +299,8 @@ Evaluation Harness → Scene Planner → Draft Generator
 | Minimal Creation Contract Renderer   | ✅   | PR #20 / merge `1e9cb85`：最小 UI + 任务轮询 + 提案审核 + Accept/Reject + Current Version + Accept Refresh 修复；已合并进入 main                                                                                                                                                                                                   |
 | Writing Evaluation Lab               | ✅   | PR #18 / merge `4eab0c14`（固定题库 + 多策略对比 + 评分体系）                                                                                                                                                                                                                                                                      |
 | Real Generation Experiment Runner    | ✅   | PR #21 / merge `5829735d500559a15e4879cc4e22c863618294ed`：已合并进入 main；allowlisted provider 边界 + MiMo `mimo-v2.5-pro` 默认真实模型 + 目录级原子发布 + secret-store 抽取；v1 maxTokens=1024 → PARTIAL_FAILURE、Q1=false；v2 maxTokens=8192 → COMPLETE、3/3 SUCCEEDED、Q1=true；累计真实调用 7 次、自动重试 0；无人工质量结论 |
-| Minimal Manuscript / Chapter Version | 🟡   | design PR #23 已合并（merge `d8ad6e0…`）；MV1-A backend foundation 进行中（PR OPEN，未合并 → 保持 🟡；MV1-A 合并后降落为 🧱，仅 MV1-B 合并后才可标 ✅）                                                                                                                                                                            |
-| Scene Planner                        | ⬜   | 从章节目标到场景卡片                                                                                                                                                                                                                                                                                                               |
+| Minimal Manuscript / Chapter Version | 🧱   | design PR #23 已合并；MV1-A backend foundation 已合并（PR #24，merge `814f1ba…`）→ 降落为 🧱；PR #25（MV1-B Renderer）保持 Draft、不按产品完成合并，资产经 replacement PR 选择性复用                                                                                                                                               |
+| Scene Planner                        | ⏸    | DEFERRED until Writer-first Workspace and AI Writing Actions V1（原：从章节目标到场景卡片）                                                                                                                                                                                                                                        |
 | Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                                                                                                                                                                                                                                                                                                                  |
 | Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示）                                                                                                                                                                                                                                                                                                   |
 | Character Voice Critic               | ⬜   | 人物声音一致性和区分度                                                                                                                                                                                                                                                                                                             |
@@ -312,6 +321,8 @@ Evaluation Harness → Scene Planner → Draft Generator
 ---
 
 ## 五、调整后的执行优先级
+
+> 依据 `/PRODUCT_DIRECTION.md`：本表为旧计划。Scene Planner 已标 **DEFERRED until Writer-first Workspace and AI Writing Actions V1**；新的最高优先级为 **R1 Writer-first Workspace**。
 
 | 顺序 | 能力                                      | 前置依赖                      |
 | ---- | ----------------------------------------- | ----------------------------- |
@@ -369,7 +380,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 
 ### 当前产品描述
 
-**这是一个成熟的本地项目、需求澄清、任务执行和创作规格后端平台；项目已经具备受控真实生成实验、自动评测和 GQ2 人工 baseline 盲评能力。尚无真实稿件版本管理（Minimal Manuscript / Chapter Version 的 MV1-A backend foundation 进行中，尚未合并），尚无章节生成产品链路，尚无文章质量显著提升证据，仍不是完整小说生成器。**
+**这是一个成熟的本地项目、需求澄清、任务执行和创作规格后端平台；项目已经具备受控真实生成实验、自动评测和 GQ2 人工 baseline 盲评能力。Minimal Manuscript / Chapter Version 的 MV1-A backend foundation 已合并（PR #24）但仅属 🧱 基础；尚无章节生成产品链路，尚无文章质量显著提升证据，仍不是完整小说生成器。产品方向已按 `/PRODUCT_DIRECTION.md` 重置为 Writing-first，旧 Grill-first / Contract-first 主链不再是强制用户路径。**
 
 ---
 
@@ -378,14 +389,18 @@ Evaluation Harness → Scene Planner → Draft Generator
 | 字段                       | 值                                                                                                                                                                                                                         |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Last verified date         | 2026-08-03                                                                                                                                                                                                                 |
-| Verified main SHA          | `d8ad6e0bf34b1ddc5e5cc8048293945a59f77048`（PR #23 merge，标准 merge commit）                                                                                                                                              |
-| Active implementation      | Minimal Manuscript / Chapter Version MV1-A（Domain / Contracts / Database / Application）                                                                                                                                  |
-| Active PR                  | #24（`feat/manuscript-foundation-mv1a`，OPEN，未合并；合并后 MV1-A 能力降为 🧱）                                                                                                                                           |
-| Last merged capability     | Minimal Manuscript / Chapter Version Design（PR #23，merge `d8ad6e0bf34b1ddc5e5cc8048293945a59f77048`，architecture/design-only）                                                                                          |
-| Next product capability    | Minimal Manuscript / Chapter Version Renderer（MV1-B：IPC + 最小章节编辑器；MV1-A 仅 backend foundation，不构成产品能力）                                                                                                  |
+| Verified main SHA          | `814f1ba4266578e5d21a30e4cf560500e2cb0189`（PR #24 merge，标准 merge commit）                                                                                                                                              |
+| Active implementation      | R0 — Writing-first Product Reset（见 `/PRODUCT_DIRECTION.md`）                                                                                                                                                             |
+| Active PR                  | #25（`feat/manuscript-renderer-mv1b`，OPEN，Draft，未合并）                                                                                                                                                                |
+| Last merged capability     | Minimal Manuscript / Chapter Version MV1-A foundation（PR #24，merge `814f1ba…`，backend foundation，降落为 🧱）                                                                                                           |
+| Next product capability    | R1 — Writer-first Workspace（见 `/PRODUCT_DIRECTION.md`）                                                                                                                                                                  |
 | Next quality capability    | 新 pipeline 出现后执行 baseline vs new pipeline 比较盲评（每 case ≥2 候选、≥2 名独立评分者、增加 case 与题材覆盖、计算评分者间一致性）                                                                                     |
 | Current largest risk       | GQ2 baseline 盲评（baseline-one-shot-v1，3 case / 1 candidate / 1 rater）显示最弱维度为 AI 味与语言自然度（aiSmellAbsence 2.67 / languageNaturalness 3.33）；尚无任何 pipeline 被证明优于 baseline，无文章质量显著提升证据 |
 | Current quality hypothesis | 分场景生成 + 多维 critic + 定点修订，会显著优于单次整章生成（尚未验证）                                                                                                                                                    |
+
+---
+
+> **PR #25 decision**: PR #25（`feat/manuscript-renderer-mv1b`）remains Draft and will not be merged as product-complete. Its infrastructure and Renderer assets will be selectively reused through replacement PRs（Manuscript Transport Foundation + Writer-first Workspace）。
 
 ---
 

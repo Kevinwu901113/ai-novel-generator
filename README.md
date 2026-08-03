@@ -2,6 +2,10 @@
 
 中文优先、本地优先、BYOK 的桌面 AI 小说创作代理，主要面向成人向同人网文创作。
 
+## 产品方向
+
+已确认的产品方向和技术方向见 [`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md)。
+
 ## 技术栈
 
 - **运行时**：Electron 43.2.0 + Node.js 24
