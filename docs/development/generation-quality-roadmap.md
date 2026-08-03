@@ -10,7 +10,7 @@
 > - `docs/development/roadmap.md` 主要记录工程交付里程碑（M0–M8 切片状态）。
 > - 本文件记录产品最终价值、生成质量研究、长篇能力和实际进展。
 > - Contract、Version、SQLite、IPC、Task 等是护栏和支撑层，不是产品最终目标。
-> - AI 只生成 proposal、用户显式接受等原则仍必须保持。
+> - AI 不得静默覆盖用户权威内容；具体流程可采用预览、草稿、插入或替换；产品 1.0 不强制逐字段 accept 或契约审批门禁。
 
 ---
 
@@ -31,7 +31,7 @@
 
 ### 完整主链（Historical direction — superseded as a mandatory user flow）
 
-> 旧版 Grill-first 强制流程。依据 `/PRODUCT_DIRECTION.md`：写作是主流程，Grill-me 是可选辅助；该链不再作为强制用户路径，仅保留为历史参考。
+> 旧版 Grill-first 强制流程，仅作为历史记录；当前主流程以 Idea-to-Novel 产品 1.0 主链为准。Grill-me 重构为 Idea Intake / 创作访谈，是 1.0 核心资产。
 
 ```
 初始想法
@@ -318,7 +318,7 @@ Evaluation Harness → Scene Planner → Draft Generator
 | Writing Evaluation Lab               | ✅   | PR #18 / merge `4eab0c14`（固定题库 + 多策略对比 + 评分体系）                                                                                                                                                                                                                                                                      |
 | Real Generation Experiment Runner    | ✅   | PR #21 / merge `5829735d500559a15e4879cc4e22c863618294ed`：已合并进入 main；allowlisted provider 边界 + MiMo `mimo-v2.5-pro` 默认真实模型 + 目录级原子发布 + secret-store 抽取；v1 maxTokens=1024 → PARTIAL_FAILURE、Q1=false；v2 maxTokens=8192 → COMPLETE、3/3 SUCCEEDED、Q1=true；累计真实调用 7 次、自动重试 0；无人工质量结论 |
 | Minimal Manuscript / Chapter Version | 🧱   | design PR #23 已合并；MV1-A backend foundation 已合并（PR #24，merge `814f1ba…`）→ 降落为 🧱；PR #25（MV1-B Renderer）保持 Draft、不按产品完成合并，资产经 replacement PR 选择性复用                                                                                                                                               |
-| Scene Planner                        | ⏸    | DEFERRED until Writer-first Workspace and AI Writing Actions V1（原：从章节目标到场景卡片）                                                                                                                                                                                                                                        |
+| Scene Planner                        | ⏸    | R4 Chapter Generation V1 的内部生成能力；当前不作为独立复杂产品页面实施（原：从章节目标到场景卡片）                                                                                                                                                                                                                                |
 | Chapter Draft Pipeline               | ⬜   | 分场景生成 + 组合                                                                                                                                                                                                                                                                                                                  |
 | Structural Critic                    | ⬜   | 结构审查（情节、节奏、信息揭示）                                                                                                                                                                                                                                                                                                   |
 | Character Voice Critic               | ⬜   | 人物声音一致性和区分度                                                                                                                                                                                                                                                                                                             |
