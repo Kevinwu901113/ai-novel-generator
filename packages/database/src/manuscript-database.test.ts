@@ -1052,7 +1052,7 @@ describe('migration v7', () => {
     }
   }
 
-  it('v6 → v7：既有数据保留，新增稿件表可用', () => {
+  it('v6 → 最新（含稿件与 Graph run）：既有数据保留，新表可用', () => {
     buildV6();
     const db = new ProjectDatabase(dbPath);
     try {
@@ -1061,7 +1061,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(7);
+      expect(version).toBe(8);
       // 既有 v6 数据保留
       const task = db.getTaskRepository().getById('t1');
       expect(task?.taskType).toBe('CREATION_CONTRACT_DRAFT');
@@ -1078,7 +1078,7 @@ describe('migration v7', () => {
     }
   });
 
-  it('空新项目直接升到 v7', () => {
+  it('空新项目直接升到最新版本', () => {
     const db = new ProjectDatabase(dbPath);
     try {
       const version = (
@@ -1086,7 +1086,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(7);
+      expect(version).toBe(8);
     } finally {
       db.close();
     }
@@ -1102,7 +1102,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(7);
+      expect(version).toBe(8);
       const triggers = (
         db2.database
           .prepare(

@@ -205,6 +205,14 @@ export interface ProjectDatabaseManager {
   getChapterRepository(): ChapterRepository;
   /** 获取章节版本仓库 */
   getChapterVersionRepository(): ChapterVersionRepository;
+  /** 获取 Graph run 仓库（GE-1） */
+  getGraphRunRepository(): import('./graph-run-repositories.js').GraphRunRepositoryImpl;
+  /** 获取 Graph run 幂等命令日志仓库（GE-1） */
+  getGraphRunCommandLogRepository(): import('./graph-run-repositories.js').GraphRunCommandLogRepositoryImpl;
+  /** 获取 Graph run 事务端口（GE-1，BEGIN IMMEDIATE + CAS） */
+  getGraphRunTransaction(): import('./graph-run-transaction.js').GraphRunTransactionPortImpl;
+  /** 获取 Idea Intake 权威 answer 存储端口（GE-1，grill_answers） */
+  getIdeaIntakeAnswerPort(): import('./graph-run-repositories.js').IdeaIntakeAnswerPortImpl;
   /** 执行事务（BEGIN 延迟写锁，适合先读后写路径） */
   transaction<T>(fn: () => T): T;
   /** 执行事务（BEGIN IMMEDIATE，执行前立即获得写锁，适合最终原子提交） */

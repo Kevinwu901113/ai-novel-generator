@@ -43,6 +43,11 @@ import {
   isValidUpdateContractByUserInput,
   isValidLockContractFieldInput,
   isValidUnlockContractFieldInput,
+  isValidCreateProjectRunInput,
+  isValidCreateChapterRunInput,
+  isValidGetRunProgressInput,
+  isValidApplyHumanDecisionInput,
+  isValidListRunsInput,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -61,6 +66,8 @@ import {
   type ContractVersionSummary,
   type ProposalPublicData,
   type RequestContractDraftResult,
+  type GraphProgressProjectionDto,
+  type GraphRunSummaryDto,
 } from '@ai-novel/contracts';
 import { mark } from './startup-timeline.js';
 import { createMainWindow, getMainWindow } from './window-manager.js';
@@ -775,6 +782,83 @@ ipcMain.handle(
       command: 'contract.unlockField',
       payload: input,
     })) as ContractVersionPublicData;
+  },
+);
+
+// ── Graph Run（GE-1）──────────────────────────────────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.GRAPH_CREATE_PROJECT_RUN,
+  async (_event, input: unknown): Promise<GraphProgressProjectionDto> => {
+    if (!isValidCreateProjectRunInput(input)) {
+      throw Object.assign(new Error('无效的创建 Project run 输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'graph.createProjectRun',
+      payload: input,
+    })) as GraphProgressProjectionDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRAPH_CREATE_CHAPTER_RUN,
+  async (_event, input: unknown): Promise<GraphProgressProjectionDto> => {
+    if (!isValidCreateChapterRunInput(input)) {
+      throw Object.assign(new Error('无效的创建 Chapter run 输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'graph.createChapterRun',
+      payload: input,
+    })) as GraphProgressProjectionDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRAPH_GET_RUN_PROGRESS,
+  async (_event, input: unknown): Promise<GraphProgressProjectionDto> => {
+    if (!isValidGetRunProgressInput(input)) {
+      throw Object.assign(new Error('无效的获取 run 进度输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'graph.getRunProgress',
+      payload: input,
+    })) as GraphProgressProjectionDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRAPH_APPLY_HUMAN_DECISION,
+  async (_event, input: unknown): Promise<GraphProgressProjectionDto> => {
+    if (!isValidApplyHumanDecisionInput(input)) {
+      throw Object.assign(new Error('无效的人工决策输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'graph.applyHumanDecision',
+      payload: input,
+    })) as GraphProgressProjectionDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.GRAPH_LIST_RUNS,
+  async (_event, input: unknown): Promise<ReadonlyArray<GraphRunSummaryDto>> => {
+    if (!isValidListRunsInput(input)) {
+      throw Object.assign(new Error('无效的列出 run 输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'graph.listRuns',
+      payload: input,
+    })) as ReadonlyArray<GraphRunSummaryDto>;
   },
 );
 

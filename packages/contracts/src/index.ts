@@ -10,6 +10,13 @@
  * - 不暴露堆栈信息给 Renderer
  */
 
+import { isBoundedTrimmedId, hasRequiredExactKeys } from './idea-to-novel-graph.js';
+import type {
+  GraphProgressProjectionDto,
+  GraphRunKind,
+  RunTerminalStatusDto,
+} from './idea-to-novel-graph.js';
+
 // ── 错误码 ────────────────────────────────────────────────────────
 
 /** 应用错误码 */
@@ -70,6 +77,12 @@ export type ErrorCode =
   | 'MANUSCRIPT_POSITION_OVERFLOW'
   | 'CHAPTER_NOT_FOUND'
   | 'CHAPTER_VERSION_NOT_FOUND'
+  | 'GRAPH_RUN_NOT_FOUND'
+  | 'GRAPH_RUN_VERSION_CONFLICT'
+  | 'GRAPH_RUN_STATE_CONFLICT'
+  | 'GRAPH_RUN_VALIDATION_ERROR'
+  | 'GRAPH_RUN_IDEMPOTENCY_CONFLICT'
+  | 'GRAPH_RUN_INTERRUPTED'
   | 'INTERNAL_ERROR';
 
 /** 结构化应用错误 —— 返回给 Renderer，不含堆栈和绝对路径 */
@@ -255,6 +268,11 @@ export const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  GRAPH_CREATE_PROJECT_RUN: 'ipc:graph-create-project-run',
+  GRAPH_CREATE_CHAPTER_RUN: 'ipc:graph-create-chapter-run',
+  GRAPH_GET_RUN_PROGRESS: 'ipc:graph-get-run-progress',
+  GRAPH_APPLY_HUMAN_DECISION: 'ipc:graph-apply-human-decision',
+  GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -354,6 +372,232 @@ export interface ContractAPI {
   unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData>;
 }
 
+// ── Graph Run 命令 DTO（GE-1，Renderer 面 5 通道）────────────────
+
+/** 创建 Project run 命令输入 */
+export interface CreateProjectRunInputDto {
+  readonly projectId: string;
+  readonly idempotencyKey: string;
+}
+
+export function isValidCreateProjectRunInput(value: unknown): value is CreateProjectRunInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'idempotencyKey'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.idempotencyKey);
+}
+
+/** 创建 Chapter run 命令输入 */
+export interface CreateChapterRunInputDto {
+  readonly projectId: string;
+  readonly creationSpecVersionId: string;
+  readonly researchBundleId: string | null;
+  readonly storyBlueprintId: string;
+  readonly blueprintChapterId: string;
+  readonly idempotencyKey: string;
+}
+
+export function isValidCreateChapterRunInput(value: unknown): value is CreateChapterRunInputDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'projectId',
+      'creationSpecVersionId',
+      'researchBundleId',
+      'storyBlueprintId',
+      'blueprintChapterId',
+      'idempotencyKey',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    isBoundedTrimmedId(obj.projectId) &&
+    isBoundedTrimmedId(obj.creationSpecVersionId) &&
+    (obj.researchBundleId === null || isBoundedTrimmedId(obj.researchBundleId)) &&
+    isBoundedTrimmedId(obj.storyBlueprintId) &&
+    isBoundedTrimmedId(obj.blueprintChapterId) &&
+    isBoundedTrimmedId(obj.idempotencyKey)
+  );
+}
+
+/** 获取 run 进度命令输入 */
+export interface GetRunProgressInputDto {
+  readonly projectId: string;
+  readonly runId: string;
+}
+
+export function isValidGetRunProgressInput(value: unknown): value is GetRunProgressInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'runId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.runId);
+}
+
+/** 人工决策命令输入（闭合判别联合；intake answer 携带原始回答，worker 先落库再推进） */
+export type ApplyHumanDecisionInputDto =
+  | {
+      readonly kind: 'intake_answer';
+      readonly projectId: string;
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly sessionId: string;
+      readonly questionId: string;
+      readonly text: string;
+      readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: 'intake_skip';
+      readonly projectId: string;
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: 'intake_finish';
+      readonly projectId: string;
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly idempotencyKey: string;
+    }
+  | {
+      readonly kind: 'gate' | 'escalation';
+      readonly projectId: string;
+      readonly runId: string;
+      readonly nodeId: string;
+      readonly outcome: string;
+      readonly idempotencyKey: string;
+    };
+
+export function isValidApplyHumanDecisionInput(
+  value: unknown,
+): value is ApplyHumanDecisionInputDto {
+  if (value === null || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  if (typeof obj.kind !== 'string') return false;
+  if (typeof obj.projectId !== 'string' || !isBoundedTrimmedId(obj.projectId)) return false;
+  if (typeof obj.runId !== 'string' || !isBoundedTrimmedId(obj.runId)) return false;
+  if (typeof obj.nodeId !== 'string' || !isBoundedTrimmedId(obj.nodeId)) return false;
+  if (typeof obj.idempotencyKey !== 'string' || !isBoundedTrimmedId(obj.idempotencyKey)) {
+    return false;
+  }
+  switch (obj.kind) {
+    case 'intake_answer':
+      return (
+        typeof obj.sessionId === 'string' &&
+        isBoundedTrimmedId(obj.sessionId) &&
+        typeof obj.questionId === 'string' &&
+        isBoundedTrimmedId(obj.questionId) &&
+        typeof obj.text === 'string'
+      );
+    case 'intake_skip':
+    case 'intake_finish':
+      return hasRequiredExactKeys(value, [
+        'kind',
+        'projectId',
+        'runId',
+        'nodeId',
+        'idempotencyKey',
+      ]);
+    case 'gate':
+    case 'escalation':
+      return (
+        typeof obj.outcome === 'string' &&
+        hasRequiredExactKeys(value, [
+          'kind',
+          'projectId',
+          'runId',
+          'nodeId',
+          'outcome',
+          'idempotencyKey',
+        ])
+      );
+    default:
+      return false;
+  }
+}
+
+/** 列出 run 命令输入 */
+export interface ListRunsInputDto {
+  readonly projectId: string;
+}
+
+export function isValidListRunsInput(value: unknown): value is ListRunsInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId);
+}
+
+// ── Graph Run 执行器面命令输入（GE-2 起 worker 内部用；GE-1 校验）──
+
+/** advanceNode 命令输入（执行器成功产物） */
+export interface AdvanceNodeInputDto {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly outcome?: { readonly condition: string; readonly value: string };
+  readonly artifactRef?: { readonly kind: string; readonly artifactId: string };
+  readonly idempotencyKey: string;
+}
+
+export function isValidAdvanceNodeInput(value: unknown): value is AdvanceNodeInputDto {
+  if (value === null || typeof value !== 'object') return false;
+  const obj = value as Record<string, unknown>;
+  if (!isBoundedTrimmedId(obj.projectId)) return false;
+  if (!isBoundedTrimmedId(obj.runId)) return false;
+  if (!isBoundedTrimmedId(obj.nodeId)) return false;
+  if (!isBoundedTrimmedId(obj.idempotencyKey)) return false;
+  if (obj.outcome !== undefined) {
+    if (obj.outcome === null || typeof obj.outcome !== 'object') return false;
+    const oc = obj.outcome as Record<string, unknown>;
+    if (typeof oc.condition !== 'string' || typeof oc.value !== 'string') return false;
+  }
+  if (obj.artifactRef !== undefined) {
+    if (obj.artifactRef === null || typeof obj.artifactRef !== 'object') return false;
+    const ar = obj.artifactRef as Record<string, unknown>;
+    if (typeof ar.kind !== 'string' || typeof ar.artifactId !== 'string') return false;
+  }
+  return true;
+}
+
+/** failNode / requestHumanDecision 命令输入 */
+export interface FailNodeInputDto {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly nodeId: string;
+  readonly idempotencyKey: string;
+}
+
+export function isValidFailNodeInput(value: unknown): value is FailNodeInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'runId', 'nodeId', 'idempotencyKey'])) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    isBoundedTrimmedId(obj.projectId) &&
+    isBoundedTrimmedId(obj.runId) &&
+    isBoundedTrimmedId(obj.nodeId) &&
+    isBoundedTrimmedId(obj.idempotencyKey)
+  );
+}
+
+/** run 摘要（listRuns 返回值） */
+export interface GraphRunSummaryDto {
+  readonly runId: string;
+  readonly graphId: string;
+  readonly graphVersion: string;
+  readonly kind: GraphRunKind;
+  readonly terminalStatus: RunTerminalStatusDto | null;
+  readonly createdAt: string;
+}
+
+/** Graph Run API —— 通过 contextBridge 暴露给 Renderer（GE-1） */
+export interface GraphAPI {
+  createProjectRun(input: CreateProjectRunInputDto): Promise<GraphProgressProjectionDto>;
+  createChapterRun(input: CreateChapterRunInputDto): Promise<GraphProgressProjectionDto>;
+  getRunProgress(input: GetRunProgressInputDto): Promise<GraphProgressProjectionDto>;
+  applyHumanDecision(input: ApplyHumanDecisionInputDto): Promise<GraphProgressProjectionDto>;
+  listRuns(input: ListRunsInputDto): Promise<ReadonlyArray<GraphRunSummaryDto>>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -364,6 +608,7 @@ export interface DesktopAPI {
   tasks: TasksAPI;
   grill: GrillAPI;
   contract: ContractAPI;
+  graph: GraphAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -454,6 +699,12 @@ export function isAppError(data: unknown): data is AppError {
     'MANUSCRIPT_POSITION_OVERFLOW',
     'CHAPTER_NOT_FOUND',
     'CHAPTER_VERSION_NOT_FOUND',
+    'GRAPH_RUN_NOT_FOUND',
+    'GRAPH_RUN_VERSION_CONFLICT',
+    'GRAPH_RUN_STATE_CONFLICT',
+    'GRAPH_RUN_VALIDATION_ERROR',
+    'GRAPH_RUN_IDEMPOTENCY_CONFLICT',
+    'GRAPH_RUN_INTERRUPTED',
     'INTERNAL_ERROR',
   ]);
   return (
