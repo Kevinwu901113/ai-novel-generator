@@ -263,7 +263,7 @@ describe('Project 全链（无需调研）', () => {
 });
 
 describe('Idea Intake 凭证制语义', () => {
-  it('answer 必须带非空、trimmed 的 answerId', () => {
+  it('answer 必须带合法 AnswerReceiptId：空 / 首尾空白 / 129 字符拒绝，128 字符通过', () => {
     let s = intakeQuestionWaiting();
     // 空 answerId 拒绝
     expect(() =>
@@ -274,6 +274,7 @@ describe('Idea Intake 凭证制语义', () => {
         answerId: '' as AnswerReceiptId,
       }),
     ).toThrow();
+    // 首尾空白 answerId 拒绝
     expect(() =>
       applyHumanDecision(PG, s, {
         nodeId: COLLECT_ANSWER,
@@ -282,12 +283,21 @@ describe('Idea Intake 凭证制语义', () => {
         answerId: '   ' as AnswerReceiptId,
       }),
     ).toThrow();
-    // 合法 receipt 推进，graph 不保存回答正文
+    // 129 字符（超上限）answerId 拒绝
+    expect(() =>
+      applyHumanDecision(PG, s, {
+        nodeId: COLLECT_ANSWER,
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: 'x'.repeat(129) as AnswerReceiptId,
+      }),
+    ).toThrow();
+    // 128 字符（恰好上限）receipt 通过；graph 不保存回答正文
     s = applyHumanDecision(PG, s, {
       nodeId: COLLECT_ANSWER,
       decisionType: 'intake_response',
       action: 'answer',
-      answerId: createAnswerReceiptId('answer-1'),
+      answerId: 'x'.repeat(128) as AnswerReceiptId,
     });
     expect(frontierOf(s)).toEqual([SPEC_EXTRACT]);
   });
@@ -823,6 +833,13 @@ describe('Idea Intake 原子事务 receipt 契约', () => {
     expect(() => createAnswerReceiptId('x'.repeat(200))).toThrow(); // 超长拒绝
     expect(isAnswerReceiptId(42)).toBe(false);
     expect(isAnswerReceiptId('  x  ')).toBe(false);
+  });
+
+  it('createAnswerReceiptId 长度边界：129 字符拒绝、128 字符通过', () => {
+    expect(isAnswerReceiptId('x'.repeat(129))).toBe(false);
+    expect(() => createAnswerReceiptId('x'.repeat(129))).toThrow();
+    expect(isAnswerReceiptId('x'.repeat(128))).toBe(true);
+    expect(createAnswerReceiptId('x'.repeat(128))).toBe('x'.repeat(128));
   });
 
   it('graph 只记录 action，绝不保存回答正文或 receipt 本身', () => {

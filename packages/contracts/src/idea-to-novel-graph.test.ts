@@ -70,6 +70,57 @@ describe('Graph identity DTO', () => {
     );
     expect(isValidGraphIdentityDto(null)).toBe(false);
   });
+
+  it('graphId / graphVersion 必须为 trimmed bounded ID', () => {
+    expect(
+      isValidGraphIdentityDto({
+        graphId: '  idea-to-novel-project  ',
+        graphVersion: 'v1',
+        kind: 'project',
+      }),
+    ).toBe(false); // 首尾空白 graphId 拒绝
+    expect(
+      isValidGraphIdentityDto({
+        graphId: 'idea-to-novel-project',
+        graphVersion: 'v1',
+        kind: 'project',
+      }),
+    ).toBe(true);
+    expect(
+      isValidGraphIdentityDto({
+        graphId: 'x'.repeat(129),
+        graphVersion: 'v1',
+        kind: 'project',
+      }),
+    ).toBe(false); // 超上限拒绝
+    expect(
+      isValidGraphIdentityDto({
+        graphId: 'idea-to-novel-project',
+        graphVersion: 'x'.repeat(129),
+        kind: 'project',
+      }),
+    ).toBe(false); // graphVersion 超上限拒绝
+  });
+
+  it('GraphNodeProjectionDto.nodeId 必须为 trimmed bounded ID', () => {
+    expect(
+      isValidGraphNodeProjectionDto({
+        nodeId: '  DRAFT  ',
+        stage: 'generate',
+        status: 'active',
+      }),
+    ).toBe(false); // 首尾空白拒绝
+    expect(
+      isValidGraphNodeProjectionDto({
+        nodeId: 'x'.repeat(129),
+        stage: 'generate',
+        status: 'active',
+      }),
+    ).toBe(false); // 超上限拒绝
+    expect(
+      isValidGraphNodeProjectionDto({ nodeId: 'DRAFT', stage: 'generate', status: 'active' }),
+    ).toBe(true);
+  });
 });
 
 describe('进度投影 DTO', () => {
@@ -91,6 +142,43 @@ describe('进度投影 DTO', () => {
     expect(isValidGraphProgressProjectionDto(progress)).toBe(true);
     expect(isValidGraphProgressProjectionDto({ ...progress, possibleNextNodes: [1] })).toBe(false);
   });
+
+  it('拒绝重复 active node / 重复 possible next node', () => {
+    const dupActive = {
+      activeNodes: [
+        { nodeId: 'DRAFT', stage: 'generate', status: 'active' },
+        { nodeId: 'DRAFT', stage: 'generate', status: 'active' },
+      ],
+      possibleNextNodes: ['CRITIQUE_JOIN'],
+    };
+    expect(isValidGraphProgressProjectionDto(dupActive)).toBe(false);
+
+    const dupNext = {
+      activeNodes: [{ nodeId: 'DRAFT', stage: 'generate', status: 'active' }],
+      possibleNextNodes: ['CRITIQUE_JOIN', 'CRITIQUE_JOIN'],
+    };
+    expect(isValidGraphProgressProjectionDto(dupNext)).toBe(false);
+  });
+
+  it('possibleNextNodes / nodeId 必须为 trimmed bounded ID', () => {
+    const untrimmedNext = {
+      activeNodes: [],
+      possibleNextNodes: ['  CRITIQUE_JOIN  '],
+    };
+    expect(isValidGraphProgressProjectionDto(untrimmedNext)).toBe(false);
+
+    const untrimmedActive = {
+      activeNodes: [{ nodeId: '  DRAFT  ', stage: 'generate', status: 'active' }],
+      possibleNextNodes: [],
+    };
+    expect(isValidGraphProgressProjectionDto(untrimmedActive)).toBe(false);
+
+    const overlongNext = {
+      activeNodes: [],
+      possibleNextNodes: ['x'.repeat(129)],
+    };
+    expect(isValidGraphProgressProjectionDto(overlongNext)).toBe(false);
+  });
 });
 
 describe('人工决策公共 input DTO', () => {
@@ -104,6 +192,30 @@ describe('人工决策公共 input DTO', () => {
     expect(isValidHumanDecisionInputDto(valid)).toBe(true);
     expect(isValidHumanDecisionInputDto({ ...valid, answerId: '' })).toBe(false);
     expect(isValidHumanDecisionInputDto({ ...valid, answerId: '  x  ' })).toBe(false);
+  });
+
+  it('answerId 规则与 Domain AnswerReceiptId 一致：129 拒绝、128 通过、首尾空白拒绝', () => {
+    const valid: HumanDecisionInputDto = {
+      nodeId: 'COLLECT_ANSWER',
+      decisionType: 'intake_response',
+      action: 'answer',
+      answerId: 'r-1',
+    };
+    expect(isValidHumanDecisionInputDto({ ...valid, answerId: 'x'.repeat(129) })).toBe(false); // 超上限
+    expect(isValidHumanDecisionInputDto({ ...valid, answerId: 'x'.repeat(128) })).toBe(true); // 恰好上限
+    expect(isValidHumanDecisionInputDto({ ...valid, answerId: '  r-1  ' })).toBe(false); // 首尾空白
+  });
+
+  it('nodeId 必须为 trimmed bounded ID：首尾空白 / 超长拒绝', () => {
+    const valid: HumanDecisionInputDto = {
+      nodeId: 'COLLECT_ANSWER',
+      decisionType: 'intake_response',
+      action: 'answer',
+      answerId: 'r-1',
+    };
+    expect(isValidHumanDecisionInputDto({ ...valid, nodeId: '  DRAFT  ' })).toBe(false);
+    expect(isValidHumanDecisionInputDto({ ...valid, nodeId: 'x'.repeat(129) })).toBe(false);
+    expect(isValidHumanDecisionInputDto({ ...valid, nodeId: 'COLLECT_ANSWER' })).toBe(true);
   });
 
   it('skip / finish 不需要 answerId', () => {

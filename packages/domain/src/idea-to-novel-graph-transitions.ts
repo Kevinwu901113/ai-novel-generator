@@ -36,6 +36,7 @@ import {
   BUDGET_CONDITION_NAMES,
   budgetKeyForCondition,
   getLoopBudgetMax,
+  isAnswerReceiptId,
   isGraphConditionOutcome,
   isTerminalKind,
   type AnswerReceiptId,
@@ -148,10 +149,6 @@ export function assertValidTransitionState(
 
 function isBudgetConditionName(value: string): value is LoopBudgetConditionName {
   return BUDGET_CONDITION_NAMES.has(value as LoopBudgetConditionName);
-}
-
-function isTrimmedNonEmpty(value: string): boolean {
-  return value.trim().length > 0;
 }
 
 /**
@@ -727,10 +724,11 @@ export function applyHumanDecision<S extends AnyIdeaToNovelRunState>(
   let opts: ApplyNodeSuccessOptions = {};
   if (decision.decisionType === 'intake_response') {
     // Idea Intake 回答：graph 只记录持久化凭证语义，不记录回答正文。
-    // answer 必须带非空、trimmed 的 answerId（由 Runtime 先写入权威存储取得）；
-    // 拒绝空 answer / 未持久化的原始文本作为完成证据。
-    if (decision.action === 'answer' && !isTrimmedNonEmpty(decision.answerId)) {
-      throw new Error('intake answer 必须带非空、trimmed 的持久化 answerId');
+    // answer 必须带合法 AnswerReceiptId（非空、trimmed、长度 ≤128），由权威
+    // isAnswerReceiptId 在边界校验（与 Contracts 的 answerId 规则完全一致）；
+    // 拒绝空 answer / 首尾空白 / 超长 / 未持久化的原始文本作为完成证据。
+    if (decision.action === 'answer' && !isAnswerReceiptId(decision.answerId)) {
+      throw new Error('intake answer 必须带合法的持久化 answerId（AnswerReceiptId）');
     }
     const intakeAction: IntakeAction = decision.action;
     opts = { outcome: { condition: 'intake_action', value: intakeAction } };

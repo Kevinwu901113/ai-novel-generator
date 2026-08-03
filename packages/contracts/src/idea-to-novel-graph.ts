@@ -52,9 +52,24 @@ function hasOwn(obj: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(obj, key);
 }
 
-/** 非空、trimmed（无首尾空白）字符串 */
-function isNonEmptyTrimmed(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && value === value.trim();
+/** 公共 ID 长度上限（与 Domain `AnswerReceiptId` 的 128 上限一致） */
+const MAX_PUBLIC_ID_LENGTH = 128;
+
+/**
+ * 统一的 bounded trimmed ID helper。
+ *
+ * 应用于所有跨进程公共 ID（graphId / graphVersion / nodeId / possibleNextNodes /
+ * HumanDecisionInputDto.nodeId / answerId）：必须是字符串、非空、trimmed（无首尾
+ * 空白）、长度 ≤ `MAX_PUBLIC_ID_LENGTH`。answerId 的规则与 Domain `AnswerReceiptId`
+ * （`isAnswerReceiptId`）完全一致 —— 非空 + trimmed + ≤128。
+ */
+function isBoundedTrimmedId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value === value.trim() &&
+    value.length <= MAX_PUBLIC_ID_LENGTH
+  );
 }
 
 /**
@@ -76,8 +91,8 @@ function hasRequiredExactKeys(
 export function isValidGraphIdentityDto(value: unknown): value is GraphIdentityDto {
   if (!hasRequiredExactKeys(value, ['graphId', 'graphVersion', 'kind'])) return false;
   return (
-    isNonEmptyTrimmed(value.graphId) &&
-    isNonEmptyTrimmed(value.graphVersion) &&
+    isBoundedTrimmedId(value.graphId) &&
+    isBoundedTrimmedId(value.graphVersion) &&
     isValidGraphRunKind(value.kind)
   );
 }
@@ -128,7 +143,7 @@ export interface GraphNodeProjectionDto {
 export function isValidGraphNodeProjectionDto(value: unknown): value is GraphNodeProjectionDto {
   if (!hasRequiredExactKeys(value, ['nodeId', 'stage', 'status'])) return false;
   return (
-    isNonEmptyTrimmed(value.nodeId) &&
+    isBoundedTrimmedId(value.nodeId) &&
     isValidWorkflowStage(value.stage) &&
     isValidGraphNodeStatusDto(value.status)
   );
@@ -146,11 +161,19 @@ export function isValidGraphProgressProjectionDto(
   if (!hasRequiredExactKeys(value, ['activeNodes', 'possibleNextNodes'])) return false;
   if (!Array.isArray(value.activeNodes)) return false;
   if (!Array.isArray(value.possibleNextNodes)) return false;
+  // activeNodes：每个投影合法，且 nodeId 不重复
+  const activeIds = new Set<string>();
   for (const node of value.activeNodes) {
     if (!isValidGraphNodeProjectionDto(node)) return false;
+    if (activeIds.has(node.nodeId)) return false; // 重复 active node 拒绝
+    activeIds.add(node.nodeId);
   }
+  // possibleNextNodes：每个都是 trimmed bounded ID，且不重复
+  const nextIds = new Set<string>();
   for (const id of value.possibleNextNodes) {
-    if (typeof id !== 'string' || id.trim().length === 0) return false;
+    if (!isBoundedTrimmedId(id)) return false;
+    if (nextIds.has(id)) return false; // 重复 possible next node 拒绝
+    nextIds.add(id);
   }
   return true;
 }
@@ -215,12 +238,13 @@ export type HumanDecisionInputDto =
 
 function isIntakeHumanDecisionDto(value: Record<string, unknown>): value is IntakeHumanDecisionDto {
   if (value.decisionType !== 'intake_response') return false;
-  if (!isNonEmptyTrimmed(value.nodeId)) return false;
+  if (!isBoundedTrimmedId(value.nodeId)) return false;
   if (value.action === 'answer') {
-    // answer 必须带非空、trimmed 的 answerId（receipt），且无额外键
+    // answer 必须带合法 answerId（receipt：非空、trimmed、≤128），且无额外键；
+    // 规则与 Domain `AnswerReceiptId` 完全一致
     return (
       hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'action', 'answerId']) &&
-      isNonEmptyTrimmed(value.answerId)
+      isBoundedTrimmedId(value.answerId)
     );
   }
   if (value.action === 'skip' || value.action === 'finish') {
@@ -244,7 +268,7 @@ const ESCALATION_OUTCOMES: ReadonlySet<string> = new Set<EscalationDecisionOutco
 export function isValidHumanDecisionInputDto(value: unknown): value is HumanDecisionInputDto {
   if (!isPlainObject(value)) return false;
   if (isIntakeHumanDecisionDto(value)) return true;
-  if (!isNonEmptyTrimmed(value.nodeId)) return false;
+  if (!isBoundedTrimmedId(value.nodeId)) return false;
   if (value.decisionType === 'blueprint_gate') {
     return (
       hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'outcome']) &&
