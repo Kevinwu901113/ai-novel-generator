@@ -3153,3 +3153,113 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
+
+/* ── 产品工作区骨架 ───────────────────────────────────────────── */
+
+.product-workflow {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+}
+
+.product-workflow-heading {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.product-workflow-hint {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.product-stage-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.product-stage-item {
+  display: flex;
+}
+
+.product-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  padding: 16px;
+  background-color: var(--color-bg-panel);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.product-page-active {
+  border-color: var(--color-primary);
+}
+
+.product-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.product-page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.product-page-state {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.product-page-active .product-page-state {
+  color: var(--color-primary);
+}
+
+.product-page-description {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.product-page-entry {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.product-page-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.product-page-action {
+  align-self: flex-start;
+  padding: 6px 16px;
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.product-page-action:hover:not(:disabled) {
+  background-color: var(--color-primary-hover);
+}
+
+.product-page-action:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

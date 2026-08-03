@@ -8,16 +8,15 @@ import type {
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
-import { GrillWorkbench } from './grill/GrillWorkbench';
-import { TaskCenter } from './task-center/TaskCenter';
-import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
 import {
-  ProjectListRegion,
-  CreateProjectRegion,
-  ProjectStatusRegion,
-  ProviderRegion,
-} from './regions';
+  AppToolbar,
+  ProjectSidebar,
+  ProjectSelectionShell,
+  ProjectWorkspaceShell,
+  SystemStatusPanel,
+  AppStatusBar,
+} from './shell';
 
 export function App() {
   const [panelState, setPanelState] = useState<PanelState>(INITIAL_PANEL_STATE);
@@ -231,50 +230,13 @@ export function App() {
     }
   }, [loadProviderState]);
 
-  const isDataServiceReady = dataServiceStatus === 'ready';
-  const isDataServiceStarting = dataServiceStatus === 'starting';
-
   return (
     <div className="app">
-      {/* 顶部工具栏 */}
-      <header className="toolbar" role="banner">
-        <nav className="toolbar-left" aria-label="面板控制">
-          <button
-            className="toolbar-btn"
-            onClick={() => handleTogglePanel('left')}
-            aria-label={panelState.left ? '收起项目列表' : '展开项目列表'}
-            aria-expanded={panelState.left}
-            aria-controls="panel-left"
-          >
-            ☰
-          </button>
-          <h1 className="app-title">AI 小说创作代理</h1>
-        </nav>
-        <div className="toolbar-right">
-          <span
-            className={`data-service-badge ${dataServiceStatus}`}
-            role="status"
-            aria-live="polite"
-          >
-            {isDataServiceStarting && '⟳ 数据服务启动中…'}
-            {isDataServiceReady && '● 数据服务就绪'}
-            {dataServiceStatus === 'failed' && '✕ 数据服务不可用'}
-            {dataServiceStatus === 'disconnected' && '✕ 数据服务已断开'}
-          </span>
-          <span className="dev-badge" aria-hidden="true">
-            开发模式
-          </span>
-          <button
-            className="toolbar-btn"
-            onClick={() => handleTogglePanel('right')}
-            aria-label={panelState.right ? '收起状态面板' : '展开状态面板'}
-            aria-expanded={panelState.right}
-            aria-controls="panel-right"
-          >
-            ☰
-          </button>
-        </div>
-      </header>
+      <AppToolbar
+        panelState={panelState}
+        dataServiceStatus={dataServiceStatus}
+        onTogglePanel={handleTogglePanel}
+      />
 
       {/* 错误提示 */}
       {error && (
@@ -290,135 +252,44 @@ export function App() {
       <main className="workspace">
         {/* 左栏：项目列表 */}
         {panelState.left && (
-          <aside id="panel-left" className="panel panel-left" aria-label="项目列表">
-            <RendererErrorBoundary label="项目列表">
-              <ProjectListRegion
-                dataServiceStatus={dataServiceStatus}
-                projects={projects}
-                currentProjectId={currentProject?.id ?? null}
-                onRetry={handleRetry}
-                onNewProject={handleNewProject}
-                onOpenProject={handleOpenProject}
-              />
-            </RendererErrorBoundary>
-          </aside>
+          <ProjectSidebar
+            dataServiceStatus={dataServiceStatus}
+            projects={projects}
+            currentProjectId={currentProject?.id ?? null}
+            onRetry={handleRetry}
+            onNewProject={handleNewProject}
+            onOpenProject={handleOpenProject}
+          />
         )}
 
         {/* 中栏：新建项目 / Grill 工作台 */}
         {currentProject ? (
-          <section
-            ref={grillSectionRef}
-            className="panel panel-center"
-            style={{ padding: 0 }}
-            aria-label="Grill 工作台"
-          >
-            <RendererErrorBoundary label="Grill 工作台">
-              <GrillWorkbench projectId={currentProject.id} />
-            </RendererErrorBoundary>
-          </section>
+          <ProjectWorkspaceShell projectId={currentProject.id} sectionRef={grillSectionRef} />
         ) : (
-          <section ref={createSectionRef} className="panel panel-center" aria-label="新建项目">
-            <RendererErrorBoundary label="新建项目">
-              <CreateProjectRegion
-                dataServiceStatus={dataServiceStatus}
-                onRetry={handleRetry}
-                onCreate={handleCreate}
-              />
-            </RendererErrorBoundary>
-          </section>
+          <ProjectSelectionShell
+            dataServiceStatus={dataServiceStatus}
+            sectionRef={createSectionRef}
+            onRetry={handleRetry}
+            onCreate={handleCreate}
+          />
         )}
 
         {/* 右栏：状态 */}
         {panelState.right && (
-          <aside id="panel-right" className="panel panel-right" aria-label="状态面板">
-            <div className="panel-header">
-              <h2 id="status-heading">状态</h2>
-            </div>
-            <div className="panel-content">
-              <section className="status-section" aria-labelledby="status-local-heading">
-                <h3 id="status-local-heading">本地存储</h3>
-                <p>
-                  {isDataServiceReady
-                    ? 'SQLite 已就绪'
-                    : isDataServiceStarting
-                      ? '启动中…'
-                      : '不可用'}
-                </p>
-              </section>
-              <section className="status-section" aria-labelledby="status-service-heading">
-                <h3 id="status-service-heading">数据服务</h3>
-                <p>
-                  {isDataServiceStarting && '启动中…'}
-                  {isDataServiceReady && '正常运行'}
-                  {dataServiceStatus === 'failed' && (
-                    <>
-                      不可用
-                      <button
-                        className="btn-retry-inline"
-                        onClick={handleRetry}
-                        aria-label="重试数据服务"
-                      >
-                        重试
-                      </button>
-                    </>
-                  )}
-                  {dataServiceStatus === 'disconnected' && '已断开'}
-                </p>
-              </section>
-              <section className="status-section" aria-labelledby="status-stage-heading">
-                <h3 id="status-stage-heading">当前阶段</h3>
-                <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
-              </section>
-              <RendererErrorBoundary label="项目状态">
-                <ProjectStatusRegion currentProject={currentProject} />
-              </RendererErrorBoundary>
-
-              {/* 任务活动 */}
-              <section
-                className="status-section task-center-section"
-                aria-labelledby="task-center-heading"
-              >
-                <h3 id="task-center-heading">任务活动</h3>
-                <RendererErrorBoundary label="任务中心">
-                  <TaskCenter projectId={currentProject?.id ?? null} />
-                </RendererErrorBoundary>
-              </section>
-
-              {/* 模型服务 */}
-              <section
-                className="status-section provider-section"
-                aria-labelledby="provider-heading"
-              >
-                <h3 id="provider-heading">模型服务</h3>
-                <RendererErrorBoundary label="模型服务">
-                  <ProviderRegion
-                    providerState={providerState}
-                    dataServiceStatus={dataServiceStatus}
-                    onSaveApiKey={handleSaveApiKey}
-                    onDeleteApiKey={handleDeleteApiKey}
-                    onTestConnection={handleTestConnection}
-                  />
-                </RendererErrorBoundary>
-              </section>
-            </div>
-          </aside>
+          <SystemStatusPanel
+            dataServiceStatus={dataServiceStatus}
+            currentProject={currentProject}
+            providerState={providerState}
+            onRetry={handleRetry}
+            onSaveApiKey={handleSaveApiKey}
+            onDeleteApiKey={handleDeleteApiKey}
+            onTestConnection={handleTestConnection}
+          />
         )}
       </main>
 
       {/* 状态栏 */}
-      <footer className="status-bar" role="contentinfo">
-        <div className="status-left">
-          <span className="status-item">桌面服务：{health?.ok ? '正常' : '检查中...'}</span>
-          {health && <span className="status-item">版本：{health.version}</span>}
-        </div>
-        <div className="status-right">
-          {health && (
-            <span className="status-item">
-              最后检查：{new Date(health.timestamp).toLocaleTimeString('zh-CN')}
-            </span>
-          )}
-        </div>
-      </footer>
+      <AppStatusBar health={health} />
     </div>
   );
 }
