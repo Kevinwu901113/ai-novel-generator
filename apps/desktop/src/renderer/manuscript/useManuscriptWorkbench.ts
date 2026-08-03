@@ -83,17 +83,18 @@ export interface UseManuscriptWorkbenchResult {
   readonly currentVersion: ChapterVersionPublicData | null;
   readonly isLoadingCurrent: boolean;
   readonly isSaving: boolean;
+  /** 章节标题/正文输入锁：保存/promote/加载 current 期间冻结 */
+  readonly isChapterBufferLocked: boolean;
   readonly saveChapterVersion: () => Promise<boolean>;
   // 版本历史
   readonly chapterVersions: ReadonlyArray<ChapterVersionSummary>;
   readonly isLoadingVersions: boolean;
-  readonly promoteChapterVersion: (versionId: string) => Promise<boolean>;
+  readonly promoteChapterVersion: (versionId: string) => void;
   readonly isPromoting: boolean;
   // CAS 冲突
   readonly conflict: ManuscriptConflict | null;
   readonly saveAfterConflict: () => Promise<boolean>;
   readonly discardLocalChanges: () => void;
-  readonly clearConflict: () => void;
   readonly retryRefreshConflict: () => void;
   // 离开确认
   readonly pendingLeave: PendingLeaveAction | null;
@@ -156,14 +157,18 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
   editorTitleRef.current = editorTitle;
   const editorContentRef = useRef('');
   editorContentRef.current = editorContent;
+  /** 编辑器 buffer 修订号：每次用户修改 title/content 递增，save/promote 异步完成时校验 */
+  const editorRevisionRef = useRef(0);
 
-  // 编辑器输入 setter（用户编辑标记，防止加载结果覆盖用户输入）
+  // 编辑器输入 setter（用户编辑标记，防止加载结果覆盖用户输入；递增 buffer 修订号）
   const updateEditorTitle = useCallback((value: string) => {
     userEditedRef.current = true;
+    editorRevisionRef.current += 1;
     setEditorTitle(value);
   }, []);
   const updateEditorContent = useCallback((value: string) => {
     userEditedRef.current = true;
+    editorRevisionRef.current += 1;
     setEditorContent(value);
   }, []);
 
@@ -195,6 +200,9 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     isPromoting;
   const isMutationInFlightRef = useRef(false);
   isMutationInFlightRef.current = isMutationInFlight;
+
+  // ── 章节 buffer 输入锁：保存/promote/加载 current 期间冻结标题与正文 ──
+  const isChapterBufferLocked = isSaving || isPromoting || isLoadingCurrent;
 
   // ── 章节列表（按 includeArchived 过滤显示）────────────────────────
   const chapters = useMemo(() => {
@@ -460,6 +468,7 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     const opGen = generationRef.current;
     const opChapterId = chapter.id;
     const opSeq = loadSeqRef.current;
+    const opEditorRevision = editorRevisionRef.current;
     setIsSaving(true);
     setError(null);
     setSuccessMessage(null);
@@ -484,11 +493,19 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       }
       // 后端返回值即事实来源
       setCurrentVersion(version);
-      setEditorTitle(version.title);
-      setEditorContent(version.content);
-      setLastSnapshot({ title: version.title, content: version.content });
       setConflict(null);
-      setSuccessMessage(`已保存新版本 #${version.versionNumber}`);
+      if (opEditorRevision !== editorRevisionRef.current) {
+        // buffer revision 兜底：请求期间用户（或程序化）修改了 buffer。
+        // 不覆盖当前 editorTitle/editorContent；lastSnapshot 更新为已保存版本，
+        // 保持 dirty=true，不丢弃用户 buffer。
+        setLastSnapshot({ title: version.title, content: version.content });
+        setSuccessMessage('版本已更新，但检测到请求期间的本地修改，修改内容仍未保存');
+      } else {
+        setEditorTitle(version.title);
+        setEditorContent(version.content);
+        setLastSnapshot({ title: version.title, content: version.content });
+        setSuccessMessage(`已保存新版本 #${version.versionNumber}`);
+      }
       void refreshChapters(opGen);
       void refreshVersions(opGen, opChapterId);
       return true;
@@ -534,12 +551,8 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     setSuccessMessage('已加载服务器当前版本');
   }, []);
 
-  const clearConflict = useCallback(() => {
-    setConflict(null);
-  }, []);
-
-  // ── promote 历史版本 ─────────────────────────────────────────────
-  const promoteChapterVersion = useCallback(
+  // ── promote 历史版本（内部执行；入口 requestPromoteChapterVersion 负责 dirty 确认）──
+  const performPromoteChapterVersion = useCallback(
     async (versionId: string): Promise<boolean> => {
       const chapter = allChaptersRef.current.find((c) => c.id === selectedChapterIdRef.current);
       if (!chapter || isMutationInFlightRef.current) return false;
@@ -555,6 +568,7 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       const opGen = generationRef.current;
       const opChapterId = chapter.id;
       const opSeq = loadSeqRef.current;
+      const opEditorRevision = editorRevisionRef.current;
       setIsPromoting(true);
       setError(null);
       setSuccessMessage(null);
@@ -574,13 +588,18 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
           void refreshChapters(opGen);
           return false;
         }
-        // promote 成功后编辑器加载被 promote 版本，dirty 重置
+        // promote 成功后编辑器加载被 promote 版本；若请求期间 buffer 变化则保留本地 buffer
         setCurrentVersion(version);
-        setEditorTitle(version.title);
-        setEditorContent(version.content);
-        setLastSnapshot({ title: version.title, content: version.content });
         setConflict(null);
-        setSuccessMessage(`已将版本 #${version.versionNumber} 设为当前版本`);
+        if (opEditorRevision !== editorRevisionRef.current) {
+          setLastSnapshot({ title: version.title, content: version.content });
+          setSuccessMessage('版本已更新，但检测到请求期间的本地修改，修改内容仍未保存');
+        } else {
+          setEditorTitle(version.title);
+          setEditorContent(version.content);
+          setLastSnapshot({ title: version.title, content: version.content });
+          setSuccessMessage(`已将版本 #${version.versionNumber} 设为当前版本`);
+        }
         void refreshChapters(opGen);
         void refreshVersions(opGen, opChapterId);
         return true;
@@ -598,6 +617,20 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
       }
     },
     [projectId, refreshChapters, refreshVersions, handleConflict],
+  );
+
+  /** promote 入口：mutation 进行中拒绝；dirty 时进入离开确认，未 dirty 立即执行 */
+  const requestPromoteChapterVersion = useCallback(
+    (versionId: string): void => {
+      if (isMutationInFlightRef.current) {
+        setError('稿件操作正在进行，请完成后再试');
+        return;
+      }
+      navigateWithGuard(() => {
+        void performPromoteChapterVersion(versionId);
+      });
+    },
+    [navigateWithGuard, performPromoteChapterVersion],
   );
 
   // ── 创建章节（append）────────────────────────────────────────────
@@ -826,15 +859,15 @@ export function useManuscriptWorkbench(projectId: string): UseManuscriptWorkbenc
     currentVersion,
     isLoadingCurrent,
     isSaving,
+    isChapterBufferLocked,
     saveChapterVersion,
     chapterVersions,
     isLoadingVersions,
-    promoteChapterVersion,
+    promoteChapterVersion: requestPromoteChapterVersion,
     isPromoting,
     conflict,
     saveAfterConflict,
     discardLocalChanges,
-    clearConflict,
     retryRefreshConflict,
     pendingLeave,
     confirmLeave,

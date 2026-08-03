@@ -46,16 +46,17 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
         </div>
       )}
 
-      {/* CAS 冲突横幅：保留本地 buffer，刷新状态三态（loading/ready/error），不自动重试 */}
+      {/* CAS 冲突横幅：保留本地 buffer，刷新状态三态（loading/ready/error），不自动重试；
+          不可 dismiss 回旧 expected——只能重存/放弃/合法切换结束冲突 */}
       {wb.conflict && (
         <div className="manuscript-conflict-banner" role="alert">
-          <p className="manuscript-conflict-title">稿件已在其他操作中更新，数据已自动刷新。</p>
+          <p className="manuscript-conflict-title">稿件已在其他操作中更新。</p>
           <p className="manuscript-conflict-info">
             {wb.conflict.refreshStatus === 'loading' && '正在刷新服务器当前版本…'}
             {wb.conflict.refreshStatus === 'ready' &&
               (wb.conflict.serverCurrent
-                ? `服务器当前版本 #${wb.conflict.serverCurrent.versionNumber} · ${wb.conflict.serverCurrent.title}`
-                : '服务器当前版本为空（该章节尚无版本）')}
+                ? `服务器当前版本 #${wb.conflict.serverCurrent.versionNumber} · ${wb.conflict.serverCurrent.title}（已刷新）`
+                : '服务器当前版本为空（已刷新；该章节尚无版本）')}
             {wb.conflict.refreshStatus === 'error' && '服务器版本刷新失败，请重试。'}
           </p>
           <div className="manuscript-conflict-actions">
@@ -85,14 +86,6 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
                 重新刷新服务器版本
               </button>
             )}
-            <button
-              type="button"
-              className="btn btn-small btn-muted"
-              onClick={wb.clearConflict}
-              aria-label="关闭冲突提示"
-            >
-              ✕
-            </button>
           </div>
         </div>
       )}
@@ -143,6 +136,7 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
               currentVersion={wb.currentVersion}
               isSaving={wb.isSaving}
               isBusy={wb.isMutationInFlight}
+              isBufferLocked={wb.isChapterBufferLocked}
               isLoading={wb.isLoadingCurrent}
               onEditorTitleChange={wb.setEditorTitle}
               onEditorContentChange={wb.setEditorContent}
@@ -160,7 +154,7 @@ export function ManuscriptWorkbench({ projectId }: ManuscriptWorkbenchProps) {
             isBusy={wb.isMutationInFlight}
             isLoading={wb.isLoadingVersions}
             hasChapter={wb.selectedChapter !== null}
-            onPromote={(versionId) => void wb.promoteChapterVersion(versionId)}
+            onPromote={wb.promoteChapterVersion}
           />
         </div>
       </div>

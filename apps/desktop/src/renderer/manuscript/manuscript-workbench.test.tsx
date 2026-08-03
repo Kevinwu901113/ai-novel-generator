@@ -108,6 +108,47 @@ function expectedFullOrder(mock: ReturnType<typeof createManuscriptStore>): stri
     .map((c) => c.id);
 }
 
+/** 播种单章节 ch-1 并保存 v1/v2（current = v2），供 promote 测试使用 */
+async function setupChapterWithTwoVersions(
+  mock: ReturnType<typeof createManuscriptStore>,
+): Promise<void> {
+  await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+  await mock.desktop.createChapter({
+    projectId: 'p1',
+    manuscriptId: 'ms-1',
+    insertBeforeChapterId: null,
+  });
+  await mock.desktop.createChapterVersion({
+    projectId: 'p1',
+    chapterId: 'ch-1',
+    title: '标题',
+    content: 'v1',
+    expectedCurrentVersionId: null,
+  });
+  await mock.desktop.createChapterVersion({
+    projectId: 'p1',
+    chapterId: 'ch-1',
+    title: '标题',
+    content: 'v2',
+    expectedCurrentVersionId: 'ver-1',
+  });
+}
+
+/** 触发一次 CAS 冲突（本地 buffer 版本冲突），返回可控的 getCurrentChapterVersion resolve */
+function makeConflictRefreshControllable(mock: ReturnType<typeof createManuscriptStore>): {
+  resolveRefresh: (v: unknown) => void;
+} {
+  const origGet = mock.desktop.getCurrentChapterVersion.bind(mock.desktop);
+  let resolveRefresh!: (v: unknown) => void;
+  mock.desktop.getCurrentChapterVersion = vi.fn((input: unknown) => {
+    return new Promise((resolve) => {
+      resolveRefresh = () => resolve(origGet(input));
+    });
+  }) as never;
+  // 返回闭包而非值捕获，确保引用到执行期赋值后的 resolveRefresh
+  return { resolveRefresh: (v: unknown) => resolveRefresh(v) };
+}
+
 describe('ManuscriptWorkbench', () => {
   beforeEach(() => {
     cleanup();
@@ -1645,5 +1686,396 @@ describe('ManuscriptWorkbench', () => {
     });
     expect(r2).toBe(true);
     expect(attempts).toBe(2);
+  });
+
+  it('58. save期间章节标题和正文disabled', async () => {
+    const mock = createManuscriptStore();
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveFn: (v: unknown) => void = () => {};
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveFn = () => resolve(original(input));
+      });
+    }) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '正文' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    // save 进行中：章节标题与正文输入不可编辑
+    expect(screen.getByLabelText('章节标题')).toBeDisabled();
+    expect(screen.getByLabelText('正文编辑')).toBeDisabled();
+    await act(async () => {
+      resolveFn({});
+    });
+  });
+
+  it('59. promote期间章节标题和正文disabled', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    const original = mock.desktop.promoteChapterVersion.bind(mock.desktop);
+    let resolveFn: (v: unknown) => void = () => {};
+    mock.desktop.promoteChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveFn = () => resolve(original(input));
+      });
+    }) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    // promote 进行中：章节标题与正文输入不可编辑
+    expect(screen.getByLabelText('章节标题')).toBeDisabled();
+    expect(screen.getByLabelText('正文编辑')).toBeDisabled();
+    await act(async () => {
+      resolveFn({});
+    });
+  });
+
+  it('60. save期间程序化修改buffer后，save成功不覆盖新buffer且dirty保持true', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+    await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveSave!: (v: unknown) => void;
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveSave = () => resolve(original(input));
+      });
+    }) as never;
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(1));
+    await act(async () => {
+      wb!.setEditorTitle('原标题');
+      wb!.setEditorContent('原正文');
+    });
+    const savePromise = wb!.saveChapterVersion();
+    // 请求期间用户（程序化 setter）继续编辑 → revision 递增
+    await act(async () => {
+      wb!.setEditorContent('新的正文');
+    });
+    await act(async () => {
+      resolveSave({});
+    });
+    const result = await savePromise;
+    expect(result).toBe(true);
+    // 较新的本地 buffer 未被覆盖
+    expect(wb!.editorTitle).toBe('原标题');
+    expect(wb!.editorContent).toBe('新的正文');
+    // currentVersion 对应已保存版本
+    expect(wb!.currentVersion).not.toBeNull();
+    expect(wb!.currentVersion?.title).toBe('原标题');
+    expect(wb!.currentVersion?.content).toBe('原正文');
+    // lastSnapshot 已更新为已保存版本 → dirty 保持 true
+    expect(wb!.dirty).toBe(true);
+    // 安全反馈
+    expect(wb!.successMessage).toContain('本地修改');
+  });
+
+  it('61. 正常无并发编辑时save后dirty=false', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await mock.desktop.getOrCreateManuscript({ projectId: 'p1' });
+    await mock.desktop.createChapter({
+      projectId: 'p1',
+      manuscriptId: 'ms-1',
+      insertBeforeChapterId: null,
+    });
+    const original = mock.desktop.createChapterVersion.bind(mock.desktop);
+    let resolveSave!: (v: unknown) => void;
+    mock.desktop.createChapterVersion = vi.fn((input: unknown) => {
+      return new Promise((resolve) => {
+        resolveSave = () => resolve(original(input));
+      });
+    }) as never;
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(1));
+    await act(async () => {
+      wb!.setEditorTitle('标题');
+      wb!.setEditorContent('正文');
+    });
+    const savePromise = wb!.saveChapterVersion();
+    await act(async () => {
+      resolveSave({});
+    });
+    const result = await savePromise;
+    expect(result).toBe(true);
+    // 无并发编辑：editor 与快照一致 → dirty=false
+    expect(wb!.dirty).toBe(false);
+    expect(wb!.currentVersion?.content).toBe('正文');
+  });
+
+  it('62. dirty时点击promote不调用IPC并显示离开确认', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    // 制造 dirty
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存修改' } });
+    const promoteSpy = vi.spyOn(mock.desktop, 'promoteChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    // 离开确认出现，不调用后端
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(promoteSpy).not.toHaveBeenCalled();
+  });
+
+  it('63. 继续编辑保留title/content且不promote', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '新标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存修改' } });
+    const promoteSpy = vi.spyOn(mock.desktop, 'promoteChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '继续编辑' }).click();
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('新标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('未保存修改');
+    expect(promoteSpy).not.toHaveBeenCalled();
+  });
+
+  it('64. 放弃修改并离开后才执行promote（只调用一次）', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '未保存修改' } });
+    const promoteSpy = vi.spyOn(mock.desktop, 'promoteChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: '放弃修改并离开' }).click();
+    });
+    await waitFor(() => expect(promoteSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByText(/已将版本 #1 设为当前版本/)).toBeInTheDocument());
+  });
+
+  it('65. promote失败保留本地buffer和dirty', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    mock.desktop.promoteChapterVersion = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('数据库错误'), { code: 'DATABASE' })) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '本地标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地正文' } });
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '放弃修改并离开' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/数据库错误/)).toBeInTheDocument());
+    // 本地 buffer 与 dirty 保留
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('本地标题');
+    expect((screen.getByLabelText('正文编辑') as HTMLTextAreaElement).value).toBe('本地正文');
+    expect(screen.getByText('有未保存的修改')).toBeInTheDocument();
+  });
+
+  it('66. clean时promote不弹确认', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    const promoteSpy = vi.spyOn(mock.desktop, 'promoteChapterVersion');
+    await act(async () => {
+      screen.getByRole('button', { name: '设为当前版本' }).click();
+    });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => expect(promoteSpy).toHaveBeenCalledTimes(1));
+  });
+
+  it('67. promote进行中重复点击只调用一次', async () => {
+    const mock = createManuscriptStore();
+    await setupChapterWithTwoVersions(mock);
+    const original = mock.desktop.promoteChapterVersion.bind(mock.desktop);
+    let resolvePromote!: (v: unknown) => void;
+    let calls = 0;
+    mock.desktop.promoteChapterVersion = vi.fn((input: unknown) => {
+      calls++;
+      return new Promise((resolve) => {
+        resolvePromote = () => resolve(original(input));
+      });
+    }) as never;
+    setupDesktop(mock);
+    await act(async () => {
+      render(<WorkbenchHarness />);
+    });
+    await waitFor(() => expect(wb).not.toBeNull());
+    await waitFor(() => expect(wb!.allChapters.length).toBe(1));
+    // 加载版本历史
+    await waitFor(() => expect(wb!.chapterVersions.length).toBe(2));
+    const v1 = mock.store.versions[0];
+    // 第一次 promote（延迟）
+    await act(async () => {
+      wb!.promoteChapterVersion(v1.id);
+    });
+    // mutation 锁已生效：第二次请求立即拒绝（busy），不调用后端
+    await act(async () => {
+      wb!.promoteChapterVersion(v1.id);
+    });
+    expect(calls).toBe(1);
+    await act(async () => {
+      resolvePromote({});
+    });
+    expect(calls).toBe(1);
+  });
+
+  it('68. 冲突横幅没有关闭按钮', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+    // 冲突横幅不可直接关闭（不得回到旧 expected 路径）
+    expect(screen.queryByRole('button', { name: '关闭冲突提示' })).not.toBeInTheDocument();
+    expect(screen.getByText('稿件已在其他操作中更新。')).toBeInTheDocument();
+  });
+
+  it('69. 冲突error态仅允许重新刷新（无关闭、重存/放弃disabled）', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    mock.desktop.getCurrentChapterVersion = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('网络错误'), { code: 'NETWORK' })) as never;
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() =>
+      expect(screen.getByText('服务器版本刷新失败，请重试。')).toBeInTheDocument(),
+    );
+    // error 态：仅允许重新刷新；重存/放弃 disabled；无关闭按钮
+    expect(screen.getByRole('button', { name: '重新刷新服务器版本' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '基于新版本再保存' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '放弃本地修改并加载服务器版本' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: '关闭冲突提示' })).not.toBeInTheDocument();
+  });
+
+  it('70. 冲突不能通过dismiss回到旧expected路径（无dismiss控件，横幅持续）', async () => {
+    const mock = createManuscriptStore();
+    setupDesktop(mock);
+    await act(async () => {
+      render(<ManuscriptWorkbench projectId="p1" />);
+    });
+    await waitForLoaded();
+    await act(async () => {
+      screen.getByRole('button', { name: '新建章节' }).click();
+    });
+    await waitFor(() => expect(screen.getByLabelText('章节标题')).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText('章节标题'), { target: { value: '标题' } });
+    fireEvent.change(screen.getByLabelText('正文编辑'), { target: { value: '本地' } });
+    await mock.desktop.createChapterVersion({
+      projectId: 'p1',
+      chapterId: 'ch-1',
+      title: '标题',
+      content: '服务器版本',
+      expectedCurrentVersionId: null,
+    });
+    const { resolveRefresh } = makeConflictRefreshControllable(mock);
+    await act(async () => {
+      screen.getByRole('button', { name: '保存新版本' }).click();
+    });
+    await waitFor(() => expect(screen.getByText('正在刷新服务器当前版本…')).toBeInTheDocument());
+    await act(async () => {
+      resolveRefresh({});
+    });
+    await waitFor(() => expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument());
+    // 无 dismiss 控件：点击其他非冲突操作（切换 archived 开关）不会关闭冲突
+    fireEvent.click(screen.getByRole('checkbox', { name: /显示已归档章节/ }));
+    expect(screen.getByText(/服务器当前版本 #1/)).toBeInTheDocument();
+    // 仍无关闭按钮，冲突只能通过「基于新版本再保存」或「放弃本地修改」结束
+    expect(screen.queryByRole('button', { name: '关闭冲突提示' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '基于新版本再保存' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '放弃本地修改并加载服务器版本' })).toBeEnabled();
   });
 });

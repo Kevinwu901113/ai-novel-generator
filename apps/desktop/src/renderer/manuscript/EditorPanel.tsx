@@ -31,6 +31,8 @@ interface EditorPanelProps {
   readonly isSaving: boolean;
   /** 全局 mutation 锁：进行中时禁用保存类按钮 */
   readonly isBusy: boolean;
+  /** 章节 buffer 输入锁：保存/promote/加载 current 期间冻结标题与正文 */
+  readonly isBufferLocked: boolean;
   readonly isLoading: boolean;
   readonly onEditorTitleChange: (value: string) => void;
   readonly onEditorContentChange: (value: string) => void;
@@ -51,6 +53,7 @@ export function EditorPanel({
   currentVersion,
   isSaving,
   isBusy,
+  isBufferLocked,
   isLoading,
   onEditorTitleChange,
   onEditorContentChange,
@@ -120,7 +123,7 @@ export function EditorPanel({
             aria-label="章节标题"
             value={editorTitle}
             onChange={(e) => onEditorTitleChange(e.target.value)}
-            disabled={!canEdit}
+            disabled={!canEdit || isBufferLocked}
             maxLength={200}
           />
           <label className="chapter-content-label" htmlFor="chapter-content-textarea">
@@ -133,7 +136,7 @@ export function EditorPanel({
             aria-label="正文编辑"
             value={editorContent}
             onChange={(e) => onEditorContentChange(e.target.value)}
-            disabled={!canEdit}
+            disabled={!canEdit || isBufferLocked}
             spellCheck={false}
             maxLength={1_000_000}
           />
