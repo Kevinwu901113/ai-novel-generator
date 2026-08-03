@@ -2,9 +2,16 @@
 
 中文优先、本地优先、BYOK 的桌面 AI 小说创作代理，主要面向成人向同人网文创作。
 
-## 产品方向
+## 产品方向与路线
 
-已确认的产品方向和技术方向见 [`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md)。
+- 产品方向（最高权威）：[`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md)
+- 产品 1.0 纵向切片规格：[`docs/product/idea-to-novel-v1.md`](docs/product/idea-to-novel-v1.md)
+- **统一路线（GE-0..GE-9）**：[`docs/development/graph-engineering-roadmap.md`](docs/development/graph-engineering-roadmap.md)
+- **当前状态（唯一状态文档）**：[`docs/development/current-project-state.md`](docs/development/current-project-state.md)
+- 模块边界：[`docs/architecture/module-boundaries.md`](docs/architecture/module-boundaries.md)
+
+流程权威是两张 Graph（[`packages/domain/src/idea-to-novel-graph.ts`](packages/domain/src/idea-to-novel-graph.ts)）：
+IdeaToNovelProjectGraphV1 + ChapterGenerationGraphV1。
 
 ## 技术栈
 
@@ -44,17 +51,20 @@ ai-novel-generator/
 │   │   └── ...
 │   └── worker/           # 独立 Worker
 ├── packages/
-│   ├── domain/           # 纯 TypeScript 领域模型
-│   ├── application/      # 应用用例
-│   ├── contracts/        # IPC 类型定义
-│   ├── database/         # SQLite 持久化
-│   ├── model-gateway/    # 多模型网关
-│   ├── task-engine/      # 任务引擎
-│   ├── context-engine/   # 上下文管理
-│   ├── research-engine/  # 资料研究
-│   ├── review-engine/    # 审稿引擎
-│   ├── editor-schema/    # 编辑器结构
-│   ├── import-export/    # 导入导出
+│   ├── domain/           # 纯领域模型 + 两张权威 Graph（idea-to-novel-graph.ts）
+│   ├── application/      # 应用用例（含 GE-1 GraphRunService）
+│   ├── contracts/        # IPC 类型定义（DesktopAPI）
+│   ├── database/         # SQLite 持久化（migration v1–v8）
+│   ├── model-gateway/    # 模型网关（invokeModel / testConnection）
+│   ├── task-engine/      # 持久化任务引擎（执行器底座）
+│   ├── secret-store/     # macOS Keychain
+│   ├── writing-evaluation/# 离线确定性评测
+│   ├── plotpilot-adapter/# 可选外部 sidecar adapter
+│   ├── context-engine/   # stub → GE-9 派生层
+│   ├── research-engine/  # stub → GE-4 Web Research
+│   ├── review-engine/    # stub → GE-9 审稿
+│   ├── editor-schema/    # stub → GE-7 编辑器结构
+│   ├── import-export/    # stub → GE-7 TXT/Markdown 导出
 │   └── testing/          # 测试工具
 ├── docs/
 │   ├── product/          # 产品文档
