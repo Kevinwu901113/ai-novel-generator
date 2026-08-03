@@ -105,6 +105,20 @@ app 的**主工作区**：项目创建后 Renderer 直接落在 `GrillWorkbench`
 
 **两个已确认缺陷**：`GRILL_MARK_QUESTION_ASKED` IPC 死链路；`initialIdea` 未自动播种进 session goal。
 
+**R1 复用路线（不新建重复数据模型）**：
+
+- **直接复用现有表与模型**：`grill_sessions` / `grill_questions` / `grill_answers` 表，
+  Grill 的 domain / application / repository 全部复用，**不新建** Idea / Session / Answer 领域模型，
+  **不新建** Idea Intake 数据表，**不物理重命名** grill 表。
+- **修复与补齐**：修复 `grill.markQuestionAsked` 死链（补 worker dispatch case 或删通道）；
+  将 `projects.initial_idea` 自动播种进 intake session goal。
+- **前台重构**：将工作台重构为自然对话式 Idea Intake；隐藏 PAUSED/ABANDONED、proposal review、
+  diagnostics 等非 1.0 流程。
+- **命名策略**：内部代码可暂时保留 `grill` 命名，用户侧使用 Idea Intake；**不要为了命名纯洁度
+  迁移稳定数据**。
+- **迁移策略**：R1 默认不创建 migration。只有发现具体且不可复用的新持久化字段时，才提交独立的
+  设计裁决（不随本计划 PR 实现）。
+
 ### 3.2 Creation Contract
 
 Creation Contract 是**已合并、重度测试**的契约编写管线：17-section `CreationContractSections`
@@ -120,7 +134,7 @@ lock/unlock 流、共享快照校验器、与 Grill 耦合的 AI 草案任务引
 
 | 资产                                                                                                           | 决定                     | 说明                                                                                                                                                           |
 | -------------------------------------------------------------------------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 17-section sections schema + 校验 + canonical 序列化 + 快照 hash（`packages/domain/src/creation-contract.ts`） | `KEEP_AS_IS`             | **直接映射 CreationSpec 字段**；可选符号重命名 contract→spec；schema v2 若 1.0 弃锁则去掉 lock-only 片段                                                       |
+| 17-section sections schema + 校验 + canonical 序列化 + 快照 hash（`packages/domain/src/creation-contract.ts`） | `REUSE_WITH_REFACTOR`    | **仅作为 CreationSpecSnapshot 基础**；Draft 阶段不要求完整校验；记录待补充/裁决的 1.0 字段（作品形式 / 语言偏好 / 生成方式）；本 PR 不实现 schema v2           |
 | 版本化权威快照 + current pointer + append-only                                                                 | `KEEP_AS_IS`             | 直接复用；manuscript FK 已消费（`project-database.ts:594`）                                                                                                    |
 | 快照校验器（`creation-contract-snapshot-validation.ts`）                                                       | `KEEP_AS_IS`             | 唯一严格校验门                                                                                                                                                 |
 | user update 后端（`updateCreationContractByUser`）                                                             | `KEEP_AS_IS`             | 1.0 CreationSpec 直接编辑后端的现成实现；**需新建 spec 编辑器 UI 调用它**                                                                                      |
@@ -132,9 +146,24 @@ lock/unlock 流、共享快照校验器、与 Grill 耦合的 AI 草案任务引
 | `useContractDraft.ts`                                                                                          | `REUSE_WITH_REFACTOR`    | 剥离 accept/reject review 路径；保留草案请求 + 任务轮询 + current 刷新；加 updateByUser 编辑路径                                                               |
 | contracts IPC/API（10 通道 + 校验器）                                                                          | `KEEP_AS_IS`             | 保留 `getCurrent/listProposals/requestDraft/acceptProposal/rejectProposal/updateByUser`；`listVersions/getProposal/lockField/unlockField` 可后台保留或裁剪     |
 
+**CreationSpecDraft 与 CreationSpecSnapshot 的区分**：
+
+| 概念                   | 约束                                                      | 生命周期                                 | 用途                                             |
+| ---------------------- | --------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------ |
+| `CreationSpecDraft`    | **允许部分字段**；不要求完整 protagonist、POV、tense 等   | **随对话持续更新**（Idea Intake 过程内） | Idea Intake 过程                                 |
+| `CreationSpecSnapshot` | **完整严格校验**；版本化（append-only + current pointer） | 一次成型、不可变                         | **Research、Blueprint 和 Generation 的权威输入** |
+
+- 现有 `CreationContractSections` 只作为 **Snapshot 基础**（严格校验 / canonical / 版本化全部保留）。
+- 现有 schema 需要**补充或裁决**的 1.0 字段（记录在案，**本 PR 不实现 schema v2**）：
+  - **作品形式**（novel / 短篇 / 剧本等）；
+  - **语言偏好**；
+  - **生成方式**（逐章 / 整稿 / 风格化等）。
+- Draft→Snapshot 的晋升即现有 accept/apply 语义（`BACKEND_ONLY`，隐藏审查 UI）。
+
 **明确复用分类**：
 
-- **直接复用**：sections schema、版本化快照、快照校验、canonical hashing、`ContractSectionsView`、`contract-labels`、user-update 后端、数据库 repository/transaction。
+- **直接复用**：版本化快照、快照校验、canonical hashing、`ContractSectionsView`、`contract-labels`、user-update 后端、数据库 repository/transaction。
+- **REUSE_WITH_REFACTOR**：`CreationContractSections` 作为 Snapshot 基础；Draft 阶段允许部分字段；补充/裁决 1.0 字段（作品形式 / 语言偏好 / 生成方式）。
 - **仅复用 schema 思想**：provenance 机制（重、每次读都重校验，仅 `<details>` 后展示）→ 1.0 简化为字段来源标注。
 - **后台保留但前台隐藏**：accept/reject 后端（`BACKEND_ONLY`）、listVersions/getProposal。
 - **产品 1.0 不再使用**：lock/unlock 整个表面（`DEFER`）、提案审查 UI（`REMOVE_FROM_DEFAULT_UX`）。
@@ -237,6 +266,18 @@ Chapter generation / Review+rewrite 六类长任务当前引擎**都能承载**"
 的骨架，但**缺失**：取消、进度、恢复（RUNNING 重放）、自动重试、依赖 DAG、跨多步调用的流水线
 结构、流式事件、按任务超时。单调用任务模型无法原生表达"规划后生成"等多步长任务。
 
+**平台升级前置条件（不设硬前置）**：以下能力**不是 R1–R3 的硬前置**，标为 `DEFER` / R6 或 1.x：
+
+- Token 级流式、多 provider、按调用选择模型、成本展示；
+- 任务 DAG、RUNNING 自动重放、通用自动重试。
+
+路线：
+
+- **R1**：现有非流式 Model Gateway + 严格解析 + 轮询可满足首版。
+- **R2**：Research 需要 search/fetch 端口、**粗粒度任务状态**、失败与超时。
+- **R3**：Blueprint 先使用**文本 JSON + strict validator**。
+- **R4**：长章节生成**前**增加**取消**和**阶段进度**。
+
 ### 3.6 Model Gateway
 
 `packages/model-gateway` 是**最小的 Anthropic-compatible 单 provider HTTP 客户端**
@@ -260,12 +301,16 @@ apiKey/prompt/上游 body**。全部行为有 mock-fetch vitest 覆盖。
 | usage 记账                         | `IMPLEMENTED`     | 完整 token/latency/finishReason/providerRequestId 落库并聚合到 `TaskStatsPublicData`；**无成本/计费**                                                                    |
 | 任务调用方式                       | `IMPLEMENTED`     | 引擎通过注入的 `invokeModel` 端口调用；`apps/worker/src/index.ts` 在组合根注入 fetch+clock                                                                               |
 
-**Idea-to-Novel 1.0 需要但缺失**：向 UI 流式回传 token、schema 驱动的结构化生成（blueprint）、
-多 provider + 按调用选模型、可配置超时与 UI 取消、成本/usage 展示。
+**Idea-to-Novel 1.0 需要但缺失（按路线分级）**：
 
-复用建议：`REUSE_WITH_REFACTOR`（保留错误码映射、usage 抽取、超时/abort、安全不变量；扩展流式与
-结构化输出路径）；`FIXED_PROVIDER_PROFILE` → `SUPERSEDE`（替换为多 provider 注册表种子）；任务引擎
-`executeModelInvocationTest` → `REUSE_WITH_RENAME`（作为 1.0 任务优先原子调用的参考模式）。
+- **R1 即可满足**：现有**非流式** Model Gateway + 严格解析 + **轮询**——不需要 Token 级流式。
+- **R3 路径**：Blueprint 先使用**文本 JSON + strict validator**（沿用现有 prompt + 严格解析模式）。
+- **DEFER / R6 或 1.x（非 R1–R3 硬前置）**：Token 级流式、多 provider、按调用选择模型、成本展示、
+  可配置超时与 UI 取消。
+
+复用建议：`REUSE_WITH_REFACTOR`（保留错误码映射、usage 抽取、超时/abort、安全不变量；流式与
+结构化输出按路线延后）；`FIXED_PROVIDER_PROFILE` → `SUPERSEDE`（多 provider 注册表种子，**R6/1.x**）；
+任务引擎 `executeModelInvocationTest` → `REUSE_WITH_RENAME`（作为 1.0 任务优先原子调用的参考模式）。
 
 ### 3.7 Web Research
 
@@ -303,6 +348,20 @@ apiKey/prompt/上游 body**。全部行为有 mock-fetch vitest 覆盖。
   供 blueprint 引用）。
 - `ResearchOrchestrator`：输入 `{ researchDecision }`；输出 `ResearchBundle`。
   由任务类型承载（扩展 `TaskType` 闭合并集），走现有 worker dispatch + 启动恢复路径。
+
+**V1 最低安全边界（不延后到 R6）**：
+
+- 仅允许 `http/https` 协议；
+- 拒绝 `localhost`、loopback、private、link-local 目标（含 DNS 解析后校验）；
+- 重定向后**重新校验** URL（不信任首跳）；
+- 限制响应字节数与 content-type；
+- 连接 / 读取超时；
+- 拒绝 URL credentials；
+- 来源保留 canonical URL、title、fetchedAt；
+- **默认保存提取文本 / 事实笔记，不永久保存原始 HTML**。
+
+以上边界是 **Web Research V1 验收门禁的一部分**（见 §7 P4），并随 `WebSearchPort` /
+`WebFetchPort` 端口契约一起测试。
 
 缺口的宿主：`packages/research-engine`（替换 stub）、`packages/domain`（扩展 TaskType）、
 `packages/contracts`（research 通道）、`packages/database`（新 migration）、`packages/secret-store`（search API key 槽位）。
@@ -380,41 +439,45 @@ Evaluation Harness 由两部分构成：
 > C3 = Cycle 3（Generation + Manuscript UI）。Owner：A = Agent A（产品方向 + Renderer/壳），
 > B = Agent B（Domain/Application/Database/Worker/Transport）。
 
-### 4.1 Idea Intake（复用自 Grill-me）
+### 4.1 Idea Intake（复用自 Grill-me，R1 不新建数据模型）
 
-| Asset / Path                                              | Current Role                                            | Evidence                                                 | Reuse Decision           | Target 1.0 Role         | Required Change                                                                            | Phase | Owner | Deps | Risk |
-| --------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------- | ------------------------ | ----------------------- | ------------------------------------------------------------------------------------------ | ----- | ----- | ---- | ---- |
-| `packages/domain/src/grill.ts`                            | Grill 领域模型（session/question/answer/proposal 状态） | `grill.ts:101-127` 转移图                                | `KEEP_AS_IS`             | Idea Intake 领域模型    | 无；PAUSED/ABANDONED 保留但 1.0 不用                                                       | C1    | B     | —    | 低   |
-| `packages/domain/src/grill-question-plan.ts`              | 严格 AI 追问解析 + 环检测                               | `grill-question-plan.ts:108-312,413-494`                 | `KEEP_AS_IS`             | AI 追问规划             | 无                                                                                         | C1    | B     | —    | 低   |
-| `packages/application/src/grill-session.ts`               | session/question/answer 用例                            | `grill-session.ts:361-447` answer 修订                   | `REUSE_WITH_RENAME`      | Idea Intake 用例        | rename grill→idea-intake；加 create-from-initialIdea；可选删 answerHistory/proposal review | C1    | B     | P1   | 中   |
-| `packages/application/src/grill-question-plan.ts`         | 去重规划请求 + 提案接受                                 | `grill-question-plan.ts:250-403` 拓扑插入                | `KEEP_AS_IS`             | AI 追问规划用例         | 重命名引用                                                                                 | C1    | B     | P1   | 低   |
-| `packages/database/src/grill-repositories.ts`             | 5 个 repo 实现（project 作用域）                        | `grill-repositories.ts:32-417`                           | `REUSE_WITH_RENAME`      | Idea Intake repos       | 表重命名；可选删 proposals + 修订化 answers                                                | C1    | B     | P1   | 中   |
-| `packages/database/src/project-database.ts`               | 迁移架构与表 owner                                      | `project-database.ts:160-241` grill 表                   | `KEEP_AS_IS`             | intake 表宿主           | 新 migration 追加                                                                          | C1    | B     | —    | 低   |
-| `packages/task-engine/src/grill-question-plan.ts`         | AI 追问后台任务                                         | `grill-question-plan.ts:163-494`                         | `KEEP_AS_IS`             | 追问生成任务            | rename requestKind                                                                         | C1    | B     | P1   | 低   |
-| `apps/worker/src/grill-handlers.ts`                       | dispatch + repo 适配器                                  | `grill-handlers.ts:931-982`（缺 markQuestionAsked case） | `REUSE_WITH_REFACTOR`    | intake RPC handlers     | 补死链路 case 或删通道；rename 命名空间                                                    | C1    | B     | P2   | 中   |
-| `apps/desktop/src/main/index.ts`（grill 内联块）          | 内联 IPC handlers（无 grill-ipc.ts）                    | `index.ts:278-620`                                       | `DEFER`                  | intake main IPC         | 先抽取成独立模块再复用                                                                     | C1    | B     | P2   | 中   |
-| `apps/desktop/src/preload/index.ts`（grill 组）           | `window.desktop.grill` 22 方法                          | `preload/index.ts:178-287`                               | `REUSE_WITH_RENAME`      | `window.desktop.intake` | rename；删 defeature 方法                                                                  | C1    | A     | P2   | 低   |
-| `apps/desktop/src/renderer/grill/useGrillQuestionPlan.ts` | 2s 轮询 + single-flight 控制器                          | `useGrillQuestionPlan.ts:149-247`                        | `DEFER`                  | 1.0 追问流              | 保留异步规划流才需要                                                                       | C1/C2 | A     | P3   | 低   |
-| `apps/desktop/src/renderer/grill/GrillDiagnostics.tsx`    | DEV 诊断条                                              | `GrillDiagnostics.tsx:30`（`!import.meta.env.DEV`）      | `REMOVE_FROM_DEFAULT_UX` | 无                      | 从默认 UX 移除                                                                             | C1    | A     | P3   | 低   |
+> **R1 基线**：直接复用 `grill_sessions` / `grill_questions` / `grill_answers` 与 Grill
+> domain/application/repository；内部保留 `grill` 命名，用户侧使用 Idea Intake；**默认不创建 migration**。
+> 只有发现具体且不可复用的新持久化字段，才提交独立设计裁决。
+
+| Asset / Path                                              | Current Role                                            | Evidence                                                 | Reuse Decision           | Target 1.0 Role        | Required Change                                                                                             | Phase | Owner | Deps | Risk |
+| --------------------------------------------------------- | ------------------------------------------------------- | -------------------------------------------------------- | ------------------------ | ---------------------- | ----------------------------------------------------------------------------------------------------------- | ----- | ----- | ---- | ---- |
+| `packages/domain/src/grill.ts`                            | Grill 领域模型（session/question/answer/proposal 状态） | `grill.ts:101-127` 转移图                                | `KEEP_AS_IS`             | Idea Intake 领域模型   | 复用，不新建；PAUSED/ABANDONED 保留但 1.0 不用                                                              | C1    | B     | —    | 低   |
+| `packages/domain/src/grill-question-plan.ts`              | 严格 AI 追问解析 + 环检测                               | `grill-question-plan.ts:108-312,413-494`                 | `KEEP_AS_IS`             | AI 追问规划            | 复用；保持命名                                                                                              | C1    | B     | —    | 低   |
+| `packages/application/src/grill-session.ts`               | session/question/answer 用例                            | `grill-session.ts:361-447` answer 修订                   | `REUSE_WITH_REFACTOR`    | Idea Intake 用例       | 保持 grill 命名；加 create-from-initialIdea；可选删 answerHistory/proposal review（前台隐藏）               | C1    | B     | P1   | 中   |
+| `packages/application/src/grill-question-plan.ts`         | 去重规划请求 + 提案接受                                 | `grill-question-plan.ts:250-403` 拓扑插入                | `KEEP_AS_IS`             | AI 追问规划用例        | 复用；保持命名                                                                                              | C1    | B     | P1   | 低   |
+| `packages/database/src/grill-repositories.ts`             | 5 个 repo 实现（project 作用域）                        | `grill-repositories.ts:32-417`                           | `KEEP_AS_IS`             | Idea Intake repos      | **复用现有表，不新建、不物理重命名**；稳定数据不动；可选删 proposals + 修订化 answers 由前台隐藏            | C1    | B     | P1   | 中   |
+| `packages/database/src/project-database.ts`               | 迁移架构与表 owner                                      | `project-database.ts:160-241` grill 表                   | `KEEP_AS_IS`             | intake 表宿主          | **R1 默认无新 migration**；仅发现不可复用新字段才独立裁决                                                   | C1    | B     | —    | 低   |
+| `packages/task-engine/src/grill-question-plan.ts`         | AI 追问后台任务                                         | `grill-question-plan.ts:163-494`                         | `KEEP_AS_IS`             | 追问生成任务           | 复用；保持命名                                                                                              | C1    | B     | P1   | 低   |
+| `apps/worker/src/grill-handlers.ts`                       | dispatch + repo 适配器                                  | `grill-handlers.ts:931-982`（缺 markQuestionAsked case） | `REUSE_WITH_REFACTOR`    | intake RPC handlers    | **修复 markQuestionAsked 死链**（补 dispatch case）；保持 grill 命令命名                                    | C1    | B     | P2   | 中   |
+| `apps/desktop/src/main/index.ts`（grill 内联块）          | 内联 IPC handlers（无 grill-ipc.ts）                    | `index.ts:278-620`                                       | `DEFER`                  | intake main IPC        | R1 保持内联可用；抽取为独立模块可后续做                                                                     | C1    | B     | P2   | 中   |
+| `apps/desktop/src/preload/index.ts`（grill 组）           | `window.desktop.grill` 22 方法                          | `preload/index.ts:178-287`                               | `KEEP_AS_IS`             | 用户侧 Idea Intake API | 内部保留 grill 命名，用户侧命名为 Idea Intake；前台隐藏非 1.0 方法（pause/abandon/answerHistory/proposals） | C1    | A     | P2   | 低   |
+| `apps/desktop/src/renderer/grill/useGrillQuestionPlan.ts` | 2s 轮询 + single-flight 控制器                          | `useGrillQuestionPlan.ts:149-247`                        | `DEFER`                  | 1.0 追问流             | 保留异步规划流才需要                                                                                        | C1/C2 | A     | P3   | 低   |
+| `apps/desktop/src/renderer/grill/GrillDiagnostics.tsx`    | DEV 诊断条                                              | `GrillDiagnostics.tsx:30`（`!import.meta.env.DEV`）      | `REMOVE_FROM_DEFAULT_UX` | 无                     | 从默认 UX 移除                                                                                              | C1    | A     | P3   | 低   |
 
 ### 4.2 CreationSpec（复用自 Creation Contract）
 
-| Asset / Path                                                                   | Current Role                                     | Evidence                                                          | Reuse Decision           | Target 1.0 Role        | Required Change                                                       | Phase | Owner | Deps | Risk |
-| ------------------------------------------------------------------------------ | ------------------------------------------------ | ----------------------------------------------------------------- | ------------------------ | ---------------------- | --------------------------------------------------------------------- | ----- | ----- | ---- | ---- |
-| `packages/domain/src/creation-contract.ts`                                     | 17-section schema + 校验 + canonical + 快照 hash | `creation-contract.ts:82,315`                                     | `KEEP_AS_IS`             | CreationSpec 领域核心  | 可选改名；schema v2 弃锁                                              | C1    | B     | —    | 中   |
-| `packages/application/src/creation-contract-snapshot-validation.ts`            | 共享权威快照校验器                               | `:128`                                                            | `KEEP_AS_IS`             | 完整性校验门           | 无                                                                    | C1    | B     | P1   | 低   |
-| `packages/application/src/creation-contract-user-mutations.ts`（updateByUser） | 直接编辑后端                                     | `:314`（无 renderer 调用者）                                      | `KEEP_AS_IS`             | CreationSpec 直接编辑  | 新建 spec 编辑器 UI                                                   | C1    | B     | P1   | 低   |
-| `packages/task-engine/src/creation-contract-draft.ts`                          | AI 草案任务（grill 耦合）                        | `:528`；`creation-contract-request.ts:125` 要求 COMPLETED session | `REUSE_WITH_REFACTOR`    | CreationSpec AI 草案   | 解耦 grill session 依赖与 grill 形状 prompt context                   | C1    | B     | P2   | 高   |
-| `apps/worker/src/contract-handlers.ts`                                         | RPC handlers                                     | `:339`                                                            | `KEEP_AS_IS`             | CreationSpec RPC       | 保留 getCurrent/listProposals/requestDraft/accept/reject/updateByUser | C1    | B     | P2   | 低   |
-| `packages/contracts/src/index.ts`（CONTRACT 通道 + API）                       | IPC 表面                                         | `index.ts:248-257,340`                                            | `KEEP_AS_IS`             | CreationSpec IPC       | 可选裁剪未用通道                                                      | C1    | B     | P2   | 低   |
-| `packages/application/src/creation-contract-mutations.ts`（accept/reject）     | 提案晋升后端                                     | `:531,823`                                                        | `BACKEND_ONLY`           | "采用此草稿"动作       | 隐藏审查 UI                                                           | C1    | B     | P2   | 低   |
-| `packages/application/src/creation-contract-user-mutations.ts`（lock/unlock）  | 锁后端                                           | `:451,554`（UI 无法创建锁）                                       | `DEFER`                  | 无                     | 1.0 移除                                                              | C1    | B     | —    | 低   |
-| `packages/database/src/project-database.ts`（lock_events + 触发器）            | 锁表                                             | `:381` CHECK schema_version=1                                     | `DEFER`                  | 无                     | 保留兼容或 v2 删除                                                    | C1    | B     | —    | 低   |
-| `apps/desktop/src/renderer/contract/ContractSectionsView.tsx`                  | 只读分区视图                                     | 纯展示组件                                                        | `KEEP_AS_IS`             | CreationSpec 只读视图  | 无                                                                    | C1    | A     | P3   | 低   |
-| `apps/desktop/src/renderer/contract/contract-labels.ts`                        | 文案/格式助手                                    | 纯展示                                                            | `KEEP_AS_IS`             | 同上                   | 无                                                                    | C1    | A     | P3   | 低   |
-| `apps/desktop/src/renderer/contract/useContractDraft.ts`                       | 草案工作台 hook                                  | `:471`（accept 恒空 operations）                                  | `REUSE_WITH_REFACTOR`    | CreationSpec 编辑 hook | 剥 accept/reject review；加 updateByUser 编辑路径                     | C1    | A     | P3   | 中   |
-| `apps/desktop/src/renderer/contract/ContractDraftPanel.tsx`                    | 提案审查面板                                     | `:307-324`                                                        | `REMOVE_FROM_DEFAULT_UX` | 替换为 spec 编辑器     | 移除 accept/reject 审查 UI                                            | C1    | A     | P3   | 低   |
-| `apps/desktop/src/renderer/App.tsx`                                            | Grill-first 默认壳                               | `App.tsx:310-316` 创建后落 GrillWorkbench                         | `REUSE_WITH_REFACTOR`    | Idea-to-Novel 壳       | 默认入口改为 Idea Intake                                              | C1    | A     | P3   | 中   |
+| Asset / Path                                                                   | Current Role                                     | Evidence                                                          | Reuse Decision           | Target 1.0 Role               | Required Change                                                                                                  | Phase | Owner | Deps | Risk |
+| ------------------------------------------------------------------------------ | ------------------------------------------------ | ----------------------------------------------------------------- | ------------------------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----- | ----- | ---- | ---- |
+| `packages/domain/src/creation-contract.ts`                                     | 17-section schema + 校验 + canonical + 快照 hash | `creation-contract.ts:82,315`                                     | `REUSE_WITH_REFACTOR`    | CreationSpecSnapshot 领域核心 | 仅作 Snapshot 基础；Draft 允许部分字段；补充/裁决 1.0 字段（作品形式/语言偏好/生成方式）；本 PR 不实现 schema v2 | C1    | B     | —    | 中   |
+| `packages/application/src/creation-contract-snapshot-validation.ts`            | 共享权威快照校验器                               | `:128`                                                            | `KEEP_AS_IS`             | 完整性校验门                  | 无                                                                                                               | C1    | B     | P1   | 低   |
+| `packages/application/src/creation-contract-user-mutations.ts`（updateByUser） | 直接编辑后端                                     | `:314`（无 renderer 调用者）                                      | `KEEP_AS_IS`             | CreationSpec 直接编辑         | 新建 spec 编辑器 UI                                                                                              | C1    | B     | P1   | 低   |
+| `packages/task-engine/src/creation-contract-draft.ts`                          | AI 草案任务（grill 耦合）                        | `:528`；`creation-contract-request.ts:125` 要求 COMPLETED session | `REUSE_WITH_REFACTOR`    | CreationSpec AI 草案          | 解耦 grill session 依赖与 grill 形状 prompt context                                                              | C1    | B     | P2   | 高   |
+| `apps/worker/src/contract-handlers.ts`                                         | RPC handlers                                     | `:339`                                                            | `KEEP_AS_IS`             | CreationSpec RPC              | 保留 getCurrent/listProposals/requestDraft/accept/reject/updateByUser                                            | C1    | B     | P2   | 低   |
+| `packages/contracts/src/index.ts`（CONTRACT 通道 + API）                       | IPC 表面                                         | `index.ts:248-257,340`                                            | `KEEP_AS_IS`             | CreationSpec IPC              | 可选裁剪未用通道                                                                                                 | C1    | B     | P2   | 低   |
+| `packages/application/src/creation-contract-mutations.ts`（accept/reject）     | 提案晋升后端                                     | `:531,823`                                                        | `BACKEND_ONLY`           | "采用此草稿"动作              | 隐藏审查 UI                                                                                                      | C1    | B     | P2   | 低   |
+| `packages/application/src/creation-contract-user-mutations.ts`（lock/unlock）  | 锁后端                                           | `:451,554`（UI 无法创建锁）                                       | `DEFER`                  | 无                            | 1.0 移除                                                                                                         | C1    | B     | —    | 低   |
+| `packages/database/src/project-database.ts`（lock_events + 触发器）            | 锁表                                             | `:381` CHECK schema_version=1                                     | `DEFER`                  | 无                            | 保留兼容或 v2 删除                                                                                               | C1    | B     | —    | 低   |
+| `apps/desktop/src/renderer/contract/ContractSectionsView.tsx`                  | 只读分区视图                                     | 纯展示组件                                                        | `KEEP_AS_IS`             | CreationSpec 只读视图         | 无                                                                                                               | C1    | A     | P3   | 低   |
+| `apps/desktop/src/renderer/contract/contract-labels.ts`                        | 文案/格式助手                                    | 纯展示                                                            | `KEEP_AS_IS`             | 同上                          | 无                                                                                                               | C1    | A     | P3   | 低   |
+| `apps/desktop/src/renderer/contract/useContractDraft.ts`                       | 草案工作台 hook                                  | `:471`（accept 恒空 operations）                                  | `REUSE_WITH_REFACTOR`    | CreationSpec 编辑 hook        | 剥 accept/reject review；加 updateByUser 编辑路径                                                                | C1    | A     | P3   | 中   |
+| `apps/desktop/src/renderer/contract/ContractDraftPanel.tsx`                    | 提案审查面板                                     | `:307-324`                                                        | `REMOVE_FROM_DEFAULT_UX` | 替换为 spec 编辑器            | 移除 accept/reject 审查 UI                                                                                       | C1    | A     | P3   | 低   |
+| `apps/desktop/src/renderer/App.tsx`                                            | Grill-first 默认壳                               | `App.tsx:310-316` 创建后落 GrillWorkbench                         | `REUSE_WITH_REFACTOR`    | Idea-to-Novel 壳              | 默认入口改为 Idea Intake                                                                                         | C1    | A     | P3   | 中   |
 
 ### 4.3 Web Research（当前全部未实现）
 
@@ -430,13 +493,13 @@ Evaluation Harness 由两部分构成：
 
 ### 4.4 Task Engine / Model Gateway（长任务与生成）
 
-| Asset / Path                                                      | Current Role                        | Evidence                      | Reuse Decision        | Target 1.0 Role               | Required Change                                   | Phase | Owner | Deps  | Risk |
-| ----------------------------------------------------------------- | ----------------------------------- | ----------------------------- | --------------------- | ----------------------------- | ------------------------------------------------- | ----- | ----- | ----- | ---- |
-| `packages/task-engine`                                            | 3 类持久任务 + CAS + 启动恢复       | `index.ts:94,163,528`         | `REUSE_WITH_REFACTOR` | 1.0 长任务执行                | 补取消/进度/RUNNING 恢复/依赖 DAG/流式/按任务超时 | C2/C3 | B     | P5/P8 | 高   |
-| `packages/task-engine/src/index.ts`（executeModelInvocationTest） | 任务优先原子调用参考                | `:94`                         | `REUSE_WITH_RENAME`   | 1.0 原子调用模板              | 泛化 FIXED_PROVIDER_ID + per-call model           | C3    | B     | P8    | 中   |
-| `packages/model-gateway/src/index.ts`                             | 单 provider 网关（无流式/无结构化） | `:370` 等待 `response.json()` | `REUSE_WITH_REFACTOR` | 1.0 生成网关                  | 加流式 + tools/json_schema                        | C3    | B     | P8    | 高   |
-| `packages/database/src/app-database.ts`（FIXED_PROVIDER_PROFILE） | 固定单 provider 种子                | `:480-486`                    | `SUPERSEDE`           | 多 provider 注册表种子        | 换 provider 表 + 多 provider                      | C3    | B     | P8    | 中   |
-| `packages/plotpilot-adapter/src/lifecycle.ts`                     | python sidecar 生命周期             | `lifecycle.ts:290-308`        | `DEFER`               | R6；**不得成为 1.0 关键路径** | 无 1.0 工作                                       | C3    | B     | —     | 低   |
+| Asset / Path                                                      | Current Role                        | Evidence                      | Reuse Decision        | Target 1.0 Role               | Required Change                                                                                     | Phase | Owner | Deps  | Risk |
+| ----------------------------------------------------------------- | ----------------------------------- | ----------------------------- | --------------------- | ----------------------------- | --------------------------------------------------------------------------------------------------- | ----- | ----- | ----- | ---- |
+| `packages/task-engine`                                            | 3 类持久任务 + CAS + 启动恢复       | `index.ts:94,163,528`         | `REUSE_WITH_REFACTOR` | 1.0 长任务执行                | R2 补粗粒度任务状态 + 失败/超时；R4 长章节前补取消 + 阶段进度；DAG/RUNNING 重放/自动重试 → DEFER/R6 | C2/C3 | B     | P5/P8 | 高   |
+| `packages/task-engine/src/index.ts`（executeModelInvocationTest） | 任务优先原子调用参考                | `:94`                         | `REUSE_WITH_RENAME`   | 1.0 原子调用模板              | 泛化 FIXED_PROVIDER_ID + per-call model（R6/1.x）                                                   | C3    | B     | P8    | 中   |
+| `packages/model-gateway/src/index.ts`                             | 单 provider 网关（无流式/无结构化） | `:370` 等待 `response.json()` | `REUSE_WITH_REFACTOR` | 1.0 生成网关                  | R1 用现有非流式 + 严格解析；R3 blueprint 文本 JSON + validator；流式/结构化输出 → R6/1.x（DEFER）   | C3    | B     | P8    | 高   |
+| `packages/database/src/app-database.ts`（FIXED_PROVIDER_PROFILE） | 固定单 provider 种子                | `:480-486`                    | `SUPERSEDE`           | 多 provider 注册表种子        | R6/1.x；非 R1–R3 硬前置                                                                             | C3    | B     | P8    | 中   |
+| `packages/plotpilot-adapter/src/lifecycle.ts`                     | python sidecar 生命周期             | `lifecycle.ts:290-308`        | `DEFER`               | R6；**不得成为 1.0 关键路径** | 无 1.0 工作                                                                                         | C3    | B     | —     | 低   |
 
 ### 4.5 Manuscript（MV1-A + PR #25）
 
@@ -539,87 +602,118 @@ PR #25 当前处理方式（本审计结论）：
 
 ## 6. 双 Agent 实施图
 
-两名 Agent 并行工作（Agent A = 产品方向 + Renderer / 产品壳；Agent B = 后端 /
-Domain / Application / Database / Worker / Transport），以**契约冻结**为同步点。
+两名 Agent 并行工作，以**契约冻结**为同步点。分工**不固定**为"A 只做 Renderer、B 包办全部
+backend"——Cycle 1 按层分工，Cycle 2/3 按**纵向能力切片**分工（见 6.3 / 6.4）。
+共享热点始终单一 owner（见 6.1）。
 
 ### 6.1 共享热点：单一 owner 或先后顺序
 
-| 热点                 | 文件                                                                                                       | 策略                                                                                   | Owner                               |
-| -------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------- |
-| `packages/contracts` | `packages/contracts/src/index.ts`                                                                          | 每个 Cycle 开始时先冻结该 Cycle 的契约提交；**禁止同时修改**，一方冻结、另一方只读消费 | 按 Cycle 指定单 owner（见 6.2–6.4） |
-| 数据库迁移注册表     | `packages/database/src/project-database.ts`（`PROJECT_MIGRATIONS`）、`app-database.ts`（`APP_MIGRATIONS`） | 版本号顺序追加；**并行时禁止同时追加**，后合入方 rebase 后接续 v8/v9/…                 | 每个 Cycle 单 owner                 |
-| Worker root dispatch | `apps/worker/src/index.ts`                                                                                 | 命令组 append-only；**禁止同时修改**                                                   | 每个 Cycle 单 owner                 |
-| Main IPC 注册        | `apps/desktop/src/main/index.ts`                                                                           | 新 handler append；**禁止同时修改**                                                    | 每个 Cycle 单 owner                 |
-| App shell            | `apps/desktop/src/renderer/App.tsx`、`main.tsx`、`App.css`                                                 | **Agent A 独占**；Agent B 的 UI 组件作为叶子组件交付，由 shell 装配                    | Agent A                             |
-| roadmap              | `docs/development/generation-quality-roadmap.md`                                                           | 权威文档，**Agent A 独占**                                                             | Agent A                             |
+| 热点                 | 文件                                                                                                       | 策略                                                                                                   | Owner                               |
+| -------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| `packages/contracts` | `packages/contracts/src/index.ts`                                                                          | 每个 Cycle 开始时先冻结该 Cycle 的契约提交；**禁止同时修改**，一方冻结、另一方只读消费                 | 按 Cycle 指定单 owner（见 6.2–6.4） |
+| 数据库迁移注册表     | `packages/database/src/project-database.ts`（`PROJECT_MIGRATIONS`）、`app-database.ts`（`APP_MIGRATIONS`） | 版本号顺序追加；**并行时禁止同时追加**，后合入方 rebase 后接续。**R1 默认不新增**（复用现有 grill 表） | 每个 Cycle 单 owner（C2 = Agent A） |
+| Worker root dispatch | `apps/worker/src/index.ts`                                                                                 | 命令组 append-only；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰                         | 每个 Cycle 单 owner（C2 = Agent A） |
+| Main IPC 注册        | `apps/desktop/src/main/index.ts`                                                                           | 新 handler append；**禁止同时修改**；C2 期间 Agent B 在 Research 合并前不触碰                          | 每个 Cycle 单 owner（C2 = Agent A） |
+| App shell            | `apps/desktop/src/renderer/App.tsx`、`main.tsx`、`App.css`                                                 | **Agent A 独占**；Agent B 的 UI 组件作为叶子组件交付，由 shell 装配                                    | Agent A                             |
+| roadmap              | `docs/development/generation-quality-roadmap.md`                                                           | 权威文档，**Agent A 独占**                                                                             | Agent A                             |
 
 ### 6.2 Cycle 1：Idea Intake
 
 - **契约冻结**：`IdeaIntake` IPC 通道名 + 输入校验器 + `IdeaIntakeAPI`（`packages/contracts/src/index.ts`）。
+  R1 **默认不新建 migration**，复用现有 `grill_*` 表。
+- **R1 复用路线（Agent B 负责后端）**：
+  - 复用现有 `grill_sessions` / `grill_questions` / `grill_answers` 表；
+  - 复用 Grill domain / application / repository（内部保留 `grill` 命名）；
+  - 修复 `grill.markQuestionAsked` 死链（补 worker dispatch case）；
+  - 将 `projects.initial_idea` 自动播种进 intake session goal。
 - **Agent A 负责目录**：
-  - `apps/desktop/src/renderer/idea-intake/`（新默认入口、Idea 输入、追问/回答流 UI）
+  - `apps/desktop/src/renderer/idea-intake/`（新默认入口、**自然对话式** Idea Intake UI：
+    Idea 输入、追问/回答流）
   - `apps/desktop/src/renderer/App.tsx`（默认入口切换到 Idea Intake，卸载旧默认 Grill 入口）
-  - `apps/desktop/src/preload/index.ts`（renderer 侧消费的冻结 API）
+  - `apps/desktop/src/renderer/grill/`（前台重构：隐藏 PAUSED/ABANDONED、proposal review、
+    diagnostics 等非 1.0 流程）
+  - `apps/desktop/src/preload/index.ts`（renderer 侧消费的冻结 API；用户侧命名 Idea Intake）
 - **Agent B 负责目录**：
-  - `packages/contracts/`（先冻结 Idea Intake 契约）
-  - `packages/domain/`（Idea / Session / Answer 聚合）
-  - `packages/application/`（用例）
-  - `packages/database/`（Idea Intake 表 + 新 migration，v8）
-  - `apps/worker/src/`（新命令组 + dispatch）
-  - `apps/desktop/src/main/index.ts`（IPC handler 注册）
-- **合并顺序**：契约 → domain/application/database/worker/main → preload → renderer。
+  - `packages/contracts/`（先冻结 Idea Intake 契约；复用 `GRILL_*` 通道为主）
+  - `packages/application/`（加 create-from-initialIdea 用例；修复死链相关）
+  - `apps/worker/src/`（补 `grill.markQuestionAsked` dispatch case）
+  - `apps/desktop/src/main/index.ts`（IPC handler 注册/接线）
+- **合并顺序**：契约冻结 → 死链修复 + initialIdea 播种 → preload → renderer 前台重构。
 - **冲突文件 owner**：`packages/contracts/src/index.ts`（B）、`apps/desktop/src/main/index.ts`（B）、
-  `apps/desktop/src/preload/index.ts`（A 消费冻结 API）、`apps/desktop/src/renderer/App.tsx`（A）。
+  `apps/desktop/src/preload/index.ts`（A 消费冻结 API）、`apps/desktop/src/renderer/App.tsx`（A）、
+  `apps/desktop/src/renderer/grill/*`（A 前台重构）。
 
-### 6.3 Cycle 2：Web Research 与 Story Blueprint 并行
+### 6.3 Cycle 2：Web Research 与 Story Blueprint 并行（纵向分工）
 
-- **契约冻结**：`Research`（search/fetch/bundle 通道）+ `StoryBlueprint` 通道。
-- **Agent A 负责**：Web Research 产品 UI（调研决策、搜索结果、来源与引用展示）
-  — `apps/desktop/src/renderer/research/`；preload 消费。
-- **Agent B 负责**：Story Blueprint（domain/application/db + blueprint 生成任务）
-  — `packages/domain/`、`packages/application/`、`packages/database/`（v9）、`packages/task-engine/`、
-  `apps/worker/src/`、`apps/desktop/src/main/index.ts`。
-- **依赖**：blueprint 生成任务消费 `ResearchBundle`；两者以冻结契约为界并行，
-  集成点放在本 Cycle 末（research 存储先稳定，blueprint 只读消费其 schema）。
-- **禁止同时修改**：`packages/contracts`、`project-database.ts` 迁移注册表、
-  `apps/worker/src/index.ts`、`apps/desktop/src/main/index.ts`（owner 按 6.1）。
+- **契约冻结**：`ResearchBundle` + `StoryBlueprint` 契约（`packages/contracts/src/index.ts`）。
+- **Agent A —— Web Research 完整纵向切片**（**本 Cycle 拥有 Research 相关 contracts、
+  migration registry、Worker/Main 接线**）：
+  - `packages/research-engine/`（`WebSearchPort` / `WebFetchPort` / `ResearchOrchestrator`）
+  - `packages/database/`（`ResearchBundle` 存储，新 migration）
+  - `packages/task-engine/`（research 任务编排）
+  - `packages/contracts/`（Research 通道 + API + 校验器）
+  - `apps/worker/src/`、`apps/desktop/src/main/`、`apps/desktop/src/preload/`（transport）
+  - `apps/desktop/src/renderer/research/`（调研决策、搜索结果、来源与引用展示，产品 UI）
+- **Agent B —— Story Blueprint 纯核心**（**Research 合并前不修改 migration registry、
+  Worker root、Main IPC root**）：
+  - `packages/domain/`（Blueprint 聚合 + 校验）
+  - `packages/application/`（Blueprint 生成服务）
+  - fixture 测试；**使用冻结的 `ResearchBundle` contract**（只读消费）
+- **同步顺序**：
+  1. 先冻结 `ResearchBundle` 与 `StoryBlueprint` contracts；
+  2. 两边并行开发；
+  3. **Web Research 先合并**；
+  4. Blueprint **rebase**；
+  5. 接入真实 `ResearchBundle` 与 Worker transport。
+- **共享热点单一 owner**（本 Cycle）：`packages/contracts`（A 冻结 research，双方只读）、
+  迁移注册表（A）、Worker root dispatch（A）、Main IPC root（A）、App shell（A）、roadmap（A）。
 
-### 6.4 Cycle 3：Generation 与 Manuscript UI 并行
+### 6.4 Cycle 3：Generation 与 Manuscript 并行（纵向分工）
 
 - **契约冻结**：`Generation`（章节生成 / review/rewrite 通道）+ `Manuscript`（移植自 PR #25）通道。
-- **Agent A 负责**：Manuscript Review UI（编辑器、章节列表、版本历史、dirty/CAS/buffer 安全、导出入口）
-  — 移植 PR #25 renderer 资产；App shell 装配。
-- **Agent B 负责**：Novel Generation pipeline（章节生成任务、prompt 组装、model-gateway 流式、
-  review/rewrite 任务类型、生成产物落库 + 新 migration v10）。
-- **禁止同时修改**：`packages/contracts`、迁移注册表、`apps/worker/src/index.ts`、
-  `apps/desktop/src/main/index.ts`、App shell（A）、roadmap（A）。
+- **Agent A —— Manuscript transport + Review UI**（本 Cycle 拥有 manuscript 相关
+  contracts / migration registry / Worker/Main 接线）：
+  - 移植 PR #25 transport（contracts 通道 + Main/preload/worker）
+  - 移植 PR #25 renderer（`useManuscriptWorkbench`、ChapterList、EditorPanel、VersionHistory、
+    dirty/CAS/buffer 安全）
+  - App shell 装配；导出入口
+- **Agent B —— Chapter Generation 核心 pipeline**：
+  - `packages/task-engine/`（章节生成任务）
+  - `packages/application/`（prompt 组装）
+  - `packages/database/`（生成产物落库，新 migration）
+  - R1–R3 使用**现有非流式 Model Gateway + 严格解析 + 轮询**；取消与阶段进度在 R4 增加
+    （见 §7 修正四）
+- **共享热点单一 owner**：`packages/contracts`、迁移注册表、`apps/worker/src/index.ts`、
+  `apps/desktop/src/main/index.ts`（各 Cycle 单 owner，见 6.1）、App shell（A）、roadmap（A）。
 
 ## 7. 推荐的代码 PR 序列
 
 > 每个 PR 为可独立合并的小步；标 A/B 的为并行候选。每个 PR 都给出依赖与验收门禁。
 
-| #   | PR                                    | 目标                                                                                | 主要目录                                                                                       | 可并行                        | 依赖                             | 验收门禁                                      | 涉及模型调用                          |
-| --- | ------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------- | -------------------------------- | --------------------------------------------- | ------------------------------------- |
-| P1  | Idea Intake domain/schema             | 定义 Idea / Session / Answer 领域模型 + DB 表（migration v8）                       | `packages/domain`、`packages/database`                                                         | —                             | —                                | 单测；`pnpm check`；迁移可重放                | 否                                    |
-| P2  | Idea Intake process bridge            | 用例 + worker 命令组 + main IPC + preload 暴露                                      | `packages/application`、`apps/worker/src`、`apps/desktop/src/main`、`apps/desktop/src/preload` | —                             | P1                               | IPC 往返单测；用户输入不丢失测试              | 否                                    |
-| P3  | Idea Intake product UI                | 新默认入口 + 追问/回答流 UI；卸载旧默认入口                                         | `apps/desktop/src/renderer/idea-intake`、`App.tsx`                                             | 可与 P2 并行（契约冻结后）    | P1（契约）                       | Renderer 测试；手动验收；重启恢复             | 否                                    |
-| P4  | Web Research ports and storage        | `WebSearchPort` / `WebFetchPort` / `ResearchRepository` + `ResearchBundle` 表（v9） | `packages/research-engine`、`packages/database`                                                | 可与 P5 并行                  | P1                               | 端口契约测试；存储往返测试；无真实联网        | 否                                    |
-| P5  | Web Research orchestration            | research 任务类型 + dispatch + 编排（失败/超时/来源元数据）                         | `packages/task-engine`、`apps/worker/src`                                                      | 可与 P4 并行                  | P4 存储 schema                   | 任务生命周期测试；来源关联；重试              | **是**（search/fetch provider，若有） |
-| P6  | Research product UI                   | 调研决策、搜索结果、来源与引用展示                                                  | `apps/desktop/src/renderer/research`                                                           | —                             | P4、P5                           | Renderer 测试；手动验收                       | 否                                    |
-| P7  | Story Blueprint domain and generation | Blueprint 聚合 + 生成任务（消费 CreationSpec + ResearchBundle）                     | `packages/domain`、`packages/application`、`packages/task-engine`                              | 可与 P4/P5 并行（契约冻结后） | P1、P2、P5                       | blueprint 结构校验；来源引用保留              | **是**                                |
-| P8  | Chapter generation pipeline           | 章节生成任务 + 产物落库（migration v10）+ 流式回传                                  | `packages/task-engine`、`packages/model-gateway`、`packages/database`                          | 可与 P10 并行                 | P7                               | 生成不覆盖手写正文（CAS）；重启恢复           | **是**                                |
-| P9  | Manuscript transport extraction       | 从 PR #25 移植 contracts / Main / Preload / Worker / E2E                            | `packages/contracts`、`apps/desktop/src/main`、`apps/desktop/src/preload`、`apps/worker/src`   | 可与 P8 并行                  | —（主线上 manuscript v7 已存在） | typed IPC 测试；restart persistence 测试      | 否                                    |
-| P10 | Manuscript review UI                  | 移植 PR #25 renderer（ChapterList/EditorPanel/VersionHistory/dirty/CAS/buffer）     | `apps/desktop/src/renderer/manuscript`                                                         | 可与 P8 并行                  | P9                               | dirty/CAS/buffer 安全测试；离开守卫；手动验收 | 否                                    |
-| P11 | Export                                | 导出为可读成品（TXT/Markdown/…）                                                    | `packages/import-export`、`apps/desktop/src/main`                                              | —                             | P10                              | 导出往返测试                                  | 否                                    |
+| #   | PR                                    | 目标                                                                                                                                         | 主要目录                                                                                       | 可并行                                                            | 依赖                                  | 验收门禁                                                                                                                                                                               | 调用类型                                      |
+| --- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| P1  | Idea Intake adaptation foundation     | **复用**现有 grill 表 + Grill 领域/应用/仓库；修复 `grill.markQuestionAsked` 死链；`initialIdea` 播种进 intake session；默认不创建 migration | `packages/application`、`apps/worker/src`、`packages/domain`、`packages/database`（复用为主）  | —                                                                 | —                                     | 死链修复 + 播种单测；`pnpm check`；无新 migration（除非独立裁决）                                                                                                                      | 否                                            |
+| P2  | Idea Intake process bridge            | 复用 grill 用例 + worker 命令组 + main IPC + preload 接线（用户侧命名 Idea Intake）                                                          | `packages/application`、`apps/worker/src`、`apps/desktop/src/main`、`apps/desktop/src/preload` | —                                                                 | P1                                    | IPC 往返单测；用户输入不丢失测试                                                                                                                                                       | 否                                            |
+| P3  | Idea Intake product UI                | 自然对话式 Idea Intake（新默认入口 + 追问/回答流）；隐藏 PAUSED/ABANDONED/proposal review/diagnostics                                        | `apps/desktop/src/renderer/idea-intake`、`apps/desktop/src/renderer/grill`、`App.tsx`          | 可与 P2 并行（契约冻结后）                                        | P1（契约）                            | Renderer 测试；手动验收；重启恢复                                                                                                                                                      | 否                                            |
+| P4  | Web Research ports and storage        | `WebSearchPort` / `WebFetchPort` / `ResearchRepository` + `ResearchBundle` 存储（新 migration）；**V1 安全边界**                             | `packages/research-engine`、`packages/database`                                                | —（P5 需等本 PR 冻结后开始）                                      | P1                                    | 端口契约测试；存储往返测试；**V1 安全边界测试**（http/https 白名单、拒绝 private/loopback/link-local、重定向后重新校验、字节数/content-type 限制、超时、拒绝 credentials）；无真实联网 | 否（仅端口定义）                              |
+| P5  | Web Research orchestration            | research 任务类型 + dispatch + 编排（失败/超时/来源元数据）                                                                                  | `packages/task-engine`、`apps/worker/src`                                                      | 部分重叠（**P4 接口与存储 schema 冻结后**才可开始；非无依赖并行） | P4 接口 + 存储 schema（冻结后）       | 任务生命周期测试；来源关联；失败/超时                                                                                                                                                  | **外部 search/fetch API 调用**（非 LLM 调用） |
+| P6  | Research product UI                   | 调研决策、搜索结果、来源与引用展示                                                                                                           | `apps/desktop/src/renderer/research`                                                           | —                                                                 | P4、P5                                | Renderer 测试；手动验收                                                                                                                                                                | 否                                            |
+| P7  | Story Blueprint domain and generation | Blueprint 聚合 + 生成任务（消费 CreationSpecSnapshot + ResearchBundle contract）                                                             | `packages/domain`、`packages/application`                                                      | 可与 P4/P5 并行（ResearchBundle 契约冻结后）                      | P1、P2、P4（ResearchBundle contract） | blueprint 结构校验（文本 JSON + strict validator）；来源引用保留                                                                                                                       | **LLM 模型调用**（R3）                        |
+| P8  | Chapter generation pipeline           | 章节生成任务 + 产物落库（新 migration）；R1–R3 用现有非流式网关 + 轮询；R4 补取消 + 阶段进度                                                 | `packages/task-engine`、`packages/application`、`packages/database`                            | 可与 P10 并行                                                     | P7                                    | 生成不覆盖手写正文（CAS）；重启恢复；长章节前补取消/进度（R4）                                                                                                                         | **LLM 模型调用**                              |
+| P9  | Manuscript transport extraction       | 从 PR #25 移植 contracts / Main / Preload / Worker / E2E                                                                                     | `packages/contracts`、`apps/desktop/src/main`、`apps/desktop/src/preload`、`apps/worker/src`   | 可与 P8 并行                                                      | —（主线上 manuscript v7 已存在）      | typed IPC 测试；restart persistence 测试                                                                                                                                               | 否                                            |
+| P10 | Manuscript review UI                  | 移植 PR #25 renderer（ChapterList/EditorPanel/VersionHistory/dirty/CAS/buffer）                                                              | `apps/desktop/src/renderer/manuscript`                                                         | 可与 P8 并行                                                      | P9                                    | dirty/CAS/buffer 安全测试；离开守卫；手动验收                                                                                                                                          | 否                                            |
+| P11 | Export                                | 导出为可读成品（TXT/Markdown/…）                                                                                                             | `packages/import-export`、`apps/desktop/src/main`                                              | —                                                                 | P10                                   | 导出往返测试                                                                                                                                                                           | 否                                            |
 
-> 备注：P5/P7/P8 涉及模型调用，但**本审计不进行任何模型调用**；验收门禁中的模型相关项
-> 由后续实施阶段执行。
+> 备注：调用类型列区分**外部 search/fetch API 调用**与 **LLM 模型调用**——搜索 API 调用**不等同于**
+> LLM 调用。P5 属于外部 API 调用，P7/P8 属于 LLM 调用。本审计不进行任何模型调用；验收门禁中的
+> 调用相关项由后续实施阶段执行。
 
 ## 8. 验证与完成标准
 
 - `pnpm exec prettier --write docs/development/idea-to-novel-migration-plan.md`
 - `git diff --check`
-- `pnpm check`（format:check + lint + build + typecheck + test）
+- `unset WRITING_EXPERIMENT_LIVE` + `pnpm check`
+  （format:check + lint + build + typecheck + test）
 - 本审计交付物：本文档 + `/tmp/idea-to-novel-asset-audit-report.md` + `/tmp/idea-to-novel-asset-audit-state.md`
 
 ## 9. 红线与不做清单
