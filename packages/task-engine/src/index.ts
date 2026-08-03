@@ -288,3 +288,6 @@ export type {
   ContractDraftContextDeps,
   ValidatedContractDraftContext,
 } from './contract-draft-context.js';
+
+export { executeChapterDraft, parseChapterDraftV1 } from './chapter-generation.js';
+export type { ChapterDraftV1, ChapterDraftExecutionResult } from './chapter-generation.js';

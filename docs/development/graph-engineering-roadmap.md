@@ -308,11 +308,11 @@ gate 决策、终态）。
 
 ## 15. 当前推进位置
 
-- **当前阶段**：GE-5（StoryBlueprint + PROJECT_READY）后端已完成；GE-6 待启动。
-  GE-3/GE-4 前端（Idea Intake 页 + 调研 UI）为后续步骤。
+- **当前阶段**：GE-6（Chapter Graph 真实生成节点）任务引擎基座已完成；GE-7 待启动。
+  GE-3/GE-4 前端与章节节点执行器接线为后续步骤。
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
-- **下一步**：GE-6 — Chapter Graph 真实章节生成节点。
-- **验收标准**：本文件 §11 的 GE-6 退出条件。
+- **下一步**：GE-7 — MANUSCRIPT_COMMIT + 稿件工作区 + 导出。
+- **验收标准**：本文件 §12 的 GE-7 退出条件。
 
 ## 16. 已删除的历史资料
 

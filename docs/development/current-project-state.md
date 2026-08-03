@@ -125,8 +125,9 @@ GE-2 Walking Skeleton   → ✅ 已完成（2026-08-04，双图全路径 + 故�
 GE-3 Idea Intake 后端   → ✅ 已完成（2026-08-04，死链修复 + 播种 + CreationSpec 失效 + intake 命令）
 GE-4 Research 后端      → ✅ 已完成（2026-08-04，research-engine + 安全边界 + migration v9 + research.execute）
 GE-5 Blueprint 后端     → ✅ 已完成（2026-08-04，StoryBlueprint + migration v10 + blueprint.*）
+GE-6 Chapter 任务基座   → ✅ 已完成（2026-08-04，CHAPTER_DRAFT 任务 + 严格解析 + migration v11）
 GE-3/GE-4 前端          → 后续步骤（Idea Intake 页 + 调研 UI）
-GE-6..GE-7 真实节点     → 下一步
+GE-7..GE-8              → 下一步
 GE-8 端到端验收         → 待开始
 GE-9 质量增强           → 待开始
 ```
