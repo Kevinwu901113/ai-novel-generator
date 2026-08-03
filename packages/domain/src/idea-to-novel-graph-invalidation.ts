@@ -1,9 +1,10 @@
 /**
  * @ai-novel/domain - Idea-to-Novel Artifact Invalidation Rules
  *
- * Artifact 依赖是严格单向的下游依赖链：
+ * Artifact 依赖是严格单向的下游依赖链（由各 Graph 的 `artifactDownstreamOrder` 声明）：
  *
- *   idea → creationSpec → researchBundle → storyBlueprint → generationRun → manuscript
+ *   Project：idea → creationSpec → researchBundle → storyBlueprint
+ *   Chapter：generationRun → manuscript
  *
  * 上游 artifact 变化会使所有严格下游 artifact 失效；
  * 下游 artifact（如 manuscript）的用户编辑不会反向使上游失效。
@@ -12,35 +13,22 @@
  */
 
 import type { ArtifactKind } from './idea-to-novel-graph.js';
-import type { ArtifactRef, IdeaToNovelGraphRunState } from './idea-to-novel-graph-state.js';
-
-/**
- * 权威 artifact 的失效依赖顺序（严格单向）。
- *
- * 不含 manuscript：manuscript 是用户权威内容，不被任何上游变化失效。
- */
-export const ARTIFACT_DOWNSTREAM_ORDER: readonly ArtifactKind[] = [
-  'idea',
-  'creationSpec',
-  'researchBundle',
-  'storyBlueprint',
-  'generationRun',
-];
+import type { ArtifactRef, IdeaToNovelGraphRunStateBase } from './idea-to-novel-graph-state.js';
 
 /**
  * 计算某个 artifact 变化后的下游失效闭包。
  *
- * manuscript 是用户权威内容，不因任何上游变化失效，因此不在失效链内：
- * - creationSpec 变化 → [researchBundle, storyBlueprint, generationRun]；
- * - researchBundle 变化 → [storyBlueprint, generationRun]；
- * - storyBlueprint 变化 → [generationRun]；
- * - manuscript 变化 → []（用户编辑不反向使上游失效）；
- * - idea 变化 → [creationSpec, researchBundle, storyBlueprint, generationRun]。
+ * `order` 是权威的 artifact 下游依赖顺序（来自 Graph 的 artifactDownstreamOrder）。
+ * manuscript 是用户权威内容，不因任何上游变化失效，因此不在失效链内（各 Graph 的顺序不含它
+ * 的下游）。
  */
-export function computeInvalidationClosure(changed: ArtifactKind): ReadonlyArray<ArtifactKind> {
-  const idx = ARTIFACT_DOWNSTREAM_ORDER.indexOf(changed);
+export function computeInvalidationClosure(
+  order: ReadonlyArray<ArtifactKind>,
+  changed: ArtifactKind,
+): ReadonlyArray<ArtifactKind> {
+  const idx = order.indexOf(changed);
   if (idx < 0) return [];
-  return ARTIFACT_DOWNSTREAM_ORDER.slice(idx + 1);
+  return order.slice(idx + 1);
 }
 
 /**
@@ -52,10 +40,11 @@ export function computeInvalidationClosure(changed: ArtifactKind): ReadonlyArray
  *
  * 返回新状态；纯函数，不修改入参。
  */
-export function applyArtifactChange(
-  state: IdeaToNovelGraphRunState,
+export function applyArtifactChange<S extends IdeaToNovelGraphRunStateBase>(
+  state: S,
   changed: ArtifactRef,
-): IdeaToNovelGraphRunState {
+  order: ReadonlyArray<ArtifactKind>,
+): S {
   const nextArtifacts = { ...state.artifacts, [changed.kind]: changed };
 
   // 重新生成的 kind 不再失效
@@ -63,7 +52,7 @@ export function applyArtifactChange(
 
   const staleKinds = new Set(cleared.map((ref) => ref.kind));
   const additions: ArtifactRef[] = [];
-  for (const kind of computeInvalidationClosure(changed.kind)) {
+  for (const kind of computeInvalidationClosure(order, changed.kind)) {
     if (staleKinds.has(kind)) continue;
     const current = state.artifacts[kind];
     if (current !== null) {

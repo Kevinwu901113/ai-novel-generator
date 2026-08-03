@@ -1,8 +1,14 @@
 /**
- * @ai-novel/domain - Idea-to-Novel Graph Definition Static Validator
+ * @ai-novel/domain - Idea-to-Novel Graph Definition Static Validator（required + exact）
  *
- * 对 Graph Definition 做静态校验，fail-closed：
+ * 对两张 Graph（Project / Chapter）做静态校验，fail-closed：
  * 任何损坏定义都返回至少一条错误，绝不抛异常、绝不返回"有效"。
+ *
+ * required + exact：
+ * - 每种结构定义必需字段集合（Graph / Node / Edge / OutputContract / JoinDeclaration /
+ *   JoinAggregationPolicy / LoopDeclaration / OutcomeRequirement）；
+ * - 必需键存在、无额外键、普通对象、字段类型正确、字符串非空无首尾空白、基础长度上限、闭合枚举、数组元素合法；
+ * - 删除任何必需字段都返回稳定的 MISSING_* 错误码。
  *
  * 拒绝：
  * - 重复 node / edge ID，未知 edge source/target；
@@ -10,17 +16,19 @@
  * - exact-key / shape 违规：node / edge / output / join / loop / requirement 的未知键、
  *   null / array / 非对象、自定义原型或继承键；
  * - 原型键（constructor / toString / __proto__ 等）作为条件名或节点 id；
- * - 非法 node.kind / edge.kind / edge.mode / humanDecisionType / terminalStatus；
+ * - 非法 node.kind / edge.kind / edge.mode / humanDecisionType / terminalStatus / graph.kind；
  * - 非终止节点无合法出口（含仅预算耗尽出口）；终止节点禁止出口边；
  * - JOIN kind 必须声明合法 join 与 joinAggregationPolicy；非 JOIN 节点禁止声明 join；
  * - join 来源不唯一 / 与 join-mode 入边不匹配；
  * - 无界循环：移除全部 loop-back 边后剩余图必须无环；loop 边必须本身在环上；
- * - 预算键 loop 边 maxIterations 必须一致；预算耗尽出口必须绑定到对应 loop source 与 budget；
+ * - 预算键 loop 边 maxIterations 必须一致；预算耗尽出口必须绑定到对应 loop source 与 budget，
+ *   且耗尽出口的非预算条件必须与 loop 边完全一致（业务条件合取）；
  * - 未知 / 未覆盖的条件枚举；条件边缺条件；固定边带条件；歧义条件；
  * - 模型类节点缺 promptId 或引用未知 promptId；
  * - 人工交互节点缺 humanDecisionType；
  * - 非法 stage projection；
- * - 输出契约违规（outputRequired 不一致、非法条件名 / artifact kind）。
+ * - 输出契约违规（outputRequired 不一致、非法条件名 / artifact kind）；
+ * - artifactKinds / budgetKeys / artifactDownstreamOrder 完整性（与节点/边声明一致）。
  */
 
 import {
@@ -37,12 +45,15 @@ import {
   isPromptRequiredKind,
   isTerminalKind,
   LOOP_BUDGET_CONDITION_BY_KEY,
+  type AnyIdeaToNovelGraphV1,
+  type ChapterGenerationGraphV1,
+  type EdgeOutcomeRequirement,
   type GraphConditionName,
   type GraphNodeId,
   type GraphNodeImplementationKind,
   type IdeaToNovelGraphEdgeDefinition,
   type IdeaToNovelGraphNodeDefinition,
-  type IdeaToNovelGraphV1,
+  type IdeaToNovelProjectGraphV1,
   type LoopBudgetKey,
 } from './idea-to-novel-graph.js';
 import { isArtifactKind } from './idea-to-novel-graph-state.js';
@@ -51,6 +62,20 @@ import { workflowStageForNodeId } from './idea-to-novel-graph-stages.js';
 /** 校验错误码（闭合枚举） */
 export type GraphValidationErrorCode =
   | 'MALFORMED_GRAPH'
+  | 'MISSING_GRAPH_KEY'
+  | 'MISSING_NODE_KEY'
+  | 'MISSING_EDGE_KEY'
+  | 'MISSING_OUTPUT_KEY'
+  | 'MISSING_JOIN_KEY'
+  | 'MISSING_LOOP_KEY'
+  | 'MISSING_REQUIREMENT_KEY'
+  | 'MISSING_JOIN_POLICY_KEY'
+  | 'INVALID_GRAPH_KIND'
+  | 'INVALID_ID_FIELD'
+  | 'INVALID_LABEL'
+  | 'INVALID_ARTIFACT_KINDS'
+  | 'INVALID_BUDGET_KEYS'
+  | 'INVALID_DOWNSTREAM_ORDER'
   | 'DUPLICATE_NODE_ID'
   | 'DUPLICATE_EDGE_ID'
   | 'UNKNOWN_EDGE_SOURCE'
@@ -118,40 +143,66 @@ function err(
   return { code, message, ...(nodeId ? { nodeId } : {}), ...(edgeId ? { edgeId } : {}) };
 }
 
-const GRAPH_KEYS = new Set(['id', 'version', 'entryNodeId', 'nodes', 'edges']);
-const NODE_KEYS = new Set([
+// ── required + exact 键集 ───────────────────────────────────────
+
+const GRAPH_REQUIRED: ReadonlyArray<string> = [
   'id',
+  'version',
   'kind',
-  'label',
+  'entryNodeId',
+  'nodes',
+  'edges',
+  'artifactKinds',
+  'budgetKeys',
+  'artifactDownstreamOrder',
+];
+const GRAPH_KEYS = new Set(GRAPH_REQUIRED);
+
+const NODE_REQUIRED: ReadonlyArray<string> = ['id', 'kind', 'label', 'output'];
+const NODE_KEYS = new Set([
+  ...NODE_REQUIRED,
   'promptId',
-  'output',
   'humanDecisionType',
   'budgetResetPolicy',
   'join',
   'joinAggregationPolicy',
   'terminalStatus',
 ]);
-const EDGE_KEYS = new Set(['id', 'from', 'to', 'kind', 'requiredOutcomes', 'mode', 'loop']);
-const OUTPUT_KEYS = new Set(['requiredOutcomeCondition', 'allowedArtifactKind', 'outputRequired']);
-const JOIN_KEYS = new Set(['requiredIncoming']);
-const LOOP_KEYS = new Set(['budget', 'maxIterations']);
-const REQUIREMENT_KEYS = new Set(['condition', 'expectedOutcome']);
-const JOIN_POLICY_KEYS = new Set(['kind', 'sources', 'rule']);
+
+const EDGE_REQUIRED: ReadonlyArray<string> = ['id', 'from', 'to', 'kind', 'mode'];
+const EDGE_KEYS = new Set([...EDGE_REQUIRED, 'requiredOutcomes', 'loop']);
+
+const OUTPUT_REQUIRED: ReadonlyArray<string> = [
+  'requiredOutcomeCondition',
+  'allowedArtifactKind',
+  'outputRequired',
+];
+const OUTPUT_KEYS = new Set(OUTPUT_REQUIRED);
+
+const JOIN_REQUIRED: ReadonlyArray<string> = ['requiredIncoming'];
+const JOIN_KEYS = new Set(JOIN_REQUIRED);
+
+const LOOP_REQUIRED: ReadonlyArray<string> = ['budget', 'maxIterations'];
+const LOOP_KEYS = new Set(LOOP_REQUIRED);
+
+const REQUIREMENT_REQUIRED: ReadonlyArray<string> = ['condition', 'expectedOutcome'];
+const REQUIREMENT_KEYS = new Set(REQUIREMENT_REQUIRED);
+
+const JOIN_POLICY_REQUIRED: ReadonlyArray<string> = ['kind', 'sources', 'rule'];
+const JOIN_POLICY_KEYS = new Set(JOIN_POLICY_REQUIRED);
+
 const HUMAN_DECISION_TYPES = new Set([
-  'answer_question',
+  'intake_response',
   'blueprint_gate',
   'candidate_gate',
   'escalation',
 ]);
-const BUDGET_KEYS = new Set([
-  'clarification',
-  'researchRetry',
-  'blueprintRewrite',
-  'rewrite',
-  'candidateRewrite',
-  'regenerate',
-  'specRevision',
-]);
+const VALID_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
+
+const MAX_ID_LENGTH = 128;
+const MAX_LABEL_LENGTH = 200;
+
+// ── 基础守卫 ────────────────────────────────────────────────────
 
 /**
  * 仅接受 Object.prototype 或 null prototype 的普通对象；自定义原型 / 数组 / null 拒绝。
@@ -162,18 +213,24 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return proto === Object.prototype || proto === null;
 }
 
-/** 缺失/损坏 output 时的安全默认值（fail-closed，不崩溃） */
-function safeOutput(node: IdeaToNovelGraphNodeDefinition): {
-  requiredOutcomeCondition: GraphConditionName | null;
-  allowedArtifactKind: string | null;
-} {
-  if (isPlainObject(node.output)) {
-    return node.output as {
-      requiredOutcomeCondition: GraphConditionName | null;
-      allowedArtifactKind: string | null;
-    };
+function hasOwn(obj: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function isTrimmedNonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function checkRequiredKeys(
+  errors: GraphValidationError[],
+  obj: object,
+  required: ReadonlyArray<string>,
+  code: GraphValidationErrorCode,
+  where: string,
+): void {
+  for (const key of required) {
+    if (!hasOwn(obj, key)) errors.push(err(code, `${where} 缺少必需键: ${key}`));
   }
-  return { requiredOutcomeCondition: null, allowedArtifactKind: null };
 }
 
 function checkExactKeys(
@@ -184,14 +241,72 @@ function checkExactKeys(
   where: string,
 ): void {
   for (const key of Object.keys(obj)) {
-    if (!allowed.has(key)) {
-      errors.push(err(code, `${where} 含未知键: ${key}`));
-    }
+    if (!allowed.has(key)) errors.push(err(code, `${where} 含未知键: ${key}`));
   }
 }
 
+/** 校验 id 类字符串字段：非空、trim 无首尾空白、长度上限 */
+function checkIdField(
+  errors: GraphValidationError[],
+  value: unknown,
+  where: string,
+  maxLength: number = MAX_ID_LENGTH,
+): value is string {
+  if (!isTrimmedNonEmpty(value)) {
+    errors.push(err('INVALID_ID_FIELD', `${where} 非法（非字符串或为空）`));
+    return false;
+  }
+  if (value !== value.trim()) {
+    errors.push(err('INVALID_ID_FIELD', `${where} 含首尾空白`));
+    return false;
+  }
+  if (value.length > maxLength) {
+    errors.push(err('INVALID_ID_FIELD', `${where} 超过长度上限 ${maxLength}`));
+    return false;
+  }
+  return true;
+}
+
+/** 校验 label：非空、trim 无首尾空白、长度上限 */
+function checkLabelField(errors: GraphValidationError[], value: unknown, where: string): boolean {
+  if (!isTrimmedNonEmpty(value)) {
+    errors.push(err('INVALID_LABEL', `${where} 非法（非字符串或为空）`));
+    return false;
+  }
+  if (value !== value.trim()) {
+    errors.push(err('INVALID_LABEL', `${where} 含首尾空白`));
+    return false;
+  }
+  if (value.length > MAX_LABEL_LENGTH) {
+    errors.push(err('INVALID_LABEL', `${where} 超过长度上限 ${MAX_LABEL_LENGTH}`));
+    return false;
+  }
+  return true;
+}
+
+/** 缺失/损坏 output 时的安全默认值（fail-closed，不崩溃） */
+function safeOutput(node: IdeaToNovelGraphNodeDefinition): {
+  requiredOutcomeCondition: GraphConditionName | null;
+  allowedArtifactKind: string | null;
+} {
+  if (isPlainObject(node.output)) {
+    return {
+      requiredOutcomeCondition: node.output.requiredOutcomeCondition as GraphConditionName | null,
+      allowedArtifactKind: node.output.allowedArtifactKind as string | null,
+    };
+  }
+  return { requiredOutcomeCondition: null, allowedArtifactKind: null };
+}
+
+/** 只取已通过 shape 校验的 requirement（损坏条目已在 shape 阶段报告，语义阶段跳过） */
+function safeRequirements(
+  edge: IdeaToNovelGraphEdgeDefinition,
+): ReadonlyArray<EdgeOutcomeRequirement> {
+  return (edge.requiredOutcomes ?? []).filter(isPlainObject);
+}
+
 function requirementKey(edge: IdeaToNovelGraphEdgeDefinition): string {
-  return (edge.requiredOutcomes ?? [])
+  return safeRequirements(edge)
     .map((r) => `${r.condition}=${r.expectedOutcome}`)
     .sort()
     .join('|');
@@ -261,24 +376,107 @@ function strongComponents(
   return components;
 }
 
+// ── 权威入口 ────────────────────────────────────────────────────
+
 /**
  * 校验 Graph Definition，返回错误列表（空数组 = 有效）。
- * fail-closed：损坏输入返回 MALFORMED_GRAPH，绝不抛异常。
+ * fail-closed：损坏输入返回 MALFORMED_GRAPH 或具体错误码，绝不抛异常。
  */
-export function validateIdeaToNovelGraphV1(
-  graph: IdeaToNovelGraphV1,
+function validateGraphDefinition(
+  graph: AnyIdeaToNovelGraphV1,
 ): ReadonlyArray<GraphValidationError> {
   const errors: GraphValidationError[] = [];
   if (!isPlainObject(graph)) {
     return [err('MALFORMED_GRAPH', 'graph 不是普通对象')];
   }
+  checkRequiredKeys(errors, graph, GRAPH_REQUIRED, 'MISSING_GRAPH_KEY', 'graph');
   checkExactKeys(errors, graph, GRAPH_KEYS, 'UNKNOWN_GRAPH_KEY', 'graph');
+
+  // 顶层 id / version / kind / entryNodeId
+  checkIdField(errors, graph.id, 'graph.id');
+  checkIdField(errors, graph.version, 'graph.version');
+  if (graph.kind !== 'project' && graph.kind !== 'chapter') {
+    errors.push(err('INVALID_GRAPH_KIND', `graph.kind 非法: ${String(graph.kind)}`));
+  }
+  checkIdField(errors, graph.entryNodeId, 'graph.entryNodeId');
+
+  // artifactKinds / budgetKeys / artifactDownstreamOrder 完整性
+  const artifactKinds: string[] = [];
+  if (!Array.isArray(graph.artifactKinds)) {
+    errors.push(err('INVALID_ARTIFACT_KINDS', 'graph.artifactKinds 必须是数组'));
+  } else {
+    const seenKinds = new Set<string>();
+    for (const kind of graph.artifactKinds) {
+      if (!isArtifactKind(kind)) {
+        errors.push(err('INVALID_ARTIFACT_KINDS', `artifactKinds 含未知 kind: ${String(kind)}`));
+        continue;
+      }
+      if (seenKinds.has(kind)) {
+        errors.push(err('INVALID_ARTIFACT_KINDS', `artifactKinds 含重复 kind: ${String(kind)}`));
+      }
+      seenKinds.add(kind);
+      artifactKinds.push(kind);
+    }
+  }
+  const budgetKeys: string[] = [];
+  if (!Array.isArray(graph.budgetKeys)) {
+    errors.push(err('INVALID_BUDGET_KEYS', 'graph.budgetKeys 必须是数组'));
+  } else {
+    const seenBudgets = new Set<string>();
+    for (const key of graph.budgetKeys) {
+      if (!isLoopBudgetKey(key)) {
+        errors.push(err('INVALID_BUDGET_KEYS', `budgetKeys 含未知预算: ${String(key)}`));
+        continue;
+      }
+      if (seenBudgets.has(key)) {
+        errors.push(err('INVALID_BUDGET_KEYS', `budgetKeys 含重复预算: ${String(key)}`));
+      }
+      seenBudgets.add(key);
+      budgetKeys.push(key);
+    }
+  }
+  if (!Array.isArray(graph.artifactDownstreamOrder)) {
+    errors.push(err('INVALID_DOWNSTREAM_ORDER', 'artifactDownstreamOrder 必须是数组'));
+  } else {
+    const seenDown = new Set<string>();
+    for (const kind of graph.artifactDownstreamOrder) {
+      if (!isArtifactKind(kind)) {
+        errors.push(
+          err('INVALID_DOWNSTREAM_ORDER', `artifactDownstreamOrder 含未知 kind: ${String(kind)}`),
+        );
+        continue;
+      }
+      if (seenDown.has(kind)) {
+        errors.push(
+          err('INVALID_DOWNSTREAM_ORDER', `artifactDownstreamOrder 含重复 kind: ${String(kind)}`),
+        );
+      }
+      seenDown.add(kind);
+    }
+    // artifactDownstreamOrder 必须是 artifactKinds 的排列（集合一致、无遗漏）
+    const kindSet = new Set(artifactKinds);
+    const downSet = new Set(graph.artifactDownstreamOrder);
+    if (
+      kindSet.size !== downSet.size ||
+      ![...kindSet].every((k) => downSet.has(k)) ||
+      ![...downSet].every((k) => kindSet.has(k))
+    ) {
+      errors.push(
+        err('INVALID_DOWNSTREAM_ORDER', 'artifactDownstreamOrder 与 artifactKinds 不一致'),
+      );
+    }
+  }
+
   if (
     !Array.isArray(graph.nodes) ||
     !Array.isArray(graph.edges) ||
     typeof graph.entryNodeId !== 'string'
   ) {
-    return [err('MALFORMED_GRAPH', 'nodes / edges / entryNodeId 缺失或类型错误')];
+    errors.push(err('MALFORMED_GRAPH', 'nodes / edges / entryNodeId 缺失或类型错误'));
+    // nodes / edges 非数组时无法继续安全解析，提前返回（保留已累积的错误）
+    if (!Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
+      return errors;
+    }
   }
 
   // 先安全解析 shape：剔除非普通对象条目，避免后续语义校验解引用 null/损坏项
@@ -304,138 +502,117 @@ export function validateIdeaToNovelGraphV1(
     errors.push(err('MALFORMED_GRAPH', 'nodes / edges 为空'));
   }
 
-  const nodeIds = nodes.map((n) => n.id);
+  const nodeIds = nodes.filter((n) => typeof n.id === 'string').map((n) => n.id);
 
   // 入口节点存在
-  if (!nodeIds.includes(graph.entryNodeId)) {
+  if (typeof graph.entryNodeId === 'string' && !nodeIds.includes(graph.entryNodeId)) {
     errors.push(err('UNKNOWN_ENTRY_NODE', `入口节点不存在: ${String(graph.entryNodeId)}`));
   }
 
-  // 1. 节点：重复 ID、kind、exact-key/shape、输出契约、人工类型、终止状态
+  // 1. 节点：重复 ID、kind、required+exact、输出契约、人工类型、终止状态
   const seenNode = new Set<GraphNodeId>();
-  for (const node of nodes) {
-    if (!isPlainObject(node)) {
-      errors.push(err('MALFORMED_GRAPH', '节点不是对象'));
-      continue;
+  for (const rawNode of nodes) {
+    const node = rawNode as IdeaToNovelGraphNodeDefinition;
+    const where = typeof node.id === 'string' ? `节点 ${node.id}` : '节点 <id 缺失>';
+    checkRequiredKeys(errors, node, NODE_REQUIRED, 'MISSING_NODE_KEY', where);
+    checkExactKeys(errors, node, NODE_KEYS, 'UNKNOWN_NODE_KEY', where);
+    checkIdField(errors, node.id, `${where} 的 id`);
+    checkLabelField(errors, node.label, `${where} 的 label`);
+    if (typeof node.id === 'string') {
+      if (seenNode.has(node.id)) {
+        errors.push(err('DUPLICATE_NODE_ID', `重复节点: ${node.id}`, node.id));
+      }
+      seenNode.add(node.id);
     }
-    checkExactKeys(errors, node, NODE_KEYS, 'UNKNOWN_NODE_KEY', `节点 ${String(node.id)}`);
-    if (seenNode.has(node.id)) {
-      errors.push(err('DUPLICATE_NODE_ID', `重复节点: ${node.id}`, node.id));
-    }
-    seenNode.add(node.id);
     if (!isGraphNodeImplementationKind(node.kind)) {
       errors.push(
         err(
           'INVALID_NODE_KIND',
-          `节点 ${String(node.id)} 的 kind 非法: ${String(node.kind)}`,
-          node.id,
+          `${where} 的 kind 非法: ${String(node.kind)}`,
+          typeof node.id === 'string' ? node.id : undefined,
         ),
       );
     }
 
-    // 输出契约
+    // 输出契约（required + exact）
     if (!isPlainObject(node.output)) {
-      errors.push(
-        err('INVALID_OUTPUT_CONTRACT', `节点 ${String(node.id)} 的 output 不是对象`, node.id),
-      );
+      errors.push(err('INVALID_OUTPUT_CONTRACT', `${where} 的 output 不是对象`, node.id));
     } else {
-      checkExactKeys(
+      checkRequiredKeys(
         errors,
         node.output,
-        OUTPUT_KEYS,
-        'UNKNOWN_OUTPUT_KEY',
-        `节点 ${String(node.id)}.output`,
+        OUTPUT_REQUIRED,
+        'MISSING_OUTPUT_KEY',
+        `${where}.output`,
       );
+      checkExactKeys(errors, node.output, OUTPUT_KEYS, 'UNKNOWN_OUTPUT_KEY', `${where}.output`);
       const { requiredOutcomeCondition, allowedArtifactKind, outputRequired } = node.output;
       if (requiredOutcomeCondition !== null && !isGraphConditionName(requiredOutcomeCondition)) {
         errors.push(
-          err(
-            'INVALID_OUTPUT_CONTRACT',
-            `节点 ${String(node.id)} 的 requiredOutcomeCondition 非法`,
-            node.id,
-          ),
+          err('INVALID_OUTPUT_CONTRACT', `${where} 的 requiredOutcomeCondition 非法`, node.id),
         );
       }
       if (allowedArtifactKind !== null && !isArtifactKind(allowedArtifactKind)) {
         errors.push(
-          err(
-            'INVALID_OUTPUT_CONTRACT',
-            `节点 ${String(node.id)} 的 allowedArtifactKind 非法`,
-            node.id,
-          ),
+          err('INVALID_OUTPUT_CONTRACT', `${where} 的 allowedArtifactKind 非法`, node.id),
         );
       }
       if (typeof outputRequired !== 'boolean') {
-        errors.push(
-          err('INVALID_OUTPUT_CONTRACT', `节点 ${String(node.id)} 的 outputRequired 非法`, node.id),
-        );
+        errors.push(err('INVALID_OUTPUT_CONTRACT', `${where} 的 outputRequired 非法`, node.id));
       } else {
         const shouldBeRequired = requiredOutcomeCondition !== null || allowedArtifactKind !== null;
         if (outputRequired !== shouldBeRequired) {
           errors.push(
-            err(
-              'INVALID_OUTPUT_CONTRACT',
-              `节点 ${String(node.id)} 的 outputRequired 与契约不一致`,
-              node.id,
-            ),
+            err('INVALID_OUTPUT_CONTRACT', `${where} 的 outputRequired 与契约不一致`, node.id),
           );
         }
       }
     }
 
-    if (node.humanDecisionType !== undefined && !HUMAN_DECISION_TYPES.has(node.humanDecisionType)) {
+    // 节点产物 artifact 必须在 artifactKinds 内
+    const producedKind = safeOutput(node).allowedArtifactKind;
+    if (producedKind !== null && !artifactKinds.includes(producedKind)) {
       errors.push(
         err(
-          'INVALID_HUMAN_DECISION_TYPE',
-          `节点 ${String(node.id)} 的 humanDecisionType 非法`,
+          'INVALID_ARTIFACT_KINDS',
+          `${where} 产出 artifact ${producedKind} 不在 artifactKinds 内`,
           node.id,
         ),
       );
     }
 
-    if (node.terminalStatus !== undefined) {
-      const validTerminal =
-        node.terminalStatus === 'completed' ||
-        node.terminalStatus === 'failed' ||
-        node.terminalStatus === 'cancelled' ||
-        node.terminalStatus === 'blocked';
-      if (!validTerminal) {
-        errors.push(
-          err('INVALID_TERMINAL_STATUS', `节点 ${String(node.id)} 的 terminalStatus 非法`, node.id),
-        );
-      }
-    }
-    if (node.join !== undefined && !isPlainObject(node.join)) {
+    if (node.humanDecisionType !== undefined && !HUMAN_DECISION_TYPES.has(node.humanDecisionType)) {
       errors.push(
-        err('JOIN_DECLARATION_MISMATCH', `节点 ${String(node.id)} 的 join 声明不是对象`, node.id),
-      );
-    } else if (isPlainObject(node.join)) {
-      checkExactKeys(
-        errors,
-        node.join,
-        JOIN_KEYS,
-        'UNKNOWN_JOIN_KEY',
-        `节点 ${String(node.id)}.join`,
+        err('INVALID_HUMAN_DECISION_TYPE', `${where} 的 humanDecisionType 非法`, node.id),
       );
     }
+
+    if (node.terminalStatus !== undefined && !VALID_TERMINAL_STATUSES.has(node.terminalStatus)) {
+      errors.push(err('INVALID_TERMINAL_STATUS', `${where} 的 terminalStatus 非法`, node.id));
+    }
+
+    // join 声明（required + exact）
+    if (node.join !== undefined && !isPlainObject(node.join)) {
+      errors.push(err('JOIN_DECLARATION_MISMATCH', `${where} 的 join 声明不是对象`, node.id));
+    } else if (isPlainObject(node.join)) {
+      checkRequiredKeys(errors, node.join, JOIN_REQUIRED, 'MISSING_JOIN_KEY', `${where}.join`);
+      checkExactKeys(errors, node.join, JOIN_KEYS, 'UNKNOWN_JOIN_KEY', `${where}.join`);
+    }
+
     // budgetResetPolicy：必须是闭合预算键数组、无重复
     if (node.budgetResetPolicy !== undefined) {
       if (!Array.isArray(node.budgetResetPolicy)) {
         errors.push(
-          err(
-            'INVALID_BUDGET_RESET_POLICY',
-            `节点 ${String(node.id)} 的 budgetResetPolicy 必须是数组`,
-            node.id,
-          ),
+          err('INVALID_BUDGET_RESET_POLICY', `${where} 的 budgetResetPolicy 必须是数组`, node.id),
         );
       } else {
         const seen = new Set<string>();
         for (const key of node.budgetResetPolicy) {
-          if (!BUDGET_KEYS.has(key)) {
+          if (!isLoopBudgetKey(key)) {
             errors.push(
               err(
                 'INVALID_BUDGET_RESET_POLICY',
-                `节点 ${String(node.id)} 的 budgetResetPolicy 含未知预算 ${String(key)}`,
+                `${where} 的 budgetResetPolicy 含未知预算 ${String(key)}`,
                 node.id,
               ),
             );
@@ -444,7 +621,7 @@ export function validateIdeaToNovelGraphV1(
             errors.push(
               err(
                 'INVALID_BUDGET_RESET_POLICY',
-                `节点 ${String(node.id)} 的 budgetResetPolicy 含重复预算 ${String(key)}`,
+                `${where} 的 budgetResetPolicy 含重复预算 ${String(key)}`,
                 node.id,
               ),
             );
@@ -455,96 +632,104 @@ export function validateIdeaToNovelGraphV1(
     }
   }
 
-  // 2. 边：重复 ID、source/target、kind/mode、exact-key/shape、loop、requirement
+  // 2. 边：重复 ID、source/target、kind/mode、required+exact、loop、requirement
   const seenEdge = new Set<string>();
-  for (const edge of edges) {
-    if (!isPlainObject(edge)) {
-      errors.push(err('MALFORMED_GRAPH', '边不是对象'));
-      continue;
+  for (const rawEdge of edges) {
+    const edge = rawEdge as IdeaToNovelGraphEdgeDefinition;
+    const where = typeof edge.id === 'string' ? `边 ${edge.id}` : '边 <id 缺失>';
+    checkRequiredKeys(errors, edge, EDGE_REQUIRED, 'MISSING_EDGE_KEY', where);
+    checkExactKeys(errors, edge, EDGE_KEYS, 'UNKNOWN_EDGE_KEY', where);
+    checkIdField(errors, edge.id, `${where} 的 id`);
+    if (typeof edge.id === 'string') {
+      if (seenEdge.has(edge.id)) {
+        errors.push(err('DUPLICATE_EDGE_ID', `重复边: ${edge.id}`, undefined, edge.id));
+      }
+      seenEdge.add(edge.id);
     }
-    checkExactKeys(errors, edge, EDGE_KEYS, 'UNKNOWN_EDGE_KEY', `边 ${String(edge.id)}`);
-    if (seenEdge.has(edge.id)) {
-      errors.push(err('DUPLICATE_EDGE_ID', `重复边: ${edge.id}`, undefined, edge.id));
+    if (typeof edge.from === 'string') {
+      if (!nodeIds.includes(edge.from)) {
+        errors.push(err('UNKNOWN_EDGE_SOURCE', `${where} 的 source 不存在`, undefined, edge.id));
+      }
     }
-    seenEdge.add(edge.id);
-    if (!nodeIds.includes(edge.from)) {
-      errors.push(err('UNKNOWN_EDGE_SOURCE', `边 ${edge.id} 的 source 不存在`, undefined, edge.id));
-    }
-    if (!nodeIds.includes(edge.to)) {
-      errors.push(err('UNKNOWN_EDGE_TARGET', `边 ${edge.id} 的 target 不存在`, undefined, edge.id));
+    if (typeof edge.to === 'string') {
+      if (!nodeIds.includes(edge.to)) {
+        errors.push(err('UNKNOWN_EDGE_TARGET', `${where} 的 target 不存在`, undefined, edge.id));
+      }
     }
     if (!isGraphEdgeKind(edge.kind)) {
       errors.push(
-        err(
-          'INVALID_EDGE_KIND',
-          `边 ${edge.id} 的 kind 非法: ${String(edge.kind)}`,
-          undefined,
-          edge.id,
-        ),
+        err('INVALID_EDGE_KIND', `${where} 的 kind 非法: ${String(edge.kind)}`, undefined, edge.id),
       );
     }
     if (!isGraphEdgeMode(edge.mode)) {
       errors.push(
-        err(
-          'INVALID_EDGE_MODE',
-          `边 ${edge.id} 的 mode 非法: ${String(edge.mode)}`,
-          undefined,
-          edge.id,
-        ),
+        err('INVALID_EDGE_MODE', `${where} 的 mode 非法: ${String(edge.mode)}`, undefined, edge.id),
       );
     }
+    // loop 声明（required + exact）
     if (edge.loop !== undefined) {
       if (!isPlainObject(edge.loop)) {
-        errors.push(err('INVALID_LOOP_MAX', `边 ${edge.id} 的 loop 不是对象`, undefined, edge.id));
+        errors.push(err('INVALID_LOOP_MAX', `${where} 的 loop 不是对象`, undefined, edge.id));
       } else {
-        checkExactKeys(errors, edge.loop, LOOP_KEYS, 'UNKNOWN_LOOP_KEY', `边 ${edge.id}.loop`);
+        checkRequiredKeys(errors, edge.loop, LOOP_REQUIRED, 'MISSING_LOOP_KEY', `${where}.loop`);
+        checkExactKeys(errors, edge.loop, LOOP_KEYS, 'UNKNOWN_LOOP_KEY', `${where}.loop`);
         if (!isLoopBudgetKey(edge.loop.budget)) {
-          errors.push(
-            err('INVALID_LOOP_MAX', `边 ${edge.id} 的 loop.budget 非法`, undefined, edge.id),
-          );
+          errors.push(err('INVALID_LOOP_MAX', `${where} 的 loop.budget 非法`, undefined, edge.id));
         }
         if (!Number.isSafeInteger(edge.loop.maxIterations) || edge.loop.maxIterations < 1) {
           errors.push(
-            err('INVALID_LOOP_MAX', `边 ${edge.id} 的 maxIterations 非法`, undefined, edge.id),
+            err('INVALID_LOOP_MAX', `${where} 的 maxIterations 非法`, undefined, edge.id),
+          );
+        }
+        // loop 预算必须在 graph.budgetKeys 内
+        if (isLoopBudgetKey(edge.loop.budget) && !budgetKeys.includes(edge.loop.budget)) {
+          errors.push(
+            err(
+              'INVALID_BUDGET_KEYS',
+              `${where} 的 loop 预算 ${edge.loop.budget} 不在 budgetKeys 内`,
+              undefined,
+              edge.id,
+            ),
           );
         }
       }
     }
+    // requiredOutcomes（required + exact 每个 requirement）
     if (edge.requiredOutcomes !== undefined && !Array.isArray(edge.requiredOutcomes)) {
       errors.push(
         err(
           'EMPTY_CONDITIONAL_EDGE',
-          `边 ${edge.id} 的 requiredOutcomes 必须是数组`,
+          `${where} 的 requiredOutcomes 必须是数组`,
           undefined,
           edge.id,
         ),
       );
     } else {
       for (const req of edge.requiredOutcomes ?? []) {
+        const reqWhere = `${where} 条件`;
         if (!isPlainObject(req)) {
+          errors.push(err('UNKNOWN_REQUIREMENT_KEY', `${reqWhere} 不是对象`, undefined, edge.id));
+          continue;
+        }
+        checkRequiredKeys(errors, req, REQUIREMENT_REQUIRED, 'MISSING_REQUIREMENT_KEY', reqWhere);
+        checkExactKeys(errors, req, REQUIREMENT_KEYS, 'UNKNOWN_REQUIREMENT_KEY', reqWhere);
+        if (!isGraphConditionName(req.condition)) {
           errors.push(
             err(
-              'UNKNOWN_REQUIREMENT_KEY',
-              `边 ${edge.id} 的 requiredOutcome 不是对象`,
+              'UNKNOWN_CONDITION',
+              `${reqWhere} 引用未知条件: ${String(req.condition)}`,
               undefined,
               edge.id,
             ),
           );
-          continue;
         }
-        checkExactKeys(
-          errors,
-          req,
-          REQUIREMENT_KEYS,
-          'UNKNOWN_REQUIREMENT_KEY',
-          `边 ${edge.id} 条件`,
-        );
       }
     }
   }
 
   // 3. 非终止节点出口 / 终止节点禁止出口 / join 声明 / 输出契约与边一致性
   for (const node of nodes) {
+    if (typeof node.id !== 'string') continue;
     const kind = node.kind as GraphNodeImplementationKind;
     const outgoing = edges.filter((e) => e.from === node.id);
     if (isTerminalKind(kind)) {
@@ -567,7 +752,7 @@ export function validateIdeaToNovelGraphV1(
       } else {
         const hasNonBudgetExit = outgoing.some((e) => {
           if (e.kind === 'fixed') return true;
-          return (e.requiredOutcomes ?? []).some((r) => !BUDGET_CONDITION_NAMES.has(r.condition));
+          return safeRequirements(e).some((r) => !BUDGET_CONDITION_NAMES.has(r.condition));
         });
         if (!hasNonBudgetExit) {
           errors.push(
@@ -582,7 +767,7 @@ export function validateIdeaToNovelGraphV1(
       // 非预算条件边必须使用节点产出的 condition
       for (const e of outgoing) {
         if (e.kind !== 'conditional') continue;
-        for (const req of e.requiredOutcomes ?? []) {
+        for (const req of safeRequirements(e)) {
           if (BUDGET_CONDITION_NAMES.has(req.condition)) continue;
           if (req.condition !== safeOutput(node).requiredOutcomeCondition) {
             errors.push(
@@ -650,6 +835,7 @@ export function validateIdeaToNovelGraphV1(
     if (new Set(joinSourceIds).size !== joinSourceIds.length) {
       errors.push(err('JOIN_POLICY_MISMATCH', `节点 ${node.id} 的 join 来源重复`, node.id));
     }
+    // joinAggregationPolicy（required + exact）
     if (node.joinAggregationPolicy) {
       const policy = node.joinAggregationPolicy;
       if (!isPlainObject(policy)) {
@@ -657,6 +843,13 @@ export function validateIdeaToNovelGraphV1(
           err('INVALID_JOIN_POLICY', `节点 ${node.id} 的 joinAggregationPolicy 不是对象`, node.id),
         );
       } else {
+        checkRequiredKeys(
+          errors,
+          policy,
+          JOIN_POLICY_REQUIRED,
+          'MISSING_JOIN_POLICY_KEY',
+          `节点 ${node.id}.joinAggregationPolicy`,
+        );
         checkExactKeys(
           errors,
           policy,
@@ -715,7 +908,7 @@ export function validateIdeaToNovelGraphV1(
   // 每个预算的 loop source 必须有绑定到同一 source 的耗尽出口，
   // 且耗尽出口的非预算条件必须与对应 loop 边完全一致（业务条件合取）
   const nonBudgetRequirementKey = (e: IdeaToNovelGraphEdgeDefinition): string =>
-    (e.requiredOutcomes ?? [])
+    safeRequirements(e)
       .filter((r) => !BUDGET_CONDITION_NAMES.has(r.condition))
       .map((r) => `${r.condition}=${r.expectedOutcome}`)
       .sort()
@@ -727,7 +920,7 @@ export function validateIdeaToNovelGraphV1(
       const exhaustedEdges = edges.filter(
         (e) =>
           e.from === source &&
-          (e.requiredOutcomes ?? []).some(
+          safeRequirements(e).some(
             (r) => r.condition === condition && r.expectedOutcome === 'exhausted',
           ),
       );
@@ -804,7 +997,7 @@ export function validateIdeaToNovelGraphV1(
       errors.push(err('EMPTY_CONDITIONAL_EDGE', `条件边 ${edge.id} 缺少条件`, undefined, edge.id));
       continue;
     }
-    for (const req of reqs) {
+    for (const req of safeRequirements(edge)) {
       if (!isGraphConditionName(req.condition)) {
         errors.push(
           err(
@@ -857,13 +1050,14 @@ export function validateIdeaToNovelGraphV1(
     for (const src of n.joinAggregationPolicy?.sources ?? []) joinSourceIds.add(src);
   }
   for (const node of nodes) {
+    if (typeof node.id !== 'string') continue;
     if (joinSourceIds.has(node.id)) continue;
     const produced = safeOutput(node).requiredOutcomeCondition;
     if (produced === null || !isGraphConditionName(produced)) continue;
     const referenced = new Set<string>();
     for (const e of edges) {
       if (e.from !== node.id || e.kind !== 'conditional') continue;
-      for (const req of e.requiredOutcomes ?? []) {
+      for (const req of safeRequirements(e)) {
         if (req.condition === produced) referenced.add(String(req.expectedOutcome));
       }
     }
@@ -881,10 +1075,13 @@ export function validateIdeaToNovelGraphV1(
   }
 
   // 6. 可达性
-  const reachable = isReachable(edges, graph.entryNodeId);
-  for (const node of nodes) {
-    if (!reachable.has(node.id)) {
-      errors.push(err('UNREACHABLE_NODE', `节点不可达: ${node.id}`, node.id));
+  if (typeof graph.entryNodeId === 'string') {
+    const reachable = isReachable(edges, graph.entryNodeId);
+    for (const node of nodes) {
+      if (typeof node.id !== 'string') continue;
+      if (!reachable.has(node.id)) {
+        errors.push(err('UNREACHABLE_NODE', `节点不可达: ${node.id}`, node.id));
+      }
     }
   }
 
@@ -895,6 +1092,7 @@ export function validateIdeaToNovelGraphV1(
 
   // 8. prompt 分离
   for (const node of nodes) {
+    if (typeof node.id !== 'string') continue;
     const kind = node.kind as GraphNodeImplementationKind;
     if (isPromptRequiredKind(kind) && node.promptId === undefined) {
       errors.push(
@@ -914,6 +1112,7 @@ export function validateIdeaToNovelGraphV1(
 
   // 9. 人工交互节点 humanDecisionType
   for (const node of nodes) {
+    if (typeof node.id !== 'string') continue;
     const kind = node.kind as GraphNodeImplementationKind;
     if (isHumanInterruptKind(kind) && kind !== 'IDEA_INPUT') {
       if (node.humanDecisionType === undefined) {
@@ -941,6 +1140,7 @@ export function validateIdeaToNovelGraphV1(
 
   // 10. stage projection 完整性
   for (const node of nodes) {
+    if (typeof node.id !== 'string') continue;
     if (workflowStageForNodeId(node.id) === undefined) {
       errors.push(
         err('INVALID_STAGE_PROJECTION', `节点 ${node.id} 无 WorkflowStage 映射`, node.id),
@@ -951,7 +1151,31 @@ export function validateIdeaToNovelGraphV1(
   return errors;
 }
 
-/** 是否有效（错误列表为空） */
-export function isValidIdeaToNovelGraphV1(graph: IdeaToNovelGraphV1): boolean {
-  return validateIdeaToNovelGraphV1(graph).length === 0;
+/** Project Graph 校验（fail-closed） */
+export function validateIdeaToNovelProjectGraphV1(
+  graph: IdeaToNovelProjectGraphV1,
+): ReadonlyArray<GraphValidationError> {
+  return validateGraphDefinition(graph);
+}
+
+/** Chapter Graph 校验（fail-closed） */
+export function validateChapterGenerationGraphV1(
+  graph: ChapterGenerationGraphV1,
+): ReadonlyArray<GraphValidationError> {
+  return validateGraphDefinition(graph);
+}
+
+/** Project Graph 是否有效（错误列表为空） */
+export function isValidIdeaToNovelProjectGraphV1(graph: IdeaToNovelProjectGraphV1): boolean {
+  return validateIdeaToNovelProjectGraphV1(graph).length === 0;
+}
+
+/** Chapter Graph 是否有效（错误列表为空） */
+export function isValidChapterGenerationGraphV1(graph: ChapterGenerationGraphV1): boolean {
+  return validateChapterGenerationGraphV1(graph).length === 0;
+}
+
+/** 兼容入口：校验任意一张 Graph（Project / Chapter） */
+export function isValidIdeaToNovelGraphV1(graph: AnyIdeaToNovelGraphV1): boolean {
+  return validateGraphDefinition(graph).length === 0;
 }

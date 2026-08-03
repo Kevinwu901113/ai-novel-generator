@@ -6,8 +6,9 @@
  * 执行语义全部从 Graph Definition 读取（节点输出契约 / humanDecisionType /
  * budgetResetPolicy / joinAggregationPolicy / terminalStatus），Graph 外部不持有权威映射。
  *
- * 语义要点：
- * - `assertValidTransitionState`：公开 transition 的前置不变量，非法 state fail-closed；
+ * 两种 Graph（Project / Chapter）共用同一套转移机器：
+ * - `assertValidTransitionState` 依据 graphId/version 匹配拒绝把 Project state 传给 Chapter
+ *   transition（反之亦然）；
  * - `canTraverseEdge`：条件边是否成立（源节点成功 + 闭合条件匹配 + 预算可用/耗尽）；
  * - `routesFrom`：一个已成功源节点实际会走的边（有界循环优先于耗尽出口）；
  * - `computeNextFrontier`：从成功源出发，计算下一批应激活的节点；
@@ -16,11 +17,17 @@
  * - `applyNodeFailure`：节点硬失败 → 运行终止 failed；
  * - `requestHumanDecision` / `applyHumanDecision`：人工中断节点的挂起与决议。
  *
+ * Idea Intake 回答语义（凭证制，graph 不保存回答正文）：
+ * - `intake_response` 决策是闭合判别联合：answer（必须带非空、trimmed 的持久化 answerId）/
+ *   skip（跳过当前问题）/ finish（主动结束访谈）；
+ * - 未来 Runtime 先把回答写入现有 Grill/Idea Intake 权威存储，取得 answerId，再推进 Graph transition；
+ * - graph 拒绝空 answerId / 未持久化的原始文本作为完成证据。
+ *
  * 有界循环语义：
  * - loop-back 边声明 `{ budget, maxIterations }`；重入前预算 `used < maxIterations`；
  * - 重入 loop 时，把循环体（loop body）节点重置为 pending 并清除其产出，
- *   保证下一轮循环体内的节点（如三个 Critic）可以重新执行；
- * - 已消费边（`consumedEdges`）防止 loop 体外部（如 DRAFT→Critic）在循环回环时再次触发；
+ *   保证下一轮循环体内的节点可以重新执行；
+ * - 已消费边（`consumedEdges`）防止 loop 体外部在循环回环时再次触发；
  * - 预算耗尽时走 `X_budget: exhausted` 出口（人工升级节点，而非自动接受）。
  */
 
@@ -31,6 +38,7 @@ import {
   getLoopBudgetMax,
   isGraphConditionOutcome,
   isTerminalKind,
+  type AnyIdeaToNovelGraphV1,
   type BlueprintGateDecision,
   type CandidateGateDecision,
   type EscalationDecision,
@@ -40,13 +48,15 @@ import {
   type HumanDecisionType,
   type IdeaToNovelGraphEdgeDefinition,
   type IdeaToNovelGraphNodeDefinition,
-  type IdeaToNovelGraphV1,
+  type IntakeAction,
+  type IntakeEscalationDecision,
   type LoopBudgetConditionName,
   type LoopBudgetKey,
+  type ResearchEscalationDecision,
 } from './idea-to-novel-graph.js';
 import type {
   ArtifactRef,
-  IdeaToNovelGraphRunState,
+  IdeaToNovelGraphRunStateBase,
   PendingHumanDecision,
 } from './idea-to-novel-graph-state.js';
 import { applyArtifactChange } from './idea-to-novel-graph-invalidation.js';
@@ -61,13 +71,39 @@ export interface ApplyNodeSuccessOptions {
   readonly artifactRef?: ArtifactRef;
 }
 
-/** 人工决策输入（闭合判别联合） */
-export type HumanDecisionInput =
+/**
+ * Idea Intake 回答决策（凭证制）。
+ *
+ * - answer：必须带非空、trimmed 的 `answerId`；graph 只记录持久化凭证，不记录回答正文。
+ *   未来 Runtime 须先把回答写入现有 Grill/Idea Intake 权威存储取得 answerId，再推进 transition。
+ * - skip：不需要 answerId，表示用户跳过当前问题。
+ * - finish：不需要 answerId，表示用户主动结束访谈。
+ */
+export type IntakeHumanDecision =
   | {
       readonly nodeId: GraphNodeId;
-      readonly decisionType: 'answer_question';
-      readonly answer: string;
+      readonly decisionType: 'intake_response';
+      readonly action: 'answer';
+      readonly answerId: string;
     }
+  | {
+      readonly nodeId: GraphNodeId;
+      readonly decisionType: 'intake_response';
+      readonly action: 'skip';
+    }
+  | {
+      readonly nodeId: GraphNodeId;
+      readonly decisionType: 'intake_response';
+      readonly action: 'finish';
+    };
+
+/** 人工升级决策取值（含各升级节点的闭合枚举） */
+export type EscalationDecisionOutcome =
+  EscalationDecision | IntakeEscalationDecision | ResearchEscalationDecision;
+
+/** 人工决策输入（闭合判别联合） */
+export type HumanDecisionInput =
+  | IntakeHumanDecision
   | {
       readonly nodeId: GraphNodeId;
       readonly decisionType: 'blueprint_gate';
@@ -81,7 +117,7 @@ export type HumanDecisionInput =
   | {
       readonly nodeId: GraphNodeId;
       readonly decisionType: 'escalation';
-      readonly outcome: EscalationDecision;
+      readonly outcome: EscalationDecisionOutcome;
     };
 
 // ── 前置不变量（公开 transition 先验证）──────────────────────────
@@ -89,10 +125,12 @@ export type HumanDecisionInput =
 /**
  * 公开 transition 的前置不变量：复用权威 graph-aware 状态校验。
  * 非法 state 直接抛错（fail-closed，不部分推进）；run 已终止时拒绝继续推进。
+ * graphId/version 匹配由 `validateGraphRunState` 强制：Project state 传给 Chapter
+ * transition（或反之）会在 graph 身份校验处失败。
  */
 export function assertValidTransitionState(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
 ): void {
   const errors = validateGraphRunState(graph, state);
   if (errors.length > 0) {
@@ -109,9 +147,13 @@ function isBudgetConditionName(value: string): value is LoopBudgetConditionName 
   return BUDGET_CONDITION_NAMES.has(value as LoopBudgetConditionName);
 }
 
+function isTrimmedNonEmpty(value: string): boolean {
+  return value.trim().length > 0;
+}
+
 function matchesBudgetState(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
   budget: LoopBudgetKey,
   expected: string,
 ): boolean {
@@ -130,8 +172,8 @@ function matchesBudgetState(
  * 未知边 id 或条件不满足时返回 false（fail-closed，不抛异常）。
  */
 export function canTraverseEdge(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
   edgeId: string,
 ): boolean {
   const edge = graph.edges.find((e) => e.id === edgeId);
@@ -166,7 +208,7 @@ export function canTraverseEdge(
 // ── 路径可达性 ──────────────────────────────────────────────────
 
 function pathExistsRestricted(
-  graph: IdeaToNovelGraphV1,
+  graph: AnyIdeaToNovelGraphV1,
   from: GraphNodeId,
   to: GraphNodeId,
   currentLoopEdgeId: string,
@@ -195,7 +237,7 @@ function pathExistsRestricted(
  * 以便下一轮重新执行（source 由 resetLoopBody 一并重置）。
  */
 export function computeLoopBodyNodes(
-  graph: IdeaToNovelGraphV1,
+  graph: AnyIdeaToNovelGraphV1,
   source: GraphNodeId,
   target: GraphNodeId,
   currentLoopEdgeId: string,
@@ -221,8 +263,8 @@ export function computeLoopBodyNodes(
  * 已消费边不参与。
  */
 export function routesFrom(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
   sourceId: GraphNodeId,
 ): ReadonlyArray<IdeaToNovelGraphEdgeDefinition> {
   if (state.nodeStatuses[sourceId] !== 'succeeded') return [];
@@ -238,8 +280,8 @@ export function routesFrom(
 
 /** 边是否被来源实际走（用于 join 判定与 frontier 计算） */
 export function isEdgeTaken(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
   edgeId: string,
 ): boolean {
   const edge = graph.edges.find((e) => e.id === edgeId);
@@ -257,8 +299,8 @@ export function isEdgeTaken(
  * - 无 incoming 的入口节点：仅在其为 pending 时返回。
  */
 export function computeNextFrontier(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
 ): ReadonlyArray<GraphNodeId> {
   const result: GraphNodeId[] = [];
   for (const node of graph.nodes) {
@@ -284,12 +326,14 @@ export function computeNextFrontier(
  * 从 joinAggregationPolicy 声明的来源确定性聚合 JOIN 节点结果。
  *
  * - 来源必须恰好为策略声明的集合、无重复、每个来源都产出指定 condition；
+ * - 三个 source 必须都 succeeded —— 拒绝仅注入 nodeOutcomes 的伪造 state；
+ * - 必须对应三条已满足的 join incoming edge（来源逐一对应）；
  * - 空数组 / 缺项 / 重复来源 / 非法 outcome 一律 fail-closed（抛错）；
  * - 全 pass 才 pass，否则 needs_rewrite。
  */
 export function aggregateJoinOutcome(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
   joinNodeId: GraphNodeId,
 ): GraphNodeOutcome {
   const node = graph.nodes.find((n) => n.id === joinNodeId);
@@ -340,29 +384,29 @@ export function aggregateJoinOutcome(
 
 // ── 内部状态变更辅助 ────────────────────────────────────────────
 
-function incrementBudget(
-  state: IdeaToNovelGraphRunState,
+function incrementBudget<S extends IdeaToNovelGraphRunStateBase>(
+  state: S,
   budget: LoopBudgetKey,
-): IdeaToNovelGraphRunState {
+): S {
   return {
     ...state,
     attemptBudget: { ...state.attemptBudget, [budget]: state.attemptBudget[budget] + 1 },
   };
 }
 
-function unconsumeEdges(
-  state: IdeaToNovelGraphRunState,
+function unconsumeEdges<S extends IdeaToNovelGraphRunStateBase>(
+  state: S,
   edgeIds: ReadonlyArray<string>,
-): IdeaToNovelGraphRunState {
+): S {
   const set = new Set(edgeIds);
   const remaining = state.consumedEdges.filter((id) => !set.has(id));
   return { ...state, consumedEdges: remaining };
 }
 
-function consumeEdges(
-  state: IdeaToNovelGraphRunState,
+function consumeEdges<S extends IdeaToNovelGraphRunStateBase>(
+  state: S,
   edgeIds: ReadonlyArray<string>,
-): IdeaToNovelGraphRunState {
+): S {
   const set = new Set(state.consumedEdges);
   for (const id of edgeIds) set.add(id);
   return { ...state, consumedEdges: [...set] };
@@ -372,15 +416,15 @@ function consumeEdges(
  * 重入 loop-back 边时重置循环体（含 loop 源节点）。
  *
  * - 循环体节点 + loop 源节点都重置为 pending 并清除产出，
- *   使下一轮循环内的节点（含源节点，如 RESEARCH_VALIDATE / CRITIQUE_JOIN）可以重新执行；
+ *   使下一轮循环内的节点（含源节点，如 SPEC_EXTRACT / RESEARCH_VALIDATE / CRITIQUE_JOIN）可以重新执行；
  * - 循环体内边（from/to 都在重置集合内）取消消费，使下一轮可重新触发；
- * - 循环体外进入循环体的边（如 DRAFT→Critic）保持消费，防止再次触发。
+ * - 循环体外进入循环体的边保持消费，防止再次触发。
  */
-function resetLoopBody(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+function resetLoopBody<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   loopEdge: IdeaToNovelGraphEdgeDefinition,
-): IdeaToNovelGraphRunState {
+): S {
   const body = computeLoopBodyNodes(graph, loopEdge.from, loopEdge.to, loopEdge.id);
   const resetSet = new Set<GraphNodeId>([loopEdge.from, ...body]);
   const nodeStatuses = { ...state.nodeStatuses };
@@ -440,12 +484,12 @@ function assertArtifactMatchesContract(
 
 // ── 节点完成推进（内部共享）──────────────────────────────────────
 
-function completeNode(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+function completeNode<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   nodeId: GraphNodeId,
   opts: ApplyNodeSuccessOptions,
-): IdeaToNovelGraphRunState {
+): S {
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
   const status = state.nodeStatuses[nodeId];
@@ -464,7 +508,7 @@ function completeNode(
   assertOutcomeMatchesContract(node, effectiveOutcome);
   assertArtifactMatchesContract(node, opts.artifactRef);
 
-  let next: IdeaToNovelGraphRunState = {
+  let next: S = {
     ...state,
     nodeStatuses: { ...state.nodeStatuses, [nodeId]: 'succeeded' },
   };
@@ -472,7 +516,7 @@ function completeNode(
     next = { ...next, nodeOutcomes: { ...next.nodeOutcomes, [nodeId]: effectiveOutcome } };
   }
   if (opts.artifactRef) {
-    next = applyArtifactChange(next, opts.artifactRef);
+    next = applyArtifactChange(next, opts.artifactRef, graph.artifactDownstreamOrder);
   }
 
   // 节点成功触发的预算重置（执行语义来自 node.budgetResetPolicy）
@@ -538,12 +582,12 @@ function completeNode(
  * - JOIN 节点结果由聚合策略计算，不接受调用方伪造；
  * - 强制节点输出契约。
  */
-export function applyNodeSuccess(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+export function applyNodeSuccess<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   nodeId: GraphNodeId,
   opts?: ApplyNodeSuccessOptions,
-): IdeaToNovelGraphRunState {
+): S {
   assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
@@ -558,12 +602,15 @@ export function applyNodeSuccess(
  *
  * 失败即终止整个 run（terminalStatus = failed）。V1 不做节点级自动重试；
  * 可重试的"调研校验失败"通过 `research_valid: invalid` 条件边回环表达。
+ *
+ * fan-out failure：失败节点 → failed；其它 active/waiting_for_human → cancelled；
+ * frontier 清空；pendingHumanDecision 清空；失败节点清空 outcome；run 终止 failed。
  */
-export function applyNodeFailure(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+export function applyNodeFailure<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   nodeId: GraphNodeId,
-): IdeaToNovelGraphRunState {
+): S {
   assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
@@ -585,7 +632,7 @@ export function applyNodeFailure(
   const nodeOutcomes = { ...state.nodeOutcomes };
   delete nodeOutcomes[nodeId];
 
-  const next: IdeaToNovelGraphRunState = {
+  const next: S = {
     ...state,
     nodeStatuses,
     nodeOutcomes,
@@ -606,12 +653,12 @@ export function applyNodeFailure(
 /**
  * 请求一次人工决策：把人工交互节点挂起为 waiting_for_human。
  */
-export function requestHumanDecision(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+export function requestHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   nodeId: GraphNodeId,
   decisionType: HumanDecisionType,
-): IdeaToNovelGraphRunState {
+): S {
   assertValidTransitionState(graph, state);
   const node = graph.nodes.find((n) => n.id === nodeId);
   if (!node) throw new Error(`节点不存在: ${nodeId}`);
@@ -638,13 +685,15 @@ export function requestHumanDecision(
 /**
  * 应用一次人工决策，把人工交互节点完成。
  *
- * 门禁/升级节点的 outcome 条件由节点输出契约（requiredOutcomeCondition）决定。
+ * - `intake_response`：answer 必须带非空、trimmed 的持久化 answerId（凭证制）；
+ *   skip / finish 不需要 answerId；产出 `intake_action` 结果由边条件路由。
+ * - 门禁/升级节点：outcome 条件由节点输出契约（requiredOutcomeCondition）决定。
  */
-export function applyHumanDecision(
-  graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+export function applyHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
+  graph: AnyIdeaToNovelGraphV1,
+  state: S,
   decision: HumanDecisionInput,
-): IdeaToNovelGraphRunState {
+): S {
   assertValidTransitionState(graph, state);
   const pending = state.pendingHumanDecision;
   if (!pending) throw new Error('没有待处理的人工决策');
@@ -663,7 +712,16 @@ export function applyHumanDecision(
   }
 
   let opts: ApplyNodeSuccessOptions = {};
-  if (decision.decisionType !== 'answer_question') {
+  if (decision.decisionType === 'intake_response') {
+    // Idea Intake 回答：graph 只记录持久化凭证语义，不记录回答正文。
+    // answer 必须带非空、trimmed 的 answerId（由 Runtime 先写入权威存储取得）；
+    // 拒绝空 answer / 未持久化的原始文本作为完成证据。
+    if (decision.action === 'answer' && !isTrimmedNonEmpty(decision.answerId)) {
+      throw new Error('intake answer 必须带非空、trimmed 的持久化 answerId');
+    }
+    const intakeAction: IntakeAction = decision.action;
+    opts = { outcome: { condition: 'intake_action', value: intakeAction } };
+  } else {
     // 门禁 / 升级：outcome 条件来自节点输出契约
     const condition = node.output.requiredOutcomeCondition;
     if (condition === null) {
@@ -676,7 +734,7 @@ export function applyHumanDecision(
     opts = { outcome: { condition, value: decision.outcome } as GraphNodeOutcome };
   }
 
-  const cleared: IdeaToNovelGraphRunState = { ...state, pendingHumanDecision: null };
+  const cleared: S = { ...state, pendingHumanDecision: null };
   return completeNode(graph, cleared, decision.nodeId, opts);
 }
 
@@ -684,13 +742,15 @@ export function applyHumanDecision(
  * 判断 run 是否终止（terminalStatus 已设置）。
  */
 export function isRunTerminal(
-  _graph: IdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunState,
+  _graph: AnyIdeaToNovelGraphV1,
+  state: IdeaToNovelGraphRunStateBase,
 ): boolean {
   return state.terminalStatus !== null;
 }
 
 /** 读取当前终止状态（测试辅助） */
-export function terminalStatusOf(state: IdeaToNovelGraphRunState): GraphRunTerminalStatus | null {
+export function terminalStatusOf(
+  state: IdeaToNovelGraphRunStateBase,
+): GraphRunTerminalStatus | null {
   return state.terminalStatus;
 }

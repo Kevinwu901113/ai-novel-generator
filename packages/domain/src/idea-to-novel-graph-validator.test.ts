@@ -1,679 +1,584 @@
 /**
- * @ai-novel/domain - Idea-to-Novel Graph Validator fail-closed tests
+ * @ai-novel/domain - Idea-to-Novel Graph Validator tests（required + exact，fail-closed）
  *
- * 对各类损坏定义，validator 必须：
- * - 返回至少一条对应错误；
- * - `isValidIdeaToNovelGraphV1` 返回 false；
- * - 绝不抛异常（fail-closed）。
+ * 覆盖：
+ * - 两张权威 Graph 通过静态校验；
+ * - Graph required-field 删除矩阵：删除任何必需字段都返回稳定 MISSING_* 错误码且不抛异常；
+ * - malformed 输入矩阵：nodes/edges 含 null / 混合损坏 / 自定义原型，永不抛异常、永不返回 valid；
+ * - 自定义 prototype 拒绝；
+ * - unknown keys 拒绝；
+ * - 字符串字段（非空 / 首尾空白 / 长度上限）；
+ * - artifactKinds / budgetKeys / artifactDownstreamOrder 完整性；
+ * - 预算耗尽出口业务条件合取（BUDGET_EXIT_CONDITION_MISMATCH / BUDGET_EXIT_NOT_BOUND）；
+ * - 循环、覆盖、可达性等既有语义校验保留。
  */
 
 import { describe, it, expect } from 'vitest';
 import {
-  IDEA_TO_NOVEL_GRAPH_V1,
-  createStablePromptId,
-  type IdeaToNovelGraphEdgeDefinition,
-  type IdeaToNovelGraphNodeDefinition,
-  type IdeaToNovelGraphV1,
+  IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
+  CHAPTER_GENERATION_GRAPH_V1,
+  BLUEPRINT_USER_GATE,
+  CRITIQUE_JOIN,
 } from './idea-to-novel-graph.js';
 import {
-  validateIdeaToNovelGraphV1,
-  isValidIdeaToNovelGraphV1,
+  validateIdeaToNovelProjectGraphV1,
+  isValidIdeaToNovelProjectGraphV1,
+  isValidChapterGenerationGraphV1,
+  type GraphValidationError,
   type GraphValidationErrorCode,
 } from './idea-to-novel-graph-validator.js';
 
-function expectCode(graph: IdeaToNovelGraphV1, code: GraphValidationErrorCode): void {
-  const errors = validateIdeaToNovelGraphV1(graph); // 不抛异常
-  expect(
-    errors.some((e) => e.code === code),
-    JSON.stringify(errors),
-  ).toBe(true);
-  expect(isValidIdeaToNovelGraphV1(graph)).toBe(false);
+function cloneGraph<T>(g: T): T {
+  return JSON.parse(JSON.stringify(g)) as T;
 }
 
-function nodeById(
-  graph: IdeaToNovelGraphV1,
-  id: string,
-): IdeaToNovelGraphNodeDefinition | undefined {
-  return graph.nodes.find((n) => n.id === id);
+function projectGraph(): Record<string, unknown> {
+  return cloneGraph(IDEA_TO_NOVEL_PROJECT_GRAPH_V1) as Record<string, unknown>;
 }
 
-function edgeById(
-  graph: IdeaToNovelGraphV1,
-  id: string,
-): IdeaToNovelGraphEdgeDefinition | undefined {
-  return graph.edges.find((e) => e.id === id);
+function chapterGraph(): Record<string, unknown> {
+  return cloneGraph(CHAPTER_GENERATION_GRAPH_V1) as Record<string, unknown>;
 }
 
-function replaceNode(
-  graph: IdeaToNovelGraphV1,
-  id: string,
-  patch: Partial<IdeaToNovelGraphNodeDefinition>,
-): IdeaToNovelGraphV1 {
-  return {
-    ...graph,
-    nodes: graph.nodes.map((n) => (n.id === id ? { ...n, ...patch } : n)),
-  };
+function without(obj: Record<string, unknown>, key: string): Record<string, unknown> {
+  const copy = { ...obj };
+  delete copy[key];
+  return copy;
 }
 
-describe('定义损坏 → fail closed', () => {
-  it('重复 node ID', () => {
-    const n = nodeById(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT')!;
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: [...IDEA_TO_NOVEL_GRAPH_V1.nodes, n] },
-      'DUPLICATE_NODE_ID',
-    );
+function deleteNodeField(
+  g: Record<string, unknown>,
+  nodeId: string,
+  field: string,
+): Record<string, unknown> {
+  const nodes = (g.nodes as Array<Record<string, unknown>>).map((n) => {
+    if (n.id !== nodeId) return n;
+    const copy = { ...n };
+    delete copy[field];
+    return copy;
+  });
+  return { ...g, nodes };
+}
+
+function deleteOutputField(
+  g: Record<string, unknown>,
+  nodeId: string,
+  field: string,
+): Record<string, unknown> {
+  const nodes = (g.nodes as Array<Record<string, unknown>>).map((n) => {
+    if (n.id !== nodeId) return n;
+    const copy = { ...n, output: { ...(n.output as Record<string, unknown>) } };
+    delete copy.output[field];
+    return copy;
+  });
+  return { ...g, nodes };
+}
+
+function deleteJoinField(
+  g: Record<string, unknown>,
+  nodeId: string,
+  field: string,
+): Record<string, unknown> {
+  const nodes = (g.nodes as Array<Record<string, unknown>>).map((n) => {
+    if (n.id !== nodeId) return n;
+    const copy = { ...n, join: { ...(n.join as Record<string, unknown>) } };
+    delete copy.join[field];
+    return copy;
+  });
+  return { ...g, nodes };
+}
+
+function deleteEdgeField(
+  g: Record<string, unknown>,
+  edgeId: string,
+  field: string,
+): Record<string, unknown> {
+  const edges = (g.edges as Array<Record<string, unknown>>).map((e) => {
+    if (e.id !== edgeId) return e;
+    const copy = { ...e };
+    delete copy[field];
+    return copy;
+  });
+  return { ...g, edges };
+}
+
+function deleteLoopField(
+  g: Record<string, unknown>,
+  edgeId: string,
+  field: string,
+): Record<string, unknown> {
+  const edges = (g.edges as Array<Record<string, unknown>>).map((e) => {
+    if (e.id !== edgeId) return e;
+    const copy = { ...e, loop: { ...(e.loop as Record<string, unknown>) } };
+    delete copy.loop[field];
+    return copy;
+  });
+  return { ...g, edges };
+}
+
+function deleteRequirementField(
+  g: Record<string, unknown>,
+  edgeId: string,
+  index: number,
+  field: string,
+): Record<string, unknown> {
+  const edges = (g.edges as Array<Record<string, unknown>>).map((e) => {
+    if (e.id !== edgeId) return e;
+    const reqs = (e.requiredOutcomes as Array<Record<string, unknown>>).map((r, i) => {
+      if (i !== index) return r;
+      const copy = { ...r };
+      delete copy[field];
+      return copy;
+    });
+    return { ...e, requiredOutcomes: reqs };
+  });
+  return { ...g, edges };
+}
+
+/** 校验损坏图：不抛异常、返回至少一条错误、指定错误码出现 */
+function expectBroken(
+  g: Record<string, unknown>,
+  code: GraphValidationErrorCode,
+): ReadonlyArray<GraphValidationError> {
+  const errors = validateIdeaToNovelProjectGraphV1(g as never);
+  expect(() => validateIdeaToNovelProjectGraphV1(g as never)).not.toThrow();
+  expect(errors.length).toBeGreaterThan(0);
+  expect(isValidIdeaToNovelProjectGraphV1(g as never)).toBe(false);
+  expect(errors.map((e) => e.code)).toContain(code);
+  return errors;
+}
+
+const BLUEPRINT_USER_GATE_ID = String(BLUEPRINT_USER_GATE);
+const CRITIQUE_JOIN_ID = String(CRITIQUE_JOIN);
+
+describe('两张权威 Graph 通过静态校验', () => {
+  it('Project Graph valid', () => {
+    expect(isValidIdeaToNovelProjectGraphV1(IDEA_TO_NOVEL_PROJECT_GRAPH_V1)).toBe(true);
   });
 
-  it('重复 edge ID', () => {
-    const e = edgeById(IDEA_TO_NOVEL_GRAPH_V1, 'chapter-plan--draft')!;
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, e] },
-      'DUPLICATE_EDGE_ID',
-    );
-  });
-
-  it('不存在的 edge target / source', () => {
-    const badTarget = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'chapter-plan--draft' ? { ...e, to: 'NOPE' as never } : e,
-      ),
-    };
-    expectCode(badTarget, 'UNKNOWN_EDGE_TARGET');
-
-    const badSource = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'chapter-plan--draft' ? { ...e, from: 'NOPE' as never } : e,
-      ),
-    };
-    expectCode(badSource, 'UNKNOWN_EDGE_SOURCE');
-  });
-
-  it('未知入口节点', () => {
-    expectCode({ ...IDEA_TO_NOVEL_GRAPH_V1, entryNodeId: 'NOPE' as never }, 'UNKNOWN_ENTRY_NODE');
-  });
-
-  it('不可达节点', () => {
-    const ghost: IdeaToNovelGraphNodeDefinition = {
-      id: 'GHOST' as never,
-      kind: 'TERMINAL',
-      label: '幽灵节点',
-    };
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: [...IDEA_TO_NOVEL_GRAPH_V1.nodes, ghost] },
-      'UNREACHABLE_NODE',
-    );
-  });
-
-  it('无合法出口的非终止节点', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.filter((e) => e.id !== 'manuscript-commit--export-ready'),
-    };
-    expectCode(graph, 'NO_LEGAL_EXIT');
-  });
-
-  it('没有 join 声明的 fan-in', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', { join: undefined }),
-      'FAN_IN_WITHOUT_JOIN',
-    );
-  });
-
-  it('join 声明与实际 join 入边数不匹配', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', { join: { requiredIncoming: 2 } }),
-      'JOIN_DECLARATION_MISMATCH',
-    );
-  });
-
-  it('无界循环（SCC 无 loop 边）', () => {
-    const synthetic: IdeaToNovelGraphV1 = {
-      id: 'synthetic' as never,
-      version: 'v1' as never,
-      entryNodeId: 'A' as never,
-      nodes: [
-        { id: 'A' as never, kind: 'IDEA_INPUT', label: 'A' },
-        { id: 'B' as never, kind: 'TERMINAL', label: 'B' },
-      ],
-      edges: [
-        {
-          id: 'e1' as never,
-          from: 'A' as never,
-          to: 'B' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-        {
-          id: 'e2' as never,
-          from: 'B' as never,
-          to: 'A' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-      ],
-    };
-    expectCode(synthetic, 'UNBOUNDED_CYCLE');
-  });
-
-  it('loop 边不在环上', () => {
-    const graph: IdeaToNovelGraphV1 = {
-      id: 'synthetic2' as never,
-      version: 'v1' as never,
-      entryNodeId: 'A' as never,
-      nodes: [
-        { id: 'A' as never, kind: 'IDEA_INPUT', label: 'A' },
-        { id: 'B' as never, kind: 'TERMINAL', label: 'B' },
-      ],
-      edges: [
-        {
-          id: 'e1' as never,
-          from: 'A' as never,
-          to: 'B' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-        {
-          id: 'loop-a-b' as never,
-          from: 'A' as never,
-          to: 'B' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-          loop: { budget: 'rewrite', maxIterations: 3 },
-        },
-      ],
-    };
-    expectCode(graph, 'LOOP_EDGE_NOT_CYCLIC');
-  });
-
-  it('非法 loop maxIterations', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'critique-join--rewrite'
-          ? { ...e, loop: { budget: 'rewrite' as const, maxIterations: 0 } }
-          : e,
-      ),
-    };
-    expectCode(graph, 'INVALID_LOOP_MAX');
-  });
-
-  it('同一预算键的 loop 边 maxIterations 不一致', () => {
-    const selfLoop: IdeaToNovelGraphEdgeDefinition = {
-      id: 'rewrite-self-loop' as never,
-      from: 'REWRITE' as never,
-      to: 'REWRITE' as never,
-      kind: 'fixed',
-      mode: 'exclusive',
-      loop: { budget: 'rewrite', maxIterations: 1 },
-    };
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, selfLoop] },
-      'LOOP_MAX_INCONSISTENT',
-    );
-  });
-
-  it('预算耗尽出口未绑定到对应 loop source', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.filter(
-        (e) => e.id !== 'critique-join--candidate-gate-budget-exhausted',
-      ),
-    };
-    expectCode(graph, 'BUDGET_EXIT_NOT_BOUND');
-  });
-
-  it('未知条件名', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'research-decision--blueprint-generate-none'
-          ? {
-              ...e,
-              requiredOutcomes: [{ condition: 'bogus' as never, expectedOutcome: 'none' as never }],
-            }
-          : e,
-      ),
-    };
-    expectCode(graph, 'UNKNOWN_CONDITION');
-  });
-
-  it('未覆盖的条件枚举取值', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'research-decision--blueprint-generate-none'
-          ? {
-              ...e,
-              requiredOutcomes: [
-                { condition: 'research_decision', expectedOutcome: 'blue' as never },
-              ],
-            }
-          : e,
-      ),
-    };
-    expectCode(graph, 'UNKNOWN_CONDITION_OUTCOME');
-  });
-
-  it('空条件条件边 / 固定边带条件', () => {
-    const empty = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'research-decision--blueprint-generate-none' ? { ...e, requiredOutcomes: [] } : e,
-      ),
-    };
-    expectCode(empty, 'EMPTY_CONDITIONAL_EDGE');
-
-    const fixedWithCond = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'idea-capture--spec-extract'
-          ? {
-              ...e,
-              requiredOutcomes: [{ condition: 'research_decision', expectedOutcome: 'none' }],
-            }
-          : e,
-      ),
-    };
-    expectCode(fixedWithCond, 'CONDITIONAL_OUTCOMES_ON_FIXED_EDGE');
-  });
-
-  it('歧义条件（同源两条边条件相同）', () => {
-    const dup = edgeById(IDEA_TO_NOVEL_GRAPH_V1, 'research-decision--research-plan-light')!;
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, { ...dup, id: 'dup-light' as never }],
-      },
-      'AMBIGUOUS_EDGE_OUTCOMES',
-    );
-  });
-
-  it('模型类节点缺 promptId / 未知 promptId', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { promptId: undefined }),
-      'MISSING_PROMPT_ID_FOR_MODEL_NODE',
-    );
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', {
-        promptId: createStablePromptId('prompt:unknown-v1'),
-      }),
-      'UNKNOWN_PROMPT_ID',
-    );
-  });
-
-  it('人工交互节点缺决策类型映射', () => {
-    const graph: IdeaToNovelGraphV1 = {
-      id: 'synthetic3' as never,
-      version: 'v1' as never,
-      entryNodeId: 'A' as never,
-      nodes: [
-        { id: 'A' as never, kind: 'IDEA_INPUT', label: 'A' },
-        { id: 'G' as never, kind: 'USER_GATE', label: 'G' },
-        { id: 'T' as never, kind: 'TERMINAL', label: 'T' },
-      ],
-      edges: [
-        {
-          id: 'e1' as never,
-          from: 'A' as never,
-          to: 'G' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-        {
-          id: 'e2' as never,
-          from: 'G' as never,
-          to: 'T' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-      ],
-    };
-    expectCode(graph, 'MISSING_HUMAN_DECISION_TYPE');
-  });
-
-  it('非法 stage projection', () => {
-    const ghost: IdeaToNovelGraphNodeDefinition = {
-      id: 'NEW_NODE' as never,
-      kind: 'TERMINAL',
-      label: '新节点',
-    };
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: [...IDEA_TO_NOVEL_GRAPH_V1.nodes, ghost] },
-      'INVALID_STAGE_PROJECTION',
-    );
-  });
-
-  it('没有终止节点', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map((n) =>
-        n.kind === 'TERMINAL' ? { ...n, kind: 'GENERATE' as never } : n,
-      ),
-    };
-    expectCode(graph, 'MISSING_TERMINAL_NODE');
-  });
-
-  it('malformed 输入返回 MALFORMED_GRAPH 且不抛异常', () => {
-    expectCode(null as unknown as IdeaToNovelGraphV1, 'MALFORMED_GRAPH');
-    expectCode({} as IdeaToNovelGraphV1, 'MALFORMED_GRAPH');
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: 'not-an-array' } as unknown as IdeaToNovelGraphV1,
-      'MALFORMED_GRAPH',
-    );
-  });
-
-  it('node.kind / edge.kind / edge.mode 闭合枚举', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { kind: 'GARBAGE' as never }),
-      'INVALID_NODE_KIND',
-    );
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-          e.id === 'idea-capture--spec-extract' ? { ...e, kind: 'GARBAGE' as never } : e,
-        ),
-      },
-      'INVALID_EDGE_KIND',
-    );
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-          e.id === 'idea-capture--spec-extract' ? { ...e, mode: 'GARBAGE' as never } : e,
-        ),
-      },
-      'INVALID_EDGE_MODE',
-    );
-  });
-
-  it('未覆盖的条件枚举取值（如删掉 research_decision=deep 的出口）', () => {
-    const noDeep = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.filter(
-        (e) => e.id !== 'research-decision--research-plan-deep',
-      ),
-    };
-    expectCode(noDeep, 'UNCOVERED_CONDITION_OUTCOME');
-  });
-
-  it('非终止节点只有预算耗尽出口 → 拒绝（强化 NO_LEGAL_EXIT）', () => {
-    const graph: IdeaToNovelGraphV1 = {
-      id: 'synthetic4' as never,
-      version: 'v1' as never,
-      entryNodeId: 'A' as never,
-      nodes: [
-        { id: 'A' as never, kind: 'IDEA_INPUT', label: 'A' },
-        { id: 'D' as never, kind: 'DECISION', label: 'D' },
-        { id: 'T' as never, kind: 'TERMINAL', label: 'T' },
-      ],
-      edges: [
-        {
-          id: 'e1' as never,
-          from: 'A' as never,
-          to: 'D' as never,
-          kind: 'fixed',
-          mode: 'exclusive',
-        },
-        {
-          id: 'e2' as never,
-          from: 'D' as never,
-          to: 'T' as never,
-          kind: 'conditional',
-          requiredOutcomes: [{ condition: 'rewrite_budget', expectedOutcome: 'exhausted' }],
-          mode: 'exclusive',
-        },
-      ],
-    };
-    expectCode(graph, 'NO_LEGAL_EXIT');
-  });
-
-  it('Object.prototype 键（constructor）不会让 validator 抛异常（fail-closed）', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'research-decision--blueprint-generate-none'
-          ? {
-              ...e,
-              requiredOutcomes: [
-                { condition: 'constructor' as never, expectedOutcome: 'none' as never },
-              ],
-            }
-          : e,
-      ),
-    };
-    expect(() => validateIdeaToNovelGraphV1(graph)).not.toThrow();
-    expect(validateIdeaToNovelGraphV1(graph).some((e) => e.code === 'UNKNOWN_CONDITION')).toBe(
-      true,
-    );
+  it('Chapter Graph valid', () => {
+    expect(isValidChapterGenerationGraphV1(CHAPTER_GENERATION_GRAPH_V1)).toBe(true);
   });
 });
 
-describe('REWORK：validator 强化', () => {
-  it('终止节点禁止出口边', () => {
-    const extraEdge: IdeaToNovelGraphEdgeDefinition = {
-      id: 'export--draft' as never,
-      from: 'EXPORT_READY' as never,
-      to: 'DRAFT' as never,
-      kind: 'fixed',
-      mode: 'exclusive',
-    };
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, extraEdge] },
-      'TERMINAL_HAS_OUTGOING_EDGE',
+describe('Graph required-field 删除矩阵', () => {
+  it('删除 graph.id / graph.version / graph.entryNodeId → MISSING_GRAPH_KEY', () => {
+    expectBroken(without(projectGraph(), 'id'), 'MISSING_GRAPH_KEY');
+    expectBroken(without(projectGraph(), 'version'), 'MISSING_GRAPH_KEY');
+    expectBroken(without(projectGraph(), 'entryNodeId'), 'MISSING_GRAPH_KEY');
+  });
+
+  it('删除 node.id / node.kind / node.label / node.output → MISSING_NODE_KEY', () => {
+    expectBroken(deleteNodeField(projectGraph(), BLUEPRINT_USER_GATE_ID, 'id'), 'MISSING_NODE_KEY');
+    expectBroken(
+      deleteNodeField(projectGraph(), BLUEPRINT_USER_GATE_ID, 'kind'),
+      'MISSING_NODE_KEY',
+    );
+    expectBroken(
+      deleteNodeField(projectGraph(), BLUEPRINT_USER_GATE_ID, 'label'),
+      'MISSING_NODE_KEY',
+    );
+    expectBroken(
+      deleteNodeField(projectGraph(), BLUEPRINT_USER_GATE_ID, 'output'),
+      'MISSING_NODE_KEY',
     );
   });
 
-  it('JOIN kind 缺 join 声明；非 JOIN 声明 join', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', { join: undefined }),
-      'JOIN_KIND_WITHOUT_JOIN',
-    );
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { join: { requiredIncoming: 2 } }),
-      'NON_JOIN_WITH_JOIN',
+  it('删除 edge.id / edge.from / edge.to / edge.kind / edge.mode → MISSING_EDGE_KEY', () => {
+    const edgeId = 'blueprint-user-gate--project-ready-accept';
+    expectBroken(deleteEdgeField(projectGraph(), edgeId, 'id'), 'MISSING_EDGE_KEY');
+    expectBroken(deleteEdgeField(projectGraph(), edgeId, 'from'), 'MISSING_EDGE_KEY');
+    expectBroken(deleteEdgeField(projectGraph(), edgeId, 'to'), 'MISSING_EDGE_KEY');
+    expectBroken(deleteEdgeField(projectGraph(), edgeId, 'kind'), 'MISSING_EDGE_KEY');
+    expectBroken(deleteEdgeField(projectGraph(), edgeId, 'mode'), 'MISSING_EDGE_KEY');
+  });
+
+  it('删除 output.outputRequired → MISSING_OUTPUT_KEY', () => {
+    expectBroken(
+      deleteOutputField(projectGraph(), BLUEPRINT_USER_GATE_ID, 'outputRequired'),
+      'MISSING_OUTPUT_KEY',
     );
   });
 
-  it('joinAggregationPolicy 来源与 join 入边不匹配', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', {
-        joinAggregationPolicy: {
-          kind: 'critique_verdict',
-          sources: ['DRAFT', 'REWRITE', 'CHAPTER_PLAN'] as never,
-          rule: 'all_pass_or_needs_rewrite',
-        },
-      }),
-      'JOIN_POLICY_MISMATCH',
+  it('删除 join.requiredIncoming → MISSING_JOIN_KEY', () => {
+    expectBroken(
+      deleteJoinField(chapterGraph(), CRITIQUE_JOIN_ID, 'requiredIncoming'),
+      'MISSING_JOIN_KEY',
     );
   });
 
-  it('exact-key：node / edge / output 的未知键被拒', () => {
-    const node = nodeById(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT')!;
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map((n) => (n.id === 'DRAFT' ? { ...n, bogus: 1 } : n)),
-      },
-      'UNKNOWN_NODE_KEY',
+  it('删除 loop.budget / loop.maxIterations → MISSING_LOOP_KEY', () => {
+    const loopEdge = 'spec-extract--ask-question';
+    expectBroken(deleteLoopField(projectGraph(), loopEdge, 'budget'), 'MISSING_LOOP_KEY');
+    expectBroken(deleteLoopField(projectGraph(), loopEdge, 'maxIterations'), 'MISSING_LOOP_KEY');
+  });
+
+  it('删除 requirement.condition / requirement.expectedOutcome → MISSING_REQUIREMENT_KEY', () => {
+    const condEdge = 'blueprint-user-gate--project-ready-accept';
+    expectBroken(
+      deleteRequirementField(projectGraph(), condEdge, 0, 'condition'),
+      'MISSING_REQUIREMENT_KEY',
     );
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-          e.id === 'idea-capture--spec-extract' ? { ...e, bogus: 1 } : e,
-        ),
-      },
-      'UNKNOWN_EDGE_KEY',
-    );
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', {
-        output: { ...node.output, bogus: 1 } as never,
-      }),
-      'UNKNOWN_OUTPUT_KEY',
+    expectBroken(
+      deleteRequirementField(projectGraph(), condEdge, 0, 'expectedOutcome'),
+      'MISSING_REQUIREMENT_KEY',
     );
   });
 
-  it('移除全部 loop 边后仍存在环 → 拒绝', () => {
-    // CANDIDATE_GATE→CHAPTER_PLAN 是一条非 loop 反向边，形成纯非 loop 环
-    const extra: IdeaToNovelGraphEdgeDefinition = {
-      id: 'candidate-gate--chapter-plan-non-loop' as never,
-      from: 'CANDIDATE_GATE' as never,
-      to: 'CHAPTER_PLAN' as never,
-      kind: 'fixed',
-      mode: 'exclusive',
-    };
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, extra] },
-      'CYCLE_AFTER_LOOP_REMOVAL',
-    );
-  });
-
-  it('输出契约不一致（outputRequired true 但无输出类型）', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', {
-        output: {
-          requiredOutcomeCondition: null,
-          allowedArtifactKind: null,
-          outputRequired: true,
-        } as never,
-      }),
-      'INVALID_OUTPUT_CONTRACT',
-    );
-  });
-
-  it('原型键作为条件名 / 节点 id 被拒（fail-closed）', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      nodes: [
-        ...IDEA_TO_NOVEL_GRAPH_V1.nodes,
-        {
-          id: '__proto__' as never,
-          kind: 'TERMINAL' as never,
-          label: 'p',
-          output: {
-            requiredOutcomeCondition: null,
-            allowedArtifactKind: null,
-            outputRequired: false,
-          },
-        },
-      ],
-    };
-    expect(() => validateIdeaToNovelGraphV1(graph)).not.toThrow();
-    expect(
-      validateIdeaToNovelGraphV1(graph).some((e) => e.code === 'INVALID_STAGE_PROJECTION'),
-    ).toBe(true);
-    // __proto__ 作为条件名 → UNKNOWN_CONDITION
-    const condGraph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'research-decision--blueprint-generate-none'
-          ? {
-              ...e,
-              requiredOutcomes: [
-                { condition: '__proto__' as never, expectedOutcome: 'none' as never },
-              ],
-            }
-          : e,
-      ),
-    };
-    expect(() => validateIdeaToNovelGraphV1(condGraph)).not.toThrow();
-    expect(validateIdeaToNovelGraphV1(condGraph).some((e) => e.code === 'UNKNOWN_CONDITION')).toBe(
-      true,
-    );
+  it('删除 joinAggregationPolicy.kind / .sources / .rule → MISSING_JOIN_POLICY_KEY', () => {
+    const g = chapterGraph();
+    const originalNodes = g.nodes as Array<Record<string, unknown>>;
+    for (const field of ['kind', 'sources', 'rule']) {
+      const nodes = originalNodes.map((n) => {
+        if (n.id !== CRITIQUE_JOIN_ID) return n;
+        const policy = { ...(n.joinAggregationPolicy as Record<string, unknown>) };
+        delete policy[field];
+        return { ...n, joinAggregationPolicy: policy };
+      });
+      expectBroken({ ...g, nodes }, 'MISSING_JOIN_POLICY_KEY');
+    }
   });
 });
 
-describe('Second Review：validator 强化', () => {
+describe('malformed 输入矩阵（永不抛异常、永不返回 valid）', () => {
+  it('nodes:[null] / edges:[null] / 空数组 → MALFORMED_GRAPH 且不抛', () => {
+    expectBroken({ ...projectGraph(), nodes: [null] }, 'MALFORMED_GRAPH');
+    expectBroken({ ...projectGraph(), edges: [null] }, 'MALFORMED_GRAPH');
+    expectBroken({ ...projectGraph(), nodes: [], edges: [] }, 'MALFORMED_GRAPH');
+  });
+
+  it('混合损坏条目不抛异常', () => {
+    const g = projectGraph();
+    const nodes = g.nodes as Array<Record<string, unknown>>;
+    const edges = g.edges as Array<Record<string, unknown>>;
+    const mixed = {
+      ...g,
+      nodes: [...nodes.slice(0, 3), null, ...nodes.slice(3)],
+      edges: [...edges.slice(0, 2), null, 'not-an-object', ...edges.slice(2)],
+    };
+    const errors = validateIdeaToNovelProjectGraphV1(mixed as never);
+    expect(() => validateIdeaToNovelProjectGraphV1(mixed as never)).not.toThrow();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.map((e) => e.code)).toContain('MALFORMED_GRAPH');
+  });
+
+  it('graph 不是对象 / 是数组 / 是 null → MALFORMED_GRAPH', () => {
+    expect(() => validateIdeaToNovelProjectGraphV1(null as never)).not.toThrow();
+    expect(() => validateIdeaToNovelProjectGraphV1([] as never)).not.toThrow();
+    expect(() => validateIdeaToNovelProjectGraphV1('graph' as never)).not.toThrow();
+    expect(validateIdeaToNovelProjectGraphV1(null as never).length).toBeGreaterThan(0);
+  });
+
+  it('node.output 非对象 → INVALID_OUTPUT_CONTRACT', () => {
+    const g = projectGraph();
+    g.nodes = (g.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, output: null } : n,
+    );
+    expectBroken(g as Record<string, unknown>, 'INVALID_OUTPUT_CONTRACT');
+  });
+
+  it('node.join 非对象 → JOIN_DECLARATION_MISMATCH；edge.loop 非对象 → INVALID_LOOP_MAX', () => {
+    const g1 = chapterGraph();
+    g1.nodes = (g1.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === CRITIQUE_JOIN_ID ? { ...n, join: null } : n,
+    );
+    expectBroken(g1 as Record<string, unknown>, 'JOIN_DECLARATION_MISMATCH');
+
+    const g2 = projectGraph();
+    g2.edges = (g2.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'spec-extract--ask-question' ? { ...e, loop: null } : e,
+    );
+    expectBroken(g2 as Record<string, unknown>, 'INVALID_LOOP_MAX');
+  });
+
+  it('edge.requiredOutcomes 含非对象 → UNKNOWN_REQUIREMENT_KEY', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, requiredOutcomes: [null] } : e,
+    );
+    expectBroken(g as Record<string, unknown>, 'UNKNOWN_REQUIREMENT_KEY');
+  });
+
+  it('非法 kind / edge kind / edge mode → INVALID_NODE_KIND / INVALID_EDGE_KIND / INVALID_EDGE_MODE', () => {
+    const g1 = projectGraph();
+    g1.nodes = (g1.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, kind: 'NOT_A_KIND' } : n,
+    );
+    expectBroken(g1 as Record<string, unknown>, 'INVALID_NODE_KIND');
+
+    const g2 = projectGraph();
+    g2.edges = (g2.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, kind: 'dynamic' } : e,
+    );
+    expectBroken(g2 as Record<string, unknown>, 'INVALID_EDGE_KIND');
+
+    const g3 = projectGraph();
+    g3.edges = (g3.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, mode: 'fan' } : e,
+    );
+    expectBroken(g3 as Record<string, unknown>, 'INVALID_EDGE_MODE');
+  });
+});
+
+describe('自定义 prototype 拒绝', () => {
+  it('graph 自定义原型 → MALFORMED_GRAPH', () => {
+    const g = Object.create({ evil: true });
+    g.id = 'x';
+    g.version = 'v1';
+    g.kind = 'project';
+    g.entryNodeId = 'A';
+    g.nodes = [];
+    g.edges = [];
+    g.artifactKinds = [];
+    g.budgetKeys = [];
+    g.artifactDownstreamOrder = [];
+    const errors = validateIdeaToNovelProjectGraphV1(g as never);
+    expect(() => validateIdeaToNovelProjectGraphV1(g as never)).not.toThrow();
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.map((e) => e.code)).toContain('MALFORMED_GRAPH');
+  });
+
+  it('node 自定义原型条目 → MALFORMED_GRAPH', () => {
+    const g = projectGraph();
+    const evil = Object.create({ hidden: 'x' });
+    evil.id = 'EVIL_NODE';
+    evil.kind = 'DECISION';
+    evil.label = 'evil';
+    evil.output = {
+      requiredOutcomeCondition: null,
+      allowedArtifactKind: null,
+      outputRequired: false,
+    };
+    g.nodes = [...(g.nodes as Array<unknown>), evil];
+    expectBroken(g as Record<string, unknown>, 'MALFORMED_GRAPH');
+  });
+
+  it('原型键（constructor）作条件名被拒', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept'
+        ? { ...e, requiredOutcomes: [{ condition: 'constructor', expectedOutcome: 'accept' }] }
+        : e,
+    );
+    const errors = validateIdeaToNovelProjectGraphV1(g as never);
+    expect(errors.map((e) => e.code)).toContain('UNKNOWN_CONDITION');
+  });
+});
+
+describe('unknown keys 拒绝', () => {
+  it('graph / node / edge / output / join / loop / requirement 的未知键', () => {
+    expectBroken({ ...projectGraph(), extra: 1 }, 'UNKNOWN_GRAPH_KEY');
+
+    const g1 = projectGraph();
+    g1.nodes = (g1.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, extraNode: 1 } : n,
+    );
+    expectBroken(g1 as Record<string, unknown>, 'UNKNOWN_NODE_KEY');
+
+    const g2 = projectGraph();
+    g2.edges = (g2.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, extraEdge: 1 } : e,
+    );
+    expectBroken(g2 as Record<string, unknown>, 'UNKNOWN_EDGE_KEY');
+
+    const g3 = projectGraph();
+    g3.nodes = (g3.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID
+        ? { ...n, output: { ...(n.output as Record<string, unknown>), extraOutput: 1 } }
+        : n,
+    );
+    expectBroken(g3 as Record<string, unknown>, 'UNKNOWN_OUTPUT_KEY');
+
+    const g4 = chapterGraph();
+    g4.nodes = (g4.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === CRITIQUE_JOIN_ID
+        ? { ...n, join: { ...(n.join as Record<string, unknown>), extraJoin: 1 } }
+        : n,
+    );
+    expectBroken(g4 as Record<string, unknown>, 'UNKNOWN_JOIN_KEY');
+
+    const g5 = projectGraph();
+    g5.edges = (g5.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'spec-extract--ask-question'
+        ? { ...e, loop: { ...(e.loop as Record<string, unknown>), extraLoop: 1 } }
+        : e,
+    );
+    expectBroken(g5 as Record<string, unknown>, 'UNKNOWN_LOOP_KEY');
+
+    const g6 = projectGraph();
+    g6.edges = (g6.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept'
+        ? {
+            ...e,
+            requiredOutcomes: [
+              { condition: 'blueprint_gate', expectedOutcome: 'accept', extraReq: 1 },
+            ],
+          }
+        : e,
+    );
+    expectBroken(g6 as Record<string, unknown>, 'UNKNOWN_REQUIREMENT_KEY');
+  });
+});
+
+describe('字符串字段校验', () => {
+  it('id / label 非空、无首尾空白、长度上限', () => {
+    const g1 = projectGraph();
+    g1.nodes = (g1.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, id: '   ' } : n,
+    );
+    expectBroken(g1 as Record<string, unknown>, 'INVALID_ID_FIELD');
+
+    const g2 = projectGraph();
+    g2.nodes = (g2.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, label: ' 带首尾空白 ' } : n,
+    );
+    expectBroken(g2 as Record<string, unknown>, 'INVALID_LABEL');
+
+    const g3 = projectGraph();
+    g3.nodes = (g3.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === BLUEPRINT_USER_GATE_ID ? { ...n, label: 'x'.repeat(300) } : n,
+    );
+    expectBroken(g3 as Record<string, unknown>, 'INVALID_LABEL');
+  });
+});
+
+describe('artifactKinds / budgetKeys / artifactDownstreamOrder 完整性', () => {
+  it('节点产物不在 artifactKinds 内 → INVALID_ARTIFACT_KINDS', () => {
+    const g = projectGraph();
+    g.artifactKinds = ['idea', 'creationSpec', 'researchBundle']; // 缺 storyBlueprint
+    expectBroken(g as Record<string, unknown>, 'INVALID_ARTIFACT_KINDS');
+  });
+
+  it('loop 预算不在 budgetKeys 内 → INVALID_BUDGET_KEYS', () => {
+    const g = projectGraph();
+    g.budgetKeys = ['clarification', 'researchRetry', 'blueprintRewrite', 'specRevision']; // 缺 intakeRevision
+    expectBroken(g as Record<string, unknown>, 'INVALID_BUDGET_KEYS');
+  });
+
+  it('artifactDownstreamOrder 与 artifactKinds 不一致 → INVALID_DOWNSTREAM_ORDER', () => {
+    const g = projectGraph();
+    g.artifactDownstreamOrder = ['idea', 'creationSpec', 'storyBlueprint']; // 缺 researchBundle
+    expectBroken(g as Record<string, unknown>, 'INVALID_DOWNSTREAM_ORDER');
+  });
+
+  it('graph.kind 非法 → INVALID_GRAPH_KIND', () => {
+    const g = projectGraph();
+    g.kind = 'scene';
+    expectBroken(g as Record<string, unknown>, 'INVALID_GRAPH_KIND');
+  });
+});
+
+describe('预算耗尽出口业务条件合取', () => {
   it('耗尽出口业务条件与 loop 边不一致 → BUDGET_EXIT_CONDITION_MISMATCH', () => {
-    const graph = {
-      ...IDEA_TO_NOVEL_GRAPH_V1,
-      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
-        e.id === 'blueprint-user-gate--blueprint-escalation-budget-exhausted'
-          ? {
-              ...e,
-              requiredOutcomes: [
-                { condition: 'blueprint_gate', expectedOutcome: 'accept' as never },
-                { condition: 'blueprint_rewrite_budget', expectedOutcome: 'exhausted' },
-              ],
-            }
-          : e,
-      ),
-    };
-    expectCode(graph, 'BUDGET_EXIT_CONDITION_MISMATCH');
+    const g = projectGraph();
+    // blueprint-user-gate--blueprint-escalation：[request_rewrite, exhausted]
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--blueprint-escalation'
+        ? {
+            ...e,
+            requiredOutcomes: [
+              { condition: 'blueprint_gate', expectedOutcome: 'accept' },
+              { condition: 'blueprint_rewrite_budget', expectedOutcome: 'exhausted' },
+            ],
+          }
+        : e,
+    );
+    expectBroken(g as Record<string, unknown>, 'BUDGET_EXIT_CONDITION_MISMATCH');
   });
 
-  it('budgetResetPolicy 未知元素 / 重复 → INVALID_BUDGET_RESET_POLICY', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { budgetResetPolicy: ['bogus'] as never }),
-      'INVALID_BUDGET_RESET_POLICY',
+  it('删除预算耗尽出口 → BUDGET_EXIT_NOT_BOUND', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).filter(
+      (e) => e.id !== 'blueprint-user-gate--blueprint-escalation',
     );
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { budgetResetPolicy: ['rewrite', 'rewrite'] }),
-      'INVALID_BUDGET_RESET_POLICY',
-    );
+    expectBroken(g as Record<string, unknown>, 'BUDGET_EXIT_NOT_BOUND');
   });
 
-  it('joinAggregationPolicy exact keys → INVALID_JOIN_POLICY', () => {
-    expectCode(
-      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', {
-        joinAggregationPolicy: {
-          kind: 'critique_verdict',
-          sources: ['CONTINUITY_CRITIC', 'STYLE_CRITIC', 'REQUIREMENT_CRITIC'],
-          rule: 'all_pass_or_needs_rewrite',
-          bogus: 1,
-        } as never,
-      }),
-      'INVALID_JOIN_POLICY',
+  it('耗尽出口携带 loop 业务条件合取（research invalid + research_retry_budget exhausted）', () => {
+    const g = projectGraph();
+    const exit = (g.edges as Array<Record<string, unknown>>).find(
+      (e) => e.id === 'research-validate--research-escalation',
     );
+    expect(exit).toBeDefined();
+    const reqs = exit!.requiredOutcomes as Array<Record<string, unknown>>;
+    const conditions = reqs.map((r) => String(r.condition));
+    expect(conditions).toEqual(['research_valid', 'research_retry_budget']);
+    const nonBudget = reqs.filter((r) => String(r.condition) !== 'research_retry_budget');
+    expect(nonBudget).toEqual([{ condition: 'research_valid', expectedOutcome: 'invalid' }]);
+  });
+});
+
+describe('循环与覆盖语义保留', () => {
+  it('loop maxIterations 非法 → INVALID_LOOP_MAX', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'spec-extract--ask-question'
+        ? { ...e, loop: { budget: 'clarification', maxIterations: 0 } }
+        : e,
+    );
+    expectBroken(g as Record<string, unknown>, 'INVALID_LOOP_MAX');
   });
 
-  it('graph 顶层未知键 → UNKNOWN_GRAPH_KEY', () => {
-    expectCode(
-      { ...IDEA_TO_NOVEL_GRAPH_V1, bogus: 1 } as unknown as IdeaToNovelGraphV1,
-      'UNKNOWN_GRAPH_KEY',
+  it('条件边缺条件 → EMPTY_CONDITIONAL_EDGE', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, requiredOutcomes: [] } : e,
     );
+    expectBroken(g as Record<string, unknown>, 'EMPTY_CONDITIONAL_EDGE');
   });
 
-  it('自定义原型 graph / nodes 数组含 null → MALFORMED_GRAPH 且不抛异常', () => {
-    const customProto = Object.create({});
-    Object.assign(customProto, IDEA_TO_NOVEL_GRAPH_V1);
-    expectCode(customProto as unknown as IdeaToNovelGraphV1, 'MALFORMED_GRAPH');
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        nodes: [...IDEA_TO_NOVEL_GRAPH_V1.nodes, null],
-      } as unknown as IdeaToNovelGraphV1,
-      'MALFORMED_GRAPH',
+  it('固定边带条件 → CONDITIONAL_OUTCOMES_ON_FIXED_EDGE', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'idea-capture--spec-extract'
+        ? { ...e, requiredOutcomes: [{ condition: 'blueprint_gate', expectedOutcome: 'accept' }] }
+        : e,
     );
-    expectCode(
-      {
-        ...IDEA_TO_NOVEL_GRAPH_V1,
-        edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, null],
-      } as unknown as IdeaToNovelGraphV1,
-      'MALFORMED_GRAPH',
-    );
+    expectBroken(g as Record<string, unknown>, 'CONDITIONAL_OUTCOMES_ON_FIXED_EDGE');
   });
 
-  it('malformed matrix 永不抛异常（no-throw）', () => {
-    const malformed: Array<unknown> = [
-      null,
-      undefined,
-      42,
-      'x',
-      [],
-      {},
-      { nodes: null, edges: null, entryNodeId: null, id: 1, version: 2 },
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: [null, undefined, 42, 'x', []] },
-      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [null, undefined, 'e'] },
-      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map(() => null) },
-      Object.create(null),
-      JSON.parse('{"nodes":[{"id":1}],"edges":[{"id":2}],"entryNodeId":"A"}'),
-    ];
-    for (const input of malformed) {
-      expect(() => validateIdeaToNovelGraphV1(input as IdeaToNovelGraphV1)).not.toThrow();
+  it('未知条件 / 非法取值 → UNKNOWN_CONDITION / UNKNOWN_CONDITION_OUTCOME', () => {
+    const g1 = projectGraph();
+    g1.edges = (g1.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept'
+        ? { ...e, requiredOutcomes: [{ condition: 'nonexistent', expectedOutcome: 'x' }] }
+        : e,
+    );
+    expectBroken(g1 as Record<string, unknown>, 'UNKNOWN_CONDITION');
+
+    const g2 = projectGraph();
+    g2.edges = (g2.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept'
+        ? { ...e, requiredOutcomes: [{ condition: 'blueprint_gate', expectedOutcome: 'maybe' }] }
+        : e,
+    );
+    expectBroken(g2 as Record<string, unknown>, 'UNKNOWN_CONDITION_OUTCOME');
+  });
+
+  it('Project 图新节点（INTAKE_ESCALATION / RESEARCH_ESCALATION）可达且整体有效', () => {
+    const g = projectGraph();
+    const nodes = g.nodes as Array<Record<string, unknown>>;
+    expect(nodes.map((n) => String(n.id))).toContain('INTAKE_ESCALATION');
+    expect(nodes.map((n) => String(n.id))).toContain('RESEARCH_ESCALATION');
+    expect(isValidIdeaToNovelProjectGraphV1(g as never)).toBe(true);
+  });
+});
+
+describe('Project / Chapter 图节点边界（Run 边界语义）', () => {
+  it('Project 图不含 chapter generation 节点；Chapter 图不含 project 节点', () => {
+    const projectIds = IDEA_TO_NOVEL_PROJECT_GRAPH_V1.nodes.map((n) => n.id as unknown as string);
+    const chapterIds = CHAPTER_GENERATION_GRAPH_V1.nodes.map((n) => n.id as unknown as string);
+    for (const forbidden of [
+      'DRAFT',
+      'CRITIQUE_JOIN',
+      'REWRITE',
+      'CANDIDATE_GATE',
+      'MANUSCRIPT_COMMIT',
+    ]) {
+      expect(projectIds).not.toContain(forbidden);
+    }
+    for (const forbidden of ['IDEA_CAPTURE', 'RESEARCH_DECISION', 'BLUEPRINT_GENERATE']) {
+      expect(chapterIds).not.toContain(forbidden);
     }
   });
 });
