@@ -397,6 +397,20 @@ export type {
 } from './research.js';
 export { executeResearch, getResearchBundle } from './research.js';
 
+// ── StoryBlueprint（GE-5）────────────────────────────────────────
+
+export type {
+  StoryBlueprintRepositoryPort,
+  BlueprintDeps,
+  GenerateBlueprintInput,
+} from './blueprint.js';
+export {
+  generateBlueprint,
+  getBlueprint,
+  acceptBlueprint,
+  listBlueprintChapters,
+} from './blueprint.js';
+
 // ── Graph Walking Skeleton（GE-2）────────────────────────────────
 
 export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';

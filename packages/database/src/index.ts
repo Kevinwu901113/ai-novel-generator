@@ -100,4 +100,5 @@ export {
 } from './graph-run-repositories.js';
 export { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
 export { ResearchBundleRepositoryImpl } from './research-repositories.js';
+export { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 export { sha256Utf8 } from './creation-contract-repositories.js';

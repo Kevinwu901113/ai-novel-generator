@@ -113,6 +113,7 @@ import {
   dispatchResearchCommand,
   type ResearchHandlerContext,
 } from './research-handlers.js';
+import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
 import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
 import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
@@ -1570,6 +1571,17 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           fetch: provider.fetch,
         };
         data = await dispatchResearchCommand(request.command, request.payload, researchCtx);
+        break;
+      }
+      case 'blueprint.generate':
+      case 'blueprint.accept':
+      case 'blueprint.listChapters': {
+        const blueprintCtx: BlueprintHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchBlueprintCommand(request.command, request.payload, blueprintCtx);
         break;
       }
       default:

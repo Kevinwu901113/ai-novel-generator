@@ -124,8 +124,9 @@ GE-1 Durable Runtime    → ✅ 已完成（2026-08-04，migration v8）
 GE-2 Walking Skeleton   → ✅ 已完成（2026-08-04，双图全路径 + 故障注入）
 GE-3 Idea Intake 后端   → ✅ 已完成（2026-08-04，死链修复 + 播种 + CreationSpec 失效 + intake 命令）
 GE-4 Research 后端      → ✅ 已完成（2026-08-04，research-engine + 安全边界 + migration v9 + research.execute）
+GE-5 Blueprint 后端     → ✅ 已完成（2026-08-04，StoryBlueprint + migration v10 + blueprint.*）
 GE-3/GE-4 前端          → 后续步骤（Idea Intake 页 + 调研 UI）
-GE-5..GE-7 真实节点     → 下一步
+GE-6..GE-7 真实节点     → 下一步
 GE-8 端到端验收         → 待开始
 GE-9 质量增强           → 待开始
 ```
