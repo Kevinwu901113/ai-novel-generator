@@ -37,11 +37,13 @@ import {
   CANDIDATE_ESCALATION,
   RUN_CANCELLED,
   RUN_BLOCKED,
+  aggregateCritiqueVerdict,
   createWorkflowRunId,
   type GraphId,
   type GraphNodeId,
   type GraphNodeOutcome,
 } from './idea-to-novel-graph.js';
+import { isValidGraphRunState } from './idea-to-novel-graph-state-validation.js';
 import {
   createInitialRunState,
   artifactRef,
@@ -552,34 +554,35 @@ describe('computeNextFrontier 与 frontier 一致性', () => {
   });
 });
 
-describe('预算耗尽人工升级（不自动接受）', () => {
-  function blueprintGateExhausted(): IdeaToNovelGraphRunState {
-    let s = intakeComplete(fresh());
-    s = success(s, RESEARCH_DECISION, {
-      outcome: { condition: 'research_decision', value: 'none' },
-    });
-    s = success(s, BLUEPRINT_GENERATE, { artifactRef: artifactRef('storyBlueprint', 'bp-1') });
-    for (let i = 0; i < 3; i++) {
-      s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
-      s = applyHumanDecision(G, s, {
-        nodeId: BLUEPRINT_USER_GATE,
-        decisionType: 'blueprint_gate',
-        outcome: 'request_rewrite',
-      });
-      s = success(s, BLUEPRINT_GENERATE, {
-        artifactRef: artifactRef('storyBlueprint', `bp-${i + 2}`),
-      });
-    }
-    // 第 4 次 request_rewrite → blueprintRewrite 耗尽 → BLUEPRINT_ESCALATION（而非 CHAPTER_PLAN）
+/** 驱动 BLUEPRINT_USER_GATE 的 request_rewrite 直到 blueprintRewrite 耗尽，返回 BLUEPRINT_ESCALATION 活跃状态 */
+function blueprintGateExhausted(): IdeaToNovelGraphRunState {
+  let s = intakeComplete(fresh());
+  s = success(s, RESEARCH_DECISION, {
+    outcome: { condition: 'research_decision', value: 'none' },
+  });
+  s = success(s, BLUEPRINT_GENERATE, { artifactRef: artifactRef('storyBlueprint', 'bp-1') });
+  for (let i = 0; i < 3; i++) {
     s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
     s = applyHumanDecision(G, s, {
       nodeId: BLUEPRINT_USER_GATE,
       decisionType: 'blueprint_gate',
       outcome: 'request_rewrite',
     });
-    return s;
+    s = success(s, BLUEPRINT_GENERATE, {
+      artifactRef: artifactRef('storyBlueprint', `bp-${i + 2}`),
+    });
   }
+  // 第 4 次 request_rewrite → blueprintRewrite 耗尽 → BLUEPRINT_ESCALATION（而非 CHAPTER_PLAN）
+  s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+  s = applyHumanDecision(G, s, {
+    nodeId: BLUEPRINT_USER_GATE,
+    decisionType: 'blueprint_gate',
+    outcome: 'request_rewrite',
+  });
+  return s;
+}
 
+describe('预算耗尽人工升级（不自动接受）', () => {
   it('blueprintRewrite 耗尽 → 进入 BLUEPRINT_ESCALATION，而非自动 CHAPTER_PLAN', () => {
     const s = blueprintGateExhausted();
     expect(s.attemptBudget.blueprintRewrite).toBe(3);
@@ -807,5 +810,198 @@ describe('transition 前置不变量', () => {
     expect(() =>
       success({ ...s, attemptBudget }, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') }),
     ).toThrow();
+  });
+});
+
+describe('Second Review：预算耗尽 conjunction / 防伪造 / fan-out / blocked', () => {
+  function blueprintGateAtExhaustionWaiting(): IdeaToNovelGraphRunState {
+    let s = intakeComplete(fresh());
+    s = success(s, RESEARCH_DECISION, {
+      outcome: { condition: 'research_decision', value: 'none' },
+    });
+    s = success(s, BLUEPRINT_GENERATE, { artifactRef: artifactRef('storyBlueprint', 'bp-1') });
+    for (let i = 0; i < 3; i++) {
+      s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+      s = applyHumanDecision(G, s, {
+        nodeId: BLUEPRINT_USER_GATE,
+        decisionType: 'blueprint_gate',
+        outcome: 'request_rewrite',
+      });
+      s = success(s, BLUEPRINT_GENERATE, {
+        artifactRef: artifactRef('storyBlueprint', `bp-${i + 2}`),
+      });
+    }
+    return requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+  }
+
+  it('blueprint 预算耗尽后 accept 不双分支（只走 accept → CHAPTER_PLAN）', () => {
+    const s = blueprintGateAtExhaustionWaiting();
+    expect(s.attemptBudget.blueprintRewrite).toBe(3);
+    const next = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_USER_GATE,
+      decisionType: 'blueprint_gate',
+      outcome: 'accept',
+    });
+    expect(frontierOf(next)).toEqual([CHAPTER_PLAN]);
+    expect(next.activeFrontier).not.toContain(BLUEPRINT_ESCALATION);
+  });
+
+  it('blueprint 预算耗尽 + request_rewrite → 进入 BLUEPRINT_ESCALATION（conjunction）', () => {
+    const s = blueprintGateAtExhaustionWaiting();
+    const next = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_USER_GATE,
+      decisionType: 'blueprint_gate',
+      outcome: 'request_rewrite',
+    });
+    expect(frontierOf(next)).toEqual([BLUEPRINT_ESCALATION]);
+  });
+
+  it('candidate 预算耗尽后 accept 不双分支（只走 accept → MANUSCRIPT_COMMIT）', () => {
+    const g = reachedCandidateGate();
+    const s: IdeaToNovelGraphRunState = {
+      ...g,
+      attemptBudget: { ...g.attemptBudget, candidateRewrite: 5, regenerate: 5 },
+    };
+    const next = applyHumanDecision(G, s, {
+      nodeId: CANDIDATE_GATE,
+      decisionType: 'candidate_gate',
+      outcome: 'accept',
+    });
+    expect(frontierOf(next)).toEqual([MANUSCRIPT_COMMIT]);
+    expect(next.activeFrontier).not.toContain(CANDIDATE_ESCALATION);
+  });
+
+  it('candidateRewrite 耗尽 + request_rewrite → CANDIDATE_ESCALATION；regenerate 耗尽 + reject → CANDIDATE_ESCALATION', () => {
+    const g = reachedCandidateGate();
+    const s1: IdeaToNovelGraphRunState = {
+      ...g,
+      attemptBudget: { ...g.attemptBudget, candidateRewrite: 5 },
+    };
+    expect(
+      frontierOf(
+        applyHumanDecision(G, s1, {
+          nodeId: CANDIDATE_GATE,
+          decisionType: 'candidate_gate',
+          outcome: 'request_rewrite',
+        }),
+      ),
+    ).toEqual([CANDIDATE_ESCALATION]);
+
+    const s2: IdeaToNovelGraphRunState = {
+      ...g,
+      attemptBudget: { ...g.attemptBudget, regenerate: 5 },
+    };
+    expect(
+      frontierOf(
+        applyHumanDecision(G, s2, {
+          nodeId: CANDIDATE_GATE,
+          decisionType: 'candidate_gate',
+          outcome: 'reject',
+        }),
+      ),
+    ).toEqual([CANDIDATE_ESCALATION]);
+  });
+
+  it('specRevision 耗尽 + modify_requirements → RUN_BLOCKED（conjunction）', () => {
+    // 先做一次 modify_requirements 得到合法状态，再构造 specRevision 耗尽 + 升级节点重激活
+    const base = blueprintGateExhausted(); // BLUEPRINT_ESCALATION active
+    const waiting = requestHumanDecision(G, base, BLUEPRINT_ESCALATION, 'escalation');
+    const decided = applyHumanDecision(G, waiting, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'modify_requirements',
+    });
+    expect(decided.attemptBudget.specRevision).toBe(1);
+    const crafted: IdeaToNovelGraphRunState = {
+      ...decided,
+      attemptBudget: { ...decided.attemptBudget, specRevision: 3 },
+      nodeStatuses: {
+        ...decided.nodeStatuses,
+        [BLUEPRINT_ESCALATION]: 'active',
+        [SPEC_EXTRACT]: 'pending',
+      },
+      activeFrontier: [BLUEPRINT_ESCALATION],
+    };
+    const waiting2 = requestHumanDecision(G, crafted, BLUEPRINT_ESCALATION, 'escalation');
+    const blocked = applyHumanDecision(G, waiting2, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'modify_requirements',
+    });
+    expect(frontierOf(blocked)).toEqual([RUN_BLOCKED]);
+  });
+
+  it('伪造 JOIN（仅注入 nodeOutcomes、来源未 succeeded）→ 拒绝', () => {
+    const s = fresh();
+    const forged: IdeaToNovelGraphRunState = {
+      ...s,
+      nodeOutcomes: {
+        [CONTINUITY_CRITIC]: { condition: 'critique_verdict', value: 'pass' },
+        [STYLE_CRITIC]: { condition: 'critique_verdict', value: 'pass' },
+        [REQUIREMENT_CRITIC]: { condition: 'critique_verdict', value: 'pass' },
+      },
+    };
+    expect(() => aggregateJoinOutcome(G, forged, CRITIQUE_JOIN)).toThrow();
+  });
+
+  it('fan-out failure：失败节点 failed，其它 active/waiting 节点 cancelled，状态通过权威校验', () => {
+    let s = intakeComplete(fresh());
+    s = success(s, RESEARCH_DECISION, {
+      outcome: { condition: 'research_decision', value: 'none' },
+    });
+    s = success(s, BLUEPRINT_GENERATE, { artifactRef: artifactRef('storyBlueprint', 'bp-1') });
+    s = requestHumanDecision(G, s, BLUEPRINT_USER_GATE, 'blueprint_gate');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_USER_GATE,
+      decisionType: 'blueprint_gate',
+      outcome: 'accept',
+    });
+    s = success(s, CHAPTER_PLAN);
+    s = success(s, DRAFT, { artifactRef: artifactRef('generationRun', 'gen-1') });
+    const failed = applyNodeFailure(G, s, CONTINUITY_CRITIC);
+    expect(failed.terminalStatus).toBe('failed');
+    expect(failed.nodeStatuses[CONTINUITY_CRITIC]).toBe('failed');
+    expect(failed.nodeStatuses[STYLE_CRITIC]).toBe('cancelled');
+    expect(failed.nodeStatuses[REQUIREMENT_CRITIC]).toBe('cancelled');
+    expect(failed.activeFrontier).toEqual([]);
+    expect(failed.pendingHumanDecision).toBeNull();
+    expect(isValidGraphRunState(G, failed)).toBe(true);
+  });
+
+  it('empty aggregate → 抛错', () => {
+    expect(() => aggregateCritiqueVerdict([])).toThrow();
+    expect(() =>
+      aggregateCritiqueVerdict([{ condition: 'critique_verdict', value: 'pass' }]),
+    ).toThrow();
+    expect(() =>
+      aggregateCritiqueVerdict([
+        { condition: 'critique_verdict', value: 'pass' },
+        { condition: 'research_valid', value: 'valid' },
+        { condition: 'critique_verdict', value: 'pass' },
+      ]),
+    ).toThrow();
+  });
+
+  it('blocked 恢复契约：同一 run 不可继续，恢复需创建新 workflow run', () => {
+    let s = blueprintGateExhausted();
+    s = requestHumanDecision(G, s, BLUEPRINT_ESCALATION, 'escalation');
+    s = applyHumanDecision(G, s, {
+      nodeId: BLUEPRINT_ESCALATION,
+      decisionType: 'escalation',
+      outcome: 'continue_later',
+    });
+    s = success(s, RUN_BLOCKED);
+    expect(terminalStatusOf(s)).toBe('blocked');
+    expect(isRunTerminal(G, s)).toBe(true);
+    expect(() => success(s, IDEA_CAPTURE, { artifactRef: artifactRef('idea', 'i') })).toThrow();
+    // 恢复 = 新建 workflow run（全新初始状态，非终止）
+    const newRun = createInitialRunState({
+      graph: G,
+      projectId: PROJECT_ID,
+      workflowRunId: createWorkflowRunId('run-2'),
+      createdAt: '2026-08-03T00:01:00.000Z',
+    });
+    expect(newRun.terminalStatus).toBeNull();
+    expect(frontierOf(newRun)).toEqual([IDEA_CAPTURE]);
   });
 });

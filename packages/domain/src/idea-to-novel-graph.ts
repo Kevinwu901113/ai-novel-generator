@@ -112,7 +112,11 @@ export type CritiqueVerdict = 'pass' | 'needs_rewrite';
 export type EscalationDecision =
   'accept_current' | 'modify_requirements' | 'cancel' | 'continue_later';
 
-/** 运行终止状态 */
+/**
+ * 运行终止状态。
+ *
+ * blocked 是终止态（非同一 run 内可恢复）：恢复必须创建新的 workflow run。
+ */
 export type GraphRunTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'blocked';
 
 /** 人工决策类型（人工节点声明；由 transition 从 Graph 读取） */
@@ -670,7 +674,7 @@ const NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
   {
     id: RUN_BLOCKED,
     kind: 'TERMINAL',
-    label: '已阻塞（可恢复）',
+    label: '已阻塞',
     output: noOut,
     terminalStatus: 'blocked',
   },
@@ -790,7 +794,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: RESEARCH_VALIDATE,
     to: BLUEPRINT_GENERATE,
     kind: 'conditional',
-    requiredOutcomes: [cond('research_retry_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('research_valid', 'invalid'),
+      cond('research_retry_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   // ── Story Blueprint ──────────────────────────────────────────
@@ -823,7 +830,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: BLUEPRINT_USER_GATE,
     to: BLUEPRINT_ESCALATION,
     kind: 'conditional',
-    requiredOutcomes: [cond('blueprint_rewrite_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('blueprint_gate', 'request_rewrite'),
+      cond('blueprint_rewrite_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   {
@@ -864,7 +874,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: BLUEPRINT_ESCALATION,
     to: RUN_BLOCKED,
     kind: 'conditional',
-    requiredOutcomes: [cond('spec_revision_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('escalation_decision', 'modify_requirements'),
+      cond('spec_revision_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   // ── Generation：Draft + 三 Critic 并行 + join ─────────────────
@@ -939,7 +952,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: CRITIQUE_JOIN,
     to: CANDIDATE_GATE,
     kind: 'conditional',
-    requiredOutcomes: [cond('rewrite_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('critique_verdict', 'needs_rewrite'),
+      cond('rewrite_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   {
@@ -995,7 +1011,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: CANDIDATE_GATE,
     to: CANDIDATE_ESCALATION,
     kind: 'conditional',
-    requiredOutcomes: [cond('candidate_rewrite_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('candidate_gate', 'request_rewrite'),
+      cond('candidate_rewrite_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   {
@@ -1003,7 +1022,7 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: CANDIDATE_GATE,
     to: CANDIDATE_ESCALATION,
     kind: 'conditional',
-    requiredOutcomes: [cond('regenerate_budget', 'exhausted')],
+    requiredOutcomes: [cond('candidate_gate', 'reject'), cond('regenerate_budget', 'exhausted')],
     mode: 'exclusive',
   },
   {
@@ -1044,7 +1063,10 @@ const EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
     from: CANDIDATE_ESCALATION,
     to: RUN_BLOCKED,
     kind: 'conditional',
-    requiredOutcomes: [cond('spec_revision_budget', 'exhausted')],
+    requiredOutcomes: [
+      cond('escalation_decision', 'modify_requirements'),
+      cond('spec_revision_budget', 'exhausted'),
+    ],
     mode: 'exclusive',
   },
   // ── Commit → 终止 ─────────────────────────────────────────────
@@ -1100,13 +1122,23 @@ export function getLoopBudgetMax(graph: IdeaToNovelGraphV1, budget: LoopBudgetKe
   return null;
 }
 
-/** 三个 Critic 并行后 join 的聚合结论：全部 pass 才 pass */
+/**
+ * 三个 Critic 并行后 join 的聚合结论：全部 pass 才 pass。
+ *
+ * 要求恰好 3 个合法 critique_verdict 结果；空 / 缺项 / 多项 / 非法 condition 一律抛错。
+ */
 export function aggregateCritiqueVerdict(
   criticOutcomes: ReadonlyArray<GraphNodeOutcome>,
 ): CritiqueVerdict {
-  const allPass = criticOutcomes.every(
-    (o) => o.condition === 'critique_verdict' && o.value === 'pass',
-  );
+  if (criticOutcomes.length !== 3) {
+    throw new Error(`aggregateCritiqueVerdict 要求恰好 3 个结果，实际 ${criticOutcomes.length}`);
+  }
+  for (const o of criticOutcomes) {
+    if (o.condition !== 'critique_verdict') {
+      throw new Error(`aggregateCritiqueVerdict 收到非法 condition: ${o.condition}`);
+    }
+  }
+  const allPass = criticOutcomes.every((o) => o.value === 'pass');
   return allPass ? 'pass' : 'needs_rewrite';
 }
 

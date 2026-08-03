@@ -585,3 +585,95 @@ describe('REWORK：validator 强化', () => {
     );
   });
 });
+
+describe('Second Review：validator 强化', () => {
+  it('耗尽出口业务条件与 loop 边不一致 → BUDGET_EXIT_CONDITION_MISMATCH', () => {
+    const graph = {
+      ...IDEA_TO_NOVEL_GRAPH_V1,
+      edges: IDEA_TO_NOVEL_GRAPH_V1.edges.map((e) =>
+        e.id === 'blueprint-user-gate--blueprint-escalation-budget-exhausted'
+          ? {
+              ...e,
+              requiredOutcomes: [
+                { condition: 'blueprint_gate', expectedOutcome: 'accept' as never },
+                { condition: 'blueprint_rewrite_budget', expectedOutcome: 'exhausted' },
+              ],
+            }
+          : e,
+      ),
+    };
+    expectCode(graph, 'BUDGET_EXIT_CONDITION_MISMATCH');
+  });
+
+  it('budgetResetPolicy 未知元素 / 重复 → INVALID_BUDGET_RESET_POLICY', () => {
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { budgetResetPolicy: ['bogus'] as never }),
+      'INVALID_BUDGET_RESET_POLICY',
+    );
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'DRAFT', { budgetResetPolicy: ['rewrite', 'rewrite'] }),
+      'INVALID_BUDGET_RESET_POLICY',
+    );
+  });
+
+  it('joinAggregationPolicy exact keys → INVALID_JOIN_POLICY', () => {
+    expectCode(
+      replaceNode(IDEA_TO_NOVEL_GRAPH_V1, 'CRITIQUE_JOIN', {
+        joinAggregationPolicy: {
+          kind: 'critique_verdict',
+          sources: ['CONTINUITY_CRITIC', 'STYLE_CRITIC', 'REQUIREMENT_CRITIC'],
+          rule: 'all_pass_or_needs_rewrite',
+          bogus: 1,
+        } as never,
+      }),
+      'INVALID_JOIN_POLICY',
+    );
+  });
+
+  it('graph 顶层未知键 → UNKNOWN_GRAPH_KEY', () => {
+    expectCode(
+      { ...IDEA_TO_NOVEL_GRAPH_V1, bogus: 1 } as unknown as IdeaToNovelGraphV1,
+      'UNKNOWN_GRAPH_KEY',
+    );
+  });
+
+  it('自定义原型 graph / nodes 数组含 null → MALFORMED_GRAPH 且不抛异常', () => {
+    const customProto = Object.create({});
+    Object.assign(customProto, IDEA_TO_NOVEL_GRAPH_V1);
+    expectCode(customProto as unknown as IdeaToNovelGraphV1, 'MALFORMED_GRAPH');
+    expectCode(
+      {
+        ...IDEA_TO_NOVEL_GRAPH_V1,
+        nodes: [...IDEA_TO_NOVEL_GRAPH_V1.nodes, null],
+      } as unknown as IdeaToNovelGraphV1,
+      'MALFORMED_GRAPH',
+    );
+    expectCode(
+      {
+        ...IDEA_TO_NOVEL_GRAPH_V1,
+        edges: [...IDEA_TO_NOVEL_GRAPH_V1.edges, null],
+      } as unknown as IdeaToNovelGraphV1,
+      'MALFORMED_GRAPH',
+    );
+  });
+
+  it('malformed matrix 永不抛异常（no-throw）', () => {
+    const malformed: Array<unknown> = [
+      null,
+      undefined,
+      42,
+      'x',
+      [],
+      {},
+      { nodes: null, edges: null, entryNodeId: null, id: 1, version: 2 },
+      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: [null, undefined, 42, 'x', []] },
+      { ...IDEA_TO_NOVEL_GRAPH_V1, edges: [null, undefined, 'e'] },
+      { ...IDEA_TO_NOVEL_GRAPH_V1, nodes: IDEA_TO_NOVEL_GRAPH_V1.nodes.map(() => null) },
+      Object.create(null),
+      JSON.parse('{"nodes":[{"id":1}],"edges":[{"id":2}],"entryNodeId":"A"}'),
+    ];
+    for (const input of malformed) {
+      expect(() => validateIdeaToNovelGraphV1(input as IdeaToNovelGraphV1)).not.toThrow();
+    }
+  });
+});

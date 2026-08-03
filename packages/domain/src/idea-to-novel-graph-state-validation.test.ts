@@ -156,14 +156,114 @@ describe('validateGraphRunState（graph-aware）', () => {
     expect(hasCode({ ...fresh(), invalidatedArtifacts }, 'STATE_INVALIDATED_DUPLICATE')).toBe(true);
   });
 
-  it('拒绝额外 top-level 键（prototype 安全）', () => {
-    const s = { ...fresh(), __proto__: {}, extra: 1 } as unknown as IdeaToNovelGraphRunState;
-    expect(hasCode(s, 'STATE_EXTRA_KEY')).toBe(true);
+  it('拒绝额外 top-level 键 / 自定义原型（prototype 安全）', () => {
+    expect(
+      hasCode({ ...fresh(), extra: 1 } as unknown as IdeaToNovelGraphRunState, 'STATE_EXTRA_KEY'),
+    ).toBe(true);
+    const customProto = Object.create({});
+    Object.assign(customProto, fresh());
+    expect(
+      hasCode(customProto as unknown as IdeaToNovelGraphRunState, 'STATE_CUSTOM_PROTOTYPE'),
+    ).toBe(true);
   });
 
   it('空 ID → 拒绝', () => {
     expect(
       hasCode({ ...fresh(), projectId: '   ' as unknown as ProjectId }, 'STATE_EMPTY_ID'),
+    ).toBe(true);
+  });
+});
+
+describe('Second Review：state validator 边界', () => {
+  it('unknown 输入矩阵永不抛异常', () => {
+    const malformed: unknown[] = [
+      null,
+      undefined,
+      42,
+      'x',
+      [],
+      {},
+      Object.create({}),
+      Object.create(null),
+      { ...fresh(), __proto__: {} },
+      { ...fresh(), extra: 1 },
+      { graphId: 'g', graphVersion: 'v' },
+    ];
+    for (const input of malformed) {
+      expect(() => validateGraphRunState(G, input)).not.toThrow();
+    }
+  });
+
+  it('缺失必需 top-level 键 → STATE_MISSING_KEY', () => {
+    const s = { ...fresh() };
+    delete (s as Record<string, unknown>).workflowRunId;
+    expect(hasCode(s, 'STATE_MISSING_KEY')).toBe(true);
+  });
+
+  it('consumedEdges 未知 / 重复边 → 拒绝', () => {
+    expect(hasCode({ ...fresh(), consumedEdges: ['no-such-edge'] }, 'STATE_CONSUMED_UNKNOWN')).toBe(
+      true,
+    );
+    expect(
+      hasCode(
+        { ...fresh(), consumedEdges: ['idea-capture--spec-extract', 'idea-capture--spec-extract'] },
+        'STATE_CONSUMED_DUPLICATE',
+      ),
+    ).toBe(true);
+  });
+
+  it('waiting_without_pending：waiting_for_human 节点必须有对应 pending decision', () => {
+    const s = fresh();
+    const nodeStatuses = { ...s.nodeStatuses, IDEA_CAPTURE: 'waiting_for_human' as const };
+    expect(
+      hasCode(
+        { ...s, nodeStatuses, activeFrontier: [IDEA_CAPTURE] },
+        'STATE_PENDING_DECISION_INCONSISTENT',
+      ),
+    ).toBe(true);
+  });
+
+  it('nodeOutcomes：节点未 succeeded / condition 与契约不一致 / value 非法 → 拒绝', () => {
+    const s = fresh();
+    const notSucceeded = {
+      ...s,
+      nodeOutcomes: {
+        IDEA_CAPTURE: { condition: 'clarification_remaining', value: 'spec_complete' },
+      },
+    } as unknown as IdeaToNovelGraphRunState;
+    expect(hasCode(notSucceeded, 'STATE_OUTCOME_NODE_NOT_SUCCEEDED')).toBe(true);
+
+    // IDEA_CAPTURE succeeded，但 outcome condition 与其契约（无 outcome）不一致
+    const nodeStatuses = { ...s.nodeStatuses, IDEA_CAPTURE: 'succeeded' as const };
+    const mismatch = {
+      ...s,
+      nodeStatuses,
+      activeFrontier: [],
+      nodeOutcomes: { IDEA_CAPTURE: { condition: 'research_decision', value: 'none' } },
+    } as unknown as IdeaToNovelGraphRunState;
+    expect(hasCode(mismatch, 'STATE_OUTCOME_CONDITION_MISMATCH')).toBe(true);
+  });
+
+  it('pending decision 嵌套 exact keys → STATE_PENDING_KEYS', () => {
+    const s = {
+      ...fresh(),
+      pendingHumanDecision: { nodeId: 'CANDIDATE_GATE', decisionType: 'candidate_gate', extra: 1 },
+    } as unknown as IdeaToNovelGraphRunState;
+    expect(hasCode(s, 'STATE_PENDING_KEYS')).toBe(true);
+  });
+
+  it('artifact ref 嵌套 exact keys → STATE_ARTIFACT_REF_KEYS', () => {
+    const artifacts = { ...fresh().artifacts, idea: { kind: 'idea', artifactId: 'i', extra: 1 } };
+    const s = { ...fresh(), artifacts } as unknown as IdeaToNovelGraphRunState;
+    expect(hasCode(s, 'STATE_ARTIFACT_REF_KEYS')).toBe(true);
+  });
+
+  it('createdAt 校验 → STATE_CREATED_AT_INVALID', () => {
+    expect(
+      hasCode(
+        { ...fresh(), createdAt: '' } as unknown as IdeaToNovelGraphRunState,
+        'STATE_CREATED_AT_INVALID',
+      ),
     ).toBe(true);
   });
 });

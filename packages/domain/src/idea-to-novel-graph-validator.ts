@@ -90,12 +90,16 @@ export type GraphValidationErrorCode =
   | 'INVALID_EDGE_KIND'
   | 'INVALID_EDGE_MODE'
   | 'INVALID_OUTPUT_CONTRACT'
+  | 'UNKNOWN_GRAPH_KEY'
   | 'UNKNOWN_NODE_KEY'
   | 'UNKNOWN_EDGE_KEY'
   | 'UNKNOWN_OUTPUT_KEY'
   | 'UNKNOWN_JOIN_KEY'
   | 'UNKNOWN_LOOP_KEY'
-  | 'UNKNOWN_REQUIREMENT_KEY';
+  | 'UNKNOWN_REQUIREMENT_KEY'
+  | 'INVALID_JOIN_POLICY'
+  | 'INVALID_BUDGET_RESET_POLICY'
+  | 'BUDGET_EXIT_CONDITION_MISMATCH';
 
 /** 单条校验错误 */
 export interface GraphValidationError {
@@ -114,6 +118,7 @@ function err(
   return { code, message, ...(nodeId ? { nodeId } : {}), ...(edgeId ? { edgeId } : {}) };
 }
 
+const GRAPH_KEYS = new Set(['id', 'version', 'entryNodeId', 'nodes', 'edges']);
 const NODE_KEYS = new Set([
   'id',
   'kind',
@@ -131,15 +136,30 @@ const OUTPUT_KEYS = new Set(['requiredOutcomeCondition', 'allowedArtifactKind', 
 const JOIN_KEYS = new Set(['requiredIncoming']);
 const LOOP_KEYS = new Set(['budget', 'maxIterations']);
 const REQUIREMENT_KEYS = new Set(['condition', 'expectedOutcome']);
+const JOIN_POLICY_KEYS = new Set(['kind', 'sources', 'rule']);
 const HUMAN_DECISION_TYPES = new Set([
   'answer_question',
   'blueprint_gate',
   'candidate_gate',
   'escalation',
 ]);
+const BUDGET_KEYS = new Set([
+  'clarification',
+  'researchRetry',
+  'blueprintRewrite',
+  'rewrite',
+  'candidateRewrite',
+  'regenerate',
+  'specRevision',
+]);
 
+/**
+ * 仅接受 Object.prototype 或 null prototype 的普通对象；自定义原型 / 数组 / null 拒绝。
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 /** 缺失/损坏 output 时的安全默认值（fail-closed，不崩溃） */
@@ -177,14 +197,17 @@ function requirementKey(edge: IdeaToNovelGraphEdgeDefinition): string {
     .join('|');
 }
 
-function isReachable(graph: IdeaToNovelGraphV1, from: GraphNodeId): Set<GraphNodeId> {
+function isReachable(
+  edges: ReadonlyArray<IdeaToNovelGraphEdgeDefinition>,
+  from: GraphNodeId,
+): Set<GraphNodeId> {
   const seen = new Set<GraphNodeId>();
   const stack: GraphNodeId[] = [from];
   while (stack.length > 0) {
     const current = stack.pop();
     if (!current || seen.has(current)) continue;
     seen.add(current);
-    for (const edge of graph.edges) {
+    for (const edge of edges) {
       if (edge.from === current && !seen.has(edge.to)) stack.push(edge.to);
     }
   }
@@ -245,20 +268,42 @@ function strongComponents(
 export function validateIdeaToNovelGraphV1(
   graph: IdeaToNovelGraphV1,
 ): ReadonlyArray<GraphValidationError> {
-  if (!graph || typeof graph !== 'object') {
-    return [err('MALFORMED_GRAPH', 'graph 不是对象')];
+  const errors: GraphValidationError[] = [];
+  if (!isPlainObject(graph)) {
+    return [err('MALFORMED_GRAPH', 'graph 不是普通对象')];
   }
-  const nodes: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = Array.isArray(graph.nodes)
-    ? graph.nodes
-    : [];
-  const edges: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = Array.isArray(graph.edges)
-    ? graph.edges
-    : [];
-  if (nodes.length === 0 || edges.length === 0 || typeof graph.entryNodeId !== 'string') {
-    return [err('MALFORMED_GRAPH', 'nodes / edges / entryNodeId 缺失')];
+  checkExactKeys(errors, graph, GRAPH_KEYS, 'UNKNOWN_GRAPH_KEY', 'graph');
+  if (
+    !Array.isArray(graph.nodes) ||
+    !Array.isArray(graph.edges) ||
+    typeof graph.entryNodeId !== 'string'
+  ) {
+    return [err('MALFORMED_GRAPH', 'nodes / edges / entryNodeId 缺失或类型错误')];
   }
 
-  const errors: GraphValidationError[] = [];
+  // 先安全解析 shape：剔除非普通对象条目，避免后续语义校验解引用 null/损坏项
+  const rawNodes = graph.nodes as unknown[];
+  const rawEdges = graph.edges as unknown[];
+  const nodes: IdeaToNovelGraphNodeDefinition[] = [];
+  for (const raw of rawNodes) {
+    if (isPlainObject(raw)) {
+      nodes.push(raw as unknown as IdeaToNovelGraphNodeDefinition);
+    } else {
+      errors.push(err('MALFORMED_GRAPH', 'nodes 数组含非对象条目'));
+    }
+  }
+  const edges: IdeaToNovelGraphEdgeDefinition[] = [];
+  for (const raw of rawEdges) {
+    if (isPlainObject(raw)) {
+      edges.push(raw as unknown as IdeaToNovelGraphEdgeDefinition);
+    } else {
+      errors.push(err('MALFORMED_GRAPH', 'edges 数组含非对象条目'));
+    }
+  }
+  if (nodes.length === 0 || edges.length === 0) {
+    errors.push(err('MALFORMED_GRAPH', 'nodes / edges 为空'));
+  }
+
   const nodeIds = nodes.map((n) => n.id);
 
   // 入口节点存在
@@ -373,14 +418,40 @@ export function validateIdeaToNovelGraphV1(
         `节点 ${String(node.id)}.join`,
       );
     }
-    if (node.budgetResetPolicy !== undefined && !Array.isArray(node.budgetResetPolicy)) {
-      errors.push(
-        err(
-          'INVALID_OUTPUT_CONTRACT',
-          `节点 ${String(node.id)} 的 budgetResetPolicy 非法`,
-          node.id,
-        ),
-      );
+    // budgetResetPolicy：必须是闭合预算键数组、无重复
+    if (node.budgetResetPolicy !== undefined) {
+      if (!Array.isArray(node.budgetResetPolicy)) {
+        errors.push(
+          err(
+            'INVALID_BUDGET_RESET_POLICY',
+            `节点 ${String(node.id)} 的 budgetResetPolicy 必须是数组`,
+            node.id,
+          ),
+        );
+      } else {
+        const seen = new Set<string>();
+        for (const key of node.budgetResetPolicy) {
+          if (!BUDGET_KEYS.has(key)) {
+            errors.push(
+              err(
+                'INVALID_BUDGET_RESET_POLICY',
+                `节点 ${String(node.id)} 的 budgetResetPolicy 含未知预算 ${String(key)}`,
+                node.id,
+              ),
+            );
+          }
+          if (seen.has(key)) {
+            errors.push(
+              err(
+                'INVALID_BUDGET_RESET_POLICY',
+                `节点 ${String(node.id)} 的 budgetResetPolicy 含重复预算 ${String(key)}`,
+                node.id,
+              ),
+            );
+          }
+          seen.add(String(key));
+        }
+      }
     }
   }
 
@@ -581,10 +652,28 @@ export function validateIdeaToNovelGraphV1(
     }
     if (node.joinAggregationPolicy) {
       const policy = node.joinAggregationPolicy;
+      if (!isPlainObject(policy)) {
+        errors.push(
+          err('INVALID_JOIN_POLICY', `节点 ${node.id} 的 joinAggregationPolicy 不是对象`, node.id),
+        );
+      } else {
+        checkExactKeys(
+          errors,
+          policy,
+          JOIN_POLICY_KEYS,
+          'INVALID_JOIN_POLICY',
+          `节点 ${node.id}.joinAggregationPolicy`,
+        );
+      }
       if (policy.kind !== 'critique_verdict' || policy.rule !== 'all_pass_or_needs_rewrite') {
         errors.push(err('JOIN_POLICY_MISMATCH', `节点 ${node.id} 的聚合策略非法`, node.id));
       }
-      const sources = [...policy.sources];
+      if (!Array.isArray(policy.sources)) {
+        errors.push(
+          err('INVALID_JOIN_POLICY', `节点 ${node.id} 的策略 sources 必须是数组`, node.id),
+        );
+      }
+      const sources = [...(Array.isArray(policy.sources) ? policy.sources : [])];
       if (new Set(sources).size !== sources.length) {
         errors.push(err('JOIN_POLICY_MISMATCH', `节点 ${node.id} 的策略来源重复`, node.id));
       }
@@ -618,23 +707,31 @@ export function validateIdeaToNovelGraphV1(
     sources.add(edge.from);
     loopSourcesByBudget.set(budget, sources);
     // loop 边必须在环上
-    const reachableFromTarget = isReachable(graph, edge.to);
+    const reachableFromTarget = isReachable(edges, edge.to);
     if (!reachableFromTarget.has(edge.from)) {
       errors.push(err('LOOP_EDGE_NOT_CYCLIC', `loop 边 ${edge.id} 不在环上`, undefined, edge.id));
     }
   }
-  // 每个预算的 loop source 必须有绑定到同一 source 的耗尽出口
+  // 每个预算的 loop source 必须有绑定到同一 source 的耗尽出口，
+  // 且耗尽出口的非预算条件必须与对应 loop 边完全一致（业务条件合取）
+  const nonBudgetRequirementKey = (e: IdeaToNovelGraphEdgeDefinition): string =>
+    (e.requiredOutcomes ?? [])
+      .filter((r) => !BUDGET_CONDITION_NAMES.has(r.condition))
+      .map((r) => `${r.condition}=${r.expectedOutcome}`)
+      .sort()
+      .join('|');
   for (const [budget, sources] of loopSourcesByBudget) {
     const condition = LOOP_BUDGET_CONDITION_BY_KEY[budget];
     for (const source of sources) {
-      const hasBoundExit = edges.some(
+      const loopEdges = edges.filter((e) => e.from === source && e.loop?.budget === budget);
+      const exhaustedEdges = edges.filter(
         (e) =>
           e.from === source &&
           (e.requiredOutcomes ?? []).some(
             (r) => r.condition === condition && r.expectedOutcome === 'exhausted',
           ),
       );
-      if (!hasBoundExit) {
+      if (exhaustedEdges.length === 0) {
         errors.push(
           err(
             'BUDGET_EXIT_NOT_BOUND',
@@ -642,6 +739,23 @@ export function validateIdeaToNovelGraphV1(
             source,
           ),
         );
+        continue;
+      }
+      // 耗尽出口的业务条件必须与每条 loop 边一致（非预算 requiredOutcomes 完全一致）
+      for (const loopEdge of loopEdges) {
+        const loopKey = nonBudgetRequirementKey(loopEdge);
+        for (const exitEdge of exhaustedEdges) {
+          if (nonBudgetRequirementKey(exitEdge) !== loopKey) {
+            errors.push(
+              err(
+                'BUDGET_EXIT_CONDITION_MISMATCH',
+                `预算 ${budget} 的耗尽出口 ${exitEdge.id} 业务条件与 loop 边 ${loopEdge.id} 不一致`,
+                source,
+                exitEdge.id,
+              ),
+            );
+          }
+        }
       }
     }
   }
@@ -767,7 +881,7 @@ export function validateIdeaToNovelGraphV1(
   }
 
   // 6. 可达性
-  const reachable = isReachable(graph, graph.entryNodeId);
+  const reachable = isReachable(edges, graph.entryNodeId);
   for (const node of nodes) {
     if (!reachable.has(node.id)) {
       errors.push(err('UNREACHABLE_NODE', `节点不可达: ${node.id}`, node.id));
