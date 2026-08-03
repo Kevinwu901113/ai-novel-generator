@@ -107,6 +107,7 @@ import {
 } from './grill-plan-runner.js';
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
 import { dispatchGraphCommand, type GraphHandlerContext } from './graph-handlers.js';
+import { dispatchIntakeCommand } from './intake-handlers.js';
 import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
 import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
@@ -1457,6 +1458,8 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'grill.listSessions':
       case 'grill.startSession':
       case 'grill.pauseSession':
+      case 'grill.listQuestions':
+      case 'grill.markQuestionAsked':
       case 'grill.resumeSession':
       case 'grill.completeSession':
       case 'grill.abandonSession':
@@ -1541,6 +1544,17 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           clock: createClock(),
         };
         data = dispatchGraphCommand(request.command, request.payload, graphCtx);
+        break;
+      }
+      case 'intake.createIntakeSession':
+      case 'intake.getActiveIntakeSession':
+      case 'intake.propagateSpecInvalidation': {
+        const intakeCtx: GrillHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchIntakeCommand(request.command, request.payload, intakeCtx);
         break;
       }
       default:

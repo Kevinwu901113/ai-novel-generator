@@ -40,6 +40,7 @@ import {
   addGrillQuestions,
   answerGrillQuestion,
   skipGrillQuestion,
+  markQuestionAsked,
   supersedeGrillQuestion,
   getCurrentAnswers,
   listAnswerHistory,
@@ -601,7 +602,10 @@ function toQuestionPlanProposalPublicData(
 
 // ── Deps 构建 ─────────────────────────────────────────────────────
 
-function buildDeps(projDb: ProjectDatabase, ctx: GrillHandlerContext): GrillSessionDeps {
+export function buildGrillSessionDeps(
+  projDb: ProjectDatabase,
+  ctx: GrillHandlerContext,
+): GrillSessionDeps {
   return {
     idGenerator: ctx.idGenerator,
     clock: ctx.clock,
@@ -632,7 +636,7 @@ function handleCreateSession(payload: unknown, ctx: GrillHandlerContext): unknow
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     const session = createGrillSession(deps, { projectId: payload.projectId, goal: payload.goal });
     return toSessionPublicData(session);
   } finally {
@@ -646,7 +650,7 @@ function handleGetSession(payload: unknown, ctx: GrillHandlerContext): unknown {
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return toSessionPublicData(getGrillSession(deps, { sessionId: payload.sessionId }));
   } finally {
     projDb.close();
@@ -663,7 +667,7 @@ function handleListSessions(payload: unknown, ctx: GrillHandlerContext): unknown
   }
   const projDb = ctx.getProjectDb(projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return listGrillSessions(deps, { projectId }).map(toSessionPublicData);
   } finally {
     projDb.close();
@@ -680,7 +684,7 @@ function handleSessionTransition(
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     const input = { sessionId: payload.sessionId, expectedVersion: payload.expectedVersion };
     const fn = {
       start: startGrillSession,
@@ -701,7 +705,7 @@ function handleAddQuestions(payload: unknown, ctx: GrillHandlerContext): unknown
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     const questions = addGrillQuestions(deps, {
       sessionId: payload.sessionId,
       expectedVersion: payload.expectedVersion,
@@ -719,7 +723,7 @@ function handleAnswerQuestion(payload: unknown, ctx: GrillHandlerContext): unkno
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     const answer = answerGrillQuestion(deps, {
       sessionId: payload.sessionId,
       expectedVersion: payload.expectedVersion,
@@ -739,9 +743,28 @@ function handleSkipQuestion(payload: unknown, ctx: GrillHandlerContext): unknown
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return toQuestionPublicData(
       skipGrillQuestion(deps, {
+        sessionId: payload.sessionId,
+        expectedVersion: payload.expectedVersion,
+        questionId: payload.questionId,
+      }),
+    );
+  } finally {
+    projDb.close();
+  }
+}
+
+function handleMarkQuestionAsked(payload: unknown, ctx: GrillHandlerContext): unknown {
+  if (!isValidGrillQuestionActionInput(payload)) {
+    throw new AppError('GRILL_VALIDATION_ERROR', '无效的标记已提问输入');
+  }
+  const projDb = ctx.getProjectDb(payload.projectId);
+  try {
+    const deps = buildGrillSessionDeps(projDb, ctx);
+    return toQuestionPublicData(
+      markQuestionAsked(deps, {
         sessionId: payload.sessionId,
         expectedVersion: payload.expectedVersion,
         questionId: payload.questionId,
@@ -758,7 +781,7 @@ function handleSupersedeQuestion(payload: unknown, ctx: GrillHandlerContext): un
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return toQuestionPublicData(
       supersedeGrillQuestion(deps, {
         sessionId: payload.sessionId,
@@ -777,7 +800,7 @@ function handleGetCurrentAnswers(payload: unknown, ctx: GrillHandlerContext): un
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return getCurrentAnswers(deps, { sessionId: payload.sessionId }).map(toAnswerPublicData);
   } finally {
     projDb.close();
@@ -790,7 +813,7 @@ function handleListQuestions(payload: unknown, ctx: GrillHandlerContext): unknow
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     // Verify session exists
     getGrillSession(deps, { sessionId: payload.sessionId });
     // List questions from repository
@@ -806,7 +829,7 @@ function handleListAnswerHistory(payload: unknown, ctx: GrillHandlerContext): un
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return listAnswerHistory(deps, {
       sessionId: payload.sessionId,
       questionId: payload.questionId,
@@ -822,7 +845,7 @@ function handleCreateProposal(payload: unknown, ctx: GrillHandlerContext): unkno
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return toProposalPublicData(
       createGrillProposal(deps, {
         sessionId: payload.sessionId,
@@ -845,7 +868,7 @@ function handleReviewProposal(payload: unknown, ctx: GrillHandlerContext): unkno
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return toProposalPublicData(
       reviewGrillProposal(deps, {
         sessionId: payload.sessionId,
@@ -865,7 +888,7 @@ function handleListProposals(payload: unknown, ctx: GrillHandlerContext): unknow
   }
   const projDb = ctx.getProjectDb(payload.projectId);
   try {
-    const deps = buildDeps(projDb, ctx);
+    const deps = buildGrillSessionDeps(projDb, ctx);
     return listGrillProposals(deps, { sessionId: payload.sessionId }).map(toProposalPublicData);
   } finally {
     projDb.close();
@@ -942,6 +965,8 @@ export function dispatchGrillCommand(
       return handleListSessions(payload, ctx);
     case 'grill.listQuestions':
       return handleListQuestions(payload, ctx);
+    case 'grill.markQuestionAsked':
+      return handleMarkQuestionAsked(payload, ctx);
     case 'grill.startSession':
       return handleSessionTransition(payload, ctx, 'start');
     case 'grill.pauseSession':

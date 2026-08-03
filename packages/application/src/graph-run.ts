@@ -24,6 +24,7 @@ import type {
 import {
   CHAPTER_GENERATION_GRAPH_ID,
   IDEA_TO_NOVEL_PROJECT_GRAPH_ID,
+  applyArtifactChange as applyArtifactChangeTransition,
   applyNodeFailure as applyNodeFailureTransition,
   applyHumanDecision as applyHumanDecisionTransition,
   applyNodeSuccess as applyNodeSuccessTransition,
@@ -444,6 +445,72 @@ export function failNode(deps: GraphRunDeps, input: FailNodeInput): GraphRunTran
       id: input.idempotencyKey,
       runId: input.runId,
       commandType: 'failNode',
+      payloadHash,
+      appliedExpectedVersion: record.expectedVersion,
+      appliedAt: now,
+    });
+    return { run: next, deduped: false };
+  });
+}
+
+/** applyArtifactChange 输入（上游权威 artifact 变化 → 级联失效下游） */
+export interface ApplyArtifactChangeInput {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly artifactKind: string;
+  readonly artifactId: string;
+  readonly idempotencyKey: string;
+}
+
+/**
+ * 应用一次权威 artifact 变化：更新 artifacts[changed.kind] 并把严格下游加入
+ * invalidatedArtifacts（按 Graph artifactDownstreamOrder）。CreationSpec 更新 → 失效
+ * researchBundle/storyBlueprint；generationRun 更新 → 失效 manuscript（GE-7 澄清）。
+ */
+export function applyArtifactChange(
+  deps: GraphRunDeps,
+  input: ApplyArtifactChangeInput,
+): GraphRunTransitionResult {
+  return deps.tx.runInTransaction((repos) => {
+    const now = deps.clock.now();
+    const payloadHash = deps.hashPayload(
+      canonicalJson({
+        command: 'applyArtifactChange',
+        runId: input.runId,
+        artifactKind: input.artifactKind,
+        artifactId: input.artifactId,
+      }),
+    );
+
+    const existing = repos.commandLog.get(input.idempotencyKey);
+    if (existing) {
+      if (existing.payloadHash !== payloadHash) {
+        throw new GraphRunIdempotencyConflictError();
+      }
+      return { run: loadRun(repos.graphRunRepo, input.runId).state, deduped: true };
+    }
+
+    const record = loadRun(repos.graphRunRepo, input.runId);
+    const graph = resolveGraph(deps, record.state.graphId);
+    if (!graph.artifactKinds.includes(input.artifactKind as never)) {
+      throw new GraphRunValidationError(`artifact kind 不在本图槽位: ${input.artifactKind}`);
+    }
+
+    const changed = artifactRef(input.artifactKind as never, input.artifactId);
+    let next: AnyIdeaToNovelRunState;
+    try {
+      next = applyArtifactChangeTransition(record.state, changed, graph.artifactDownstreamOrder);
+    } catch (err) {
+      throw toGraphRunError(err);
+    }
+    assertValidState(graph, next);
+
+    const ok = repos.graphRunRepo.saveWithCas(input.runId, record.expectedVersion, next, now);
+    if (!ok) throw new GraphRunVersionConflictError(input.runId);
+    repos.commandLog.insert({
+      id: input.idempotencyKey,
+      runId: input.runId,
+      commandType: 'applyArtifactChange',
       payloadHash,
       appliedExpectedVersion: record.expectedVersion,
       appliedAt: now,
