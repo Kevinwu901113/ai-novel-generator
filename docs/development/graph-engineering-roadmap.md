@@ -308,10 +308,10 @@ gate 决策、终态）。
 
 ## 15. 当前推进位置
 
-- **当前阶段**：GE-0（权威文档收束）执行中；GE-1 待启动。
+- **当前阶段**：GE-1（Durable Graph Runtime Kernel）已完成；GE-2 待启动。
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
-- **下一步**：GE-1 — Durable Graph Runtime Kernel。
-- **验收标准**：本文件 §6 的 GE-1 退出条件。
+- **下一步**：GE-2 — 双 Graph Walking Skeleton（确定性 fake executors）。
+- **验收标准**：本文件 §7 的 GE-2 退出条件。
 
 ## 16. 已删除的历史资料
 

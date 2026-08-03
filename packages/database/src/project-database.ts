@@ -25,6 +25,12 @@ import {
   ChapterRepositoryImpl,
   ChapterVersionRepositoryImpl,
 } from './manuscript-repositories.js';
+import {
+  GraphRunRepositoryImpl,
+  GraphRunCommandLogRepositoryImpl,
+  IdeaIntakeAnswerPortImpl,
+} from './graph-run-repositories.js';
+import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -694,6 +700,67 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
       BEGIN SELECT RAISE(ABORT, 'chapter_versions is append-only'); END;
     `,
   },
+  {
+    version: 8,
+    sql: `
+      -- ── Graph Run Runtime（GE-1）────────────────────────────────
+      -- 统一 graph_runs 表（kind 判别）+ graph_run_commands 幂等日志表。
+      -- state_json 存完整校验后的 domain run 状态；expected_version 独立列作 CAS 守卫。
+      -- chapter-only 绑定列可空 + CHECK (kind)；kind='project' 时绑定列必须为空。
+
+      CREATE TABLE IF NOT EXISTS graph_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('project','chapter')),
+        graph_id TEXT NOT NULL,
+        graph_version TEXT NOT NULL,
+        terminal_status TEXT CHECK (terminal_status IN ('completed','failed','cancelled','blocked')),
+        state_json TEXT NOT NULL CHECK (json_valid(state_json)),
+        expected_version INTEGER NOT NULL DEFAULT 1 CHECK (expected_version >= 1),
+        creation_spec_version_id TEXT,
+        research_bundle_id TEXT,
+        story_blueprint_id TEXT,
+        blueprint_chapter_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        CHECK (
+          (kind = 'chapter' AND
+             creation_spec_version_id IS NOT NULL AND
+             story_blueprint_id IS NOT NULL AND
+             blueprint_chapter_id IS NOT NULL)
+          OR
+          (kind = 'project' AND
+             creation_spec_version_id IS NULL AND
+             research_bundle_id IS NULL AND
+             story_blueprint_id IS NULL AND
+             blueprint_chapter_id IS NULL)
+        )
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_graph_runs_project_created
+        ON graph_runs(project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_graph_runs_terminal
+        ON graph_runs(terminal_status) WHERE terminal_status IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_graph_runs_active
+        ON graph_runs(id) WHERE terminal_status IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_graph_runs_chapter_blueprint
+        ON graph_runs(blueprint_chapter_id) WHERE blueprint_chapter_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS graph_run_commands (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        command_type TEXT NOT NULL,
+        payload_hash TEXT NOT NULL CHECK (length(payload_hash) = 64),
+        applied_expected_version INTEGER NOT NULL CHECK (applied_expected_version >= 0),
+        applied_at TEXT NOT NULL,
+        FOREIGN KEY (run_id) REFERENCES graph_runs(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_graph_run_commands_run
+        ON graph_run_commands(run_id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1170,6 +1237,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly manuscriptRepo: ManuscriptRepositoryImpl;
   private readonly chapterRepo: ChapterRepositoryImpl;
   private readonly chapterVersionRepo: ChapterVersionRepositoryImpl;
+  private readonly graphRunRepo: GraphRunRepositoryImpl;
+  private readonly graphRunCommandLogRepo: GraphRunCommandLogRepositoryImpl;
+  private readonly graphRunTransaction: GraphRunTransactionPortImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1198,6 +1268,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.manuscriptRepo = new ManuscriptRepositoryImpl(this.db);
     this.chapterRepo = new ChapterRepositoryImpl(this.db);
     this.chapterVersionRepo = new ChapterVersionRepositoryImpl(this.db);
+    this.graphRunRepo = new GraphRunRepositoryImpl(this.db);
+    this.graphRunCommandLogRepo = new GraphRunCommandLogRepositoryImpl(this.db);
+    this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1262,6 +1335,22 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getChapterVersionRepository(): ChapterVersionRepository {
     return this.chapterVersionRepo;
+  }
+
+  getGraphRunRepository(): GraphRunRepositoryImpl {
+    return this.graphRunRepo;
+  }
+
+  getGraphRunCommandLogRepository(): GraphRunCommandLogRepositoryImpl {
+    return this.graphRunCommandLogRepo;
+  }
+
+  getGraphRunTransaction(): GraphRunTransactionPortImpl {
+    return this.graphRunTransaction;
+  }
+
+  getIdeaIntakeAnswerPort(): IdeaIntakeAnswerPortImpl {
+    return new IdeaIntakeAnswerPortImpl(this.db);
   }
 
   transaction<T>(fn: () => T): T {

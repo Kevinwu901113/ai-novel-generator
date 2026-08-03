@@ -325,3 +325,54 @@ export { rebalanceManuscript, computeTargetPosition } from './manuscript-positio
 export type { PositionContext } from './manuscript-position.js';
 
 export { chapterVersionPortFrom } from './manuscript-conversion.js';
+
+// ── Graph Run Runtime（GE-1）────────────────────────────────────
+
+export type {
+  GraphRunKind,
+  GraphRunStateRecord,
+  GraphRunCommandRecord,
+  GraphRunRepositoryPort,
+  GraphRunCommandLogPort,
+  IdeaIntakeAnswerPort,
+  GraphRunTransactionRepositories,
+  GraphRunTransactionPort,
+} from './graph-run-types.js';
+
+export {
+  GraphRunNotFoundError,
+  GraphRunVersionConflictError,
+  GraphRunStateConflictError,
+  GraphRunValidationError,
+  GraphRunIdempotencyConflictError,
+  GraphRunInterruptedError,
+  GraphRunNestedTransactionError,
+  GraphRunTransactionBusyError,
+  GraphRunTransactionError,
+  GraphRunAsyncTransactionCallbackError,
+} from './graph-run-errors.js';
+
+export type { GraphRunDeps } from './graph-run.js';
+export type {
+  CreateProjectRunInput,
+  CreateChapterRunInput,
+  GetRunProgressInput,
+  AdvanceNodeInput,
+  FailNodeInput,
+  RequestHumanDecisionInput,
+  ApplyHumanDecisionInput,
+  ListRunsInput,
+  GraphRunTransitionResult,
+} from './graph-run.js';
+
+export {
+  createProjectRun,
+  createChapterRun,
+  getRunProgress,
+  advanceNode,
+  failNode,
+  requestHumanDecision,
+  applyHumanDecision,
+  listRuns,
+  recoverInFlightRuns,
+} from './graph-run.js';

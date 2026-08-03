@@ -63,7 +63,7 @@ const MAX_PUBLIC_ID_LENGTH = 128;
  * 空白）、长度 ≤ `MAX_PUBLIC_ID_LENGTH`。answerId 的规则与 Domain `AnswerReceiptId`
  * （`isAnswerReceiptId`）完全一致 —— 非空 + trimmed + ≤128。
  */
-function isBoundedTrimmedId(value: unknown): value is string {
+export function isBoundedTrimmedId(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     value.trim().length > 0 &&
@@ -76,7 +76,7 @@ function isBoundedTrimmedId(value: unknown): value is string {
  * required + exact 结构校验：普通对象、必需键齐全、无额外键。
  * 不使用 `value as Record<string, unknown>` 绕过 —— 由 isPlainObject 安全收窄。
  */
-function hasRequiredExactKeys(
+export function hasRequiredExactKeys(
   value: unknown,
   required: ReadonlyArray<string>,
 ): value is Record<string, unknown> {

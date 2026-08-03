@@ -60,6 +60,33 @@ export type CreationSpecVersionId = string & { readonly __brand: 'CreationSpecVe
 /** 蓝图章节标识（Chapter run 输入引用） */
 export type BlueprintChapterId = string & { readonly __brand: 'BlueprintChapterId' };
 
+function createChapterBindingId(raw: string): string {
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('Chapter 绑定引用不能为空');
+  }
+  return raw;
+}
+
+/** 构造创作要求版本标识（运行时注入，domain 不生成） */
+export function createCreationSpecVersionId(raw: string): CreationSpecVersionId {
+  return createChapterBindingId(raw) as CreationSpecVersionId;
+}
+
+/** 构造蓝图章节标识（运行时注入，domain 不生成） */
+export function createBlueprintChapterId(raw: string): BlueprintChapterId {
+  return createChapterBindingId(raw) as BlueprintChapterId;
+}
+
+/** 构造调研资料包标识（运行时注入，domain 不生成） */
+export function createResearchBundleArtifactId(raw: string): ResearchBundleArtifactId {
+  return createChapterBindingId(raw) as ResearchBundleArtifactId;
+}
+
+/** 构造故事蓝图标识（运行时注入，domain 不生成） */
+export function createStoryBlueprintArtifactId(raw: string): StoryBlueprintArtifactId {
+  return createChapterBindingId(raw) as StoryBlueprintArtifactId;
+}
+
 function createArtifactId(raw: string): string {
   if (typeof raw !== 'string' || raw.trim().length === 0) {
     throw new Error('ArtifactId 不能为空');

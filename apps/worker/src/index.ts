@@ -106,6 +106,9 @@ import {
   type GrillPlanScheduleResult,
 } from './grill-plan-runner.js';
 import { dispatchContractCommand, type ContractHandlerContext } from './contract-handlers.js';
+import { dispatchGraphCommand, type GraphHandlerContext } from './graph-handlers.js';
+import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
+import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
   scheduleContractDraftRun,
   settleContractDraftRunnerFailure,
@@ -756,6 +759,38 @@ function initialize(): void {
 
   // 恢复 PENDING 的创作契约草案任务（异步调度）
   recoverPendingContractDrafts(dataRoot);
+
+  // 恢复中断的 Graph run（active 节点 → failed；waiting_for_human 不触碰）
+  recoverGraphRuns();
+}
+
+/**
+ * Graph run 启动恢复：对每个项目的非终态 run 中处于 active 的节点执行 fail 路径。
+ * 安全可重放（CAS + 幂等键 recover:{runId}:{nodeId}:{expectedVersion}）。
+ */
+function recoverGraphRuns(): void {
+  if (!appDb) return;
+  const projects = appDb.getProjectIndexRepository().list();
+  for (const project of projects) {
+    const dbPath = join(project.projectDirectory, 'project.sqlite');
+    if (!existsSync(dbPath)) continue;
+    try {
+      const projDb = new ProjectDatabase(dbPath);
+      const deps: GraphRunDeps = {
+        idGenerator: createIdGenerator(),
+        clock: createClock(),
+        hashPayload: (payload: string) => sha256Hex(payload),
+        tx: projDb.getGraphRunTransaction(),
+        projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
+        chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
+      };
+      recoverInFlightRuns(deps);
+      projDb.close();
+    } catch (err) {
+      // 非致命：单个项目恢复失败不阻断启动
+      console.error(`recoverGraphRuns: project ${project.id} failed`, err);
+    }
+  }
 }
 
 /**
@@ -1490,6 +1525,22 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
             runContractDraft(projectId, taskId),
         };
         data = dispatchContractCommand(request.command, request.payload, contractCtx);
+        break;
+      }
+      case 'graph.createProjectRun':
+      case 'graph.createChapterRun':
+      case 'graph.getRunProgress':
+      case 'graph.advanceNode':
+      case 'graph.failNode':
+      case 'graph.requestHumanDecision':
+      case 'graph.applyHumanDecision':
+      case 'graph.listRuns': {
+        const graphCtx: GraphHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchGraphCommand(request.command, request.payload, graphCtx);
         break;
       }
       default:

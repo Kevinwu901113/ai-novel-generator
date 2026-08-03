@@ -50,6 +50,11 @@ const IPC_CHANNELS = {
   CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
   CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
   CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
+  GRAPH_CREATE_PROJECT_RUN: 'ipc:graph-create-project-run',
+  GRAPH_CREATE_CHAPTER_RUN: 'ipc:graph-create-chapter-run',
+  GRAPH_GET_RUN_PROGRESS: 'ipc:graph-get-run-progress',
+  GRAPH_APPLY_HUMAN_DECISION: 'ipc:graph-apply-human-decision',
+  GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
 } as const;
 
 /**
@@ -104,6 +109,13 @@ import type {
   ContractVersionPublicData,
   ContractVersionSummary,
   ProposalPublicData,
+  CreateProjectRunInputDto,
+  CreateChapterRunInputDto,
+  GetRunProgressInputDto,
+  ApplyHumanDecisionInputDto,
+  ListRunsInputDto,
+  GraphProgressProjectionDto,
+  GraphRunSummaryDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -333,6 +345,30 @@ const desktopAPI: DesktopAPI = {
 
     async unlockField(input: UnlockContractFieldInput): Promise<ContractVersionPublicData> {
       return ipcRenderer.invoke(IPC_CHANNELS.CONTRACT_UNLOCK_FIELD, input);
+    },
+  },
+
+  graph: {
+    async createProjectRun(input: CreateProjectRunInputDto): Promise<GraphProgressProjectionDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_CREATE_PROJECT_RUN, input);
+    },
+
+    async createChapterRun(input: CreateChapterRunInputDto): Promise<GraphProgressProjectionDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_CREATE_CHAPTER_RUN, input);
+    },
+
+    async getRunProgress(input: GetRunProgressInputDto): Promise<GraphProgressProjectionDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_GET_RUN_PROGRESS, input);
+    },
+
+    async applyHumanDecision(
+      input: ApplyHumanDecisionInputDto,
+    ): Promise<GraphProgressProjectionDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_APPLY_HUMAN_DECISION, input);
+    },
+
+    async listRuns(input: ListRunsInputDto): Promise<ReadonlyArray<GraphRunSummaryDto>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_LIST_RUNS, input);
     },
   },
 };
