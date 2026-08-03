@@ -121,8 +121,8 @@ Manuscript、Export、重启恢复。
 ```text
 GE-0 权威文档收束      → ✅ 已完成（2026-08-04）
 GE-1 Durable Runtime   → ✅ 已完成（2026-08-04，migration v8）
-GE-2 Walking Skeleton  → 下一步（前置：GE-1）
-GE-3..GE-7 真实节点    → 待开始
+GE-2 Walking Skeleton  → ✅ 已完成（2026-08-04，双图全路径 + 故障注入）
+GE-3..GE-7 真实节点    → 下一步（GE-3 起）
 GE-8 端到端验收        → 待开始
 GE-9 质量增强          → 待开始
 ```

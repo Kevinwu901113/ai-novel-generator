@@ -376,3 +376,8 @@ export {
   listRuns,
   recoverInFlightRuns,
 } from './graph-run.js';
+
+// ── Graph Walking Skeleton（GE-2）────────────────────────────────
+
+export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';
+export { fakeProducerForNode, runFakeUntilHumanOrTerminal } from './graph-skeleton.js';
