@@ -335,8 +335,11 @@ function parseArtifacts(
   return errors.length > 0 ? parsedErr(errors) : parsedOk(parsed);
 }
 
-/** invalidatedArtifacts：数组 + 合法 ref + 无重复 */
-function parseInvalidatedArtifacts(raw: unknown): Parsed<ReadonlyArray<ParsedArtifactRef>> {
+/** invalidatedArtifacts：数组 + 合法 ref + kind 限于本图合法槽位 + 无重复 */
+function parseInvalidatedArtifacts(
+  raw: unknown,
+  legalKinds: ReadonlySet<string>,
+): Parsed<ReadonlyArray<ParsedArtifactRef>> {
   if (!Array.isArray(raw)) {
     return parsedErr([se('STATE_INVALIDATED_DUPLICATE', 'invalidatedArtifacts 必须是数组')]);
   }
@@ -359,6 +362,16 @@ function parseInvalidatedArtifacts(raw: unknown): Parsed<ReadonlyArray<ParsedArt
     const artifactId = ref.artifactId;
     if (!isTrimmedNonEmpty(kind) || !isTrimmedNonEmpty(artifactId)) {
       errors.push(se('STATE_EMPTY_ID', 'invalidated artifact ID 为空'));
+      continue;
+    }
+    // invalidatedArtifacts 的 kind 必须限于本 Graph 的合法 artifact 槽位
+    if (!legalKinds.has(kind)) {
+      errors.push(
+        se(
+          'STATE_ARTIFACT_KIND_UNKNOWN',
+          `invalidated artifact kind 不在本 Graph 合法槽位内: ${kind}`,
+        ),
+      );
       continue;
     }
     const key = `${kind}:${artifactId}`;
@@ -522,7 +535,10 @@ export function validateGraphRunState(
   const artifacts = parseArtifacts(state.artifacts, graph.artifactKinds);
   if (!artifacts.ok) errors.push(...artifacts.errors);
 
-  const invalidated = parseInvalidatedArtifacts(state.invalidatedArtifacts);
+  const invalidated = parseInvalidatedArtifacts(
+    state.invalidatedArtifacts,
+    new Set(graph.artifactKinds),
+  );
   if (!invalidated.ok) errors.push(...invalidated.errors);
 
   const consumedEdges = parseConsumedEdges(state.consumedEdges, knownEdgeIds);

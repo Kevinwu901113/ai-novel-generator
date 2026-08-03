@@ -107,6 +107,43 @@ export type ClarificationRemaining = 'ask_more' | 'spec_complete';
 /** Idea Intake 回答动作（graph 只记录持久化凭证语义，不记录回答正文） */
 export type IntakeAction = 'answer' | 'skip' | 'finish';
 
+/**
+ * Idea Intake 回答凭证（原子事务 receipt）。
+ *
+ * 原子事务 receipt 契约：
+ * 1. Runtime 先把用户回答正文写入现有 Grill/Idea Intake 权威存储（同一事务内持久化）；
+ * 2. 事务成功提交后返回本 receipt（`AnswerReceiptId`，非空、trimmed、无首尾空白）；
+ * 3. 再推进 Graph transition —— Graph 只记录 receipt，绝不接受/保存回答正文。
+ *
+ * Graph 不解释 receipt 的内容，只校验其非空、trimmed 且长度有界。
+ */
+export type AnswerReceiptId = string & { readonly __brand: 'AnswerReceiptId' };
+
+const MAX_ANSWER_RECEIPT_LENGTH = 128;
+
+export function createAnswerReceiptId(raw: string): AnswerReceiptId {
+  if (typeof raw !== 'string' || raw.trim().length === 0) {
+    throw new Error('AnswerReceiptId 不能为空');
+  }
+  if (raw !== raw.trim()) {
+    throw new Error('AnswerReceiptId 不得含首尾空白');
+  }
+  if (raw.length > MAX_ANSWER_RECEIPT_LENGTH) {
+    throw new Error(`AnswerReceiptId 超过长度上限 ${MAX_ANSWER_RECEIPT_LENGTH}`);
+  }
+  return raw as AnswerReceiptId;
+}
+
+/** 校验一个值是否为合法 AnswerReceiptId（非空、trimmed、长度有界） */
+export function isAnswerReceiptId(value: unknown): value is AnswerReceiptId {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value === value.trim() &&
+    value.length <= MAX_ANSWER_RECEIPT_LENGTH
+  );
+}
+
 /** 澄清预算耗尽时的人工升级决策 */
 export type IntakeEscalationDecision =
   'continue_with_current_spec' | 'modify_idea' | 'cancel' | 'continue_later';
@@ -149,6 +186,12 @@ export type HumanDecisionType =
 export type ArtifactKind =
   'idea' | 'creationSpec' | 'researchBundle' | 'storyBlueprint' | 'generationRun' | 'manuscript';
 
+/** Project Graph 的 artifact 槽位（状态类型/运行时真正只含这些键） */
+export type ProjectArtifactKind = 'idea' | 'creationSpec' | 'researchBundle' | 'storyBlueprint';
+
+/** Chapter Graph 的 artifact 槽位（状态类型/运行时真正只含这些键） */
+export type ChapterArtifactKind = 'generationRun' | 'manuscript';
+
 /**
  * 有界循环预算键。
  *
@@ -164,6 +207,13 @@ export type LoopBudgetKey =
   | 'rewrite'
   | 'candidateRewrite'
   | 'regenerate';
+
+/** Project Graph 的预算键（状态类型/运行时真正只含这些键） */
+export type ProjectBudgetKey =
+  'clarification' | 'intakeRevision' | 'researchRetry' | 'blueprintRewrite' | 'specRevision';
+
+/** Chapter Graph 的预算键（状态类型/运行时真正只含这些键） */
+export type ChapterBudgetKey = 'rewrite' | 'candidateRewrite' | 'regenerate';
 
 /** 预算耗尽条件名：`<key>_budget` */
 export type LoopBudgetConditionName =
@@ -495,11 +545,17 @@ export interface IdeaToNovelGraphDefinitionBase {
 /** 项目级 Graph：idea → creationSpec → researchBundle → storyBlueprint → PROJECT_READY */
 export interface IdeaToNovelProjectGraphV1 extends IdeaToNovelGraphDefinitionBase {
   readonly kind: 'project';
+  readonly artifactKinds: ReadonlyArray<ProjectArtifactKind>;
+  readonly budgetKeys: ReadonlyArray<ProjectBudgetKey>;
+  readonly artifactDownstreamOrder: ReadonlyArray<ProjectArtifactKind>;
 }
 
 /** 章节级 Graph：CHAPTER_PLAN → DRAFT → 三 Critic → CRITIQUE_JOIN → REWRITE → CANDIDATE_GATE → MANUSCRIPT_COMMIT → CHAPTER_READY */
 export interface ChapterGenerationGraphV1 extends IdeaToNovelGraphDefinitionBase {
   readonly kind: 'chapter';
+  readonly artifactKinds: ReadonlyArray<ChapterArtifactKind>;
+  readonly budgetKeys: ReadonlyArray<ChapterBudgetKey>;
+  readonly artifactDownstreamOrder: ReadonlyArray<ChapterArtifactKind>;
 }
 
 /** 任意一张 Idea-to-Novel Graph V1 */
@@ -1034,7 +1090,7 @@ const PROJECT_EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
 ];
 
 /** 项目级权威 artifact 槽位 */
-export const PROJECT_ARTIFACT_KINDS: readonly ArtifactKind[] = [
+export const PROJECT_ARTIFACT_KINDS: readonly ProjectArtifactKind[] = [
   'idea',
   'creationSpec',
   'researchBundle',
@@ -1042,7 +1098,7 @@ export const PROJECT_ARTIFACT_KINDS: readonly ArtifactKind[] = [
 ];
 
 /** 项目级权威预算键 */
-export const PROJECT_BUDGET_KEYS: readonly LoopBudgetKey[] = [
+export const PROJECT_BUDGET_KEYS: readonly ProjectBudgetKey[] = [
   'clarification',
   'intakeRevision',
   'researchRetry',
@@ -1051,7 +1107,7 @@ export const PROJECT_BUDGET_KEYS: readonly LoopBudgetKey[] = [
 ];
 
 /** 项目级 artifact 下游依赖顺序（级联失效） */
-export const PROJECT_ARTIFACT_DOWNSTREAM_ORDER: readonly ArtifactKind[] = [
+export const PROJECT_ARTIFACT_DOWNSTREAM_ORDER: readonly ProjectArtifactKind[] = [
   'idea',
   'creationSpec',
   'researchBundle',
@@ -1365,17 +1421,20 @@ const CHAPTER_EDGES: ReadonlyArray<IdeaToNovelGraphEdgeDefinition> = [
 ];
 
 /** 章节级权威 artifact 槽位 */
-export const CHAPTER_ARTIFACT_KINDS: readonly ArtifactKind[] = ['generationRun', 'manuscript'];
+export const CHAPTER_ARTIFACT_KINDS: readonly ChapterArtifactKind[] = [
+  'generationRun',
+  'manuscript',
+];
 
 /** 章节级权威预算键 */
-export const CHAPTER_BUDGET_KEYS: readonly LoopBudgetKey[] = [
+export const CHAPTER_BUDGET_KEYS: readonly ChapterBudgetKey[] = [
   'rewrite',
   'candidateRewrite',
   'regenerate',
 ];
 
 /** 章节级 artifact 下游依赖顺序（级联失效） */
-export const CHAPTER_ARTIFACT_DOWNSTREAM_ORDER: readonly ArtifactKind[] = [
+export const CHAPTER_ARTIFACT_DOWNSTREAM_ORDER: readonly ChapterArtifactKind[] = [
   'generationRun',
   'manuscript',
 ];

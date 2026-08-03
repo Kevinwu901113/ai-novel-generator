@@ -298,11 +298,19 @@ function safeOutput(node: IdeaToNovelGraphNodeDefinition): {
   return { requiredOutcomeCondition: null, allowedArtifactKind: null };
 }
 
-/** 只取已通过 shape 校验的 requirement（损坏条目已在 shape 阶段报告，语义阶段跳过） */
+/**
+ * 只取已通过 shape 校验的 requirement（损坏条目已在 shape 阶段报告，语义阶段跳过）。
+ *
+ * requiredOutcomes 可能是任何损坏值（非数组 / null / 原始类型）：
+ * 必须先用 Array.isArray 守卫，避免对原始值调用 `.filter` 抛异常。
+ */
 function safeRequirements(
   edge: IdeaToNovelGraphEdgeDefinition,
 ): ReadonlyArray<EdgeOutcomeRequirement> {
-  return (edge.requiredOutcomes ?? []).filter(isPlainObject);
+  const raw = edge.requiredOutcomes;
+  if (!Array.isArray(raw)) return [];
+  // 元素已在 shape 阶段校验为普通对象；此处仅为取合法元素做二次防御
+  return raw.filter(isPlainObject) as unknown as ReadonlyArray<EdgeOutcomeRequirement>;
 }
 
 function requirementKey(edge: IdeaToNovelGraphEdgeDefinition): string {
@@ -1047,7 +1055,10 @@ function validateGraphDefinition(
   // （join 来源的产出由 joinAggregationPolicy 消费，其覆盖由 JOIN_POLICY_MISMATCH 检查保证）
   const joinSourceIds = new Set<GraphNodeId>();
   for (const n of nodes) {
-    for (const src of n.joinAggregationPolicy?.sources ?? []) joinSourceIds.add(src);
+    // sources 可能是任何损坏值：先守卫 Array.isArray，避免 for...of 对原始值抛异常
+    const sources = n.joinAggregationPolicy?.sources;
+    if (!Array.isArray(sources)) continue;
+    for (const src of sources) joinSourceIds.add(src);
   }
   for (const node of nodes) {
     if (typeof node.id !== 'string') continue;

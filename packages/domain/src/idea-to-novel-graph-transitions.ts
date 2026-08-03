@@ -38,6 +38,7 @@ import {
   getLoopBudgetMax,
   isGraphConditionOutcome,
   isTerminalKind,
+  type AnswerReceiptId,
   type AnyIdeaToNovelGraphV1,
   type BlueprintGateDecision,
   type CandidateGateDecision,
@@ -55,8 +56,8 @@ import {
   type ResearchEscalationDecision,
 } from './idea-to-novel-graph.js';
 import type {
+  AnyIdeaToNovelRunState,
   ArtifactRef,
-  IdeaToNovelGraphRunStateBase,
   PendingHumanDecision,
 } from './idea-to-novel-graph-state.js';
 import { applyArtifactChange } from './idea-to-novel-graph-invalidation.js';
@@ -72,10 +73,12 @@ export interface ApplyNodeSuccessOptions {
 }
 
 /**
- * Idea Intake 回答决策（凭证制）。
+ * Idea Intake 回答决策（凭证制，原子事务 receipt）。
  *
- * - answer：必须带非空、trimmed 的 `answerId`；graph 只记录持久化凭证，不记录回答正文。
- *   未来 Runtime 须先把回答写入现有 Grill/Idea Intake 权威存储取得 answerId，再推进 transition。
+ * - answer：必须带非空、trimmed 的 `answerId`（`AnswerReceiptId`）。Graph 只记录持久化凭证，
+ *   不记录回答正文。原子事务 receipt 契约：未来 Runtime 先把回答写入现有 Grill/Idea Intake
+ *   权威存储（同一事务持久化提交），取得 receipt 后再推进 Graph transition；
+ *   graph 拒绝空 receipt / 未持久化的原始文本作为完成证据。
  * - skip：不需要 answerId，表示用户跳过当前问题。
  * - finish：不需要 answerId，表示用户主动结束访谈。
  */
@@ -84,7 +87,7 @@ export type IntakeHumanDecision =
       readonly nodeId: GraphNodeId;
       readonly decisionType: 'intake_response';
       readonly action: 'answer';
-      readonly answerId: string;
+      readonly answerId: AnswerReceiptId;
     }
   | {
       readonly nodeId: GraphNodeId;
@@ -130,7 +133,7 @@ export type HumanDecisionInput =
  */
 export function assertValidTransitionState(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
 ): void {
   const errors = validateGraphRunState(graph, state);
   if (errors.length > 0) {
@@ -151,15 +154,26 @@ function isTrimmedNonEmpty(value: string): boolean {
   return value.trim().length > 0;
 }
 
+/**
+ * 读取状态预算计数（宽松视图）。
+ *
+ * 状态类型把 attemptBudget 拆成各 Graph 的预算键子集；transition 中出现的预算键
+ * 都来自本图 loop 边（graph-aware validator 保证 ∈ graph.budgetKeys ⊆ 状态预算键），
+ * 因此对完整 LoopBudgetKey 视图的读取是安全的。
+ */
+function attemptBudgetOf(state: AnyIdeaToNovelRunState): Readonly<Record<LoopBudgetKey, number>> {
+  return state.attemptBudget as Readonly<Record<LoopBudgetKey, number>>;
+}
+
 function matchesBudgetState(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
   budget: LoopBudgetKey,
   expected: string,
 ): boolean {
   const max = getLoopBudgetMax(graph, budget);
   if (max === null) return false;
-  const used = state.attemptBudget[budget];
+  const used = attemptBudgetOf(state)[budget];
   if (expected === 'available') return used < max;
   if (expected === 'exhausted') return used >= max;
   return false;
@@ -173,7 +187,7 @@ function matchesBudgetState(
  */
 export function canTraverseEdge(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
   edgeId: string,
 ): boolean {
   const edge = graph.edges.find((e) => e.id === edgeId);
@@ -264,7 +278,7 @@ export function computeLoopBodyNodes(
  */
 export function routesFrom(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
   sourceId: GraphNodeId,
 ): ReadonlyArray<IdeaToNovelGraphEdgeDefinition> {
   if (state.nodeStatuses[sourceId] !== 'succeeded') return [];
@@ -281,7 +295,7 @@ export function routesFrom(
 /** 边是否被来源实际走（用于 join 判定与 frontier 计算） */
 export function isEdgeTaken(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
   edgeId: string,
 ): boolean {
   const edge = graph.edges.find((e) => e.id === edgeId);
@@ -300,7 +314,7 @@ export function isEdgeTaken(
  */
 export function computeNextFrontier(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
 ): ReadonlyArray<GraphNodeId> {
   const result: GraphNodeId[] = [];
   for (const node of graph.nodes) {
@@ -333,7 +347,7 @@ export function computeNextFrontier(
  */
 export function aggregateJoinOutcome(
   graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
   joinNodeId: GraphNodeId,
 ): GraphNodeOutcome {
   const node = graph.nodes.find((n) => n.id === joinNodeId);
@@ -384,17 +398,16 @@ export function aggregateJoinOutcome(
 
 // ── 内部状态变更辅助 ────────────────────────────────────────────
 
-function incrementBudget<S extends IdeaToNovelGraphRunStateBase>(
-  state: S,
-  budget: LoopBudgetKey,
-): S {
-  return {
-    ...state,
-    attemptBudget: { ...state.attemptBudget, [budget]: state.attemptBudget[budget] + 1 },
-  };
+function incrementBudget<S extends AnyIdeaToNovelRunState>(state: S, budget: LoopBudgetKey): S {
+  const current = attemptBudgetOf(state);
+  const nextBudget = {
+    ...current,
+    [budget]: current[budget] + 1,
+  } as S['attemptBudget'];
+  return { ...state, attemptBudget: nextBudget };
 }
 
-function unconsumeEdges<S extends IdeaToNovelGraphRunStateBase>(
+function unconsumeEdges<S extends AnyIdeaToNovelRunState>(
   state: S,
   edgeIds: ReadonlyArray<string>,
 ): S {
@@ -403,7 +416,7 @@ function unconsumeEdges<S extends IdeaToNovelGraphRunStateBase>(
   return { ...state, consumedEdges: remaining };
 }
 
-function consumeEdges<S extends IdeaToNovelGraphRunStateBase>(
+function consumeEdges<S extends AnyIdeaToNovelRunState>(
   state: S,
   edgeIds: ReadonlyArray<string>,
 ): S {
@@ -420,7 +433,7 @@ function consumeEdges<S extends IdeaToNovelGraphRunStateBase>(
  * - 循环体内边（from/to 都在重置集合内）取消消费，使下一轮可重新触发；
  * - 循环体外进入循环体的边保持消费，防止再次触发。
  */
-function resetLoopBody<S extends IdeaToNovelGraphRunStateBase>(
+function resetLoopBody<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   loopEdge: IdeaToNovelGraphEdgeDefinition,
@@ -484,7 +497,7 @@ function assertArtifactMatchesContract(
 
 // ── 节点完成推进（内部共享）──────────────────────────────────────
 
-function completeNode<S extends IdeaToNovelGraphRunStateBase>(
+function completeNode<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   nodeId: GraphNodeId,
@@ -522,8 +535,8 @@ function completeNode<S extends IdeaToNovelGraphRunStateBase>(
   // 节点成功触发的预算重置（执行语义来自 node.budgetResetPolicy）
   const resets = node.budgetResetPolicy ?? [];
   if (resets.length > 0) {
-    const budget = { ...next.attemptBudget };
-    for (const key of resets) budget[key] = 0;
+    const budget = { ...attemptBudgetOf(next) } as S['attemptBudget'];
+    for (const key of resets) (budget as Record<LoopBudgetKey, number>)[key] = 0;
     next = { ...next, attemptBudget: budget };
   }
 
@@ -582,7 +595,7 @@ function completeNode<S extends IdeaToNovelGraphRunStateBase>(
  * - JOIN 节点结果由聚合策略计算，不接受调用方伪造；
  * - 强制节点输出契约。
  */
-export function applyNodeSuccess<S extends IdeaToNovelGraphRunStateBase>(
+export function applyNodeSuccess<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   nodeId: GraphNodeId,
@@ -606,7 +619,7 @@ export function applyNodeSuccess<S extends IdeaToNovelGraphRunStateBase>(
  * fan-out failure：失败节点 → failed；其它 active/waiting_for_human → cancelled；
  * frontier 清空；pendingHumanDecision 清空；失败节点清空 outcome；run 终止 failed。
  */
-export function applyNodeFailure<S extends IdeaToNovelGraphRunStateBase>(
+export function applyNodeFailure<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   nodeId: GraphNodeId,
@@ -653,7 +666,7 @@ export function applyNodeFailure<S extends IdeaToNovelGraphRunStateBase>(
 /**
  * 请求一次人工决策：把人工交互节点挂起为 waiting_for_human。
  */
-export function requestHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
+export function requestHumanDecision<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   nodeId: GraphNodeId,
@@ -689,7 +702,7 @@ export function requestHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
  *   skip / finish 不需要 answerId；产出 `intake_action` 结果由边条件路由。
  * - 门禁/升级节点：outcome 条件由节点输出契约（requiredOutcomeCondition）决定。
  */
-export function applyHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
+export function applyHumanDecision<S extends AnyIdeaToNovelRunState>(
   graph: AnyIdeaToNovelGraphV1,
   state: S,
   decision: HumanDecisionInput,
@@ -743,14 +756,12 @@ export function applyHumanDecision<S extends IdeaToNovelGraphRunStateBase>(
  */
 export function isRunTerminal(
   _graph: AnyIdeaToNovelGraphV1,
-  state: IdeaToNovelGraphRunStateBase,
+  state: AnyIdeaToNovelRunState,
 ): boolean {
   return state.terminalStatus !== null;
 }
 
 /** 读取当前终止状态（测试辅助） */
-export function terminalStatusOf(
-  state: IdeaToNovelGraphRunStateBase,
-): GraphRunTerminalStatus | null {
+export function terminalStatusOf(state: AnyIdeaToNovelRunState): GraphRunTerminalStatus | null {
   return state.terminalStatus;
 }

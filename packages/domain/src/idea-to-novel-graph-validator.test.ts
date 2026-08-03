@@ -582,3 +582,84 @@ describe('Project / Chapter 图节点边界（Run 边界语义）', () => {
     }
   });
 });
+
+describe('malformed 剩余抛异常路径回归（永不抛异常）', () => {
+  /** 校验一个损坏图：不抛异常、不返回 valid、返回至少一条错误 */
+  function expectNoThrowBroken(g: Record<string, unknown>): void {
+    expect(() => validateIdeaToNovelProjectGraphV1(g as never)).not.toThrow();
+    const errors = validateIdeaToNovelProjectGraphV1(g as never);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(isValidIdeaToNovelProjectGraphV1(g as never)).toBe(false);
+  }
+
+  it('edge.requiredOutcomes 为非数组原始值（42）→ 不抛', () => {
+    const g = projectGraph();
+    g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, requiredOutcomes: 42 } : e,
+    );
+    expectNoThrowBroken(g as Record<string, unknown>);
+  });
+
+  it('edge.requiredOutcomes 为字符串/对象（非数组）→ 不抛', () => {
+    for (const bad of ['cond', { condition: 'blueprint_gate' }, [null, 42, 'x']]) {
+      const g = projectGraph();
+      g.edges = (g.edges as Array<Record<string, unknown>>).map((e) =>
+        e.id === 'blueprint-user-gate--project-ready-accept' ? { ...e, requiredOutcomes: bad } : e,
+      );
+      expectNoThrowBroken(g as Record<string, unknown>);
+    }
+  });
+
+  it('joinAggregationPolicy.sources 为非数组（42 / 字符串 / null）→ 不抛', () => {
+    for (const bad of [42, 'x', null]) {
+      const g = chapterGraph();
+      g.nodes = (g.nodes as Array<Record<string, unknown>>).map((n) =>
+        n.id === CRITIQUE_JOIN_ID
+          ? {
+              ...n,
+              joinAggregationPolicy: {
+                ...(n.joinAggregationPolicy as Record<string, unknown>),
+                sources: bad,
+              },
+            }
+          : n,
+      );
+      expectNoThrowBroken(g as Record<string, unknown>);
+    }
+  });
+
+  it('node.budgetResetPolicy 为非数组（42 / 字符串）→ 不抛', () => {
+    for (const bad of [42, 'x']) {
+      const g = projectGraph();
+      g.nodes = (g.nodes as Array<Record<string, unknown>>).map((n) =>
+        n.id === BLUEPRINT_USER_GATE_ID ? { ...n, budgetResetPolicy: bad } : n,
+      );
+      expectNoThrowBroken(g as Record<string, unknown>);
+    }
+  });
+
+  it('edge.loop 为原始值 / join 声明为原始值 / 混合损坏边 → 不抛', () => {
+    const g1 = projectGraph();
+    g1.edges = (g1.edges as Array<Record<string, unknown>>).map((e) =>
+      e.id === 'spec-extract--ask-question' ? { ...e, loop: 42 } : e,
+    );
+    expectNoThrowBroken(g1 as Record<string, unknown>);
+
+    const g2 = chapterGraph();
+    g2.nodes = (g2.nodes as Array<Record<string, unknown>>).map((n) =>
+      n.id === CRITIQUE_JOIN_ID ? { ...n, join: 42 } : n,
+    );
+    expectNoThrowBroken(g2 as Record<string, unknown>);
+
+    const g3 = projectGraph();
+    const edges = g3.edges as Array<Record<string, unknown>>;
+    g3.edges = [
+      ...edges.slice(0, 4),
+      null,
+      { id: 'x', from: 42, to: null, kind: 42, mode: 42, requiredOutcomes: 'bad' },
+      'not-an-object',
+      ...edges.slice(4),
+    ];
+    expectNoThrowBroken(g3 as Record<string, unknown>);
+  });
+});

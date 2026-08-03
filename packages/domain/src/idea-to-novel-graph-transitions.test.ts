@@ -46,6 +46,9 @@ import {
   CHAPTER_CANCELLED,
   CHAPTER_BLOCKED,
   createWorkflowRunId,
+  createAnswerReceiptId,
+  isAnswerReceiptId,
+  type AnswerReceiptId,
   type GraphNodeId,
   type GraphNodeOutcome,
 } from './idea-to-novel-graph.js';
@@ -268,7 +271,7 @@ describe('Idea Intake 凭证制语义', () => {
         nodeId: COLLECT_ANSWER,
         decisionType: 'intake_response',
         action: 'answer',
-        answerId: '',
+        answerId: '' as AnswerReceiptId,
       }),
     ).toThrow();
     expect(() =>
@@ -276,15 +279,15 @@ describe('Idea Intake 凭证制语义', () => {
         nodeId: COLLECT_ANSWER,
         decisionType: 'intake_response',
         action: 'answer',
-        answerId: '   ',
+        answerId: '   ' as AnswerReceiptId,
       }),
     ).toThrow();
-    // 合法 answerId 推进，graph 不保存回答正文
+    // 合法 receipt 推进，graph 不保存回答正文
     s = applyHumanDecision(PG, s, {
       nodeId: COLLECT_ANSWER,
       decisionType: 'intake_response',
       action: 'answer',
-      answerId: 'answer-1',
+      answerId: createAnswerReceiptId('answer-1'),
     });
     expect(frontierOf(s)).toEqual([SPEC_EXTRACT]);
   });
@@ -316,7 +319,7 @@ describe('Idea Intake 凭证制语义', () => {
       nodeId: COLLECT_ANSWER,
       decisionType: 'intake_response',
       action: 'answer',
-      answerId: 'answer-1',
+      answerId: createAnswerReceiptId('answer-1'),
     });
     expect(frontierOf(s)).toEqual([SPEC_EXTRACT]);
     // 第二轮到 SPEC_EXTRACT 后可再走 ask_more + 可用预算 → 追问
@@ -792,7 +795,7 @@ describe('HumanDecisionInput 类型约束（IntakeHumanDecision）', () => {
       nodeId: COLLECT_ANSWER,
       decisionType: 'intake_response',
       action: 'answer',
-      answerId: 'a-1',
+      answerId: createAnswerReceiptId('a-1'),
     };
     const skip: HumanDecisionInput = {
       nodeId: COLLECT_ANSWER,
@@ -807,5 +810,99 @@ describe('HumanDecisionInput 类型约束（IntakeHumanDecision）', () => {
     expect(answer.action).toBe('answer');
     expect(skip.action).toBe('skip');
     expect(finish.action).toBe('finish');
+  });
+});
+
+describe('Idea Intake 原子事务 receipt 契约', () => {
+  it('createAnswerReceiptId 冻结 receipt 格式：非空、trimmed、长度有界', () => {
+    expect(createAnswerReceiptId('receipt-1')).toBe('receipt-1');
+    expect(isAnswerReceiptId('receipt-1')).toBe(true);
+    expect(() => createAnswerReceiptId('')).toThrow();
+    expect(() => createAnswerReceiptId('   ')).toThrow();
+    expect(() => createAnswerReceiptId('  x  ')).toThrow(); // 首尾空白拒绝
+    expect(() => createAnswerReceiptId('x'.repeat(200))).toThrow(); // 超长拒绝
+    expect(isAnswerReceiptId(42)).toBe(false);
+    expect(isAnswerReceiptId('  x  ')).toBe(false);
+  });
+
+  it('graph 只记录 action，绝不保存回答正文或 receipt 本身', () => {
+    let s = intakeQuestionWaiting();
+    s = applyHumanDecision(PG, s, {
+      nodeId: COLLECT_ANSWER,
+      decisionType: 'intake_response',
+      action: 'answer',
+      answerId: createAnswerReceiptId('receipt-1'),
+    });
+    // 状态中只出现 intake_action 产出；回答正文与 receipt 本身都不进入 run state
+    // （receipt 是原子事务的凭证，由未来 Runtime 写入权威存储后取得；graph 只在边界校验其合法性）
+    expect(s.nodeOutcomes[COLLECT_ANSWER]).toEqual({ condition: 'intake_action', value: 'answer' });
+    const serialized = JSON.stringify(s);
+    expect(serialized).not.toContain('我的回答正文');
+    expect(serialized).not.toContain('receipt-1');
+  });
+
+  it('空 receipt / 未持久化原始文本不能作为完成证据', () => {
+    const s = intakeQuestionWaiting();
+    expect(() =>
+      applyHumanDecision(PG, s, {
+        nodeId: COLLECT_ANSWER,
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: '' as AnswerReceiptId,
+      }),
+    ).toThrow();
+    expect(() =>
+      applyHumanDecision(PG, s, {
+        nodeId: COLLECT_ANSWER,
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: '   ' as AnswerReceiptId,
+      }),
+    ).toThrow();
+  });
+});
+
+describe('Project/Chapter artifact 与 budget 槽位真正拆开', () => {
+  it('Project state 只含 Project artifact / budget 槽位', () => {
+    const s = projectFresh();
+    expect(Object.keys(s.artifacts).sort()).toEqual([
+      'creationSpec',
+      'idea',
+      'researchBundle',
+      'storyBlueprint',
+    ]);
+    expect(Object.keys(s.attemptBudget).sort()).toEqual([
+      'blueprintRewrite',
+      'clarification',
+      'intakeRevision',
+      'researchRetry',
+      'specRevision',
+    ]);
+    // 不包含 chapter-only 槽位
+    expect('generationRun' in s.artifacts).toBe(false);
+    expect('manuscript' in s.artifacts).toBe(false);
+    expect('rewrite' in s.attemptBudget).toBe(false);
+  });
+
+  it('Chapter state 只含 Chapter artifact / budget 槽位', () => {
+    const s = chapterFresh();
+    expect(Object.keys(s.artifacts).sort()).toEqual(['generationRun', 'manuscript']);
+    expect(Object.keys(s.attemptBudget).sort()).toEqual([
+      'candidateRewrite',
+      'regenerate',
+      'rewrite',
+    ]);
+    // 不包含 project-only 槽位
+    expect('idea' in s.artifacts).toBe(false);
+    expect('researchBundle' in s.artifacts).toBe(false);
+    expect('clarification' in s.attemptBudget).toBe(false);
+  });
+
+  it('Project 图 artifact/budget 声明与 Project state 槽位一致', () => {
+    const graphKinds = PG.artifactKinds.map((k) => k);
+    const graphBudgets = PG.budgetKeys.map((k) => k);
+    const s = projectFresh();
+    expect(Object.keys(s.artifacts).sort()).toEqual([...graphKinds].sort());
+    expect(Object.keys(s.attemptBudget).sort()).toEqual([...graphBudgets].sort());
   });
 });

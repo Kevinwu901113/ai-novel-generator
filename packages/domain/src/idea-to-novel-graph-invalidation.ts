@@ -13,7 +13,7 @@
  */
 
 import type { ArtifactKind } from './idea-to-novel-graph.js';
-import type { ArtifactRef, IdeaToNovelGraphRunStateBase } from './idea-to-novel-graph-state.js';
+import type { AnyIdeaToNovelRunState, ArtifactRef } from './idea-to-novel-graph-state.js';
 
 /**
  * 计算某个 artifact 变化后的下游失效闭包。
@@ -40,21 +40,26 @@ export function computeInvalidationClosure(
  *
  * 返回新状态；纯函数，不修改入参。
  */
-export function applyArtifactChange<S extends IdeaToNovelGraphRunStateBase>(
+export function applyArtifactChange<S extends AnyIdeaToNovelRunState>(
   state: S,
   changed: ArtifactRef,
   order: ReadonlyArray<ArtifactKind>,
 ): S {
-  const nextArtifacts = { ...state.artifacts, [changed.kind]: changed };
+  // 状态类型的 artifacts 只含本图槽位；changed.kind 由 graph-aware 校验保证 ∈ 本图槽位
+  const nextArtifacts = {
+    ...(state.artifacts as Readonly<Record<ArtifactKind, ArtifactRef | null>>),
+    [changed.kind]: changed,
+  } as S['artifacts'];
 
   // 重新生成的 kind 不再失效
   const cleared = state.invalidatedArtifacts.filter((ref) => ref.kind !== changed.kind);
 
   const staleKinds = new Set(cleared.map((ref) => ref.kind));
   const additions: ArtifactRef[] = [];
+  const artifactsView = state.artifacts as Readonly<Record<ArtifactKind, ArtifactRef | null>>;
   for (const kind of computeInvalidationClosure(order, changed.kind)) {
     if (staleKinds.has(kind)) continue;
-    const current = state.artifacts[kind];
+    const current = artifactsView[kind];
     if (current !== null) {
       additions.push(current);
       staleKinds.add(kind);

@@ -185,3 +185,127 @@ describe('终止状态 DTO', () => {
     expect(isValidRunTerminalStateDto(null)).toBe(false);
   });
 });
+
+describe('plain-object + required/exact 校验（所有 DTO）', () => {
+  it('自定义 prototype / 数组 / 原始类型 一律拒绝', () => {
+    const evil = Object.create({ hidden: 'x' });
+    evil.graphId = 'idea-to-novel-project';
+    evil.graphVersion = 'v1';
+    evil.kind = 'project';
+    expect(isValidGraphIdentityDto(evil)).toBe(false);
+
+    const evilProgress = Object.create({ hidden: 'x' });
+    evilProgress.activeNodes = [];
+    evilProgress.possibleNextNodes = [];
+    expect(isValidGraphProgressProjectionDto(evilProgress)).toBe(false);
+
+    expect(isValidGraphIdentityDto([])).toBe(false);
+    expect(isValidGraphIdentityDto('x')).toBe(false);
+    expect(isValidRunTerminalStateDto(42)).toBe(false);
+  });
+
+  it('required + exact：缺失必需键或出现额外键一律拒绝', () => {
+    // GraphIdentityDto
+    expect(
+      isValidGraphIdentityDto({
+        graphId: 'idea-to-novel-project',
+        graphVersion: 'v1',
+        kind: 'project',
+      }),
+    ).toBe(true);
+    expect(isValidGraphIdentityDto({ graphVersion: 'v1', kind: 'project' })).toBe(false); // 缺 graphId
+    expect(
+      isValidGraphIdentityDto({
+        graphId: 'idea-to-novel-project',
+        graphVersion: 'v1',
+        kind: 'project',
+        extra: 1,
+      }),
+    ).toBe(false); // 额外键
+
+    // GraphNodeProjectionDto
+    expect(
+      isValidGraphNodeProjectionDto({ nodeId: 'DRAFT', stage: 'generate', status: 'active' }),
+    ).toBe(true);
+    expect(isValidGraphNodeProjectionDto({ nodeId: 'DRAFT', stage: 'generate' })).toBe(false);
+    expect(
+      isValidGraphNodeProjectionDto({
+        nodeId: 'DRAFT',
+        stage: 'generate',
+        status: 'active',
+        extra: 1,
+      }),
+    ).toBe(false);
+
+    // GraphProgressProjectionDto
+    expect(isValidGraphProgressProjectionDto({ activeNodes: [], possibleNextNodes: ['X'] })).toBe(
+      true,
+    );
+    expect(isValidGraphProgressProjectionDto({ activeNodes: [] })).toBe(false);
+    expect(
+      isValidGraphProgressProjectionDto({ activeNodes: [], possibleNextNodes: ['X'], extra: 1 }),
+    ).toBe(false);
+
+    // RunTerminalStateDto
+    expect(isValidRunTerminalStateDto({ terminalStatus: null })).toBe(true);
+    expect(isValidRunTerminalStateDto({})).toBe(false);
+    expect(isValidRunTerminalStateDto({ terminalStatus: null, extra: 1 })).toBe(false);
+  });
+
+  it('HumanDecisionInputDto：intake answer 额外键拒绝；gate/escalation 额外键拒绝', () => {
+    // answer 带额外键 → 拒绝
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'COLLECT_ANSWER',
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: 'r-1',
+        extra: 1,
+      }),
+    ).toBe(false);
+    // skip 带额外键 → 拒绝
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'COLLECT_ANSWER',
+        decisionType: 'intake_response',
+        action: 'skip',
+        extra: 1,
+      }),
+    ).toBe(false);
+    // blueprint_gate 缺 outcome → 拒绝
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'BLUEPRINT_USER_GATE',
+        decisionType: 'blueprint_gate',
+      }),
+    ).toBe(false);
+    // escalation 带额外键 → 拒绝
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'RESEARCH_ESCALATION',
+        decisionType: 'escalation',
+        outcome: 'skip_research',
+        extra: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it('answerId 作为原子事务 receipt：非空、trimmed、无额外键', () => {
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'COLLECT_ANSWER',
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: '  r-1  ',
+      }),
+    ).toBe(false); // 首尾空白 receipt 拒绝
+    expect(
+      isValidHumanDecisionInputDto({
+        nodeId: 'COLLECT_ANSWER',
+        decisionType: 'intake_response',
+        action: 'answer',
+        answerId: 'r-1',
+      }),
+    ).toBe(true);
+  });
+});

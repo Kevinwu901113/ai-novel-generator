@@ -36,15 +36,49 @@ export interface GraphIdentityDto {
   readonly kind: GraphRunKind;
 }
 
-export function isValidGraphIdentityDto(value: unknown): value is GraphIdentityDto {
+// ── plain-object + required/exact 校验基础 ───────────────────────
+
+/**
+ * 仅接受 Object.prototype 或 null prototype 的普通对象；
+ * 自定义原型 / 数组 / null / 原始类型拒绝。
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const obj = value as Record<string, unknown>;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function hasOwn(obj: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+/** 非空、trimmed（无首尾空白）字符串 */
+function isNonEmptyTrimmed(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value === value.trim();
+}
+
+/**
+ * required + exact 结构校验：普通对象、必需键齐全、无额外键。
+ * 不使用 `value as Record<string, unknown>` 绕过 —— 由 isPlainObject 安全收窄。
+ */
+function hasRequiredExactKeys(
+  value: unknown,
+  required: ReadonlyArray<string>,
+): value is Record<string, unknown> {
+  if (!isPlainObject(value)) return false;
+  if (Object.keys(value).length !== required.length) return false;
+  for (const key of required) {
+    if (!hasOwn(value, key)) return false;
+  }
+  return true;
+}
+
+export function isValidGraphIdentityDto(value: unknown): value is GraphIdentityDto {
+  if (!hasRequiredExactKeys(value, ['graphId', 'graphVersion', 'kind'])) return false;
   return (
-    typeof obj.graphId === 'string' &&
-    obj.graphId.trim().length > 0 &&
-    typeof obj.graphVersion === 'string' &&
-    obj.graphVersion.trim().length > 0 &&
-    isValidGraphRunKind(obj.kind)
+    isNonEmptyTrimmed(value.graphId) &&
+    isNonEmptyTrimmed(value.graphVersion) &&
+    isValidGraphRunKind(value.kind)
   );
 }
 
@@ -92,13 +126,11 @@ export interface GraphNodeProjectionDto {
 }
 
 export function isValidGraphNodeProjectionDto(value: unknown): value is GraphNodeProjectionDto {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const obj = value as Record<string, unknown>;
+  if (!hasRequiredExactKeys(value, ['nodeId', 'stage', 'status'])) return false;
   return (
-    typeof obj.nodeId === 'string' &&
-    obj.nodeId.trim().length > 0 &&
-    isValidWorkflowStage(obj.stage) &&
-    isValidGraphNodeStatusDto(obj.status)
+    isNonEmptyTrimmed(value.nodeId) &&
+    isValidWorkflowStage(value.stage) &&
+    isValidGraphNodeStatusDto(value.status)
   );
 }
 
@@ -111,14 +143,13 @@ export interface GraphProgressProjectionDto {
 export function isValidGraphProgressProjectionDto(
   value: unknown,
 ): value is GraphProgressProjectionDto {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const obj = value as Record<string, unknown>;
-  if (!Array.isArray(obj.activeNodes)) return false;
-  if (!Array.isArray(obj.possibleNextNodes)) return false;
-  for (const node of obj.activeNodes) {
+  if (!hasRequiredExactKeys(value, ['activeNodes', 'possibleNextNodes'])) return false;
+  if (!Array.isArray(value.activeNodes)) return false;
+  if (!Array.isArray(value.possibleNextNodes)) return false;
+  for (const node of value.activeNodes) {
     if (!isValidGraphNodeProjectionDto(node)) return false;
   }
-  for (const id of obj.possibleNextNodes) {
+  for (const id of value.possibleNextNodes) {
     if (typeof id !== 'string' || id.trim().length === 0) return false;
   }
   return true;
@@ -184,15 +215,18 @@ export type HumanDecisionInputDto =
 
 function isIntakeHumanDecisionDto(value: Record<string, unknown>): value is IntakeHumanDecisionDto {
   if (value.decisionType !== 'intake_response') return false;
-  if (typeof value.nodeId !== 'string' || value.nodeId.trim().length === 0) return false;
+  if (!isNonEmptyTrimmed(value.nodeId)) return false;
   if (value.action === 'answer') {
+    // answer 必须带非空、trimmed 的 answerId（receipt），且无额外键
     return (
-      typeof value.answerId === 'string' &&
-      value.answerId.trim().length > 0 &&
-      value.answerId === value.answerId.trim()
+      hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'action', 'answerId']) &&
+      isNonEmptyTrimmed(value.answerId)
     );
   }
-  return value.action === 'skip' || value.action === 'finish';
+  if (value.action === 'skip' || value.action === 'finish') {
+    return hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'action']);
+  }
+  return false;
 }
 
 const ESCALATION_OUTCOMES: ReadonlySet<string> = new Set<EscalationDecisionOutcomeDto>([
@@ -206,22 +240,31 @@ const ESCALATION_OUTCOMES: ReadonlySet<string> = new Set<EscalationDecisionOutco
   'skip_research',
 ]);
 
-/** 人工决策公共 input DTO 校验（手写，fail-closed） */
+/** 人工决策公共 input DTO 校验（手写，plain-object + required/exact，fail-closed） */
 export function isValidHumanDecisionInputDto(value: unknown): value is HumanDecisionInputDto {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj.nodeId !== 'string' || obj.nodeId.trim().length === 0) return false;
-  if (isIntakeHumanDecisionDto(obj)) return true;
-  if (obj.decisionType === 'blueprint_gate') {
-    return obj.outcome === 'accept' || obj.outcome === 'request_rewrite';
-  }
-  if (obj.decisionType === 'candidate_gate') {
+  if (!isPlainObject(value)) return false;
+  if (isIntakeHumanDecisionDto(value)) return true;
+  if (!isNonEmptyTrimmed(value.nodeId)) return false;
+  if (value.decisionType === 'blueprint_gate') {
     return (
-      obj.outcome === 'accept' || obj.outcome === 'reject' || obj.outcome === 'request_rewrite'
+      hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'outcome']) &&
+      (value.outcome === 'accept' || value.outcome === 'request_rewrite')
     );
   }
-  if (obj.decisionType === 'escalation') {
-    return typeof obj.outcome === 'string' && ESCALATION_OUTCOMES.has(obj.outcome);
+  if (value.decisionType === 'candidate_gate') {
+    return (
+      hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'outcome']) &&
+      (value.outcome === 'accept' ||
+        value.outcome === 'reject' ||
+        value.outcome === 'request_rewrite')
+    );
+  }
+  if (value.decisionType === 'escalation') {
+    return (
+      hasRequiredExactKeys(value, ['nodeId', 'decisionType', 'outcome']) &&
+      typeof value.outcome === 'string' &&
+      ESCALATION_OUTCOMES.has(value.outcome)
+    );
   }
   return false;
 }
@@ -243,8 +286,6 @@ export interface RunTerminalStateDto {
 }
 
 export function isValidRunTerminalStateDto(value: unknown): value is RunTerminalStateDto {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const obj = value as Record<string, unknown>;
-  if (obj.terminalStatus === null) return true;
-  return isValidRunTerminalStatusDto(obj.terminalStatus);
+  if (!hasRequiredExactKeys(value, ['terminalStatus'])) return false;
+  return value.terminalStatus === null || isValidRunTerminalStatusDto(value.terminalStatus);
 }

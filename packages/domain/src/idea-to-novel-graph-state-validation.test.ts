@@ -338,3 +338,75 @@ describe('artifactRef 使用示例（契约保持闭合判别联合）', () => {
     expect(s.artifacts.idea).toEqual({ kind: 'idea', artifactId: 'idea-1' });
   });
 });
+
+describe('invalidatedArtifacts 限于当前 Graph 合法 kind', () => {
+  function withInvalidated(refs: Array<{ kind: string; artifactId: string }>) {
+    const s = validProjectState();
+    return { ...s, invalidatedArtifacts: refs };
+  }
+
+  it('合法 project kind（idea/creationSpec/researchBundle/storyBlueprint）接受', () => {
+    const s = withInvalidated([{ kind: 'creationSpec', artifactId: 'spec-1' }]);
+    expect(isValidGraphRunState(PG, s)).toBe(true);
+  });
+
+  it('非本 Graph 合法 kind（manuscript / generationRun / 未知）拒绝', () => {
+    for (const kind of ['manuscript', 'generationRun', 'bogus']) {
+      expectRejected(withInvalidated([{ kind, artifactId: 'x' }]), PG);
+    }
+    const codes = validateGraphRunState(
+      PG,
+      withInvalidated([{ kind: 'manuscript', artifactId: 'x' }]),
+    ).map((e) => e.code);
+    expect(codes).toContain('STATE_ARTIFACT_KIND_UNKNOWN');
+  });
+
+  it('Chapter state 接受 generationRun / manuscript，拒绝 project kind', () => {
+    const s = chapterFresh();
+    expect(
+      isValidGraphRunState(CG, {
+        ...s,
+        invalidatedArtifacts: [{ kind: 'generationRun', artifactId: 'gen-1' }],
+      }),
+    ).toBe(true);
+    expect(
+      isValidGraphRunState(CG, {
+        ...s,
+        invalidatedArtifacts: [{ kind: 'idea', artifactId: 'idea-1' }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('Project/Chapter artifact 与 budget 槽位真正拆开（运行时）', () => {
+  it('Project state 只含 Project 槽位', () => {
+    const s = projectFresh();
+    expect(Object.keys(s.artifacts).sort()).toEqual([
+      'creationSpec',
+      'idea',
+      'researchBundle',
+      'storyBlueprint',
+    ]);
+    expect(Object.keys(s.attemptBudget).sort()).toEqual([
+      'blueprintRewrite',
+      'clarification',
+      'intakeRevision',
+      'researchRetry',
+      'specRevision',
+    ]);
+    expect('generationRun' in s.artifacts).toBe(false);
+    expect('rewrite' in s.attemptBudget).toBe(false);
+  });
+
+  it('Chapter state 只含 Chapter 槽位', () => {
+    const s = chapterFresh();
+    expect(Object.keys(s.artifacts).sort()).toEqual(['generationRun', 'manuscript']);
+    expect(Object.keys(s.attemptBudget).sort()).toEqual([
+      'candidateRewrite',
+      'regenerate',
+      'rewrite',
+    ]);
+    expect('idea' in s.artifacts).toBe(false);
+    expect('clarification' in s.attemptBudget).toBe(false);
+  });
+});

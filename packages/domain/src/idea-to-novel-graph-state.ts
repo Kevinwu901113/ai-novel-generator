@@ -17,6 +17,8 @@
 import type {
   AnyIdeaToNovelGraphV1,
   ArtifactKind,
+  ChapterArtifactKind,
+  ChapterBudgetKey,
   ChapterGenerationGraphV1,
   GraphId,
   GraphNodeId,
@@ -25,6 +27,8 @@ import type {
   GraphVersion,
   IdeaToNovelProjectGraphV1,
   LoopBudgetKey,
+  ProjectArtifactKind,
+  ProjectBudgetKey,
   WorkflowRunId,
 } from './idea-to-novel-graph.js';
 import type { ProjectId } from './index.js';
@@ -131,7 +135,10 @@ export type PendingHumanDecision =
  * - `activeFrontier` === 状态为 active / waiting_for_human 的节点集合；
  * - `attemptBudget` 对本图声明的每个预算键都有计数。
  */
-export interface IdeaToNovelGraphRunStateBase {
+export interface IdeaToNovelGraphRunStateBase<
+  A extends ArtifactKind = ArtifactKind,
+  B extends LoopBudgetKey = LoopBudgetKey,
+> {
   readonly graphId: GraphId;
   readonly graphVersion: GraphVersion;
   readonly projectId: ProjectId;
@@ -142,18 +149,18 @@ export interface IdeaToNovelGraphRunStateBase {
   readonly activeFrontier: ReadonlyArray<GraphNodeId>;
   /** 决策节点最近一次产出（键 = 已产出结果的节点） */
   readonly nodeOutcomes: Readonly<Partial<Record<GraphNodeId, GraphNodeOutcome>>>;
-  /** 权威 artifact 引用（kind → 当前权威 ref；null = 尚未产生） */
-  readonly artifacts: Readonly<Record<ArtifactKind, ArtifactRef | null>>;
+  /** 权威 artifact 引用（kind → 当前权威 ref；null = 尚未产生；键 = 本图 artifact 槽位） */
+  readonly artifacts: Readonly<Record<A, ArtifactRef | null>>;
   /** 待处理的人工决策；null = 无 */
   readonly pendingHumanDecision: PendingHumanDecision | null;
-  /** 有界循环预算已用次数（max 声明在 loop 边上） */
-  readonly attemptBudget: Readonly<Record<LoopBudgetKey, number>>;
+  /** 有界循环预算已用次数（键 = 本图预算键；max 声明在 loop 边上） */
+  readonly attemptBudget: Readonly<Record<B, number>>;
   /**
    * 已消费的边（其目标已被激活）。用于有界循环回环时防止
    * 循环体外进入循环体的边再次触发。
    */
   readonly consumedEdges: ReadonlyArray<string>;
-  /** 因上游 artifact 变化而失效的权威 artifact 引用 */
+  /** 因上游 artifact 变化而失效的权威 artifact 引用（kind 限于本图合法槽位） */
   readonly invalidatedArtifacts: ReadonlyArray<ArtifactRef>;
   /** 运行终止状态；null = 运行中 */
   readonly terminalStatus: GraphRunTerminalStatus | null;
@@ -161,12 +168,21 @@ export interface IdeaToNovelGraphRunStateBase {
   readonly createdAt: string;
 }
 
-/** Project Graph run 状态（不包含 chapter-only 必需字段） */
-export interface IdeaToNovelProjectRunState extends IdeaToNovelGraphRunStateBase {
+/**
+ * Project Graph run 状态（不包含 chapter-only 必需字段）。
+ *
+ * artifact / budget 槽位真正拆开：只含 Project Graph 的 4 个 artifact 槽位与 5 个预算键。
+ */
+export interface IdeaToNovelProjectRunState extends IdeaToNovelGraphRunStateBase<
+  ProjectArtifactKind,
+  ProjectBudgetKey
+> {
   readonly graphId: GraphId;
   readonly graphVersion: GraphVersion;
   readonly projectId: ProjectId;
   readonly workflowRunId: WorkflowRunId;
+  readonly artifacts: Readonly<Record<ProjectArtifactKind, ArtifactRef | null>>;
+  readonly attemptBudget: Readonly<Record<ProjectBudgetKey, number>>;
 }
 
 /**
@@ -174,8 +190,13 @@ export interface IdeaToNovelProjectRunState extends IdeaToNovelGraphRunStateBase
  *
  * 必须绑定 `blueprintChapterId` 与项目级输入引用；
  * 这些引用在 run 创建时由 application 从 Project run 的权威状态注入。
+ *
+ * artifact / budget 槽位真正拆开：只含 Chapter Graph 的 2 个 artifact 槽位与 3 个预算键。
  */
-export interface ChapterGenerationRunState extends IdeaToNovelGraphRunStateBase {
+export interface ChapterGenerationRunState extends IdeaToNovelGraphRunStateBase<
+  ChapterArtifactKind,
+  ChapterBudgetKey
+> {
   readonly graphId: GraphId;
   readonly graphVersion: GraphVersion;
   readonly projectId: ProjectId;
@@ -184,6 +205,8 @@ export interface ChapterGenerationRunState extends IdeaToNovelGraphRunStateBase 
   readonly researchBundleId: ResearchBundleArtifactId | null;
   readonly storyBlueprintId: StoryBlueprintArtifactId;
   readonly blueprintChapterId: BlueprintChapterId;
+  readonly artifacts: Readonly<Record<ChapterArtifactKind, ArtifactRef | null>>;
+  readonly attemptBudget: Readonly<Record<ChapterBudgetKey, number>>;
 }
 
 /** 任意一种 run state */
@@ -211,21 +234,21 @@ export interface ChapterInitialRunStateInput {
   readonly createdAt: string;
 }
 
-function buildBaseState(
+function buildBaseState<A extends ArtifactKind, B extends LoopBudgetKey>(
   graph: AnyIdeaToNovelGraphV1,
   createdAt: string,
-): Omit<IdeaToNovelGraphRunStateBase, 'projectId' | 'workflowRunId'> {
+): Omit<IdeaToNovelGraphRunStateBase<A, B>, 'projectId' | 'workflowRunId'> {
   const nodeStatuses = {} as Record<GraphNodeId, GraphNodeStatus>;
   for (const node of graph.nodes) {
     nodeStatuses[node.id] = node.id === graph.entryNodeId ? 'active' : 'pending';
   }
-  const attemptBudget = {} as Record<LoopBudgetKey, number>;
+  const attemptBudget = {} as Record<B, number>;
   for (const key of graph.budgetKeys) {
-    attemptBudget[key] = 0;
+    attemptBudget[key as B] = 0;
   }
-  const artifacts = {} as Record<ArtifactKind, ArtifactRef | null>;
+  const artifacts = {} as Record<A, ArtifactRef | null>;
   for (const kind of graph.artifactKinds) {
-    artifacts[kind] = null;
+    artifacts[kind as A] = null;
   }
   return {
     graphId: graph.id,
@@ -255,7 +278,11 @@ export function createProjectInitialRunState(
   input: ProjectInitialRunStateInput,
 ): IdeaToNovelProjectRunState {
   const { graph, projectId, workflowRunId, createdAt } = input;
-  return { ...buildBaseState(graph, createdAt), projectId, workflowRunId };
+  return {
+    ...buildBaseState<ProjectArtifactKind, ProjectBudgetKey>(graph, createdAt),
+    projectId,
+    workflowRunId,
+  };
 }
 
 /**
@@ -281,7 +308,7 @@ export function createChapterInitialRunState(
     createdAt,
   } = input;
   return {
-    ...buildBaseState(graph, createdAt),
+    ...buildBaseState<ChapterArtifactKind, ChapterBudgetKey>(graph, createdAt),
     projectId,
     workflowRunId,
     creationSpecVersionId,
