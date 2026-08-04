@@ -30,8 +30,8 @@ import {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 import {
-  GenerationArtifactStoreImpl,
   NodeExecutionRepositoryImpl,
+  NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
@@ -87,7 +87,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly commandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly intakeAnswerPort: IdeaIntakeAnswerPortImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
-  private readonly generationArtifactStore: GenerationArtifactStoreImpl;
+  private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
@@ -95,7 +95,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
     this.commandLogRepo = new GraphRunCommandLogRepositoryImpl(db);
     this.intakeAnswerPort = new IdeaIntakeAnswerPortImpl(db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(db);
-    this.generationArtifactStore = new GenerationArtifactStoreImpl(db);
+    this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -116,7 +116,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       commandLog: this.commandLogRepo,
       intakeAnswer: this.intakeAnswerPort,
       nodeExecutionRepo: this.nodeExecutionRepo,
-      generationArtifactStore: this.generationArtifactStore,
+      nodeExecutionResultStore: this.nodeExecutionResultStore,
     };
 
     try {

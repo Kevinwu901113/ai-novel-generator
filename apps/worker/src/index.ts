@@ -118,9 +118,14 @@ import {
   driveRun,
   ExecutorRegistry,
   type ArtifactResolverPort,
+  type NodeExecutorRunner,
   type NodeRunnerDeps,
 } from '@ai-novel/application';
-import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
+import {
+  IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
+  CHAPTER_GENERATION_GRAPH_V1,
+  isArtifactKind,
+} from '@ai-novel/domain';
 import {
   scheduleContractDraftRun,
   settleContractDraftRunnerFailure,
@@ -772,36 +777,51 @@ function initialize(): void {
   // 恢复 PENDING 的创作契约草案任务（异步调度）
   recoverPendingContractDrafts(dataRoot);
 
-  // 恢复中断的 Graph run（active 节点 → failed；waiting_for_human 不触碰）
-  recoverGraphRuns();
+  // 恢复中断的 Graph run（await runner 后关 DB；按 recoveryPolicy reconcile）
+  void recoverGraphRuns();
 }
 
 /**
- * Graph run 启动恢复：对每个项目的非终态 run 中处于 active 的节点执行 fail 路径。
- * 安全可重放（CAS + 幂等键 recover:{runId}:{nodeId}:{expectedVersion}）。
+ * RW-1 生产 bootstrap（共享，不每项目重建）—— GE-3..6 注册真实 executor 时填充。
+ * 当前无具体 executor（GE-3..6 前），active 节点 → fail-closed；但已有 execution 会按
+ * 其 stored recoveryPolicy reconcile（TASK_INTERRUPTED → 受控新 attempt）。
  */
-/** RW-1：严格默认 artifact resolver —— 未接入具体 artifact store 前拒绝一切 settlement artifact（fail-closed） */
-const strictArtifactResolver: ArtifactResolverPort = {
-  resolve() {
-    throw new Error('RW-1: 未接入具体 artifact store，拒绝 settlement artifact（fail-closed）');
+const productionRegistry = new ExecutorRegistry();
+const productionRunners = new Map<string, NodeExecutorRunner>();
+const productionArtifactResolver: ArtifactResolverPort = {
+  resolve(input) {
+    // task-backed 产物由 node_execution_results 持久化（artifactId=executionId）；
+    // settlement 已读取并校验 envelope；此处二次校验 kind + artifactId 归属 execution。
+    if (!isArtifactKind(input.proposed.kind)) throw new Error('非法 artifact kind');
+    if (input.proposed.artifactId !== input.executionId) {
+      throw new Error('artifact 必须引用 execution-bound durable result');
+    }
+    return {
+      kind: input.proposed.kind,
+      artifactId: input.proposed.artifactId,
+      producerNodeId: input.proposed.producerNodeId,
+      projectId: input.projectId,
+      graphRunId: input.graphRunId,
+      graphVersion: input.graphVersion,
+      version: input.proposed.version,
+    };
   },
 };
 
 /**
- * RW-1 启动恢复：对每个项目的非终态 run 运行 NodeRunner。
+ * RW-1 启动恢复：对每个项目的非终态 run **await** NodeRunner，全部完成后才关闭 ProjectDatabase。
  * 替换旧的无差别 active→failed 行为：有 execution record 时按 recoveryPolicy reconcile
- * （task succeeded+unsettled → 幂等 settlement；pending → 重新调度；replayable → 受控重试；
- *  failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
- * 当前无具体 executor 注册（GE-3..6 后续注册），active 节点 → fail-closed。
+ * （task succeeded+unsettled → 幂等 settlement；TASK_INTERRUPTED → 受控新 attempt；
+ *  deterministic failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
  */
-function recoverGraphRuns(): void {
+async function recoverGraphRuns(): Promise<void> {
   if (!appDb) return;
   const projects = appDb.getProjectIndexRepository().list();
   for (const project of projects) {
     const dbPath = join(project.projectDirectory, 'project.sqlite');
     if (!existsSync(dbPath)) continue;
+    const projDb = new ProjectDatabase(dbPath);
     try {
-      const projDb = new ProjectDatabase(dbPath);
       const runnerDeps: NodeRunnerDeps = {
         idGenerator: createIdGenerator(),
         clock: createClock(),
@@ -809,23 +829,22 @@ function recoverGraphRuns(): void {
         tx: projDb.getGraphRunTransaction(),
         projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
         chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
-        registry: new ExecutorRegistry(),
-        runners: new Map(),
-        artifactResolver: strictArtifactResolver,
+        registry: productionRegistry,
+        runners: productionRunners,
+        artifactResolver: productionArtifactResolver,
         taskRepo: new TaskRepositoryAdapter(projDb),
       };
       const runs = runnerDeps.tx.runInTransaction((repos) => repos.graphRunRepo.listNonTerminal());
       for (const record of runs) {
-        void driveRun(runnerDeps, record.state.projectId, record.state.workflowRunId).catch(
-          (err) => {
-            console.error(`driveRun ${record.state.workflowRunId} failed`, err);
-          },
-        );
+        try {
+          await driveRun(runnerDeps, record.state.projectId, record.state.workflowRunId);
+        } catch (err) {
+          // 非致命：单个 run 恢复失败不阻断整体
+          console.error(`driveRun ${record.state.workflowRunId} failed`, err);
+        }
       }
+    } finally {
       projDb.close();
-    } catch (err) {
-      // 非致命：单个项目恢复失败不阻断启动
-      console.error(`recoverGraphRuns: project ${project.id} failed`, err);
     }
   }
 }

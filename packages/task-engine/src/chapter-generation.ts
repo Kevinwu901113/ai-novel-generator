@@ -21,11 +21,17 @@ export interface ChapterDraftExecutionResult extends TaskExecutionResult {
   readonly draft: ChapterDraftV1;
 }
 
-/** task-backed 节点的 Graph 归属上下文（供持久化权威产物） */
+/** task-backed 节点的 Graph 归属上下文（供持久化 execution-bound 权威结果） */
 export interface ChapterDraftContext {
   readonly graphRunId: string;
   readonly nodeId: string;
   readonly producerExecutorId: string;
+  readonly executionId: string;
+  readonly attempt: number;
+  readonly executorVersion: string;
+  readonly inputHash: string;
+  /** 严格 outcome（可为空；CHAPTER_DRAFT 当前无 outcome） */
+  readonly outcome?: { readonly condition: string; readonly value: string } | null;
 }
 
 /**
@@ -84,7 +90,7 @@ export async function executeChapterDraft(
     idGenerator,
     invokeModel,
     transaction,
-    generationArtifactStore,
+    nodeExecutionResultStore,
   } = deps;
 
   const task = taskRepo.getById(taskId);
@@ -216,27 +222,49 @@ export async function executeChapterDraft(
     outputTokens: result.usage?.outputTokens ?? null,
   });
 
-  // RW-1：task 成功前先把完整解析输出持久化到权威 generation_artifacts，
-  // 崩溃发生在 task success 与 Graph settlement 之间时，启动后可从持久化结果 settlement。
-  if (!generationArtifactStore) {
-    throw new TaskExecutionError(
-      'TASK_EXECUTION_FAILED',
-      'task-backed 执行缺少 generationArtifactStore（无法持久化产物）',
-    );
+  // RW-1 Rework：task 成功前先把完整解析输出持久化到权威 execution-bound result envelope
+  // （node_execution_results，execution_id 唯一）。崩溃发生在 task success 与 settlement 之间时，
+  // 启动后可按 executionId 幂等 settlement。持久化失败 → task 不得永久停留 RUNNING。
+  if (!nodeExecutionResultStore) {
+    const failMsg = 'task-backed 执行缺少 nodeExecutionResultStore（无法持久化产物）';
+    transaction(() => {
+      requireCas(
+        invocationRepo.markFailed(
+          invocationId,
+          ['RUNNING'],
+          'TASK_EXECUTION_FAILED',
+          failMsg,
+          result.latencyMs,
+        ),
+        '无法标记调用失败',
+      );
+      requireCas(
+        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', failMsg),
+        '无法标记任务失败',
+      );
+    });
+    const failedTask = taskRepo.getById(taskId)!;
+    const failedInvocation = invocationRepo.getById(invocationId);
+    return { task: failedTask, invocation: failedInvocation, draft: null as never };
   }
-  const artifactId = idGenerator.generate();
   const contentJson = JSON.stringify({ kind: 'generationRun', draft });
   const now = deps.clock.now();
 
   transaction(() => {
-    generationArtifactStore.save({
-      id: artifactId,
+    nodeExecutionResultStore.save({
+      executionId: context.executionId,
       projectId: task.projectId,
       graphRunId: context.graphRunId,
       nodeId: context.nodeId,
-      producerExecutorId: context.producerExecutorId,
+      taskId,
+      attempt: context.attempt,
+      executorId: context.producerExecutorId,
+      executorVersion: context.executorVersion,
+      inputHash: context.inputHash,
+      artifactKind: 'generationRun',
+      artifactVersion: 1,
       contentJson,
-      version: 1,
+      outcome: context.outcome ?? null,
       createdAt: now,
     });
     requireCas(

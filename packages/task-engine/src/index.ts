@@ -25,7 +25,7 @@ import type {
   ProviderProfileRepository,
   IdGenerator,
   Clock,
-  GenerationArtifactStorePort,
+  NodeExecutionResultStorePort,
 } from '@ai-novel/application';
 import type { ErrorCode } from '@ai-novel/contracts';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
@@ -47,8 +47,8 @@ export interface TaskEngineDeps {
     prompt: string;
   }) => Promise<ModelInvocationOutput>;
   readonly transaction: <T>(fn: () => T) => T;
-  /** RW-1：task 成功前持久化完整解析输出的权威存储（task-backed 节点必需） */
-  readonly generationArtifactStore?: GenerationArtifactStorePort;
+  /** RW-1：task 成功前持久化 execution-bound 完整解析结果的权威存储（task-backed 节点必需） */
+  readonly nodeExecutionResultStore?: NodeExecutionResultStorePort;
 }
 
 /** 任务执行结果（公开数据，不含 prompt 或 API Key） */

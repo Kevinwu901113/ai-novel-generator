@@ -103,6 +103,6 @@ export { ResearchBundleRepositoryImpl } from './research-repositories.js';
 export { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 export {
   NodeExecutionRepositoryImpl,
-  GenerationArtifactStoreImpl,
+  NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
 export { sha256Utf8 } from './creation-contract-repositories.js';

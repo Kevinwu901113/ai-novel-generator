@@ -34,8 +34,8 @@ import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
 import { ResearchBundleRepositoryImpl } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import {
-  GenerationArtifactStoreImpl,
   NodeExecutionRepositoryImpl,
+  NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
 import type {
   ProjectDatabaseManager,
@@ -866,11 +866,19 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
   {
     version: 12,
     sql: `
-      -- ── Durable Node Execution & Settlement（RW-1）──────────────
-      -- node_executions：每次真实节点执行的持久化记录；唯一约束防止
-      --   同一 run/node/attempt 重复创建并发执行。
-      -- generation_artifacts：task 成功前持久化的权威生成产物
-      --   （完整严格解析输出），供崩溃后 settlement 使用。
+      -- ── Durable Node Execution & Settlement（RW-1 Rework）────────
+      -- node_executions：
+      --   - 每次真实尝试 = 不可变新 row（attempt 单调递增；旧 row 保留并标记
+      --     superseded/failed，不原地改 attempt）；
+      --   - visit_id 区分"Graph 节点新 activation"与"同一 activation 的基础设施 retry"
+      --     （新 activation → 新 visit_id + attempt=1；同 activation infra retry →
+      --       同 visit_id + attempt+1）；
+      --   - partial unique (graph_run_id, node_id) WHERE in-flight 保证同一节点至多一个
+      --     pending/running execution（并发 claim 的原子门）。
+      -- node_execution_results：
+      --   - execution-bound 的权威 durable result envelope（execution_id 唯一）；
+      --   - 含严格 outcome_json 与 artifact 元数据（kind/version）+ 完整内容，
+      --     task 成功前持久化；settlement 按 execution_id 读取（不 latest-by-run-node）。
 
       CREATE TABLE IF NOT EXISTS node_executions (
         id TEXT PRIMARY KEY,
@@ -878,6 +886,7 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         graph_id TEXT NOT NULL,
         graph_version TEXT NOT NULL,
         node_id TEXT NOT NULL,
+        visit_id TEXT NOT NULL,
         attempt INTEGER NOT NULL CHECK (attempt >= 1),
         executor_id TEXT NOT NULL,
         executor_version TEXT NOT NULL,
@@ -895,26 +904,31 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         FOREIGN KEY (graph_run_id) REFERENCES graph_runs(id)
       ) STRICT;
 
-      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_run_node_attempt
-        ON node_executions(graph_run_id, node_id, attempt);
+      -- 同一节点至多一个 in-flight execution（并发 claim 原子门）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_run_node_inflight
+        ON node_executions(graph_run_id, node_id)
+        WHERE status IN ('pending', 'running');
 
       CREATE INDEX IF NOT EXISTS idx_node_executions_run
         ON node_executions(graph_run_id);
 
-      CREATE TABLE IF NOT EXISTS generation_artifacts (
-        id TEXT PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS node_execution_results (
+        execution_id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         graph_run_id TEXT NOT NULL,
         node_id TEXT NOT NULL,
-        producer_executor_id TEXT NOT NULL,
-        content_json TEXT NOT NULL CHECK (json_valid(content_json)),
-        version INTEGER NOT NULL CHECK (version >= 1),
+        task_id TEXT,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        executor_id TEXT NOT NULL,
+        executor_version TEXT NOT NULL,
+        input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
+        artifact_kind TEXT,
+        artifact_version INTEGER CHECK (artifact_version IS NULL OR artifact_version >= 1),
+        content_json TEXT,
+        outcome_json TEXT,
         created_at TEXT NOT NULL,
-        FOREIGN KEY (graph_run_id) REFERENCES graph_runs(id)
+        FOREIGN KEY (execution_id) REFERENCES node_executions(id)
       ) STRICT;
-
-      CREATE INDEX IF NOT EXISTS idx_generation_artifacts_run_node
-        ON generation_artifacts(graph_run_id, node_id);
     `,
   },
 ];
@@ -1399,7 +1413,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
   private readonly blueprintRepo: StoryBlueprintRepositoryImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
-  private readonly generationArtifactStore: GenerationArtifactStoreImpl;
+  private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1434,7 +1448,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
     this.blueprintRepo = new StoryBlueprintRepositoryImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
-    this.generationArtifactStore = new GenerationArtifactStoreImpl(this.db);
+    this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1529,8 +1543,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     return this.nodeExecutionRepo;
   }
 
-  getGenerationArtifactStore(): GenerationArtifactStoreImpl {
-    return this.generationArtifactStore;
+  getNodeExecutionResultStore(): NodeExecutionResultStoreImpl {
+    return this.nodeExecutionResultStore;
   }
 
   transaction<T>(fn: () => T): T {

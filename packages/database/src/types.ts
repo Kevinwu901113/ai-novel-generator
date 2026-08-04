@@ -219,8 +219,8 @@ export interface ProjectDatabaseManager {
   getStoryBlueprintRepository(): import('./blueprint-repositories.js').StoryBlueprintRepositoryImpl;
   /** 获取 Node Execution 仓库（RW-1，migration v12） */
   getNodeExecutionRepository(): import('./node-execution-repositories.js').NodeExecutionRepositoryImpl;
-  /** 获取 Generation Artifact 存储（RW-1，migration v12） */
-  getGenerationArtifactStore(): import('./node-execution-repositories.js').GenerationArtifactStoreImpl;
+  /** 获取 Node Execution Result 存储（RW-1，migration v12） */
+  getNodeExecutionResultStore(): import('./node-execution-repositories.js').NodeExecutionResultStoreImpl;
   /** 执行事务（BEGIN 延迟写锁，适合先读后写路径） */
   transaction<T>(fn: () => T): T;
   /** 执行事务（BEGIN IMMEDIATE，执行前立即获得写锁，适合最终原子提交） */

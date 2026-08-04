@@ -427,15 +427,18 @@ export type {
   NodeExecutionRecord,
   CreateNodeExecutionInput,
   NodeExecutionRepositoryPort,
+  NodeTaskSpec,
+  StrictNodeOutcome,
+  NodeExecutionResultEnvelope,
+  NodeExecutionResultStorePort,
   ArtifactPayload,
   PersistedArtifactReceipt,
   NodeOutput,
   ArtifactResolverPort,
-  GenerationArtifactRecord,
-  GenerationArtifactStorePort,
   NodeSettlementResult,
 } from './node-execution-types.js';
 export { INFRA_MAX_ATTEMPTS } from './node-execution-types.js';
+export { computeNodeInputSnapshot } from './node-input.js';
 
 export { ExecutorRegistry } from './executor-registry.js';
 

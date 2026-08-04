@@ -1,16 +1,17 @@
 /**
- * Durable Node Execution & Settlement 类型（RW-1）。
+ * Durable Node Execution & Settlement 类型（RW-1 Rework）。
  *
  * 建立所有真实节点（GE-3..GE-6）共同依赖的执行与 settlement 契约：
- * - NodeExecutorDescriptor / ExecutorRegistry：按 graph kind + nodeId 查找 executor；
- * - NodeExecutionRecord：每次真实节点执行的持久化记录（唯一约束防重复创建）；
- * - PersistedArtifactReceipt / ArtifactResolverPort：严格 artifact 边界
- *   （禁止 production executor 传任意字符串 ArtifactRef；存在性与归属由 settlement 校验）；
- * - GenerationArtifactStore：task 成功前持久化完整解析输出的权威存储。
+ * - 每次真实尝试 = 不可变新 execution row（attempt 单调递增，旧 row 保留 superseded/failed）；
+ * - visit_id 区分新 activation 与同 activation infra retry；
+ * - partial unique (graph_run_id, node_id) WHERE in-flight 作为并发 claim 原子门；
+ * - execution-bound durable result envelope（execution_id 唯一）；
+ * - ArtifactResolverPort 严格边界（存在性/归属/version 校验）。
  */
 
 import type { ArtifactKind, GraphNodeId, GraphRunTerminalStatus } from '@ai-novel/domain';
 import type { GraphRunKind } from './graph-run-types.js';
+import type { TaskType } from '@ai-novel/domain';
 
 // ── Executor ──────────────────────────────────────────────────────
 
@@ -45,6 +46,7 @@ export interface NodeExecutionRecord {
   readonly graphId: string;
   readonly graphVersion: string;
   readonly nodeId: string;
+  readonly visitId: string;
   readonly attempt: number;
   readonly executorId: string;
   readonly executorVersion: string;
@@ -65,6 +67,7 @@ export interface CreateNodeExecutionInput {
   readonly graphId: string;
   readonly graphVersion: string;
   readonly nodeId: string;
+  readonly visitId: string;
   readonly attempt: number;
   readonly executorId: string;
   readonly executorVersion: string;
@@ -75,39 +78,77 @@ export interface CreateNodeExecutionInput {
 }
 
 export interface NodeExecutionRepositoryPort {
-  /** 插入；唯一约束 (graph_run_id, node_id, attempt) 冲突返回 false */
+  /**
+   * 插入；仅当违反 partial unique（同 run+node 已有 in-flight execution）时返回 false。
+   * 其它 SQLite 错误必须抛出（禁止 catch 吞掉所有错误）。
+   */
   create(input: CreateNodeExecutionInput): boolean;
   getById(id: string): NodeExecutionRecord | null;
-  getByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null;
-  /** 恢复扫描：某 run 的未完成执行（pending / running） */
+  /** 某 run+node 的最新 execution（历史或 in-flight，按 attempt 降序） */
+  getLatestByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null;
+  /** 某 run+node 的 in-flight execution（pending/running；partial unique 保证至多一个） */
+  getInFlightByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null;
   listActiveByRun(graphRunId: string): ReadonlyArray<NodeExecutionRecord>;
-  /** CAS：pending → running；可绑定 taskId */
+  /** CAS：pending → running；绑定 taskId */
   markRunning(
     id: string,
     expectedStatuses: ReadonlyArray<NodeExecutionStatus>,
     taskId: string | null,
   ): boolean;
-  /** CAS：running/pending → settled；写入 receipt + settledAt */
   markSettled(
     id: string,
     expectedStatuses: ReadonlyArray<NodeExecutionStatus>,
     receiptJson: string | null,
     settledAt: string,
   ): boolean;
-  /** CAS：→ failed（errorCode） */
   markFailed(
     id: string,
     expectedStatuses: ReadonlyArray<NodeExecutionStatus>,
     errorCode: string,
   ): boolean;
-  /** CAS 受控重试：→ pending + attempt++（受基础设施重试上限约束） */
-  retry(
-    id: string,
-    expectedStatuses: ReadonlyArray<NodeExecutionStatus>,
-    updatedAt: string,
-  ): boolean;
-  /** CAS：→ superseded（同节点新 attempt 取代旧记录） */
   markSuperseded(id: string, expectedStatuses: ReadonlyArray<NodeExecutionStatus>): boolean;
+}
+
+// ── TaskSpec（无副作用；事务内创建 task）──────────────────────────
+
+/** task-backed executor 返回的无副作用任务规格（不预先创建 task） */
+export interface NodeTaskSpec {
+  readonly taskType: TaskType;
+  readonly payloadJson: string;
+  readonly dedupeKey: string;
+}
+
+// ── Durable Result Envelope（execution-bound）─────────────────────
+
+/** 严格 outcome（由 executor 产出并经校验） */
+export interface StrictNodeOutcome {
+  readonly condition: string;
+  readonly value: string;
+}
+
+/** execution-bound 权威 durable result（execution_id 唯一） */
+export interface NodeExecutionResultEnvelope {
+  readonly executionId: string;
+  readonly projectId: string;
+  readonly graphRunId: string;
+  readonly nodeId: string;
+  readonly taskId: string | null;
+  readonly attempt: number;
+  readonly executorId: string;
+  readonly executorVersion: string;
+  readonly inputHash: string;
+  readonly artifactKind: ArtifactKind | null;
+  readonly artifactVersion: number | null;
+  /** 完整权威内容（task 成功前持久化） */
+  readonly contentJson: string | null;
+  readonly outcome: StrictNodeOutcome | null;
+  readonly createdAt: string;
+}
+
+export interface NodeExecutionResultStorePort {
+  /** 在 task 成功事务内保存（execution_id 唯一） */
+  save(envelope: NodeExecutionResultEnvelope): void;
+  getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null;
 }
 
 // ── Artifact 边界 ─────────────────────────────────────────────────
@@ -148,29 +189,9 @@ export interface ArtifactResolverPort {
     readonly graphRunId: string;
     readonly graphVersion: string;
     readonly nodeId: string;
+    readonly executionId: string;
     readonly proposed: ArtifactPayload;
   }): PersistedArtifactReceipt;
-}
-
-// ── Generation Artifact Store（task 成功前持久化）─────────────────
-
-export interface GenerationArtifactRecord {
-  readonly id: string;
-  readonly projectId: string;
-  readonly graphRunId: string;
-  readonly nodeId: string;
-  readonly producerExecutorId: string;
-  readonly contentJson: string;
-  readonly version: number;
-  readonly createdAt: string;
-}
-
-export interface GenerationArtifactStorePort {
-  /** 在 task 成功事务内持久化完整解析输出 */
-  save(record: GenerationArtifactRecord): void;
-  getById(id: string): GenerationArtifactRecord | null;
-  /** 按 run+node 取最新（供 settlement 读取持久化结果） */
-  getLatestByRunNode(graphRunId: string, nodeId: string): GenerationArtifactRecord | null;
 }
 
 // ── Settlement 结果 ───────────────────────────────────────────────

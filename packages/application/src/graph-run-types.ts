@@ -8,8 +8,8 @@
 
 import type { AnyIdeaToNovelRunState } from '@ai-novel/domain';
 import type {
-  GenerationArtifactStorePort,
   NodeExecutionRepositoryPort,
+  NodeExecutionResultStorePort,
 } from './node-execution-types.js';
 
 // ── run 类型 ────────────────────────────────────────────────────
@@ -82,7 +82,7 @@ export interface GraphRunTransactionRepositories {
   readonly commandLog: GraphRunCommandLogPort;
   readonly intakeAnswer: IdeaIntakeAnswerPort;
   readonly nodeExecutionRepo: NodeExecutionRepositoryPort;
-  readonly generationArtifactStore: GenerationArtifactStorePort;
+  readonly nodeExecutionResultStore: NodeExecutionResultStorePort;
 }
 
 /** 原子 transition 辅助：拥有 BEGIN IMMEDIATE / COMMIT / ROLLBACK / 嵌套检测 */

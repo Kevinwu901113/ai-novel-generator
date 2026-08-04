@@ -20,10 +20,10 @@ import type {
 } from './graph-run-types.js';
 import type {
   CreateNodeExecutionInput,
-  GenerationArtifactRecord,
-  GenerationArtifactStorePort,
   NodeExecutionRecord,
   NodeExecutionRepositoryPort,
+  NodeExecutionResultEnvelope,
+  NodeExecutionResultStorePort,
   NodeExecutionStatus,
 } from './node-execution-types.js';
 
@@ -102,17 +102,18 @@ export function createFakeGraphRunRepos() {
   };
 
   const executions = new Map<string, NodeExecutionRecord>();
-  const artifacts = new Map<string, GenerationArtifactRecord>();
+  const results = new Map<string, NodeExecutionResultEnvelope>();
 
   const nodeExecutionRepo: NodeExecutionRepositoryPort = {
     create(input: CreateNodeExecutionInput): boolean {
-      const dup = [...executions.values()].some(
+      // 模拟 partial unique：同 run+node 已有 in-flight（pending/running）→ 并发冲突
+      const inFlight = [...executions.values()].some(
         (e) =>
           e.graphRunId === input.graphRunId &&
           e.nodeId === input.nodeId &&
-          e.attempt === input.attempt,
+          (e.status === 'pending' || e.status === 'running'),
       );
-      if (dup) return false;
+      if (inFlight) return false;
       executions.set(input.id, {
         ...input,
         taskId: null,
@@ -126,9 +127,20 @@ export function createFakeGraphRunRepos() {
     getById(id: string): NodeExecutionRecord | null {
       return executions.get(id) ?? null;
     },
-    getByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
+    getLatestByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
       const matches = [...executions.values()]
         .filter((e) => e.graphRunId === graphRunId && e.nodeId === nodeId)
+        .sort((a, b) => b.attempt - a.attempt);
+      return matches[0] ?? null;
+    },
+    getInFlightByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
+      const matches = [...executions.values()]
+        .filter(
+          (e) =>
+            e.graphRunId === graphRunId &&
+            e.nodeId === nodeId &&
+            (e.status === 'pending' || e.status === 'running'),
+        )
         .sort((a, b) => b.attempt - a.attempt);
       return matches[0] ?? null;
     },
@@ -174,19 +186,6 @@ export function createFakeGraphRunRepos() {
       executions.set(id, { ...e, status: 'failed', errorCode, updatedAt: NOW });
       return true;
     },
-    retry(id: string, expected: ReadonlyArray<NodeExecutionStatus>, updatedAt: string): boolean {
-      const e = executions.get(id);
-      if (!e || !expected.includes(e.status)) return false;
-      executions.set(id, {
-        ...e,
-        status: 'pending',
-        attempt: e.attempt + 1,
-        taskId: null,
-        errorCode: null,
-        updatedAt,
-      });
-      return true;
-    },
     markSuperseded(id: string, expected: ReadonlyArray<NodeExecutionStatus>): boolean {
       const e = executions.get(id);
       if (!e || !expected.includes(e.status)) return false;
@@ -195,18 +194,12 @@ export function createFakeGraphRunRepos() {
     },
   };
 
-  const generationArtifactStore: GenerationArtifactStorePort = {
-    save(record: GenerationArtifactRecord): void {
-      artifacts.set(record.id, record);
+  const nodeExecutionResultStore: NodeExecutionResultStorePort = {
+    save(envelope: NodeExecutionResultEnvelope): void {
+      results.set(envelope.executionId, envelope);
     },
-    getById(id: string): GenerationArtifactRecord | null {
-      return artifacts.get(id) ?? null;
-    },
-    getLatestByRunNode(graphRunId: string, nodeId: string): GenerationArtifactRecord | null {
-      const matches = [...artifacts.values()]
-        .filter((a) => a.graphRunId === graphRunId && a.nodeId === nodeId)
-        .sort((a, b) => b.version - a.version);
-      return matches[0] ?? null;
+    getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null {
+      return results.get(executionId) ?? null;
     },
   };
 
@@ -217,7 +210,7 @@ export function createFakeGraphRunRepos() {
         commandLog: GraphRunCommandLogPort;
         intakeAnswer: IdeaIntakeAnswerPort;
         nodeExecutionRepo: NodeExecutionRepositoryPort;
-        generationArtifactStore: GenerationArtifactStorePort;
+        nodeExecutionResultStore: NodeExecutionResultStorePort;
       }) => T,
     ): T {
       return operation({
@@ -225,7 +218,7 @@ export function createFakeGraphRunRepos() {
         commandLog,
         intakeAnswer,
         nodeExecutionRepo,
-        generationArtifactStore,
+        nodeExecutionResultStore,
       });
     },
   };
@@ -235,13 +228,13 @@ export function createFakeGraphRunRepos() {
     commandLog,
     intakeAnswer,
     nodeExecutionRepo,
-    generationArtifactStore,
+    nodeExecutionResultStore,
     tx,
     runs,
     commands,
     answers,
     executions,
-    artifacts,
+    results,
     setForceCasFail(value: boolean): void {
       forceCasFail = value;
     },
