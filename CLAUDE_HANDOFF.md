@@ -4,19 +4,21 @@
 
 ## 1. 交接快照
 
-| 项                       | 值                                                         |
-| ------------------------ | ---------------------------------------------------------- |
-| repository               | `Kevinwu901113/ai-novel-generator`                         |
-| main                     | `2f93ccd18f6165b44a2e4089fd2567ec58a9afcb`                 |
-| PR                       | **#39** Durable Node Execution & Settlement Bridge（RW-1） |
-| branch                   | `feat/rw1-node-execution-settlement`                       |
-| 当前实现 head            | `c5def0dad0f7bfc442110fca99d6cb8de45d5c72`                 |
-| PR 状态                  | **Draft / OPEN / 未合并**                                  |
-| CI run `30888262527`     | completed / **success**（head `c5def0d`）                  |
-| Quality gates            | success                                                    |
-| macOS package smoke test | success                                                    |
-| GE-3                     | 未启动                                                     |
-| main                     | 未包含 RW-1                                                |
+| 项                       | 值                                                                         |
+| ------------------------ | -------------------------------------------------------------------------- |
+| repository               | `Kevinwu901113/ai-novel-generator`                                         |
+| main                     | `2f93ccd18f6165b44a2e4089fd2567ec58a9afcb`                                 |
+| PR                       | **#39** Durable Node Execution & Settlement Bridge（RW-1）                 |
+| branch                   | `feat/rw1-node-execution-settlement`                                       |
+| PR 当前 head             | `d67271a42edb871d6e0462ce8f50b2f83cada9af`（RW-1 实现 + handoff 文档提交） |
+| RW-1 实现 head           | `c5def0dad0f7bfc442110fca99d6cb8de45d5c72`（代码实现）                     |
+| handoff 文档提交         | `d67271a`（仅文档，`docs: add root Claude handoff`）                       |
+| PR 状态                  | **Draft / OPEN / 未合并**                                                  |
+| CI run `30889464267`     | completed / **success**（PR-triggered，head `d67271a`）                    |
+| Quality gates            | success                                                                    |
+| macOS package smoke test | success                                                                    |
+| GE-3                     | 未启动                                                                     |
+| main                     | 未包含 RW-1                                                                |
 
 ## 2. 项目目标
 
@@ -154,7 +156,7 @@
 
 具体顺序：
 
-1. 核对 PR head（`c5def0d`）、base（main `2f93ccd`）、CI 状态（run `30888262527`）；
+1. 核对 PR 当前 head（`d67271a`，其中 RW-1 实现 head 为 `c5def0d`）、base（main `2f93ccd`）、CI 状态（run `30889464267`）；
 2. 阅读全部 Principal Architect reviews（RW-1 / R5 / R5-R2 三轮）；
 3. 对 R5-R2 的 **transaction、artifact provenance、recovery、concurrency tests** 做独立代码审查；
 4. 决定 **ACCEPT** 或 **REWORK**；
