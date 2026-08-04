@@ -866,18 +866,22 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
   {
     version: 12,
     sql: `
-      -- ── Durable Node Execution & Settlement（RW-1 Rework）────────
+      -- ── Durable Node Execution & Settlement（RW-1-R5）────────────
       -- node_executions：
-      --   - 每次真实尝试 = 不可变新 row（attempt 单调递增；旧 row 保留并标记
+      --   - 每次真实尝试 = 不可变新 row（activation_no + attempt_no；旧 row 保留并标记
       --     superseded/failed，不原地改 attempt）；
-      --   - visit_id 区分"Graph 节点新 activation"与"同一 activation 的基础设施 retry"
-      --     （新 activation → 新 visit_id + attempt=1；同 activation infra retry →
-      --       同 visit_id + attempt+1）；
+      --   - activation_no 区分"Graph 节点新 activation"（+1，attempt 重置 1）；attempt_no
+      --     仅在同一 activation 内的基础设施 retry 递增（+1）；
+      --   - unique(graph_run_id, node_id, activation_no, attempt_no) 防重复创建；
       --   - partial unique (graph_run_id, node_id) WHERE in-flight 保证同一节点至多一个
-      --     pending/running execution（并发 claim 的原子门）。
+      --     pending/running execution（并发 claim 的原子门）；
+      --   - task_id 非空唯一（系统按 executionId 生成 dedupeKey；task worker 经 getByTaskId
+      --     反查权威 execution context）；
+      --   - input_snapshot_json / input_hash 持久化 canonical input snapshot（infra retry 复用）；
+      --   - claimed_by / lease_expires_at：sync execution lease（未过期不得被其他 runner retry）。
       -- node_execution_results：
       --   - execution-bound 的权威 durable result envelope（execution_id 唯一）；
-      --   - 含严格 outcome_json 与 artifact 元数据（kind/version）+ 完整内容，
+      --   - 含严格 outcome_json + artifact 元数据（kind / 真实 artifact_id / version）+ 完整内容，
       --     task 成功前持久化；settlement 按 execution_id 读取（不 latest-by-run-node）。
 
       CREATE TABLE IF NOT EXISTS node_executions (
@@ -886,14 +890,17 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         graph_id TEXT NOT NULL,
         graph_version TEXT NOT NULL,
         node_id TEXT NOT NULL,
-        visit_id TEXT NOT NULL,
-        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        activation_no INTEGER NOT NULL CHECK (activation_no >= 1),
+        attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
         executor_id TEXT NOT NULL,
         executor_version TEXT NOT NULL,
         recovery_policy TEXT NOT NULL
           CHECK (recovery_policy IN ('replayable', 'settle_if_result', 'fail_closed')),
+        input_snapshot_json TEXT,
         input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
         task_id TEXT,
+        claimed_by TEXT,
+        lease_expires_at TEXT,
         status TEXT NOT NULL
           CHECK (status IN ('pending', 'running', 'settled', 'failed', 'superseded')),
         artifact_receipt_json TEXT,
@@ -904,10 +911,19 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         FOREIGN KEY (graph_run_id) REFERENCES graph_runs(id)
       ) STRICT;
 
+      -- 同 (run, node) 的 activation+attempt 唯一（防重复创建）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_run_node_activation_attempt
+        ON node_executions(graph_run_id, node_id, activation_no, attempt_no);
+
       -- 同一节点至多一个 in-flight execution（并发 claim 原子门）
       CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_run_node_inflight
         ON node_executions(graph_run_id, node_id)
         WHERE status IN ('pending', 'running');
+
+      -- task_id 非空唯一（系统按 executionId 生成；task worker 反查）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_task_id
+        ON node_executions(task_id)
+        WHERE task_id IS NOT NULL;
 
       CREATE INDEX IF NOT EXISTS idx_node_executions_run
         ON node_executions(graph_run_id);
@@ -918,11 +934,13 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         graph_run_id TEXT NOT NULL,
         node_id TEXT NOT NULL,
         task_id TEXT,
-        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        activation_no INTEGER NOT NULL CHECK (activation_no >= 1),
+        attempt_no INTEGER NOT NULL CHECK (attempt_no >= 1),
         executor_id TEXT NOT NULL,
         executor_version TEXT NOT NULL,
         input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
         artifact_kind TEXT,
+        artifact_id TEXT,
         artifact_version INTEGER CHECK (artifact_version IS NULL OR artifact_version >= 1),
         content_json TEXT,
         outcome_json TEXT,

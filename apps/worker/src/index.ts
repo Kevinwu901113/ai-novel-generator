@@ -746,7 +746,12 @@ function reconcile(dataRoot: string): void {
   fileSystem.cleanupTemp(dataRoot, 60 * 60 * 1000);
 }
 
-function initialize(): void {
+/**
+ * 异步初始化（RW-1-R5 readiness recovery）：
+ * 全部数据一致性恢复 + **await recoverGraphRuns** 完成后才返回 —— 调用方在返回后才
+ * 发布 Worker READY / 接受 RPC，保证启动恢复先行。
+ */
+async function initialize(): Promise<void> {
   const dataRoot = getDataRoot();
   projectsDir = join(dataRoot, 'projects');
 
@@ -771,14 +776,14 @@ function initialize(): void {
   // 恢复中断的任务
   reconcileTasks(dataRoot);
 
-  // 恢复 PENDING 的 Grill 规划任务（异步调度）
+  // 恢复 PENDING 的 Grill 规划任务（幂等重新调度，CAS claim）
   recoverPendingGrillPlans(dataRoot);
 
-  // 恢复 PENDING 的创作契约草案任务（异步调度）
+  // 恢复 PENDING 的创作契约草案任务（幂等重新调度，CAS claim）
   recoverPendingContractDrafts(dataRoot);
 
   // 恢复中断的 Graph run（await runner 后关 DB；按 recoveryPolicy reconcile）
-  void recoverGraphRuns();
+  await recoverGraphRuns();
 }
 
 /**
@@ -788,13 +793,58 @@ function initialize(): void {
  */
 const productionRegistry = new ExecutorRegistry();
 const productionRunners = new Map<string, NodeExecutorRunner>();
+
+/**
+ * RW-1-R5 生产 artifact 边界：transaction-scoped resolver。
+ * 查询真实 repository 校验 kind/id/version/project/run/node/execution 归属；
+ * 删除旧的 artifactId===executionId 伪校验。
+ * - researchBundle / storyBlueprint → 真实表（research_bundles / story_blueprints）；
+ * - generationRun → 权威 execution-bound durable envelope（GE-6 正式化 generation 存储）；
+ * - idea / creationSpec / manuscript → 权威存储属于 GE-3 / GE-7，未接线前 fail-closed。
+ */
 const productionArtifactResolver: ArtifactResolverPort = {
-  resolve(input) {
-    // task-backed 产物由 node_execution_results 持久化（artifactId=executionId）；
-    // settlement 已读取并校验 envelope；此处二次校验 kind + artifactId 归属 execution。
+  resolve(repos, input) {
     if (!isArtifactKind(input.proposed.kind)) throw new Error('非法 artifact kind');
-    if (input.proposed.artifactId !== input.executionId) {
-      throw new Error('artifact 必须引用 execution-bound durable result');
+    if (input.proposed.producerNodeId !== input.nodeId) {
+      throw new Error('producer node 不匹配');
+    }
+    switch (input.proposed.kind) {
+      case 'researchBundle': {
+        const bundle = repos.researchBundleRepo.getById(input.projectId, input.proposed.artifactId);
+        if (!bundle) throw new Error('researchBundle 不存在');
+        if (bundle.version !== input.proposed.version) {
+          throw new Error('researchBundle version 不匹配');
+        }
+        break;
+      }
+      case 'storyBlueprint': {
+        const bp = repos.storyBlueprintRepo.getById(input.projectId, input.proposed.artifactId);
+        if (!bp) throw new Error('storyBlueprint 不存在');
+        if (bp.blueprint.version !== input.proposed.version) {
+          throw new Error('storyBlueprint version 不匹配');
+        }
+        break;
+      }
+      case 'generationRun': {
+        // 权威 generation artifact = execution-bound durable envelope（GE-6 正式化）
+        const envelope = repos.nodeExecutionResultStore.getByExecutionId(input.executionId);
+        if (!envelope) throw new Error('generationRun 无权威 result envelope');
+        if (envelope.artifactId !== input.proposed.artifactId) {
+          throw new Error('generationRun artifactId 不匹配');
+        }
+        if (envelope.artifactVersion !== input.proposed.version) {
+          throw new Error('generationRun version 不匹配');
+        }
+        if (envelope.projectId !== input.projectId || envelope.graphRunId !== input.graphRunId) {
+          throw new Error('generationRun project/run 不匹配');
+        }
+        break;
+      }
+      case 'idea':
+      case 'creationSpec':
+      case 'manuscript':
+        // RW-1 范围：真实权威存储属于 GE-3 / GE-7；未接线前 fail-closed
+        throw new Error(`artifact kind ${input.proposed.kind} 的真实权威存储尚未接线`);
     }
     return {
       kind: input.proposed.kind,
@@ -813,6 +863,7 @@ const productionArtifactResolver: ArtifactResolverPort = {
  * 替换旧的无差别 active→failed 行为：有 execution record 时按 recoveryPolicy reconcile
  * （task succeeded+unsettled → 幂等 settlement；TASK_INTERRUPTED → 受控新 attempt；
  *  deterministic failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
+ * 每 project / run 错误隔离；只有全部项目 DB 恢复结束才返回（readiness 门禁）。
  */
 async function recoverGraphRuns(): Promise<void> {
   if (!appDb) return;
@@ -833,6 +884,7 @@ async function recoverGraphRuns(): Promise<void> {
         runners: productionRunners,
         artifactResolver: productionArtifactResolver,
         taskRepo: new TaskRepositoryAdapter(projDb),
+        runnerId: `worker-recover:${process.pid}`,
       };
       const runs = runnerDeps.tx.runInTransaction((repos) => repos.graphRunRepo.listNonTerminal());
       for (const record of runs) {
@@ -1710,24 +1762,27 @@ function shutdown(): void {
 
 // ── 启动 ──────────────────────────────────────────────────────────
 
-try {
-  initialize();
+void (async () => {
+  try {
+    // RW-1-R5：await 全部恢复（含 recoverGraphRuns）后才发布 READY / 接受 RPC
+    await initialize();
 
-  // 监听来自 Main Process 的消息
-  if (typeof process.parentPort !== 'undefined') {
-    process.parentPort.on('message', (event: { data: unknown }) => {
-      handleMessage(event.data);
-    });
+    // 监听来自 Main Process 的消息
+    if (typeof process.parentPort !== 'undefined') {
+      process.parentPort.on('message', (event: { data: unknown }) => {
+        handleMessage(event.data);
+      });
+    }
+
+    // 发送就绪信号
+    sendToParent({ type: 'ready' } satisfies ReadyMessage);
+  } catch (err) {
+    // 初始化失败，发送错误信号
+    const message = err instanceof Error ? err.message : 'Worker 初始化失败';
+    sendToParent({ type: 'error', message });
+    process.exit(1);
   }
-
-  // 发送就绪信号
-  sendToParent({ type: 'ready' } satisfies ReadyMessage);
-} catch (err) {
-  // 初始化失败，发送错误信号
-  const message = err instanceof Error ? err.message : 'Worker 初始化失败';
-  sendToParent({ type: 'error', message });
-  process.exit(1);
-}
+})();
 
 // 处理进程退出
 process.on('SIGTERM', shutdown);

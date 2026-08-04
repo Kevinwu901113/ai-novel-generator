@@ -1,10 +1,14 @@
 /**
- * Durable Node Execution & Result 持久化（RW-1 Rework）。
+ * Durable Node Execution & Result 持久化（RW-1-R5）。
  *
- * - NodeExecutionRepositoryImpl：node_executions；每次真实尝试 = 不可变新 row（visit_id +
- *   attempt 单调递增）；partial unique (graph_run_id, node_id) WHERE in-flight 作为并发
- *   claim 原子门；create 只把明确的 UNIQUE 冲突解释为并发，其它 SQLite 错误抛出。
- * - NodeExecutionResultStoreImpl：node_execution_results（execution_id 唯一 envelope）。
+ * - NodeExecutionRepositoryImpl：node_executions；每次真实尝试 = 不可变新 row
+ *   （activation_no + attempt_no，attempt 仅在 activation 内递增）；unique
+ *   (graph_run_id, node_id, activation_no, attempt_no) 防重复创建；partial unique
+ *   (graph_run_id, node_id) WHERE in-flight 作为并发 claim 原子门；task_id 非空唯一；
+ *   create 只把明确的 UNIQUE 冲突（in-flight partial unique）解释为并发，其它 SQLite
+ *   错误抛出。getByTaskId 供任务 worker 反查权威 execution context。
+ * - NodeExecutionResultStoreImpl：node_execution_results（execution_id 唯一 envelope；
+ *   saveOrVerifySame 幂等：同内容 no-op，异内容抛错）。
  */
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -46,13 +50,16 @@ interface DbNodeExecutionRow {
   graph_id: string;
   graph_version: string;
   node_id: string;
-  visit_id: string;
-  attempt: number;
+  activation_no: number;
+  attempt_no: number;
   executor_id: string;
   executor_version: string;
   recovery_policy: NodeRecoveryPolicy;
+  input_snapshot_json: string | null;
   input_hash: string;
   task_id: string | null;
+  claimed_by: string | null;
+  lease_expires_at: string | null;
   status: NodeExecutionStatus;
   artifact_receipt_json: string | null;
   error_code: string | null;
@@ -68,13 +75,16 @@ function decodeExecution(row: DbNodeExecutionRow): NodeExecutionRecord {
     graphId: row.graph_id,
     graphVersion: row.graph_version,
     nodeId: row.node_id,
-    visitId: row.visit_id,
-    attempt: row.attempt,
+    activationNo: row.activation_no,
+    attemptNo: row.attempt_no,
     executorId: row.executor_id,
     executorVersion: row.executor_version,
     recoveryPolicy: row.recovery_policy,
+    inputSnapshotJson: row.input_snapshot_json,
     inputHash: row.input_hash,
     taskId: row.task_id,
+    claimedBy: row.claimed_by,
+    leaseExpiresAt: row.lease_expires_at,
     status: row.status,
     artifactReceiptJson: row.artifact_receipt_json,
     errorCode: row.error_code,
@@ -92,10 +102,13 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
       const result = this.db
         .prepare(
           `INSERT INTO node_executions (
-             id, graph_run_id, graph_id, graph_version, node_id, visit_id, attempt,
-             executor_id, executor_version, recovery_policy, input_hash,
-             task_id, status, artifact_receipt_json, error_code, created_at, updated_at, settled_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'pending', NULL, NULL, ?, ?, NULL)`,
+             id, graph_run_id, graph_id, graph_version, node_id, activation_no, attempt_no,
+             executor_id, executor_version, recovery_policy,
+             input_snapshot_json, input_hash,
+             task_id, claimed_by, lease_expires_at,
+             status, artifact_receipt_json, error_code, created_at, updated_at, settled_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL,
+                     'pending', NULL, NULL, ?, ?, NULL)`,
         )
         .run(
           input.id,
@@ -103,11 +116,12 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
           input.graphId,
           input.graphVersion,
           input.nodeId,
-          input.visitId,
-          input.attempt,
+          input.activationNo,
+          input.attemptNo,
           input.executorId,
           input.executorVersion,
           input.recoveryPolicy,
+          input.inputSnapshotJson,
           input.inputHash,
           input.createdAt,
           input.updatedAt,
@@ -126,10 +140,17 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
     return row ? decodeExecution(row) : null;
   }
 
+  getByTaskId(taskId: string): NodeExecutionRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM node_executions WHERE task_id = ? LIMIT 1')
+      .get(taskId) as DbNodeExecutionRow | undefined;
+    return row ? decodeExecution(row) : null;
+  }
+
   getLatestByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
     const row = this.db
       .prepare(
-        'SELECT * FROM node_executions WHERE graph_run_id = ? AND node_id = ? ORDER BY attempt DESC, created_at DESC LIMIT 1',
+        'SELECT * FROM node_executions WHERE graph_run_id = ? AND node_id = ? ORDER BY activation_no DESC, attempt_no DESC LIMIT 1',
       )
       .get(graphRunId, nodeId) as DbNodeExecutionRow | undefined;
     return row ? decodeExecution(row) : null;
@@ -138,7 +159,7 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
   getInFlightByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
     const row = this.db
       .prepare(
-        "SELECT * FROM node_executions WHERE graph_run_id = ? AND node_id = ? AND status IN ('pending','running') ORDER BY attempt DESC LIMIT 1",
+        "SELECT * FROM node_executions WHERE graph_run_id = ? AND node_id = ? AND status IN ('pending','running') ORDER BY activation_no DESC, attempt_no DESC LIMIT 1",
       )
       .get(graphRunId, nodeId) as DbNodeExecutionRow | undefined;
     return row ? decodeExecution(row) : null;
@@ -156,15 +177,26 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
   markRunning(
     id: string,
     expectedStatuses: ReadonlyArray<NodeExecutionStatus>,
-    taskId: string | null,
+    opts: {
+      readonly taskId: string | null;
+      readonly claimedBy: string | null;
+      readonly leaseExpiresAt: string | null;
+    },
   ): boolean {
     const placeholders = expectedStatuses.map(() => '?').join(',');
     const result = this.db
       .prepare(
-        `UPDATE node_executions SET status = 'running', task_id = ?, updated_at = ?
+        `UPDATE node_executions SET status = 'running', task_id = ?, claimed_by = ?, lease_expires_at = ?, updated_at = ?
          WHERE id = ? AND status IN (${placeholders})`,
       )
-      .run(taskId, new Date().toISOString(), id, ...expectedStatuses);
+      .run(
+        opts.taskId,
+        opts.claimedBy,
+        opts.leaseExpiresAt,
+        new Date().toISOString(),
+        id,
+        ...expectedStatuses,
+      );
     return result.changes === 1;
   }
 
@@ -217,11 +249,13 @@ interface DbResultRow {
   graph_run_id: string;
   node_id: string;
   task_id: string | null;
-  attempt: number;
+  activation_no: number;
+  attempt_no: number;
   executor_id: string;
   executor_version: string;
   input_hash: string;
   artifact_kind: string | null;
+  artifact_id: string | null;
   artifact_version: number | null;
   content_json: string | null;
   outcome_json: string | null;
@@ -235,11 +269,13 @@ function decodeResult(row: DbResultRow): NodeExecutionResultEnvelope {
     graphRunId: row.graph_run_id,
     nodeId: row.node_id,
     taskId: row.task_id,
-    attempt: row.attempt,
+    activationNo: row.activation_no,
+    attemptNo: row.attempt_no,
     executorId: row.executor_id,
     executorVersion: row.executor_version,
     inputHash: row.input_hash,
     artifactKind: (row.artifact_kind ?? null) as NodeExecutionResultEnvelope['artifactKind'],
+    artifactId: row.artifact_id,
     artifactVersion: row.artifact_version,
     contentJson: row.content_json,
     outcome: row.outcome_json
@@ -249,6 +285,28 @@ function decodeResult(row: DbResultRow): NodeExecutionResultEnvelope {
   };
 }
 
+/** 逐字段比对两条 envelope（幂等 saveOrVerifySame 的一致性判定） */
+function envelopesEqual(a: NodeExecutionResultEnvelope, b: NodeExecutionResultEnvelope): boolean {
+  return (
+    a.executionId === b.executionId &&
+    a.projectId === b.projectId &&
+    a.graphRunId === b.graphRunId &&
+    a.nodeId === b.nodeId &&
+    a.taskId === b.taskId &&
+    a.activationNo === b.activationNo &&
+    a.attemptNo === b.attemptNo &&
+    a.executorId === b.executorId &&
+    a.executorVersion === b.executorVersion &&
+    a.inputHash === b.inputHash &&
+    a.artifactKind === b.artifactKind &&
+    a.artifactId === b.artifactId &&
+    a.artifactVersion === b.artifactVersion &&
+    a.contentJson === b.contentJson &&
+    JSON.stringify(a.outcome) === JSON.stringify(b.outcome) &&
+    a.createdAt === b.createdAt
+  );
+}
+
 export class NodeExecutionResultStoreImpl implements NodeExecutionResultStorePort {
   constructor(private readonly db: DatabaseSync) {}
 
@@ -256,10 +314,10 @@ export class NodeExecutionResultStoreImpl implements NodeExecutionResultStorePor
     this.db
       .prepare(
         `INSERT INTO node_execution_results (
-           execution_id, project_id, graph_run_id, node_id, task_id, attempt,
+           execution_id, project_id, graph_run_id, node_id, task_id, activation_no, attempt_no,
            executor_id, executor_version, input_hash,
-           artifact_kind, artifact_version, content_json, outcome_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           artifact_kind, artifact_id, artifact_version, content_json, outcome_json, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         envelope.executionId,
@@ -267,16 +325,30 @@ export class NodeExecutionResultStoreImpl implements NodeExecutionResultStorePor
         envelope.graphRunId,
         envelope.nodeId,
         envelope.taskId,
-        envelope.attempt,
+        envelope.activationNo,
+        envelope.attemptNo,
         envelope.executorId,
         envelope.executorVersion,
         envelope.inputHash,
         envelope.artifactKind,
+        envelope.artifactId,
         envelope.artifactVersion,
         envelope.contentJson,
         envelope.outcome ? JSON.stringify(envelope.outcome) : null,
         envelope.createdAt,
       );
+  }
+
+  saveOrVerifySame(envelope: NodeExecutionResultEnvelope): void {
+    const existing = this.getByExecutionId(envelope.executionId);
+    if (existing === null) {
+      this.save(envelope);
+      return;
+    }
+    if (!envelopesEqual(existing, envelope)) {
+      throw new Error(`execution ${envelope.executionId} 已有不同内容的权威 result，拒绝覆盖`);
+    }
+    // 同内容 → 幂等 no-op
   }
 
   getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null {

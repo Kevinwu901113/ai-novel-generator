@@ -1,20 +1,24 @@
 /**
- * NodeSettlementService（RW-1 Rework）。
+ * NodeSettlementService（RW-1-R5）。
  *
  * 唯一允许非人工节点完成的方式。所有数据库变化（execution 身份/结果/stale 校验、Domain
  * transition、CAS 保存 Graph、标记 execution settled、写幂等 command 记录）处于同一
  * BEGIN IMMEDIATE 事务。
  *
- * 硬约束（Blocker 4/5/6/8）：
+ * 硬约束（RW-1-R5）：
  * - run/node/task 从 execution 反推，不允许调用方自由组合；
  * - 只允许 running（已 settled → 重复 settlement 返回原结果）；
- * - task-backed 必须验证 task SUCCEEDED + ownership；结果按 executionId 读取；
- * - inputHash 重校验（stale 拒绝）；
- * - artifact invalid / stale / task 未成功 = 确定性失败（调用方标记 execution failed +
- *   applyNodeFailure）；Graph CAS conflict = 可重试（调用方不得误标 failed）。
+ * - task-backed 必须验证 task SUCCEEDED + ownership；结果按 executionId 读取（durable
+ *   envelope 含真实 artifactId）；validateEnvelope 校验 projectId/taskId/activationNo；
+ * - inputHash 重算（按 Graph 节点 input 契约 + activationNo），stale 拒绝；
+ * - artifact 经 transaction-scoped resolver 校验（查询真实 repository）；
+ * - artifact invalid / stale / task 未成功 = 确定性失败（failExecutionAndNodeInTransaction
+ *   同一事务内标记 execution failed + applyNodeFailure）；Graph CAS conflict = 可重试
+ *   （调用方不得误标 failed）。
  */
 
 import type {
+  AnyIdeaToNovelGraphV1,
   AnyIdeaToNovelRunState,
   ApplyNodeSuccessOptions,
   GraphNodeOutcome,
@@ -22,17 +26,18 @@ import type {
 } from '@ai-novel/domain';
 import {
   artifactRef,
+  applyNodeFailure as applyNodeFailureTransition,
   applyNodeSuccess as applyNodeSuccessTransition,
   createGraphNodeId,
   isArtifactKind,
   isGraphConditionName,
   isGraphConditionOutcome,
 } from '@ai-novel/domain';
-import type { GraphRunDeps } from './graph-run.js';
+import type { GraphRunDeps, GraphRunTransitionResult } from './graph-run.js';
 import { applyTransitionInTransaction, parkHumanNodes } from './graph-run.js';
-import type { GraphRunTransitionResult } from './graph-run.js';
+import type { GraphRunTransactionRepositories } from './graph-run-types.js';
 import type { ExecutorRegistry } from './executor-registry.js';
-import { computeNodeInputSnapshot } from './node-input.js';
+import { computeNodeInputSnapshot, inputHashOf } from './node-input.js';
 import type {
   ArtifactPayload,
   ArtifactResolverPort,
@@ -74,6 +79,11 @@ export interface SettleNodeExecutionInput {
 
 function terminalStatusOf(run: AnyIdeaToNovelRunState): GraphRunTerminalStatus | null {
   return run.terminalStatus;
+}
+
+/** 由 run 状态解析权威图（project / chapter） */
+function graphForState(deps: GraphRunDeps, state: AnyIdeaToNovelRunState): AnyIdeaToNovelGraphV1 {
+  return state.graphId === deps.projectGraph.id ? deps.projectGraph : deps.chapterGraph;
 }
 
 export function settleNodeExecution(
@@ -134,9 +144,11 @@ export function settleNodeExecution(
       throw new NodeSettlementError('NODE_EXECUTION_IDENTITY_MISMATCH', 'executor identity 不匹配');
     }
 
-    // ── stale 校验：当前节点输入快照必须仍与 execution.inputHash 一致 ──
-    const currentInputHash = deps.hashPayload(
-      JSON.stringify(computeNodeInputSnapshot(run.state, execution.nodeId)),
+    // ── stale 校验：按 Graph 节点 input 契约 + activationNo 重算当前输入哈希 ──
+    const graph = graphForState(deps, run.state);
+    const currentInputHash = inputHashOf(
+      deps.hashPayload,
+      computeNodeInputSnapshot(graph, run.state, execution.nodeId, execution.activationNo),
     );
     if (currentInputHash !== execution.inputHash) {
       throw new NodeSettlementError(
@@ -176,12 +188,18 @@ export function settleNodeExecution(
           `execution ${execution.id} 无 durable result`,
         );
       }
-      validateEnvelope(envelope, execution);
+      validateEnvelope(envelope, execution, input.projectId);
       outcome = envelope.outcome ?? undefined;
       if (envelope.artifactKind !== null) {
+        if (envelope.artifactId === null) {
+          throw new NodeSettlementError(
+            'NODE_SETTLEMENT_ARTIFACT_INVALID',
+            'envelope 声明 artifactKind 但缺真实 artifactId',
+          );
+        }
         proposed = {
           kind: envelope.artifactKind,
-          artifactId: execution.id,
+          artifactId: envelope.artifactId,
           producerNodeId: execution.nodeId,
           version: envelope.artifactVersion ?? 1,
         };
@@ -191,10 +209,10 @@ export function settleNodeExecution(
       proposed = input.output.artifact;
     }
 
-    // ── artifact 校验（严格边界）──
+    // ── artifact 校验（transaction-scoped resolver 查询真实 repository）──
     let receipt = null;
     if (proposed !== undefined) {
-      receipt = deps.artifactResolver.resolve({
+      receipt = deps.artifactResolver.resolve(repos, {
         projectId: input.projectId,
         graphRunId: execution.graphRunId,
         graphVersion: execution.graphVersion,
@@ -272,27 +290,85 @@ export function settleNodeExecution(
   });
 }
 
-/** 校验 durable result envelope 与 execution 的一致性 */
+/**
+ * 原子失败（RW-1-R5）：execution 标记 failed + Domain applyNodeFailure + Graph CAS +
+ * 幂等 command 记录，全部同一 BEGIN IMMEDIATE 事务。
+ *
+ * 幂等键使用 executionId（`fail:${executionId}`）；Graph 层失败（如 run 已终态）时
+ * 整事务回滚 —— execution 不会被"半失败"。
+ * 禁止调用方在外部 blanket catch 吞掉真实错误。
+ */
+export function failExecutionAndNodeInTransaction(
+  deps: NodeSettlementDeps,
+  repos: GraphRunTransactionRepositories,
+  input: { readonly projectId: string; readonly executionId: string; readonly errorCode: string },
+): GraphRunTransitionResult {
+  const execution = repos.nodeExecutionRepo.getById(input.executionId);
+  if (!execution) {
+    throw new NodeSettlementError(
+      'NODE_EXECUTION_NOT_FOUND',
+      `execution ${input.executionId} 不存在`,
+    );
+  }
+  const run = repos.graphRunRepo.getById(execution.graphRunId);
+  if (!run || run.state.projectId !== input.projectId) {
+    throw new NodeSettlementError('NODE_EXECUTION_IDENTITY_MISMATCH', 'project ownership 不匹配');
+  }
+  const marked = repos.nodeExecutionRepo.markFailed(
+    execution.id,
+    ['pending', 'running'],
+    input.errorCode,
+  );
+  if (!marked) {
+    throw new NodeSettlementError(
+      'NODE_EXECUTION_STATE_CONFLICT',
+      `execution ${execution.id} 状态不可标记 failed（仅 pending/running）`,
+    );
+  }
+  return applyTransitionInTransaction(
+    deps,
+    repos,
+    execution.graphRunId,
+    'failNode',
+    `fail:${execution.id}`,
+    {
+      command: 'failNode',
+      runId: execution.graphRunId,
+      nodeId: execution.nodeId,
+      executionId: execution.id,
+      errorCode: input.errorCode,
+    },
+    (graph, state) => applyNodeFailureTransition(graph, state, createGraphNodeId(execution.nodeId)),
+  );
+}
+
+/** 校验 durable result envelope 与 execution 的一致性（含 projectId/taskId/activationNo） */
 function validateEnvelope(
   envelope: NodeExecutionResultEnvelope,
   execution: {
     readonly id: string;
     readonly graphRunId: string;
     readonly nodeId: string;
-    readonly attempt: number;
+    readonly activationNo: number;
+    readonly attemptNo: number;
     readonly executorId: string;
     readonly executorVersion: string;
     readonly inputHash: string;
+    readonly taskId: string | null;
   },
+  projectId: string,
 ): void {
   if (
     envelope.executionId !== execution.id ||
+    envelope.projectId !== projectId ||
     envelope.graphRunId !== execution.graphRunId ||
     envelope.nodeId !== execution.nodeId ||
-    envelope.attempt !== execution.attempt ||
+    envelope.activationNo !== execution.activationNo ||
+    envelope.attemptNo !== execution.attemptNo ||
     envelope.executorId !== execution.executorId ||
     envelope.executorVersion !== execution.executorVersion ||
-    envelope.inputHash !== execution.inputHash
+    envelope.inputHash !== execution.inputHash ||
+    envelope.taskId !== execution.taskId
   ) {
     throw new NodeSettlementError(
       'NODE_EXECUTION_IDENTITY_MISMATCH',
@@ -303,6 +379,18 @@ function validateEnvelope(
     throw new NodeSettlementError(
       'NODE_SETTLEMENT_ARTIFACT_INVALID',
       `artifact kind 非法: ${String(envelope.artifactKind)}`,
+    );
+  }
+  if (envelope.artifactKind !== null && envelope.artifactId === null) {
+    throw new NodeSettlementError(
+      'NODE_SETTLEMENT_ARTIFACT_INVALID',
+      'envelope 声明 artifactKind 但缺真实 artifactId',
+    );
+  }
+  if (envelope.artifactKind === null && envelope.artifactId !== null) {
+    throw new NodeSettlementError(
+      'NODE_SETTLEMENT_ARTIFACT_INVALID',
+      'envelope 声明 artifactId 但 artifactKind 为空',
     );
   }
 }

@@ -435,17 +435,35 @@ export type {
   PersistedArtifactReceipt,
   NodeOutput,
   ArtifactResolverPort,
+  ArtifactResolveInput,
   NodeSettlementResult,
+  NodeExecutionInputContext,
+  NodeExecutorRunner,
+  SyncNodeExecutor,
+  TaskBackedNodeExecutor,
 } from './node-execution-types.js';
-export { INFRA_MAX_ATTEMPTS } from './node-execution-types.js';
-export { computeNodeInputSnapshot } from './node-input.js';
+export {
+  INFRA_MAX_ATTEMPTS,
+  INFRA_RETRYABLE_CODES,
+  SYNC_LEASE_MS,
+} from './node-execution-types.js';
+export { canonicalJson } from './canonical-json.js';
+export { computeNodeInputSnapshot, inputHashOf, serializeInputSnapshot } from './node-input.js';
 
 export { ExecutorRegistry } from './executor-registry.js';
 
-export { settleNodeExecution, NodeSettlementError } from './node-settlement.js';
+export {
+  settleNodeExecution,
+  failExecutionAndNodeInTransaction,
+  NodeSettlementError,
+} from './node-settlement.js';
 export type { NodeSettlementDeps, SettleNodeExecutionInput } from './node-settlement.js';
 
 export { driveRun, runTerminalStatusOf } from './node-runner.js';
-export type { NodeDispatchResult, NodeExecutorRunner, NodeRunnerDeps } from './node-runner.js';
+export type { NodeDispatchResult, NodeRunnerDeps } from './node-runner.js';
 
-export { applyTransitionInTransaction, parkHumanNodes } from './graph-run.js';
+export {
+  applyTransitionInTransaction,
+  parkHumanNodes,
+  failNodeInTransaction,
+} from './graph-run.js';

@@ -33,6 +33,8 @@ import {
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
+import { ResearchBundleRepositoryImpl } from './research-repositories.js';
+import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
@@ -88,6 +90,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly intakeAnswerPort: IdeaIntakeAnswerPortImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
+  private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
+  private readonly storyBlueprintRepo: StoryBlueprintRepositoryImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
@@ -96,6 +100,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
     this.intakeAnswerPort = new IdeaIntakeAnswerPortImpl(db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(db);
+    this.researchBundleRepo = new ResearchBundleRepositoryImpl(db);
+    this.storyBlueprintRepo = new StoryBlueprintRepositoryImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -117,6 +123,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       intakeAnswer: this.intakeAnswerPort,
       nodeExecutionRepo: this.nodeExecutionRepo,
       nodeExecutionResultStore: this.nodeExecutionResultStore,
+      researchBundleRepo: this.researchBundleRepo,
+      storyBlueprintRepo: this.storyBlueprintRepo,
     };
 
     try {

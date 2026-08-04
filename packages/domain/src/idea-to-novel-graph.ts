@@ -477,6 +477,27 @@ export interface GraphNodeOutputContract {
 }
 
 /**
+ * 节点输入契约（RW-1-R5, canonical input contract）。
+ *
+ * 声明本节点实际读取的 run state 子集：哪些 artifact 槽位、哪些前驱决策节点
+ * 的 outcome、哪些预算键、是否依赖 run 绑定引用（chapter）。application 层
+ * 依此契约计算 canonical input snapshot / inputHash，settlement 时重算并拒绝 stale。
+ *
+ * 契约即"权威声明"：未声明的 state 变化（如无关 fan-out 兄弟节点结算）不改变本节点
+ * 的 input snapshot，保证互不影响。
+ */
+export interface GraphNodeInputContract {
+  /** 本节点读取的权威 artifact 槽位（其当前 ref 参与 input snapshot） */
+  readonly requiresArtifacts: ReadonlyArray<ArtifactKind>;
+  /** 本节点读取的前驱决策节点（其 nodeOutcomes 参与 input snapshot） */
+  readonly requiresOutcomes: ReadonlyArray<GraphNodeId>;
+  /** 本节点读取的预算键（其已用次数参与 input snapshot） */
+  readonly requiresBudgetKeys: ReadonlyArray<LoopBudgetKey>;
+  /** 是否依赖 run 绑定引用（chapter：creationSpecVersionId / researchBundleId / storyBlueprintId / blueprintChapterId） */
+  readonly requiresBindings: boolean;
+}
+
+/**
  * join 聚合策略：JOIN 节点如何从指定来源确定性聚合结果。
  *
  * 只支持 critique_verdict 聚合：恰好 `sources` 指定的全部来源、来源唯一、
@@ -498,6 +519,8 @@ export interface IdeaToNovelGraphNodeDefinition {
   readonly promptId?: StablePromptId;
   /** fan-in join 声明：`requiredIncoming` 必须是进入本节点的 join 边数（>=2） */
   readonly join?: { readonly requiredIncoming: number };
+  /** 输入契约（执行语义，参与序列化；RW-1-R5 canonical input contract） */
+  readonly input: GraphNodeInputContract;
   /** 输出契约（执行语义，参与序列化） */
   readonly output: GraphNodeOutputContract;
   /** 人工决策类型（仅人工节点声明） */
@@ -640,6 +663,21 @@ const out = (
 
 const noOut = out(null, null);
 
+/** 输入契约构造（无声明输入时使用 `noInp`） */
+const inp = (
+  requiresArtifacts: ReadonlyArray<ArtifactKind> = [],
+  requiresOutcomes: ReadonlyArray<GraphNodeId> = [],
+  requiresBudgetKeys: ReadonlyArray<LoopBudgetKey> = [],
+  requiresBindings = false,
+): GraphNodeInputContract => ({
+  requiresArtifacts,
+  requiresOutcomes,
+  requiresBudgetKeys,
+  requiresBindings,
+});
+
+const noInp = inp();
+
 const cond = <K extends GraphConditionName>(
   condition: K,
   expectedOutcome: GraphConditionOutcomeOf<K>,
@@ -652,6 +690,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: IDEA_CAPTURE,
     kind: 'IDEA_INPUT',
     label: '想法捕获',
+    input: noInp,
     output: out(null, 'idea'),
     // 重新捕获想法（modify_idea）视为新一轮抽取会话：重置澄清预算
     budgetResetPolicy: ['clarification'],
@@ -661,6 +700,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'EXTRACT',
     label: '创作要求抽取',
     promptId: p('prompt:spec-extract-v1'),
+    input: inp(['idea'], [], ['clarification']),
     output: out('clarification_remaining', 'creationSpec'),
   },
   {
@@ -668,6 +708,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'CLARIFY_ASK',
     label: '追问',
     promptId: p('prompt:ask-question-v1'),
+    input: inp(['idea'], [SPEC_EXTRACT], ['clarification']),
     output: noOut,
   },
   {
@@ -675,6 +716,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'CLARIFY_ANSWER',
     label: '收集回答',
     humanDecisionType: 'intake_response',
+    input: noInp,
     output: out('intake_action', null),
   },
   {
@@ -682,12 +724,14 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '澄清预算耗尽人工升级',
     humanDecisionType: 'escalation',
+    input: noInp,
     output: out('intake_escalation_decision', null),
   },
   {
     id: RESEARCH_DECISION,
     kind: 'DECISION',
     label: '调研强度判断',
+    input: inp(['idea', 'creationSpec']),
     output: out('research_decision', null),
   },
   {
@@ -695,18 +739,25 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'PLAN',
     label: '调研问题规划',
     promptId: p('prompt:research-plan-v1'),
+    input: inp(['idea', 'creationSpec'], [RESEARCH_DECISION]),
     output: noOut,
   },
   {
     id: RESEARCH_EXECUTE,
     kind: 'RESEARCH',
     label: '调研执行',
+    input: inp(
+      ['idea', 'creationSpec', 'researchBundle'],
+      [RESEARCH_DECISION, RESEARCH_PLAN],
+      ['researchRetry'],
+    ),
     output: out(null, 'researchBundle'),
   },
   {
     id: RESEARCH_VALIDATE,
     kind: 'DECISION',
     label: '调研校验',
+    input: inp(['idea', 'creationSpec', 'researchBundle'], [RESEARCH_DECISION], ['researchRetry']),
     output: out('research_valid', null),
   },
   {
@@ -714,6 +765,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '调研无效人工升级',
     humanDecisionType: 'escalation',
+    input: noInp,
     output: out('research_escalation_decision', null),
   },
   {
@@ -721,6 +773,11 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'GENERATE',
     label: '蓝图生成',
     promptId: p('prompt:blueprint-generate-v1'),
+    input: inp(
+      ['idea', 'creationSpec', 'researchBundle'],
+      [RESEARCH_DECISION],
+      ['blueprintRewrite'],
+    ),
     output: out(null, 'storyBlueprint'),
   },
   {
@@ -728,6 +785,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '蓝图人工确认',
     humanDecisionType: 'blueprint_gate',
+    input: noInp,
     output: out('blueprint_gate', null),
   },
   {
@@ -735,12 +793,14 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '蓝图预算耗尽人工升级',
     humanDecisionType: 'escalation',
+    input: noInp,
     output: out('escalation_decision', null),
   },
   {
     id: PROJECT_READY,
     kind: 'TERMINAL',
     label: '项目就绪',
+    input: noInp,
     output: noOut,
     terminalStatus: 'completed',
   },
@@ -748,6 +808,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: PROJECT_CANCELLED,
     kind: 'TERMINAL',
     label: '项目已取消',
+    input: noInp,
     output: noOut,
     terminalStatus: 'cancelled',
   },
@@ -755,6 +816,7 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: PROJECT_BLOCKED,
     kind: 'TERMINAL',
     label: '项目已阻塞',
+    input: noInp,
     output: noOut,
     terminalStatus: 'blocked',
   },
@@ -1134,6 +1196,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'PLAN',
     label: '章节规划',
     promptId: p('prompt:chapter-plan-v1'),
+    input: inp([], [], [], true),
     output: noOut,
   },
   {
@@ -1141,6 +1204,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'GENERATE',
     label: '章节草稿生成',
     promptId: p('prompt:draft-generate-v1'),
+    input: inp(['generationRun'], [CHAPTER_PLAN, CANDIDATE_GATE], ['regenerate'], true),
     output: out(null, 'generationRun'),
     budgetResetPolicy: ['rewrite', 'candidateRewrite'],
   },
@@ -1149,6 +1213,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'CRITIC',
     label: '连续性审查',
     promptId: p('prompt:continuity-critic-v1'),
+    input: inp(['generationRun'], [], ['rewrite']),
     output: out('critique_verdict', null),
   },
   {
@@ -1156,6 +1221,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'CRITIC',
     label: '风格审查',
     promptId: p('prompt:style-critic-v1'),
+    input: inp(['generationRun'], [], ['rewrite']),
     output: out('critique_verdict', null),
   },
   {
@@ -1163,6 +1229,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'CRITIC',
     label: '要求符合审查',
     promptId: p('prompt:requirement-critic-v1'),
+    input: inp(['generationRun'], [], ['rewrite'], true),
     output: out('critique_verdict', null),
   },
   {
@@ -1170,6 +1237,11 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'JOIN',
     label: '审查汇合',
     join: { requiredIncoming: 3 },
+    input: inp(
+      ['generationRun'],
+      [CONTINUITY_CRITIC, STYLE_CRITIC, REQUIREMENT_CRITIC],
+      ['rewrite'],
+    ),
     output: out('critique_verdict', null),
     joinAggregationPolicy: {
       kind: 'critique_verdict',
@@ -1182,6 +1254,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'REWRITE',
     label: '定点改写',
     promptId: p('prompt:rewrite-v1'),
+    input: inp(['generationRun'], [CRITIQUE_JOIN], ['candidateRewrite'], true),
     output: noOut,
   },
   {
@@ -1189,6 +1262,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '候选稿人工确认',
     humanDecisionType: 'candidate_gate',
+    input: noInp,
     output: out('candidate_gate', null),
     budgetResetPolicy: ['rewrite'],
   },
@@ -1197,18 +1271,21 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'USER_GATE',
     label: '候选稿预算耗尽人工升级',
     humanDecisionType: 'escalation',
+    input: noInp,
     output: out('escalation_decision', null),
   },
   {
     id: MANUSCRIPT_COMMIT,
     kind: 'COMMIT',
     label: '写入稿件',
+    input: inp(['generationRun'], [CANDIDATE_GATE]),
     output: out(null, 'manuscript'),
   },
   {
     id: CHAPTER_READY,
     kind: 'TERMINAL',
     label: '章节就绪',
+    input: noInp,
     output: noOut,
     terminalStatus: 'completed',
   },
@@ -1216,6 +1293,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: CHAPTER_CANCELLED,
     kind: 'TERMINAL',
     label: '章节已取消',
+    input: noInp,
     output: noOut,
     terminalStatus: 'cancelled',
   },
@@ -1223,6 +1301,7 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: CHAPTER_BLOCKED,
     kind: 'TERMINAL',
     label: '章节已阻塞',
+    input: noInp,
     output: noOut,
     terminalStatus: 'blocked',
   },
@@ -1541,6 +1620,12 @@ export function serializeGraphDefinition(graph: AnyIdeaToNovelGraphV1): string {
       kind: n.kind,
       label: nfc(n.label),
       promptId: n.promptId ?? null,
+      input: {
+        requiresArtifacts: [...n.input.requiresArtifacts].sort(codePointCompare),
+        requiresOutcomes: [...n.input.requiresOutcomes].sort(codePointCompare),
+        requiresBudgetKeys: [...n.input.requiresBudgetKeys].sort(codePointCompare),
+        requiresBindings: n.input.requiresBindings,
+      },
       output: {
         requiredOutcomeCondition: n.output.requiredOutcomeCondition,
         allowedArtifactKind: n.output.allowedArtifactKind,

@@ -26,6 +26,10 @@ import type {
   NodeExecutionResultStorePort,
   NodeExecutionStatus,
 } from './node-execution-types.js';
+import type { ResearchBundleRepositoryPort } from './research.js';
+import type { StoryBlueprintRepositoryPort } from './blueprint.js';
+import type { ResearchBundle } from '@ai-novel/research-engine';
+import type { StoryBlueprint } from '@ai-novel/domain';
 
 export interface FakeAnswerRecord {
   readonly id: string;
@@ -114,9 +118,20 @@ export function createFakeGraphRunRepos() {
           (e.status === 'pending' || e.status === 'running'),
       );
       if (inFlight) return false;
+      // 模拟 unique(graph_run_id, node_id, activation_no, attempt_no)
+      const dup = [...executions.values()].some(
+        (e) =>
+          e.graphRunId === input.graphRunId &&
+          e.nodeId === input.nodeId &&
+          e.activationNo === input.activationNo &&
+          e.attemptNo === input.attemptNo,
+      );
+      if (dup) return false;
       executions.set(input.id, {
         ...input,
         taskId: null,
+        claimedBy: null,
+        leaseExpiresAt: null,
         status: 'pending',
         artifactReceiptJson: null,
         errorCode: null,
@@ -127,10 +142,13 @@ export function createFakeGraphRunRepos() {
     getById(id: string): NodeExecutionRecord | null {
       return executions.get(id) ?? null;
     },
+    getByTaskId(taskId: string): NodeExecutionRecord | null {
+      return [...executions.values()].find((e) => e.taskId === taskId) ?? null;
+    },
     getLatestByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
       const matches = [...executions.values()]
         .filter((e) => e.graphRunId === graphRunId && e.nodeId === nodeId)
-        .sort((a, b) => b.attempt - a.attempt);
+        .sort((a, b) => b.activationNo - a.activationNo || b.attemptNo - a.attemptNo);
       return matches[0] ?? null;
     },
     getInFlightByRunNode(graphRunId: string, nodeId: string): NodeExecutionRecord | null {
@@ -141,7 +159,7 @@ export function createFakeGraphRunRepos() {
             e.nodeId === nodeId &&
             (e.status === 'pending' || e.status === 'running'),
         )
-        .sort((a, b) => b.attempt - a.attempt);
+        .sort((a, b) => b.activationNo - a.activationNo || b.attemptNo - a.attemptNo);
       return matches[0] ?? null;
     },
     listActiveByRun(graphRunId: string): ReadonlyArray<NodeExecutionRecord> {
@@ -152,11 +170,22 @@ export function createFakeGraphRunRepos() {
     markRunning(
       id: string,
       expected: ReadonlyArray<NodeExecutionStatus>,
-      taskId: string | null,
+      opts: {
+        readonly taskId: string | null;
+        readonly claimedBy: string | null;
+        readonly leaseExpiresAt: string | null;
+      },
     ): boolean {
       const e = executions.get(id);
       if (!e || !expected.includes(e.status)) return false;
-      executions.set(id, { ...e, status: 'running', taskId, updatedAt: NOW });
+      executions.set(id, {
+        ...e,
+        status: 'running',
+        taskId: opts.taskId,
+        claimedBy: opts.claimedBy,
+        leaseExpiresAt: opts.leaseExpiresAt,
+        updatedAt: NOW,
+      });
       return true;
     },
     markSettled(
@@ -198,8 +227,71 @@ export function createFakeGraphRunRepos() {
     save(envelope: NodeExecutionResultEnvelope): void {
       results.set(envelope.executionId, envelope);
     },
+    saveOrVerifySame(envelope: NodeExecutionResultEnvelope): void {
+      const existing = results.get(envelope.executionId);
+      if (existing === undefined) {
+        results.set(envelope.executionId, envelope);
+        return;
+      }
+      if (JSON.stringify(existing) !== JSON.stringify(envelope)) {
+        throw new Error(`execution ${envelope.executionId} 已有不同内容的权威 result，拒绝覆盖`);
+      }
+    },
     getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null {
       return results.get(executionId) ?? null;
+    },
+  };
+
+  // 真实 artifact 权威存储 fake（transaction-scoped resolver 校验 researchBundle / storyBlueprint）
+  const researchBundles = new Map<string, ResearchBundle>();
+  const researchBundleRepo: ResearchBundleRepositoryPort = {
+    save(bundle: ResearchBundle): void {
+      researchBundles.set(`${bundle.projectId}:${bundle.id}:${bundle.version}`, bundle);
+    },
+    getById(projectId: string, bundleId: string): ResearchBundle | null {
+      const all = [...researchBundles.values()].filter(
+        (b) => b.projectId === projectId && b.id === bundleId,
+      );
+      all.sort((a, b) => b.version - a.version);
+      return all[0] ?? null;
+    },
+    listByProject(projectId: string): ReadonlyArray<ResearchBundle> {
+      return [...researchBundles.values()].filter((b) => b.projectId === projectId);
+    },
+  };
+
+  const storyBlueprints = new Map<string, { blueprint: StoryBlueprint; accepted: boolean }>();
+  const storyBlueprintRepo: StoryBlueprintRepositoryPort = {
+    save(blueprint: StoryBlueprint, accepted: boolean): void {
+      storyBlueprints.set(`${blueprint.projectId}:${blueprint.id}:${blueprint.version}`, {
+        blueprint,
+        accepted,
+      });
+    },
+    getById(
+      projectId: string,
+      blueprintId: string,
+    ): { readonly blueprint: StoryBlueprint; readonly accepted: boolean } | null {
+      const all = [...storyBlueprints.values()].filter(
+        (r) => r.blueprint.projectId === projectId && r.blueprint.id === blueprintId,
+      );
+      all.sort((a, b) => b.blueprint.version - a.blueprint.version);
+      return all[0] ?? null;
+    },
+    listByProject(projectId: string): ReadonlyArray<StoryBlueprint> {
+      return [...storyBlueprints.values()]
+        .filter((r) => r.blueprint.projectId === projectId)
+        .map((r) => r.blueprint);
+    },
+    markAccepted(projectId: string, blueprintId: string): boolean {
+      let found = false;
+      for (const [key, r] of storyBlueprints) {
+        if (r.blueprint.projectId === projectId && r.blueprint.id === blueprintId) {
+          storyBlueprints.set(key, { ...r, accepted: true });
+          found = true;
+        }
+      }
+      return found;
     },
   };
 
@@ -211,6 +303,8 @@ export function createFakeGraphRunRepos() {
         intakeAnswer: IdeaIntakeAnswerPort;
         nodeExecutionRepo: NodeExecutionRepositoryPort;
         nodeExecutionResultStore: NodeExecutionResultStorePort;
+        researchBundleRepo: ResearchBundleRepositoryPort;
+        storyBlueprintRepo: StoryBlueprintRepositoryPort;
       }) => T,
     ): T {
       return operation({
@@ -219,6 +313,8 @@ export function createFakeGraphRunRepos() {
         intakeAnswer,
         nodeExecutionRepo,
         nodeExecutionResultStore,
+        researchBundleRepo,
+        storyBlueprintRepo,
       });
     },
   };
@@ -229,6 +325,8 @@ export function createFakeGraphRunRepos() {
     intakeAnswer,
     nodeExecutionRepo,
     nodeExecutionResultStore,
+    researchBundleRepo,
+    storyBlueprintRepo,
     tx,
     runs,
     commands,

@@ -296,5 +296,5 @@ export { executeChapterDraft, parseChapterDraftV1 } from './chapter-generation.j
 export type {
   ChapterDraftV1,
   ChapterDraftExecutionResult,
-  ChapterDraftContext,
+  ChapterDraftExecutionDeps,
 } from './chapter-generation.js';

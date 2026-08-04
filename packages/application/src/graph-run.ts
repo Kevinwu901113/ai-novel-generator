@@ -45,6 +45,7 @@ import {
   validateGraphRunState,
 } from '@ai-novel/domain';
 import type { Clock, IdGenerator } from './types.js';
+import { canonicalJson } from './canonical-json.js';
 import type {
   GraphRunRepositoryPort,
   GraphRunStateRecord,
@@ -158,19 +159,6 @@ export interface GraphRunTransitionResult {
 }
 
 // ── 内部辅助 ────────────────────────────────────────────────────
-
-/** 确定性 canonical JSON（键排序），用于幂等载荷指纹 */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
 
 function resolveGraph(deps: GraphRunDeps, graphId: string): AnyIdeaToNovelGraphV1 {
   if (graphId === IDEA_TO_NOVEL_PROJECT_GRAPH_ID) return deps.projectGraph;
@@ -446,15 +434,29 @@ export function advanceNode(deps: GraphRunDeps, input: AdvanceNodeInput): GraphR
 
 export function failNode(deps: GraphRunDeps, input: FailNodeInput): GraphRunTransitionResult {
   return deps.tx.runInTransaction((repos) =>
-    applyTransitionInTransaction(
-      deps,
-      repos,
-      input.runId,
-      'failNode',
-      input.idempotencyKey,
-      { command: 'failNode', runId: input.runId, nodeId: input.nodeId },
-      (graph, state) => applyNodeFailureTransition(graph, state, createGraphNodeId(input.nodeId)),
-    ),
+    failNodeInTransaction(deps, repos, input.runId, input.idempotencyKey, input.nodeId),
+  );
+}
+
+/**
+ * 在**已打开的**事务内执行 failNode（RW-1-R5 原子失败共用）。
+ * 调用方必须已经持有 `repos`（即处于 `deps.tx.runInTransaction` 回调内）。
+ */
+export function failNodeInTransaction(
+  deps: GraphRunDeps,
+  repos: GraphRunTransactionRepositories,
+  runId: string,
+  idempotencyKey: string,
+  nodeId: string,
+): GraphRunTransitionResult {
+  return applyTransitionInTransaction(
+    deps,
+    repos,
+    runId,
+    'failNode',
+    idempotencyKey,
+    { command: 'failNode', runId, nodeId },
+    (graph, state) => applyNodeFailureTransition(graph, state, createGraphNodeId(nodeId)),
   );
 }
 

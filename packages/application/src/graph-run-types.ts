@@ -11,6 +11,8 @@ import type {
   NodeExecutionRepositoryPort,
   NodeExecutionResultStorePort,
 } from './node-execution-types.js';
+import type { ResearchBundleRepositoryPort } from './research.js';
+import type { StoryBlueprintRepositoryPort } from './blueprint.js';
 
 // ── run 类型 ────────────────────────────────────────────────────
 
@@ -83,6 +85,10 @@ export interface GraphRunTransactionRepositories {
   readonly intakeAnswer: IdeaIntakeAnswerPort;
   readonly nodeExecutionRepo: NodeExecutionRepositoryPort;
   readonly nodeExecutionResultStore: NodeExecutionResultStorePort;
+  /** 真实 artifact 权威存储（transaction-scoped resolver 校验 researchBundle） */
+  readonly researchBundleRepo: ResearchBundleRepositoryPort;
+  /** 真实 artifact 权威存储（transaction-scoped resolver 校验 storyBlueprint） */
+  readonly storyBlueprintRepo: StoryBlueprintRepositoryPort;
 }
 
 /** 原子 transition 辅助：拥有 BEGIN IMMEDIATE / COMMIT / ROLLBACK / 嵌套检测 */
