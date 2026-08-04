@@ -308,11 +308,27 @@ gate 决策、终态）。
 
 ## 15. 当前推进位置
 
-- **当前阶段**：GE-6（Chapter Graph 真实生成节点）任务引擎基座已完成；GE-7 待启动。
-  GE-3/GE-4 前端与章节节点执行器接线为后续步骤。
+> **Post-Merge Architecture Acceptance（2026-08-04）**：GE-3/4/5/6 的原始退出条件未达成。
+> 已交付的是 FOUNDATION / BACKEND 能力；Graph 节点真实 executor、运行时接线、产品 UI 与 E2E 均为后续。
+> 详见 `docs/development/post-merge-acceptance.md`。**在 GE-6 原退出条件通过前，下一步不写 GE-7。**
+
+| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）               | PRODUCT_UI | E2E             |
+| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | --------------------------------------------- | ---------- | --------------- |
+| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                             | —          | —               |
+| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）  | —          | —               |
+| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用） | ❌         | ⚠️ 骨架测试达成 |
+| GE-3 Idea Intake + CreationSpec     | 🔶 REWORK           | ✅         | ✅（intake.* helper）                 | ❌ 节点未接                                   | ❌         | ❌              |
+| GE-4 Web Research + ResearchBundle  | 🔶 REWORK           | ✅         | ✅（research.execute, fake provider） | ❌ 节点未接                                   | ❌         | ❌              |
+| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子      | ❌         | ❌              |
+| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线           | ❌         | ❌              |
+
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
-- **下一步**：GE-7 — MANUSCRIPT_COMMIT + 稿件工作区 + 导出。
-- **验收标准**：本文件 §12 的 GE-7 退出条件。
+- **下一步（依依赖顺序）**：
+  - A. 补完 GE-3：真实 Idea Intake 节点 executor 闭环 + 自然对话 UI + CreationSpec 编辑器；
+  - B. 补完 GE-4：真实 Search/Fetch provider + Research Graph 节点闭环 + Research UI；
+  - C. 补完 GE-5：真实 Blueprint executor + Project Graph 模糊想法→PROJECT_READY E2E；
+  - D. 补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
+  - **E. 仅 D 完成后才启动 GE-7 MANUSCRIPT_COMMIT**。
 
 ## 16. 已删除的历史资料
 
