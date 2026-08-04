@@ -20,8 +20,11 @@ import type {
   InvocationSuccessResult,
 } from '@ai-novel/application';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
+import type { GenerationArtifactRecord, GenerationArtifactStorePort } from '@ai-novel/application';
 import { executeChapterDraft, parseChapterDraftV1, type TaskEngineDeps } from './index.js';
 import { TaskExecutionError } from './index.js';
+
+const CTX = { graphRunId: 'run-1', nodeId: 'DRAFT', producerExecutorId: 'chapter-draft-v1' };
 
 const NOW = '2026-08-04T00:00:00.000Z';
 
@@ -178,6 +181,13 @@ function buildDeps(
       })
     : vi.fn(async () => overrides.invokeResult ?? mockSuccessOutput());
 
+  const artifactStore = new Map<string, GenerationArtifactRecord>();
+  const generationArtifactStore: GenerationArtifactStorePort = {
+    save: (r) => artifactStore.set(r.id, r),
+    getById: (id) => artifactStore.get(id) ?? null,
+    getLatestByRunNode: () => null,
+  };
+
   const deps: TaskEngineDeps = {
     taskRepo,
     invocationRepo,
@@ -187,8 +197,9 @@ function buildDeps(
     clock,
     invokeModel,
     transaction: <T>(fn: () => T) => fn(),
+    generationArtifactStore,
   };
-  return { deps, taskStore, invocationStore, taskRepo, invocationRepo };
+  return { deps, taskStore, invocationStore, taskRepo, invocationRepo, artifactStore };
 }
 
 function mockSuccessOutput(): ModelInvocationOutput {
@@ -232,8 +243,8 @@ describe('parseChapterDraftV1', () => {
 
 describe('executeChapterDraft', () => {
   it('成功：task SUCCEEDED + draft 解析 + 安全摘要（不含正文）', async () => {
-    const { deps, taskRepo } = buildDeps();
-    const result = await executeChapterDraft(deps, 't1', 'prompt');
+    const { deps, taskRepo, artifactStore } = buildDeps();
+    const result = await executeChapterDraft(deps, 't1', 'prompt', CTX);
     expect(result.draft.title).toBe('第一章');
     expect(result.draft.content).toBe('正文');
     const task = taskRepo.getById('t1')!;
@@ -242,20 +253,25 @@ describe('executeChapterDraft', () => {
     expect(summary.title).toBe('第一章');
     expect(summary.contentHash).toHaveLength(64);
     expect(JSON.stringify(task.resultJson)).not.toContain('正文');
+    // RW-1：完整解析输出已在 task 成功前持久化
+    const persisted = artifactStore.get('inv-1');
+    expect(persisted).not.toBeNull();
+    expect(persisted!.graphRunId).toBe('run-1');
+    expect(persisted!.nodeId).toBe('DRAFT');
   });
 
   it('无效输出 → 任务失败，不留半成品', async () => {
     const { deps, taskRepo } = buildDeps({
       invokeResult: { ...mockSuccessOutput(), text: '{"title":"x"}' },
     });
-    await executeChapterDraft(deps, 't1', 'prompt');
+    await executeChapterDraft(deps, 't1', 'prompt', CTX);
     expect(taskRepo.getById('t1')!.status).toBe('FAILED');
     expect(taskRepo.getById('t1')!.errorCode).toBe('MODEL_RESPONSE_INVALID');
   });
 
   it('模型错误 → 任务失败', async () => {
     const { deps, taskRepo } = buildDeps({ invokeError: new Error('boom') });
-    const result = await executeChapterDraft(deps, 't1', 'prompt');
+    const result = await executeChapterDraft(deps, 't1', 'prompt', CTX);
     expect(taskRepo.getById('t1')!.status).toBe('FAILED');
     expect(result.draft).toBeNull();
   });

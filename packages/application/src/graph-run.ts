@@ -49,6 +49,7 @@ import type {
   GraphRunRepositoryPort,
   GraphRunStateRecord,
   GraphRunTransactionPort,
+  GraphRunTransactionRepositories,
 } from './graph-run-types.js';
 import {
   GraphRunIdempotencyConflictError,
@@ -236,7 +237,7 @@ function buildSuccessOpts(
  * （CLARIFY_ANSWER / USER_GATE）链式挂起为 waiting_for_human。
  * 若多个人类节点同时激活（图设计违规），第二次 requestHumanDecision 抛错 → fail-closed。
  */
-function parkHumanNodes(
+export function parkHumanNodes(
   graph: AnyIdeaToNovelGraphV1,
   state: AnyIdeaToNovelRunState,
 ): AnyIdeaToNovelRunState {
@@ -248,6 +249,64 @@ function parkHumanNodes(
     current = requestHumanDecisionTransition(graph, current, node.id, node.humanDecisionType);
   }
   return current;
+}
+
+// ── 共享 transition 执行器（内核与 NodeSettlementService 共用）──
+
+/**
+ * 在**已打开的**事务内执行一次 Domain transition（RW-1 起内核与 settlement 共用）。
+ *
+ * 管线：幂等检查（commandLog）→ load run → validate → 纯 domain transition →
+ * validate → saveWithCas（CAS）→ 写幂等 command 记录。
+ *
+ * 约束：调用方必须已经持有 `repos`（即处于 `deps.tx.runInTransaction` 回调内）。
+ * 绝不手工拼装状态、绝不在无 CAS 时持久化。
+ */
+export function applyTransitionInTransaction(
+  deps: GraphRunDeps,
+  repos: GraphRunTransactionRepositories,
+  runId: string,
+  commandType: string,
+  idempotencyKey: string,
+  canonicalPayload: unknown,
+  transition: (
+    graph: AnyIdeaToNovelGraphV1,
+    state: AnyIdeaToNovelRunState,
+  ) => AnyIdeaToNovelRunState,
+): GraphRunTransitionResult {
+  const now = deps.clock.now();
+  const payloadHash = deps.hashPayload(canonicalJson(canonicalPayload));
+
+  const existing = repos.commandLog.get(idempotencyKey);
+  if (existing) {
+    if (existing.payloadHash !== payloadHash) {
+      throw new GraphRunIdempotencyConflictError();
+    }
+    return { run: loadRun(repos.graphRunRepo, runId).state, deduped: true };
+  }
+
+  const record = loadRun(repos.graphRunRepo, runId);
+  const graph = resolveGraph(deps, record.state.graphId);
+
+  let next: AnyIdeaToNovelRunState;
+  try {
+    next = transition(graph, record.state);
+  } catch (err) {
+    throw toGraphRunError(err);
+  }
+  assertValidState(graph, next);
+
+  const ok = repos.graphRunRepo.saveWithCas(runId, record.expectedVersion, next, now);
+  if (!ok) throw new GraphRunVersionConflictError(runId);
+  repos.commandLog.insert({
+    id: idempotencyKey,
+    runId,
+    commandType,
+    payloadHash,
+    appliedExpectedVersion: record.expectedVersion,
+    appliedAt: now,
+  });
+  return { run: next, deduped: false };
 }
 
 // ── 用例 ────────────────────────────────────────────────────────
@@ -361,96 +420,42 @@ export function getRunProgress(
 }
 
 export function advanceNode(deps: GraphRunDeps, input: AdvanceNodeInput): GraphRunTransitionResult {
-  return deps.tx.runInTransaction((repos) => {
-    const now = deps.clock.now();
-    const payloadHash = deps.hashPayload(
-      canonicalJson({
+  return deps.tx.runInTransaction((repos) =>
+    applyTransitionInTransaction(
+      deps,
+      repos,
+      input.runId,
+      'advanceNode',
+      input.idempotencyKey,
+      {
         command: 'advanceNode',
         runId: input.runId,
         nodeId: input.nodeId,
         outcome: input.outcome ?? null,
         artifactRef: input.artifactRef ?? null,
-      }),
-    );
-
-    const existing = repos.commandLog.get(input.idempotencyKey);
-    if (existing) {
-      if (existing.payloadHash !== payloadHash) {
-        throw new GraphRunIdempotencyConflictError();
-      }
-      return { run: loadRun(repos.graphRunRepo, input.runId).state, deduped: true };
-    }
-
-    const record = loadRun(repos.graphRunRepo, input.runId);
-    const graph = resolveGraph(deps, record.state.graphId);
-    const nodeId = createGraphNodeId(input.nodeId);
-    const opts = buildSuccessOpts(graph, input.nodeId, input);
-
-    let next: AnyIdeaToNovelRunState;
-    try {
-      next = applyNodeSuccessTransition(graph, record.state, nodeId, opts);
-      next = parkHumanNodes(graph, next);
-    } catch (err) {
-      throw toGraphRunError(err);
-    }
-    assertValidState(graph, next);
-
-    const ok = repos.graphRunRepo.saveWithCas(input.runId, record.expectedVersion, next, now);
-    if (!ok) throw new GraphRunVersionConflictError(input.runId);
-    repos.commandLog.insert({
-      id: input.idempotencyKey,
-      runId: input.runId,
-      commandType: 'advanceNode',
-      payloadHash,
-      appliedExpectedVersion: record.expectedVersion,
-      appliedAt: now,
-    });
-    return { run: next, deduped: false };
-  });
+      },
+      (graph, state) => {
+        const nodeId = createGraphNodeId(input.nodeId);
+        const opts = buildSuccessOpts(graph, input.nodeId, input);
+        const next = applyNodeSuccessTransition(graph, state, nodeId, opts);
+        return parkHumanNodes(graph, next);
+      },
+    ),
+  );
 }
 
 export function failNode(deps: GraphRunDeps, input: FailNodeInput): GraphRunTransitionResult {
-  return deps.tx.runInTransaction((repos) => {
-    const now = deps.clock.now();
-    const payloadHash = deps.hashPayload(
-      canonicalJson({
-        command: 'failNode',
-        runId: input.runId,
-        nodeId: input.nodeId,
-      }),
-    );
-
-    const existing = repos.commandLog.get(input.idempotencyKey);
-    if (existing) {
-      if (existing.payloadHash !== payloadHash) {
-        throw new GraphRunIdempotencyConflictError();
-      }
-      return { run: loadRun(repos.graphRunRepo, input.runId).state, deduped: true };
-    }
-
-    const record = loadRun(repos.graphRunRepo, input.runId);
-    const graph = resolveGraph(deps, record.state.graphId);
-
-    let next: AnyIdeaToNovelRunState;
-    try {
-      next = applyNodeFailureTransition(graph, record.state, createGraphNodeId(input.nodeId));
-    } catch (err) {
-      throw toGraphRunError(err);
-    }
-    assertValidState(graph, next);
-
-    const ok = repos.graphRunRepo.saveWithCas(input.runId, record.expectedVersion, next, now);
-    if (!ok) throw new GraphRunVersionConflictError(input.runId);
-    repos.commandLog.insert({
-      id: input.idempotencyKey,
-      runId: input.runId,
-      commandType: 'failNode',
-      payloadHash,
-      appliedExpectedVersion: record.expectedVersion,
-      appliedAt: now,
-    });
-    return { run: next, deduped: false };
-  });
+  return deps.tx.runInTransaction((repos) =>
+    applyTransitionInTransaction(
+      deps,
+      repos,
+      input.runId,
+      'failNode',
+      input.idempotencyKey,
+      { command: 'failNode', runId: input.runId, nodeId: input.nodeId },
+      (graph, state) => applyNodeFailureTransition(graph, state, createGraphNodeId(input.nodeId)),
+    ),
+  );
 }
 
 /** applyArtifactChange 输入（上游权威 artifact 变化 → 级联失效下游） */

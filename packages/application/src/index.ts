@@ -415,3 +415,34 @@ export {
 
 export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';
 export { fakeProducerForNode, runFakeUntilHumanOrTerminal } from './graph-skeleton.js';
+
+// ── RW-1 Durable Node Execution & Settlement ─────────────────────
+
+export type {
+  NodeExecutorKind,
+  NodeRecoveryPolicy,
+  NodeExecutorDescriptor,
+  ExecutorKey,
+  NodeExecutionStatus,
+  NodeExecutionRecord,
+  CreateNodeExecutionInput,
+  NodeExecutionRepositoryPort,
+  ArtifactPayload,
+  PersistedArtifactReceipt,
+  NodeOutput,
+  ArtifactResolverPort,
+  GenerationArtifactRecord,
+  GenerationArtifactStorePort,
+  NodeSettlementResult,
+} from './node-execution-types.js';
+export { INFRA_MAX_ATTEMPTS } from './node-execution-types.js';
+
+export { ExecutorRegistry } from './executor-registry.js';
+
+export { settleNodeExecution, NodeSettlementError } from './node-settlement.js';
+export type { NodeSettlementDeps, SettleNodeExecutionInput } from './node-settlement.js';
+
+export { driveRun, runTerminalStatusOf } from './node-runner.js';
+export type { NodeDispatchResult, NodeExecutorRunner, NodeRunnerDeps } from './node-runner.js';
+
+export { applyTransitionInTransaction, parkHumanNodes } from './graph-run.js';

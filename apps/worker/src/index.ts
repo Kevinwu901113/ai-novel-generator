@@ -114,7 +114,12 @@ import {
   type ResearchHandlerContext,
 } from './research-handlers.js';
 import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
-import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
+import {
+  driveRun,
+  ExecutorRegistry,
+  type ArtifactResolverPort,
+  type NodeRunnerDeps,
+} from '@ai-novel/application';
 import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
   scheduleContractDraftRun,
@@ -775,6 +780,20 @@ function initialize(): void {
  * Graph run 启动恢复：对每个项目的非终态 run 中处于 active 的节点执行 fail 路径。
  * 安全可重放（CAS + 幂等键 recover:{runId}:{nodeId}:{expectedVersion}）。
  */
+/** RW-1：严格默认 artifact resolver —— 未接入具体 artifact store 前拒绝一切 settlement artifact（fail-closed） */
+const strictArtifactResolver: ArtifactResolverPort = {
+  resolve() {
+    throw new Error('RW-1: 未接入具体 artifact store，拒绝 settlement artifact（fail-closed）');
+  },
+};
+
+/**
+ * RW-1 启动恢复：对每个项目的非终态 run 运行 NodeRunner。
+ * 替换旧的无差别 active→failed 行为：有 execution record 时按 recoveryPolicy reconcile
+ * （task succeeded+unsettled → 幂等 settlement；pending → 重新调度；replayable → 受控重试；
+ *  failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
+ * 当前无具体 executor 注册（GE-3..6 后续注册），active 节点 → fail-closed。
+ */
 function recoverGraphRuns(): void {
   if (!appDb) return;
   const projects = appDb.getProjectIndexRepository().list();
@@ -783,15 +802,26 @@ function recoverGraphRuns(): void {
     if (!existsSync(dbPath)) continue;
     try {
       const projDb = new ProjectDatabase(dbPath);
-      const deps: GraphRunDeps = {
+      const runnerDeps: NodeRunnerDeps = {
         idGenerator: createIdGenerator(),
         clock: createClock(),
         hashPayload: (payload: string) => sha256Hex(payload),
         tx: projDb.getGraphRunTransaction(),
         projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
         chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
+        registry: new ExecutorRegistry(),
+        runners: new Map(),
+        artifactResolver: strictArtifactResolver,
+        taskRepo: new TaskRepositoryAdapter(projDb),
       };
-      recoverInFlightRuns(deps);
+      const runs = runnerDeps.tx.runInTransaction((repos) => repos.graphRunRepo.listNonTerminal());
+      for (const record of runs) {
+        void driveRun(runnerDeps, record.state.projectId, record.state.workflowRunId).catch(
+          (err) => {
+            console.error(`driveRun ${record.state.workflowRunId} failed`, err);
+          },
+        );
+      }
       projDb.close();
     } catch (err) {
       // 非致命：单个项目恢复失败不阻断启动
@@ -1536,12 +1566,12 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
         data = dispatchContractCommand(request.command, request.payload, contractCtx);
         break;
       }
+      // 仅保留 renderer 安全命令：start / read progress / human decision / list。
+      // advanceNode / failNode / requestHumanDecision 已从 RPC 面移除（RW-1 公共安全边界）：
+      // 非人工节点推进只能是 Worker 内部 NodeRunner + NodeSettlementService 的可信能力。
       case 'graph.createProjectRun':
       case 'graph.createChapterRun':
       case 'graph.getRunProgress':
-      case 'graph.advanceNode':
-      case 'graph.failNode':
-      case 'graph.requestHumanDecision':
       case 'graph.applyHumanDecision':
       case 'graph.listRuns': {
         const graphCtx: GraphHandlerContext = {

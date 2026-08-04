@@ -33,6 +33,10 @@ import {
 import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
 import { ResearchBundleRepositoryImpl } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
+import {
+  GenerationArtifactStoreImpl,
+  NodeExecutionRepositoryImpl,
+} from './node-execution-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -859,6 +863,60 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 12,
+    sql: `
+      -- ── Durable Node Execution & Settlement（RW-1）──────────────
+      -- node_executions：每次真实节点执行的持久化记录；唯一约束防止
+      --   同一 run/node/attempt 重复创建并发执行。
+      -- generation_artifacts：task 成功前持久化的权威生成产物
+      --   （完整严格解析输出），供崩溃后 settlement 使用。
+
+      CREATE TABLE IF NOT EXISTS node_executions (
+        id TEXT PRIMARY KEY,
+        graph_run_id TEXT NOT NULL,
+        graph_id TEXT NOT NULL,
+        graph_version TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL CHECK (attempt >= 1),
+        executor_id TEXT NOT NULL,
+        executor_version TEXT NOT NULL,
+        recovery_policy TEXT NOT NULL
+          CHECK (recovery_policy IN ('replayable', 'settle_if_result', 'fail_closed')),
+        input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
+        task_id TEXT,
+        status TEXT NOT NULL
+          CHECK (status IN ('pending', 'running', 'settled', 'failed', 'superseded')),
+        artifact_receipt_json TEXT,
+        error_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        settled_at TEXT,
+        FOREIGN KEY (graph_run_id) REFERENCES graph_runs(id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_executions_run_node_attempt
+        ON node_executions(graph_run_id, node_id, attempt);
+
+      CREATE INDEX IF NOT EXISTS idx_node_executions_run
+        ON node_executions(graph_run_id);
+
+      CREATE TABLE IF NOT EXISTS generation_artifacts (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        producer_executor_id TEXT NOT NULL,
+        content_json TEXT NOT NULL CHECK (json_valid(content_json)),
+        version INTEGER NOT NULL CHECK (version >= 1),
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (graph_run_id) REFERENCES graph_runs(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_generation_artifacts_run_node
+        ON generation_artifacts(graph_run_id, node_id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1340,6 +1398,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly graphRunTransaction: GraphRunTransactionPortImpl;
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
   private readonly blueprintRepo: StoryBlueprintRepositoryImpl;
+  private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
+  private readonly generationArtifactStore: GenerationArtifactStoreImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1373,6 +1433,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
     this.blueprintRepo = new StoryBlueprintRepositoryImpl(this.db);
+    this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
+    this.generationArtifactStore = new GenerationArtifactStoreImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -1461,6 +1523,14 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {
     return this.blueprintRepo;
+  }
+
+  getNodeExecutionRepository(): NodeExecutionRepositoryImpl {
+    return this.nodeExecutionRepo;
+  }
+
+  getGenerationArtifactStore(): GenerationArtifactStoreImpl {
+    return this.generationArtifactStore;
   }
 
   transaction<T>(fn: () => T): T {

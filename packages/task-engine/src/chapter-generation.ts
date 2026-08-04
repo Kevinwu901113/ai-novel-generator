@@ -21,6 +21,13 @@ export interface ChapterDraftExecutionResult extends TaskExecutionResult {
   readonly draft: ChapterDraftV1;
 }
 
+/** task-backed 节点的 Graph 归属上下文（供持久化权威产物） */
+export interface ChapterDraftContext {
+  readonly graphRunId: string;
+  readonly nodeId: string;
+  readonly producerExecutorId: string;
+}
+
 /**
  * 严格解析模型输出为 ChapterDraftV1。
  * 拒绝：非 JSON、非对象、缺字段、额外字段、非字符串字段、空 title/content。
@@ -67,6 +74,7 @@ export async function executeChapterDraft(
   deps: TaskEngineDeps,
   taskId: string,
   prompt: string,
+  context: ChapterDraftContext,
 ): Promise<ChapterDraftExecutionResult> {
   const {
     taskRepo,
@@ -76,6 +84,7 @@ export async function executeChapterDraft(
     idGenerator,
     invokeModel,
     transaction,
+    generationArtifactStore,
   } = deps;
 
   const task = taskRepo.getById(taskId);
@@ -207,7 +216,29 @@ export async function executeChapterDraft(
     outputTokens: result.usage?.outputTokens ?? null,
   });
 
+  // RW-1：task 成功前先把完整解析输出持久化到权威 generation_artifacts，
+  // 崩溃发生在 task success 与 Graph settlement 之间时，启动后可从持久化结果 settlement。
+  if (!generationArtifactStore) {
+    throw new TaskExecutionError(
+      'TASK_EXECUTION_FAILED',
+      'task-backed 执行缺少 generationArtifactStore（无法持久化产物）',
+    );
+  }
+  const artifactId = idGenerator.generate();
+  const contentJson = JSON.stringify({ kind: 'generationRun', draft });
+  const now = deps.clock.now();
+
   transaction(() => {
+    generationArtifactStore.save({
+      id: artifactId,
+      projectId: task.projectId,
+      graphRunId: context.graphRunId,
+      nodeId: context.nodeId,
+      producerExecutorId: context.producerExecutorId,
+      contentJson,
+      version: 1,
+      createdAt: now,
+    });
     requireCas(
       invocationRepo.markSucceeded(invocationId, 'RUNNING', {
         responseMetadataJson: JSON.stringify({

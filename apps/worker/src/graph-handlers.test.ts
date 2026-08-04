@@ -72,7 +72,7 @@ describe('dispatchGraphCommand', () => {
     ).toThrowError(expect.objectContaining({ code: 'VALIDATION_ERROR' }) as AppError);
   });
 
-  it('graph.advanceNode IDEA_CAPTURE → SPEC_EXTRACT active', () => {
+  it('RW-1 公共安全边界：advanceNode / failNode / requestHumanDecision 不在 RPC 面', () => {
     const ctx = buildCtx();
     dispatchGraphCommand(
       'graph.createProjectRun',
@@ -86,21 +86,20 @@ describe('dispatchGraphCommand', () => {
     ) as ReadonlyArray<{ runId: string }>;
     const runId = runs[0].runId;
 
-    const dto = dispatchGraphCommand(
-      'graph.advanceNode',
-      {
-        projectId: 'proj-1',
-        runId,
-        nodeId: 'IDEA_CAPTURE',
-        artifactRef: { kind: 'idea', artifactId: 'idea-1' },
-        idempotencyKey: 'a1',
-      },
-      ctx,
-    ) as { activeNodes: Array<{ nodeId: string; status: string }> };
-
-    expect(dto.activeNodes.some((n) => n.nodeId === 'SPEC_EXTRACT' && n.status === 'active')).toBe(
-      true,
-    );
+    // 伪造节点完成通道已关闭：advanceNode 不应被 RPC 分发
+    expect(() =>
+      dispatchGraphCommand(
+        'graph.advanceNode',
+        {
+          projectId: 'proj-1',
+          runId,
+          nodeId: 'IDEA_CAPTURE',
+          artifactRef: { kind: 'idea', artifactId: 'idea-1' },
+          idempotencyKey: 'a1',
+        },
+        ctx,
+      ),
+    ).toThrow();
   });
 
   it('graph.getRunProgress 不存在的 run → GRAPH_RUN_NOT_FOUND', () => {
