@@ -1,19 +1,9 @@
 /**
- * 仓库统一 canonical JSON 序列化（RW-1-R5, canonical input contract）。
+ * 仓库统一 canonical JSON 序列化（RW-1-R5）。
  *
- * 确定性：对象键递归排序、数组保序、原始值按 JSON 语义。用于幂等载荷指纹、
- * input snapshot 序列化 / inputHash、input_snapshot_json 持久化。
- * 不使用 localeCompare（跨 locale / 输入编码稳定）。
+ * 直接复用 domain 的 `canonicalJson`（Creation Contract 域已有的强语义）：
+ * NFC 规范化、code-point 排序（含 astral）、NFC 后 key 冲突拒绝、
+ * undefined / BigInt / Symbol / function / 非有限数拒绝。
+ * 不维护第二套弱序列化器。
  */
-
-export function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((v) => canonicalJson(v)).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const obj = value as Record<string, unknown>;
-    const keys = Object.keys(obj).sort();
-    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
+export { canonicalJson } from '@ai-novel/domain';

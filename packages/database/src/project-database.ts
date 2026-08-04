@@ -896,7 +896,7 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         executor_version TEXT NOT NULL,
         recovery_policy TEXT NOT NULL
           CHECK (recovery_policy IN ('replayable', 'settle_if_result', 'fail_closed')),
-        input_snapshot_json TEXT,
+        input_snapshot_json TEXT NOT NULL CHECK (json_valid(input_snapshot_json)),
         input_hash TEXT NOT NULL CHECK (length(input_hash) = 64),
         task_id TEXT,
         claimed_by TEXT,
@@ -945,8 +945,38 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         content_json TEXT,
         outcome_json TEXT,
         created_at TEXT NOT NULL,
+        -- Blocker 9：artifact 三元组 all-null / all-present 不变量 + JSON 有效性
+        CHECK (
+          (artifact_kind IS NULL AND artifact_id IS NULL AND artifact_version IS NULL)
+          OR
+          (artifact_kind IS NOT NULL AND artifact_id IS NOT NULL AND artifact_version IS NOT NULL)
+        ),
+        CHECK (content_json IS NULL OR json_valid(content_json)),
+        CHECK (outcome_json IS NULL OR json_valid(outcome_json)),
         FOREIGN KEY (execution_id) REFERENCES node_executions(id)
       ) STRICT;
+
+      -- generation artifact 按真实 artifactId 可寻址（Blocker 5）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_node_execution_results_artifact_id
+        ON node_execution_results(artifact_id)
+        WHERE artifact_id IS NOT NULL;
+
+      -- execution→artifact 溯源（Blocker 5）：sync 产物的权威 provenance
+      CREATE TABLE IF NOT EXISTS node_artifact_provenance (
+        artifact_kind TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        version INTEGER NOT NULL CHECK (version >= 1),
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        node_id TEXT NOT NULL,
+        execution_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (artifact_kind, artifact_id),
+        FOREIGN KEY (execution_id) REFERENCES node_executions(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_node_artifact_provenance_execution
+        ON node_artifact_provenance(execution_id);
     `,
   },
 ];
@@ -1026,7 +1056,7 @@ class ProjectMetadataRepositoryImpl implements ProjectMetadataRepository {
 
 // ── 任务仓库实现 ──────────────────────────────────────────────────
 
-class TaskRepositoryImpl implements TaskRepository {
+export class TaskRepositoryImpl implements TaskRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   create(data: CreateTaskData): void {

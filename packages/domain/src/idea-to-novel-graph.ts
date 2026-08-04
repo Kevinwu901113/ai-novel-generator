@@ -746,11 +746,8 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     id: RESEARCH_EXECUTE,
     kind: 'RESEARCH',
     label: '调研执行',
-    input: inp(
-      ['idea', 'creationSpec', 'researchBundle'],
-      [RESEARCH_DECISION, RESEARCH_PLAN],
-      ['researchRetry'],
-    ),
+    // RESEARCH_PLAN 输出为 noOut（不产 outcome）；RESEARCH_EXECUTE 只读取 research_decision outcome
+    input: inp(['idea', 'creationSpec', 'researchBundle'], [RESEARCH_DECISION], ['researchRetry']),
     output: out(null, 'researchBundle'),
   },
   {
@@ -1204,7 +1201,8 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'GENERATE',
     label: '章节草稿生成',
     promptId: p('prompt:draft-generate-v1'),
-    input: inp(['generationRun'], [CHAPTER_PLAN, CANDIDATE_GATE], ['regenerate'], true),
+    // CHAPTER_PLAN 输出为 noOut（不产 outcome）；DRAFT 只读取 candidate_gate outcome（regenerate 循环）
+    input: inp(['generationRun'], [CANDIDATE_GATE], ['regenerate'], true),
     output: out(null, 'generationRun'),
     budgetResetPolicy: ['rewrite', 'candidateRewrite'],
   },
@@ -1254,7 +1252,13 @@ const CHAPTER_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'REWRITE',
     label: '定点改写',
     promptId: p('prompt:rewrite-v1'),
-    input: inp(['generationRun'], [CRITIQUE_JOIN], ['candidateRewrite'], true),
+    // rewrite 循环（needs_rewrite）与 candidateRewrite 循环（request_rewrite）都驱动 REWRITE
+    input: inp(
+      ['generationRun'],
+      [CRITIQUE_JOIN, CANDIDATE_GATE],
+      ['rewrite', 'candidateRewrite'],
+      true,
+    ),
     output: noOut,
   },
   {

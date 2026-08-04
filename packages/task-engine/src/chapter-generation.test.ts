@@ -233,6 +233,8 @@ function buildDeps(
       }
     },
     getByExecutionId: (id) => resultStore.get(id) ?? null,
+    getByArtifactId: (artifactId) =>
+      [...resultStore.values()].find((r) => r.artifactId === artifactId) ?? null,
   };
 
   // 权威 execution context（taskId → execution）

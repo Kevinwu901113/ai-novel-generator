@@ -30,11 +30,13 @@ import {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 import {
+  NodeArtifactProvenanceRepositoryImpl,
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
 import { ResearchBundleRepositoryImpl } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
+import { TaskRepositoryPortAdapter } from './task-repository-port-adapter.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
@@ -92,6 +94,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
   private readonly storyBlueprintRepo: StoryBlueprintRepositoryImpl;
+  private readonly taskRepo: TaskRepositoryPortAdapter;
+  private readonly artifactProvenanceRepo: NodeArtifactProvenanceRepositoryImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
@@ -102,6 +106,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(db);
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(db);
     this.storyBlueprintRepo = new StoryBlueprintRepositoryImpl(db);
+    this.taskRepo = new TaskRepositoryPortAdapter(db);
+    this.artifactProvenanceRepo = new NodeArtifactProvenanceRepositoryImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -125,6 +131,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       nodeExecutionResultStore: this.nodeExecutionResultStore,
       researchBundleRepo: this.researchBundleRepo,
       storyBlueprintRepo: this.storyBlueprintRepo,
+      taskRepo: this.taskRepo,
+      artifactProvenanceRepo: this.artifactProvenanceRepo,
     };
 
     try {

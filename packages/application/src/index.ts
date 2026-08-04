@@ -441,6 +441,8 @@ export type {
   NodeExecutorRunner,
   SyncNodeExecutor,
   TaskBackedNodeExecutor,
+  ArtifactProvenanceRecord,
+  ArtifactProvenanceRepoPort,
 } from './node-execution-types.js';
 export {
   INFRA_MAX_ATTEMPTS,

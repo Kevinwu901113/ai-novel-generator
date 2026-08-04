@@ -21,6 +21,7 @@ import {
   inputHashOf,
   NodeSettlementError,
   serializeInputSnapshot,
+  failExecutionAndNodeInTransaction,
   settleNodeExecution,
   type ArtifactPayload,
   type ArtifactResolverPort,
@@ -31,7 +32,6 @@ import {
   type NodeTaskSpec,
   type PersistedArtifactReceipt,
   type TaskData,
-  type TaskRepositoryPort,
 } from './index.js';
 import { createTestDeps } from './graph-run-test-fakes.js';
 import {
@@ -74,39 +74,6 @@ function acceptingResolver(accept: (p: ArtifactPayload) => boolean): ArtifactRes
   };
 }
 
-function fakeTaskRepo(): TaskRepositoryPort & { tasks: Map<string, TaskData> } {
-  const tasks = new Map<string, TaskData>();
-  return {
-    tasks,
-    create: (d) =>
-      tasks.set(d.id, {
-        ...d,
-        dedupeKey: d.dedupeKey ?? null,
-        status: 'PENDING',
-        attemptCount: 0,
-        resultJson: null,
-        errorCode: null,
-        errorMessage: null,
-        startedAt: null,
-        finishedAt: null,
-        staleAt: null,
-        cancelledAt: null,
-        createdAt: NOW,
-        updatedAt: NOW,
-      }),
-    getById: (id) => tasks.get(id) ?? null,
-    listByProject: () => [],
-    listByStatus: () => [],
-    claimPending: () => true,
-    completeRunning: () => true,
-    failRunning: () => true,
-    failPending: () => true,
-    markStale: () => true,
-    resetToPending: () => true,
-    listRunning: () => [],
-  };
-}
-
 type Base = ReturnType<typeof createTestDeps>;
 
 function runnerDeps(
@@ -115,7 +82,6 @@ function runnerDeps(
     registry?: ExecutorRegistry;
     runners?: Map<string, unknown>;
     resolver?: ArtifactResolverPort;
-    taskRepo?: ReturnType<typeof fakeTaskRepo>;
     now?: () => string;
   } = {},
 ): NodeRunnerDeps {
@@ -125,7 +91,6 @@ function runnerDeps(
     registry: overrides.registry ?? new ExecutorRegistry(),
     runners: (overrides.runners ?? new Map()) as NodeRunnerDeps['runners'],
     artifactResolver: overrides.resolver ?? rejectingResolver(),
-    taskRepo: overrides.taskRepo ?? fakeTaskRepo(),
     runnerId: 'test-runner',
   };
 }
@@ -147,11 +112,14 @@ function syncDescriptor(
 
 function syncRunner(
   descriptor: NodeExecutorDescriptor,
-  output: NodeOutput,
+  output: NodeOutput | ((ctx: NodeExecutionInputContext) => NodeOutput),
 ): { descriptor: NodeExecutorDescriptor; execute: (ctx: NodeExecutionInputContext) => NodeOutput } {
   return {
     descriptor,
-    execute: () => output,
+    execute: (ctx) =>
+      typeof output === 'function'
+        ? (output as (c: NodeExecutionInputContext) => NodeOutput)(ctx)
+        : output,
   };
 }
 
@@ -253,7 +221,7 @@ function fullProjectDeps(base: Base): NodeRunnerDeps {
 }
 
 /** 章节 runner：CHAPTER_PLAN sync + DRAFT task-backed */
-function chapterDeps(base: Base, taskRepo: ReturnType<typeof fakeTaskRepo>): NodeRunnerDeps {
+function chapterDeps(base: Base): NodeRunnerDeps {
   const registry = new ExecutorRegistry();
   const runners = new Map<string, unknown>();
   const plan = syncRunner(
@@ -277,7 +245,6 @@ function chapterDeps(base: Base, taskRepo: ReturnType<typeof fakeTaskRepo>): Nod
     registry,
     runners,
     resolver: acceptingResolver((p) => p.kind === 'generationRun'),
-    taskRepo,
   });
 }
 
@@ -368,8 +335,7 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('3. task RUNNING 中断 → 保持（不误 fail、不 spin）', async () => {
-    const taskRepo = fakeTaskRepo();
-    const deps = chapterDeps(base, taskRepo);
+    const deps = chapterDeps(base);
     const { run } = createChapterRun(deps, {
       projectId: 'p1',
       creationSpecVersionId: 'spec-1',
@@ -389,7 +355,6 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('3b. task-backed infra retry：TASK_INTERRUPTED → 统一 claim 新 attempt 新 task（同 activation）', async () => {
-    const taskRepo = fakeTaskRepo();
     const calls: NodeExecutionInputContext[] = [];
     const registry = new ExecutorRegistry();
     const runners = new Map<string, unknown>();
@@ -418,7 +383,6 @@ describe('NodeRunner crash windows', () => {
       registry,
       runners,
       resolver: acceptingResolver(() => true),
-      taskRepo,
     });
     const { run } = createChapterRun(deps, {
       projectId: 'p1',
@@ -433,8 +397,8 @@ describe('NodeRunner crash windows', () => {
     const task1 = exec1.taskId!;
     expect(exec1.attemptNo).toBe(1);
     // 基础设施中断
-    taskRepo.tasks.set(task1, {
-      ...taskRepo.tasks.get(task1)!,
+    base.fakeTasks.set(task1, {
+      ...base.fakeTasks.get(task1)!,
       status: 'FAILED',
       errorCode: 'TASK_INTERRUPTED',
       errorMessage: '中断',
@@ -447,7 +411,7 @@ describe('NodeRunner crash windows', () => {
     expect(base.nodeExecutionRepo.getById(exec1.id)?.status).toBe('superseded');
     const task2 = exec2.taskId!;
     expect(task2).not.toBe(task1);
-    expect(taskRepo.tasks.has(task2)).toBe(true);
+    expect(base.fakeTasks.has(task2)).toBe(true);
     // prepareTask 在真实身份后调用（无空 visitId/inputHash）
     expect(calls.length).toBe(2);
     for (const c of calls) {
@@ -459,8 +423,7 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('4. task 成功 + durable result 已持久化 + 未 settlement → 幂等 settlement（task-backed）', async () => {
-    const taskRepo = fakeTaskRepo();
-    const deps = chapterDeps(base, taskRepo);
+    const deps = chapterDeps(base);
     const { run } = createChapterRun(deps, {
       projectId: 'p1',
       creationSpecVersionId: 'spec-1',
@@ -475,11 +438,11 @@ describe('NodeRunner crash windows', () => {
     expect(draftExec).not.toBeNull();
     expect(draftExec!.status).toBe('running');
     const taskId = draftExec!.taskId!;
-    expect(taskRepo.tasks.has(taskId)).toBe(true);
+    expect(base.fakeTasks.has(taskId)).toBe(true);
 
     // 模拟崩溃窗口：task 成功 + execution-bound durable result 已持久化 + 未 settlement
-    taskRepo.tasks.set(taskId, {
-      ...taskRepo.tasks.get(taskId)!,
+    base.fakeTasks.set(taskId, {
+      ...base.fakeTasks.get(taskId)!,
       status: 'SUCCEEDED',
       resultJson: '{}',
     });
@@ -741,13 +704,28 @@ describe('NodeRunner crash windows', () => {
     ];
     for (const [nodeId, id, output] of defs) {
       const d = syncDescriptor(nodeId, id);
+      if (nodeId === 'RESEARCH_EXECUTE') {
+        // 循环 retry 每次产出新的 artifactId（provenance 要求 artifact 由单一 execution 产出）
+        const perActivation = syncRunner(d, (ctx) => ({
+          artifact: {
+            kind: 'researchBundle',
+            artifactId: `rb-${ctx.activationNo}`,
+            producerNodeId: 'RESEARCH_EXECUTE' as never,
+            version: 1,
+          },
+        }));
+        register(registry, runners, perActivation.descriptor, perActivation);
+        continue;
+      }
       register(registry, runners, d, syncRunner(d, output));
     }
     const deps = runnerDeps(base, {
       registry,
       runners,
-      resolver: acceptingResolver((p) =>
-        ['idea-real-1', 'spec-real-1', 'rb-1'].includes(p.artifactId),
+      resolver: acceptingResolver(
+        (p) =>
+          ['idea-real-1', 'spec-real-1', 'rb-1'].includes(p.artifactId) ||
+          /^rb-\d+$/.test(p.artifactId),
       ),
     });
     const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c15' });
@@ -797,12 +775,10 @@ describe('NodeRunner crash windows', () => {
     register(registry, runners, draft.descriptor, draft);
     criticRunners.forEach((r) => register(registry, runners, r.descriptor, r));
 
-    const taskRepo = fakeTaskRepo();
     const deps = runnerDeps(base, {
       registry,
       runners,
       resolver: acceptingResolver(() => true),
-      taskRepo,
     });
     const { run } = createChapterRun(deps, {
       projectId: 'p1',
@@ -816,8 +792,8 @@ describe('NodeRunner crash windows', () => {
     const draftExec = base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, 'DRAFT');
     if (draftExec) {
       const taskId = draftExec.taskId!;
-      taskRepo.tasks.set(taskId, {
-        ...taskRepo.tasks.get(taskId)!,
+      base.fakeTasks.set(taskId, {
+        ...base.fakeTasks.get(taskId)!,
         status: 'SUCCEEDED',
         resultJson: '{}',
       });
@@ -851,7 +827,7 @@ describe('NodeRunner crash windows', () => {
     );
     expect(created.every((c) => c !== null && c!.taskId !== null)).toBe(true);
     const criticTaskIds = created.map((c) => c!.taskId!);
-    expect(criticTaskIds.every((tid) => taskRepo.tasks.has(tid))).toBe(true);
+    expect(criticTaskIds.every((tid) => base.fakeTasks.has(tid))).toBe(true);
   });
 
   it('15. settlement 身份：stale input（真实 inputHash 与当前不一致）→ 拒绝', async () => {
@@ -884,7 +860,6 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('16. sync lease：未过期 → 其他 runner 保持（不重试）', async () => {
-    const taskRepo = fakeTaskRepo();
     const registry = new ExecutorRegistry();
     const runners = new Map<string, unknown>();
     const idea = syncRunner(
@@ -896,7 +871,6 @@ describe('NodeRunner crash windows', () => {
       registry,
       runners,
       resolver: acceptingResolver(() => true),
-      taskRepo,
     });
     const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c-lease1' });
     // 手动创建 running sync execution，lease 在未来（未过期）
@@ -978,7 +952,6 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('18. 确定性 task 失败（业务性错误码）→ 原子失败，不 infra retry', async () => {
-    const taskRepo = fakeTaskRepo();
     const registry = new ExecutorRegistry();
     const runners = new Map<string, unknown>();
     const plan = syncRunner(
@@ -1002,7 +975,6 @@ describe('NodeRunner crash windows', () => {
       registry,
       runners,
       resolver: acceptingResolver(() => true),
-      taskRepo,
     });
     const { run } = createChapterRun(deps, {
       projectId: 'p1',
@@ -1014,8 +986,8 @@ describe('NodeRunner crash windows', () => {
     });
     await driveRun(deps, 'p1', run.workflowRunId);
     const exec1 = base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, 'DRAFT')!;
-    taskRepo.tasks.set(exec1.taskId!, {
-      ...taskRepo.tasks.get(exec1.taskId!)!,
+    base.fakeTasks.set(exec1.taskId!, {
+      ...base.fakeTasks.get(exec1.taskId!)!,
       status: 'FAILED',
       errorCode: 'MODEL_RESPONSE_INVALID',
       errorMessage: '输出非法',
@@ -1031,5 +1003,69 @@ describe('NodeRunner crash windows', () => {
     // 没有创建新 attempt
     const all = [...base.executions.values()].filter((e) => e.nodeId === 'DRAFT');
     expect(all.length).toBe(1);
+  });
+
+  it('19. B6 不变量：确定性 settlement 失败 → 原子失败，绝无 failed execution + active node 并存', async () => {
+    // sync executor 抛错 → failClosed 原子失败；run 终态，节点 failed（不 split-brain）
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const idea = syncRunner(syncDescriptor('IDEA_CAPTURE', 'idea-throw', 'replayable'), () => {
+      throw new Error('executor boom');
+    });
+    register(registry, runners, idea.descriptor, idea);
+    const deps = runnerDeps(base, {
+      registry,
+      runners,
+      resolver: acceptingResolver(() => true),
+    });
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c-b6' });
+    await driveRun(deps, 'p1', run.workflowRunId);
+    const state = getRunProgress(deps, {
+      projectId: 'p1',
+      runId: run.workflowRunId,
+    }) as IdeaToNovelProjectRunState;
+    expect(state.terminalStatus).toBe('failed');
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+    // 不变量：run 中不存在 failed execution 与 active 节点并存
+    for (const nodeId of Object.keys(state.nodeStatuses)) {
+      if (state.nodeStatuses[nodeId as never] === 'active') {
+        const exec = base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, nodeId);
+        expect(exec?.status).not.toBe('failed');
+      }
+    }
+  });
+
+  it('20. B6 fallback 收窄：节点仍 active 且 run 未终态时，原子失败错误必须上抛（不单独标 failed）', () => {
+    const deps = fullProjectDeps(base);
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c-b6b' });
+    const runId = run.workflowRunId;
+    seedRunningExecution(base, runId, 'IDEA_CAPTURE', 'e-b6b');
+    // 制造"节点仍 active + 身份不匹配"的原子失败：伪造 execution 的 graph 身份不匹配 →
+    // failExecutionAndNodeInTransaction 抛 NodeSettlementError（identity）；此时节点仍 active。
+    // 直接调用 settle 的失败路径等价物：把一个不属于该 run 的 execution 传入原子失败。
+    const executionId = 'e-b6b';
+    // 先篡改 execution 的 run 归属，使原子失败的身份校验失败
+    const exec = base.nodeExecutionRepo.getById(executionId)!;
+    base.nodeExecutionRepo.markRunning(executionId, ['pending'], {
+      taskId: null,
+      claimedBy: 'x',
+      leaseExpiresAt: NOW,
+    });
+    void exec;
+    // 用错误的 projectId 调用原子失败 → 身份错误 → 节点仍 active → 必须上抛
+    expect(() =>
+      deps.tx.runInTransaction((repos) =>
+        failExecutionAndNodeInTransaction(deps, repos, {
+          projectId: 'p-wrong',
+          executionId,
+          errorCode: 'NODE_INTERRUPTED',
+        }),
+      ),
+    ).toThrow();
+    // execution 未单独标 failed（不 split-brain）
+    expect(base.nodeExecutionRepo.getById(executionId)?.status).toBe('running');
+    const state = getRunProgress(deps, { projectId: 'p1', runId });
+    expect(state.terminalStatus).toBeNull();
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
   });
 });

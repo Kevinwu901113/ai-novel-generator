@@ -45,7 +45,6 @@ import type {
   NodeOutput,
   NodeSettlementResult,
 } from './node-execution-types.js';
-import type { TaskRepositoryPort } from './types.js';
 import { AppError } from './errors.js';
 
 export type NodeSettlementErrorCode =
@@ -67,7 +66,6 @@ export class NodeSettlementError extends AppError {
 export interface NodeSettlementDeps extends GraphRunDeps {
   readonly artifactResolver: ArtifactResolverPort;
   readonly registry: ExecutorRegistry;
-  readonly taskRepo: TaskRepositoryPort;
 }
 
 export interface SettleNodeExecutionInput {
@@ -162,7 +160,8 @@ export function settleNodeExecution(
     let proposed: ArtifactPayload | undefined;
     if (execution.taskId !== null) {
       // task-backed：验证 task SUCCEEDED + ownership + 结果按 executionId 读取
-      const task = deps.taskRepo.getById(execution.taskId);
+      // （Blocker 3：task 读经 repos.taskRepo，同一事务内保证一致性）
+      const task = repos.taskRepo.getById(execution.taskId);
       if (!task) {
         throw new NodeSettlementError(
           'NODE_SETTLEMENT_TASK_NOT_SUCCEEDED',
@@ -191,17 +190,12 @@ export function settleNodeExecution(
       validateEnvelope(envelope, execution, input.projectId);
       outcome = envelope.outcome ?? undefined;
       if (envelope.artifactKind !== null) {
-        if (envelope.artifactId === null) {
-          throw new NodeSettlementError(
-            'NODE_SETTLEMENT_ARTIFACT_INVALID',
-            'envelope 声明 artifactKind 但缺真实 artifactId',
-          );
-        }
+        // Blocker 9：三元组 all-present（validateEnvelope 已保证），不默认补 version
         proposed = {
           kind: envelope.artifactKind,
-          artifactId: envelope.artifactId,
+          artifactId: envelope.artifactId!,
           producerNodeId: execution.nodeId,
-          version: envelope.artifactVersion ?? 1,
+          version: envelope.artifactVersion!,
         };
       }
     } else if (input.output !== undefined) {
@@ -220,6 +214,20 @@ export function settleNodeExecution(
         executionId: execution.id,
         proposed,
       });
+      // Blocker 5：持久化 execution→artifact provenance（同一事务）。
+      // generationRun 的权威 provenance 即 execution-bound envelope（含 execution_id），无需单独行。
+      if (proposed.kind !== 'generationRun') {
+        repos.artifactProvenanceRepo.upsert({
+          artifactKind: proposed.kind,
+          artifactId: proposed.artifactId,
+          version: proposed.version,
+          projectId: input.projectId,
+          graphRunId: execution.graphRunId,
+          nodeId: execution.nodeId,
+          executionId: execution.id,
+          createdAt: deps.clock.now(),
+        });
+      }
     }
 
     // ── outcome 形状校验 ──
@@ -381,16 +389,15 @@ function validateEnvelope(
       `artifact kind 非法: ${String(envelope.artifactKind)}`,
     );
   }
-  if (envelope.artifactKind !== null && envelope.artifactId === null) {
+  // Blocker 9：artifact 三元组 all-null / all-present 不变量（kind↔id↔version 一致）
+  const kindPresent = envelope.artifactKind !== null;
+  if (
+    kindPresent !== (envelope.artifactId !== null) ||
+    kindPresent !== (envelope.artifactVersion !== null)
+  ) {
     throw new NodeSettlementError(
       'NODE_SETTLEMENT_ARTIFACT_INVALID',
-      'envelope 声明 artifactKind 但缺真实 artifactId',
-    );
-  }
-  if (envelope.artifactKind === null && envelope.artifactId !== null) {
-    throw new NodeSettlementError(
-      'NODE_SETTLEMENT_ARTIFACT_INVALID',
-      'envelope 声明 artifactId 但 artifactKind 为空',
+      'envelope artifact 三元组不完整（必须 all-null 或 all-present）',
     );
   }
 }

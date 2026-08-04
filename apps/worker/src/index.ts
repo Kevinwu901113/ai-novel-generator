@@ -115,7 +115,6 @@ import {
 } from './research-handlers.js';
 import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
 import {
-  driveRun,
   ExecutorRegistry,
   type ArtifactResolverPort,
   type NodeExecutorRunner,
@@ -133,6 +132,8 @@ import {
   type ContractDraftRunnerDeps,
   type ContractDraftScheduleResult,
 } from './contract-draft-runner.js';
+import { scheduleGraphTask, type GraphTaskRunnerDeps } from './graph-task-runner.js';
+import { runProjectRecovery } from './recovery-bootstrap.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -796,17 +797,37 @@ const productionRunners = new Map<string, NodeExecutorRunner>();
 
 /**
  * RW-1-R5 生产 artifact 边界：transaction-scoped resolver。
- * 查询真实 repository 校验 kind/id/version/project/run/node/execution 归属；
+ * 从**持久化 provenance**（而非调用方字段）校验 kind/id/version/project/run/node/execution；
  * 删除旧的 artifactId===executionId 伪校验。
- * - researchBundle / storyBlueprint → 真实表（research_bundles / story_blueprints）；
- * - generationRun → 权威 execution-bound durable envelope（GE-6 正式化 generation 存储）；
- * - idea / creationSpec / manuscript → 权威存储属于 GE-3 / GE-7，未接线前 fail-closed。
+ * - researchBundle / storyBlueprint：provenance 行 + 真实表（research_bundles / story_blueprints）；
+ * - generationRun：权威 execution-bound durable envelope（按真实 artifactId 可寻址）；
+ * - idea / creationSpec / manuscript：provenance 行校验 producer 归属（GE-3/GE-7 接底层存储）。
  */
 const productionArtifactResolver: ArtifactResolverPort = {
   resolve(repos, input) {
     if (!isArtifactKind(input.proposed.kind)) throw new Error('非法 artifact kind');
     if (input.proposed.producerNodeId !== input.nodeId) {
       throw new Error('producer node 不匹配');
+    }
+    // 公共 provenance 校验：execution 必须是该 artifact 的真实产出者
+    if (input.proposed.kind !== 'generationRun') {
+      const prov = repos.artifactProvenanceRepo.getByArtifact(
+        input.proposed.kind,
+        input.proposed.artifactId,
+      );
+      if (!prov)
+        throw new Error(
+          `artifact ${input.proposed.kind}:${input.proposed.artifactId} 无 provenance`,
+        );
+      if (
+        prov.executionId !== input.executionId ||
+        prov.graphRunId !== input.graphRunId ||
+        prov.nodeId !== input.nodeId ||
+        prov.projectId !== input.projectId ||
+        prov.version !== input.proposed.version
+      ) {
+        throw new Error('artifact provenance 与当前 execution/run/node 不匹配');
+      }
     }
     switch (input.proposed.kind) {
       case 'researchBundle': {
@@ -826,11 +847,11 @@ const productionArtifactResolver: ArtifactResolverPort = {
         break;
       }
       case 'generationRun': {
-        // 权威 generation artifact = execution-bound durable envelope（GE-6 正式化）
-        const envelope = repos.nodeExecutionResultStore.getByExecutionId(input.executionId);
-        if (!envelope) throw new Error('generationRun 无权威 result envelope');
-        if (envelope.artifactId !== input.proposed.artifactId) {
-          throw new Error('generationRun artifactId 不匹配');
+        // 按真实 artifactId 可寻址（Blocker 5）+ execution 归属校验
+        const envelope = repos.nodeExecutionResultStore.getByArtifactId(input.proposed.artifactId);
+        if (!envelope) throw new Error('generationRun 无权威 result envelope（按 artifactId）');
+        if (envelope.executionId !== input.executionId) {
+          throw new Error('generationRun 非当前 execution 产出');
         }
         if (envelope.artifactVersion !== input.proposed.version) {
           throw new Error('generationRun version 不匹配');
@@ -843,8 +864,8 @@ const productionArtifactResolver: ArtifactResolverPort = {
       case 'idea':
       case 'creationSpec':
       case 'manuscript':
-        // RW-1 范围：真实权威存储属于 GE-3 / GE-7；未接线前 fail-closed
-        throw new Error(`artifact kind ${input.proposed.kind} 的真实权威存储尚未接线`);
+        // provenance 已校验 producer 归属；底层权威存储属于 GE-3 / GE-7
+        break;
     }
     return {
       kind: input.proposed.kind,
@@ -863,16 +884,64 @@ const productionArtifactResolver: ArtifactResolverPort = {
  * 替换旧的无差别 active→failed 行为：有 execution record 时按 recoveryPolicy reconcile
  * （task succeeded+unsettled → 幂等 settlement；TASK_INTERRUPTED → 受控新 attempt；
  *  deterministic failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
- * 每 project / run 错误隔离；只有全部项目 DB 恢复结束才返回（readiness 门禁）。
+ * 每 project / run 错误隔离（ProjectDatabase 构造在每项目 try 内）；只有全部项目 DB 恢复结束
+ * 才返回（readiness 门禁）。
+ *
+ * Blocker 2：接真实 idempotent `scheduleTask` —— PENDING Graph task 在启动恢复中真正重新调度。
  */
-async function recoverGraphRuns(): Promise<void> {
+
+/** 启动恢复可注入选项（集成测试覆盖 registry / scheduleTask） */
+export interface RecoveryOptions {
+  readonly registry?: ExecutorRegistry;
+  readonly runners?: Map<string, NodeExecutorRunner>;
+  readonly resolver?: ArtifactResolverPort;
+  readonly scheduleTask?: (projectId: string, taskId: string) => void;
+}
+
+/** 构建真实 Graph task scheduler（幂等；执行 CHAPTER_DRAFT 任务） */
+function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
+  return {
+    openDb: (projectId: string) => getProjectDb(projectId),
+    buildEngineDeps: (projDb: ProjectDatabase) => {
+      const clock = createClock();
+      return {
+        taskRepo: new TaskRepositoryAdapter(projDb),
+        invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
+        secretStore: secretStore!,
+        providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+        idGenerator: createIdGenerator(),
+        clock,
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
+        nodeExecutionResultStore: projDb.getNodeExecutionResultStore(),
+        nodeExecutionRepo: projDb.getNodeExecutionRepository(),
+      };
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+  };
+}
+
+async function recoverGraphRuns(opts: RecoveryOptions = {}): Promise<void> {
   if (!appDb) return;
-  const projects = appDb.getProjectIndexRepository().list();
-  for (const project of projects) {
-    const dbPath = join(project.projectDirectory, 'project.sqlite');
-    if (!existsSync(dbPath)) continue;
-    const projDb = new ProjectDatabase(dbPath);
-    try {
+  await runProjectRecovery({
+    listProjects: () =>
+      appDb!
+        .getProjectIndexRepository()
+        .list()
+        .map((p) => ({
+          projectId: p.id,
+          projectDirectory: p.projectDirectory,
+        })),
+    openProjectDb: (dbPath) => new ProjectDatabase(dbPath),
+    buildRunnerDeps: (projDb, projectId) => {
       const runnerDeps: NodeRunnerDeps = {
         idGenerator: createIdGenerator(),
         clock: createClock(),
@@ -880,25 +949,21 @@ async function recoverGraphRuns(): Promise<void> {
         tx: projDb.getGraphRunTransaction(),
         projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
         chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
-        registry: productionRegistry,
-        runners: productionRunners,
-        artifactResolver: productionArtifactResolver,
-        taskRepo: new TaskRepositoryAdapter(projDb),
+        registry: opts.registry ?? productionRegistry,
+        runners: opts.runners ?? productionRunners,
+        artifactResolver: opts.resolver ?? productionArtifactResolver,
         runnerId: `worker-recover:${process.pid}`,
+        scheduleTask: (taskId) => {
+          if (opts.scheduleTask) {
+            opts.scheduleTask(projectId, taskId);
+          } else {
+            scheduleGraphTask(buildGraphTaskRunnerDeps(), projectId, taskId);
+          }
+        },
       };
-      const runs = runnerDeps.tx.runInTransaction((repos) => repos.graphRunRepo.listNonTerminal());
-      for (const record of runs) {
-        try {
-          await driveRun(runnerDeps, record.state.projectId, record.state.workflowRunId);
-        } catch (err) {
-          // 非致命：单个 run 恢复失败不阻断整体
-          console.error(`driveRun ${record.state.workflowRunId} failed`, err);
-        }
-      }
-    } finally {
-      projDb.close();
-    }
-  }
+      return runnerDeps;
+    },
+  });
 }
 
 /**

@@ -523,6 +523,10 @@ function validateGraphDefinition(
 
   const nodeIds = nodes.filter((n) => typeof n.id === 'string').map((n) => n.id);
   const nodeIdSet = new Set<string>(nodeIds as string[]);
+  const nodeById = new Map<string, IdeaToNovelGraphNodeDefinition>();
+  for (const n of nodes) {
+    if (typeof n.id === 'string') nodeById.set(n.id, n);
+  }
 
   // 入口节点存在
   if (typeof graph.entryNodeId === 'string' && !nodeIds.includes(graph.entryNodeId)) {
@@ -573,6 +577,28 @@ function validateGraphDefinition(
         !requiresOutcomes.every((id) => typeof id === 'string' && nodeIdSet.has(id))
       ) {
         errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 非法`, node.id));
+      } else if (Array.isArray(requiresOutcomes)) {
+        const seenOutcome = new Set<string>();
+        for (const depId of requiresOutcomes) {
+          if (typeof depId !== 'string') continue;
+          if (depId === node.id) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 含自依赖 ${depId}`),
+            );
+          }
+          if (seenOutcome.has(depId)) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 含重复 ${depId}`),
+            );
+          }
+          seenOutcome.add(depId);
+          const depNode = nodeById.get(depId);
+          if (depNode && safeOutput(depNode).requiredOutcomeCondition === null) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 依赖节点 ${depId} 不产出 outcome（noOut）`),
+            );
+          }
+        }
       }
       if (
         !Array.isArray(requiresBudgetKeys) ||
@@ -582,6 +608,9 @@ function validateGraphDefinition(
       }
       if (typeof requiresBindings !== 'boolean') {
         errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresBindings 非法`, node.id));
+      } else if (requiresBindings === true && graph.kind === 'project') {
+        // 项目图无 run binding 引用；只有 chapter 图可声明 requiresBindings
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 在 project 图上声明 requiresBindings`));
       }
     }
 

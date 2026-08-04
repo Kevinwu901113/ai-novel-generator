@@ -216,6 +216,8 @@ export interface NodeExecutionResultStorePort {
    */
   saveOrVerifySame(envelope: NodeExecutionResultEnvelope): void;
   getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null;
+  /** 按 Graph ArtifactRef 的真实 artifactId 解析 generation artifact 内容（Blocker 5） */
+  getByArtifactId(artifactId: string): NodeExecutionResultEnvelope | null;
 }
 
 // ── Artifact 边界 ─────────────────────────────────────────────────
@@ -243,6 +245,30 @@ export interface PersistedArtifactReceipt {
 export interface NodeOutput {
   readonly outcome?: { readonly condition: string; readonly value: string };
   readonly artifact?: ArtifactPayload;
+}
+
+/**
+ * execution→artifact 溯源（Blocker 5）。
+ *
+ * 每个产出 artifact 的 execution（含 sync）在 settlement 同事务持久化 provenance；
+ * resolver 从持久化 provenance（而非调用方字段）校验 kind/id/version/project/run/node/execution。
+ * generationRun 的权威 provenance 即 execution-bound envelope（含 execution_id + artifact_id）。
+ */
+export interface ArtifactProvenanceRecord {
+  readonly artifactKind: ArtifactKind;
+  readonly artifactId: string;
+  readonly version: number;
+  readonly projectId: string;
+  readonly graphRunId: string;
+  readonly nodeId: string;
+  readonly executionId: string;
+  readonly createdAt: string;
+}
+
+export interface ArtifactProvenanceRepoPort {
+  /** 幂等：同 (kind,id) 同 execution 同 version → no-op；异 execution/version → 抛错 */
+  upsert(record: ArtifactProvenanceRecord): void;
+  getByArtifact(artifactKind: ArtifactKind, artifactId: string): ArtifactProvenanceRecord | null;
 }
 
 export interface ArtifactResolveInput {

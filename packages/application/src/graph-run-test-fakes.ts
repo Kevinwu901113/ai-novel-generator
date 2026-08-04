@@ -240,6 +240,9 @@ export function createFakeGraphRunRepos() {
     getByExecutionId(executionId: string): NodeExecutionResultEnvelope | null {
       return results.get(executionId) ?? null;
     },
+    getByArtifactId(artifactId: string): NodeExecutionResultEnvelope | null {
+      return [...results.values()].find((r) => r.artifactId === artifactId) ?? null;
+    },
   };
 
   // 真实 artifact 权威存储 fake（transaction-scoped resolver 校验 researchBundle / storyBlueprint）
@@ -295,6 +298,83 @@ export function createFakeGraphRunRepos() {
     },
   };
 
+  // 任务仓库 fake（Blocker 3：execution、task 创建/绑定同一事务内）
+  const fakeTasks = new Map<string, import('./types.js').TaskData>();
+  const taskRepo: import('./types.js').TaskRepositoryPort = {
+    create: (d) => {
+      fakeTasks.set(d.id, {
+        ...d,
+        dedupeKey: d.dedupeKey ?? null,
+        status: 'PENDING',
+        attemptCount: 0,
+        resultJson: null,
+        errorCode: null,
+        errorMessage: null,
+        startedAt: null,
+        finishedAt: null,
+        staleAt: null,
+        cancelledAt: null,
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+    },
+    getById: (id) => fakeTasks.get(id) ?? null,
+    listByProject: () => [],
+    listByStatus: () => [],
+    claimPending: (id) => {
+      const t = fakeTasks.get(id);
+      if (!t || t.status !== 'PENDING') return false;
+      fakeTasks.set(id, { ...t, status: 'RUNNING', attemptCount: t.attemptCount + 1 });
+      return true;
+    },
+    completeRunning: (id, resultJson) => {
+      const t = fakeTasks.get(id);
+      if (!t || t.status !== 'RUNNING') return false;
+      fakeTasks.set(id, { ...t, status: 'SUCCEEDED', resultJson });
+      return true;
+    },
+    failRunning: (id, errorCode, errorMessage) => {
+      const t = fakeTasks.get(id);
+      if (!t || t.status !== 'RUNNING') return false;
+      fakeTasks.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
+    },
+    failPending: (id, errorCode, errorMessage) => {
+      const t = fakeTasks.get(id);
+      if (!t || t.status !== 'PENDING') return false;
+      fakeTasks.set(id, { ...t, status: 'FAILED', errorCode, errorMessage });
+      return true;
+    },
+    markStale: () => true,
+    resetToPending: () => true,
+    listRunning: () => [],
+  };
+
+  // execution→artifact provenance fake（Blocker 5）
+  const provenance = new Map<
+    string,
+    import('./node-execution-types.js').ArtifactProvenanceRecord
+  >();
+  const artifactProvenanceRepo: import('./node-execution-types.js').ArtifactProvenanceRepoPort = {
+    upsert: (record) => {
+      const key = `${record.artifactKind}:${record.artifactId}`;
+      const existing = provenance.get(key);
+      if (
+        existing !== undefined &&
+        (existing.executionId !== record.executionId ||
+          existing.version !== record.version ||
+          existing.graphRunId !== record.graphRunId ||
+          existing.nodeId !== record.nodeId ||
+          existing.projectId !== record.projectId)
+      ) {
+        throw new Error(`artifact ${key} 已由其他 execution/run 产出，拒绝覆盖`);
+      }
+      provenance.set(key, record);
+    },
+    getByArtifact: (artifactKind, artifactId) =>
+      provenance.get(`${artifactKind}:${artifactId}`) ?? null,
+  };
+
   const tx: GraphRunTransactionPort = {
     runInTransaction<T>(
       operation: (repos: {
@@ -305,6 +385,8 @@ export function createFakeGraphRunRepos() {
         nodeExecutionResultStore: NodeExecutionResultStorePort;
         researchBundleRepo: ResearchBundleRepositoryPort;
         storyBlueprintRepo: StoryBlueprintRepositoryPort;
+        taskRepo: import('./types.js').TaskRepositoryPort;
+        artifactProvenanceRepo: import('./node-execution-types.js').ArtifactProvenanceRepoPort;
       }) => T,
     ): T {
       return operation({
@@ -315,6 +397,8 @@ export function createFakeGraphRunRepos() {
         nodeExecutionResultStore,
         researchBundleRepo,
         storyBlueprintRepo,
+        taskRepo,
+        artifactProvenanceRepo,
       });
     },
   };
@@ -327,6 +411,10 @@ export function createFakeGraphRunRepos() {
     nodeExecutionResultStore,
     researchBundleRepo,
     storyBlueprintRepo,
+    taskRepo,
+    fakeTasks,
+    artifactProvenanceRepo,
+    provenance,
     tx,
     runs,
     commands,

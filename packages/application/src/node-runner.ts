@@ -254,7 +254,8 @@ function claimExecution(
       throw new Error(`prepareTask 失败: ${err instanceof Error ? err.message : String(err)}`);
     }
     const taskId = deps.idGenerator.generate();
-    deps.taskRepo.create({
+    // Blocker 3：task 创建必须与 execution 同事务（repos.taskRepo）
+    repos.taskRepo.create({
       id: taskId,
       projectId,
       taskType: taskSpec.taskType,
@@ -267,7 +268,12 @@ function claimExecution(
       claimedBy: deps.runnerId,
       leaseExpiresAt: null,
     });
-    if (!running) return { status: 'concurrent' };
+    // 不变量：刚插入的 execution 必须能标记 running；否则整个事务回滚（不允许残留 pending+task）
+    if (!running) {
+      throw new Error(
+        `claim 不变量破坏：execution ${executionId} 刚插入后 markRunning 失败（状态非 pending）`,
+      );
+    }
     return {
       status: 'claimed',
       executionId,
@@ -284,7 +290,11 @@ function claimExecution(
     claimedBy: deps.runnerId,
     leaseExpiresAt: leaseExpiry(deps),
   });
-  if (!running) return { status: 'concurrent' };
+  if (!running) {
+    throw new Error(
+      `claim 不变量破坏：execution ${executionId} 刚插入后 markRunning 失败（状态非 pending）`,
+    );
+  }
   return {
     status: 'claimed',
     executionId,
@@ -523,7 +533,8 @@ async function reconcileTaskBackedRunning(
   exec: NodeExecutionRecord,
   drive: DriveState,
 ): Promise<boolean> {
-  const task = deps.taskRepo.getById(exec.taskId!);
+  // Blocker 3：task 读经 repos.taskRepo（与 execution 同一事务保证一致性）
+  const task = deps.tx.runInTransaction((repos) => repos.taskRepo.getById(exec.taskId!));
   if (!task) {
     return failClosedNode(deps, projectId, runId, nodeId, exec.id, 'TASK_NOT_FOUND');
   }
@@ -606,8 +617,13 @@ async function failClosedNode(
       );
       return true;
     } catch (err) {
-      if (isExpectedFailureConflict(err)) {
-        // run 已终态 / 节点非 active：atomic 回滚 → 单独标记 execution failed（audit）
+      // Blocker 6：只允许在"run 已终态或节点 provably 不再 active"时做 audit-only 标记；
+      // identity / validation / 其它错误必须上抛（禁止 split-brain：execution failed + node active）。
+      const runRecord = deps.tx.runInTransaction((repos) => repos.graphRunRepo.getById(runId));
+      const runTerminal = runRecord !== null && runRecord.state.terminalStatus !== null;
+      const nodeInactive =
+        runRecord !== null && runRecord.state.nodeStatuses[nodeId as never] !== 'active';
+      if (runTerminal || nodeInactive) {
         try {
           deps.tx.runInTransaction((repos) =>
             repos.nodeExecutionRepo.markFailed(executionId, ['pending', 'running'], errorCode),
@@ -624,18 +640,13 @@ async function failClosedNode(
   try {
     deps.tx.runInTransaction((repos) => failNodeInTransaction(deps, repos, runId, key, nodeId));
   } catch (err) {
-    if (isExpectedFailureConflict(err)) return true;
+    if (err instanceof GraphRunStateConflictError || err instanceof GraphRunValidationError) {
+      // 无 execution 的 fail-closed：run 已终态 / 节点非 active 视为已处理
+      return true;
+    }
     throw err;
   }
   return true;
-}
-
-function isExpectedFailureConflict(err: unknown): boolean {
-  return (
-    err instanceof NodeSettlementError ||
-    err instanceof GraphRunStateConflictError ||
-    err instanceof GraphRunValidationError
-  );
 }
 
 /** 读取 run 终态（供 runner 判断） */

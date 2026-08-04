@@ -51,6 +51,15 @@ import {
   IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
   SPEC_EXTRACT,
 } from '@ai-novel/domain';
+import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
+import type {
+  ModelInvocationRepositoryPort,
+  ModelInvocationData,
+  CreateInvocationInput,
+  InvocationSuccessResult,
+  ProviderProfileRepository,
+  SecretStore,
+} from '@ai-novel/application';
 import type { TaskRow } from './types.js';
 
 const NOW = '2026-08-04T00:00:00.000Z';
@@ -169,12 +178,29 @@ function permissiveResolver(): ArtifactResolverPort {
   };
 }
 
-/** transaction-scoped 真实 artifact resolver（校验 researchBundle / storyBlueprint / generationRun） */
+/** transaction-scoped 真实 artifact resolver（provenance + 底层存储；Blocker 5） */
 function realResolver(): ArtifactResolverPort {
   return {
     resolve(repos, input: ArtifactResolveInput): PersistedArtifactReceipt {
       if (input.proposed.producerNodeId !== input.nodeId) {
         throw new Error('producer node 不匹配');
+      }
+      // 从持久化 provenance 校验 producer 归属（非调用方字段）
+      if (input.proposed.kind !== 'generationRun') {
+        const prov = repos.artifactProvenanceRepo.getByArtifact(
+          input.proposed.kind,
+          input.proposed.artifactId,
+        );
+        if (!prov) throw new Error('artifact 无 provenance');
+        if (
+          prov.executionId !== input.executionId ||
+          prov.graphRunId !== input.graphRunId ||
+          prov.nodeId !== input.nodeId ||
+          prov.projectId !== input.projectId ||
+          prov.version !== input.proposed.version
+        ) {
+          throw new Error('artifact provenance 与当前 execution/run/node 不匹配');
+        }
       }
       switch (input.proposed.kind) {
         case 'researchBundle': {
@@ -233,7 +259,6 @@ function buildKit(
     resolver?: ArtifactResolverPort;
     now?: () => string;
     idGenerator?: () => string;
-    taskRepo?: TaskRepositoryPort;
     /** per-node recoveryPolicy 覆盖（如 infra retry 需 replayable） */
     recoveryOverrides?: Record<string, NodeExecutorDescriptor['recoveryPolicy']>;
   } = {},
@@ -356,7 +381,6 @@ function buildKit(
     registry,
     runners: runners as NodeRunnerDeps['runners'],
     artifactResolver: opts.resolver ?? permissiveResolver(),
-    taskRepo: opts.taskRepo ?? new RealTaskRepoAdapter(db),
     runnerId: 'test-runner',
   };
   return { deps, prepareCalls };
@@ -406,6 +430,163 @@ function freshDb(): ProjectDatabase {
     });
   }
   return db;
+}
+
+// ── B10：真实 task-engine finalization 依赖（对 ProjectDatabase）────────────────
+
+/** 真实 ModelInvocationRepositoryPort 适配（database 内置 impl） */
+class DbInvocationAdapter implements ModelInvocationRepositoryPort {
+  constructor(private readonly db: ProjectDatabase) {}
+
+  create(data: CreateInvocationInput): void {
+    this.db.getModelInvocationRepository().create({
+      ...data,
+      status: 'PENDING',
+      createdAt: NOW,
+    });
+  }
+
+  getById(id: string): ModelInvocationData | null {
+    const row = this.db.getModelInvocationRepository().getById(id);
+    if (!row) return null;
+    return { ...(row as unknown as ModelInvocationData) };
+  }
+
+  listByTask(taskId: string): ReadonlyArray<ModelInvocationData> {
+    return this.db
+      .getModelInvocationRepository()
+      .listByTask(taskId)
+      .map((r) => ({ ...(r as unknown as ModelInvocationData) }));
+  }
+
+  markRunning(id: string, _expected: 'PENDING'): boolean {
+    return this.db.getModelInvocationRepository().markRunning(id, 'PENDING', NOW);
+  }
+
+  markSucceeded(id: string, _expected: 'RUNNING', result: InvocationSuccessResult): boolean {
+    const r = this.db.getModelInvocationRepository();
+    return r.markSucceeded(id, 'RUNNING', {
+      responseMetadataJson: result.responseMetadataJson,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      cacheReadTokens: result.cacheReadTokens,
+      cacheWriteTokens: result.cacheWriteTokens,
+      totalTokens: result.totalTokens,
+      latencyMs: result.latencyMs,
+      finishReason: result.finishReason,
+      providerRequestId: result.providerRequestId,
+      finishedAt: NOW,
+    });
+  }
+
+  markFailed(
+    id: string,
+    expected: ReadonlyArray<ModelInvocationData['status']>,
+    errorCode: string,
+    errorMessage: string,
+    latencyMs: number | null,
+  ): boolean {
+    return this.db
+      .getModelInvocationRepository()
+      .markFailed(id, expected, errorCode, errorMessage, latencyMs, NOW);
+  }
+
+  getStatsByProject(projectId: string): {
+    invocationCount: number;
+    succeededCount: number;
+    failedCount: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
+    totalLatencyMs: number;
+  } {
+    const s = this.db.getModelInvocationRepository().getStatsByProject(projectId);
+    return {
+      invocationCount: s.invocationCount,
+      succeededCount: s.succeededCount,
+      failedCount: s.failedCount,
+      totalInputTokens: s.totalInputTokens,
+      totalOutputTokens: s.totalOutputTokens,
+      totalTokens: s.totalTokens,
+      totalLatencyMs: s.totalLatencyMs,
+    };
+  }
+
+  listRunning(): ReadonlyArray<ModelInvocationData> {
+    return this.db
+      .getModelInvocationRepository()
+      .listRunning()
+      .map((r) => ({ ...(r as unknown as ModelInvocationData) }));
+  }
+}
+
+function mockChapterModelOutput() {
+  return {
+    text: JSON.stringify({ title: '第一章', content: '正文', scenePlans: ['场景一'] }),
+    providerRequestId: 'req-1',
+    finishReason: 'end_turn',
+    usage: {
+      inputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 30,
+    },
+    latencyMs: 100,
+    errorCode: null,
+    errorMessage: null,
+  };
+}
+
+/** 构建真实 task-engine deps（对 ProjectDatabase），invokeModel 可注入 */
+function buildChapterDraftEngineDeps(
+  db: ProjectDatabase,
+  opts: {
+    invokeModel?: (input: {
+      baseUrl: string;
+      model: string;
+      apiKey: string;
+      prompt: string;
+    }) => Promise<unknown>;
+  } = {},
+): ChapterDraftExecutionDeps {
+  const secretStore: SecretStore = {
+    hasSecret: async () => true,
+    setSecret: async () => {},
+    getSecret: async () => 'test-key',
+    deleteSecret: async () => {},
+  };
+  const providerRepo: ProviderProfileRepository = {
+    getById: () => ({
+      id: 'mimo-token-plan-cn',
+      providerType: 'anthropic-compatible',
+      displayName: 'MiMo',
+      baseUrl: 'https://x',
+      model: 'mimo-v2.5-pro',
+      keychainService: 'svc',
+      keychainAccount: 'acc',
+      enabled: true,
+      createdAt: NOW,
+      updatedAt: NOW,
+      lastTestedAt: null,
+      lastTestStatus: null,
+      lastTestErrorCode: null,
+      lastTestLatencyMs: null,
+    }),
+    updateTestResult: () => {},
+  };
+  return {
+    taskRepo: new RealTaskRepoAdapter(db),
+    invocationRepo: new DbInvocationAdapter(db),
+    secretStore,
+    providerRepo,
+    idGenerator: { generate: () => 'inv-1' },
+    clock: { now: () => NOW },
+    invokeModel: (opts.invokeModel ?? (async () => mockChapterModelOutput())) as never,
+    transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
+    nodeExecutionResultStore: db.getNodeExecutionResultStore(),
+    nodeExecutionRepo: db.getNodeExecutionRepository(),
+  };
 }
 
 describe('node execution settlement (real SQLite)', () => {
@@ -476,23 +657,84 @@ describe('node execution settlement (real SQLite)', () => {
     }
   });
 
-  it('2. claim/task binding rollback：task 创建失败 → 整事务回滚，无 execution 残留', async () => {
+  it('2b. UNIQUE 冲突精确分类：只有 in-flight partial unique → false，其它 UNIQUE → 抛错', () => {
     const db = freshDb();
     try {
-      // task 创建抛错 → claim 事务回滚 → 无 DRAFT execution 残留；节点 fail-closed
-      const throwingTaskRepo = new RealTaskRepoAdapter(db);
-      const originalCreate = throwingTaskRepo.create.bind(throwingTaskRepo);
-      throwingTaskRepo.create = () => {
-        throw new Error('simulated task create failure');
-      };
-      void originalCreate;
-      const kit = buildKit(db, { taskRepo: throwingTaskRepo });
+      const kit = buildKit(db);
+      const run = seedProjectRun(db, kit.deps, 'c-unique');
+      const runId = run.run.workflowRunId;
+      const state = db.getGraphRunRepository().getById(runId)!.state;
+      const repo = db.getNodeExecutionRepository();
+      const mkInput = (id: string, activationNo: number, attemptNo: number) => ({
+        id,
+        graphRunId: runId,
+        graphId: state.graphId,
+        graphVersion: state.graphVersion,
+        nodeId: 'IDEA_CAPTURE',
+        activationNo,
+        attemptNo,
+        executorId: 'idea-capture-v1',
+        executorVersion: 'v1',
+        recoveryPolicy: 'replayable' as const,
+        inputSnapshotJson: '{}',
+        inputHash: inputHashFor(kit.deps, state, 'IDEA_CAPTURE', activationNo),
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      // in-flight partial unique → false（并发门）
+      expect(repo.create(mkInput('u-1', 1, 1))).toBe(true);
+      expect(repo.create(mkInput('u-2', 2, 1))).toBe(false);
+      // 重复 PK → 抛错（非并发）
+      expect(() => repo.create(mkInput('u-1', 3, 1))).toThrow();
+      // 释放 in-flight 后，重复 (run,node,activation,attempt) → 抛错
+      repo.markSettled('u-1', ['pending'], null, NOW);
+      expect(() => repo.create(mkInput('u-3', 1, 1))).toThrow();
+      // 重复 task_id → markRunning 绑定已用 task_id → 抛错
+      repo.create(mkInput('u-4', 4, 1));
+      repo.markRunning('u-4', ['pending'], {
+        taskId: 't-dup',
+        claimedBy: 'x',
+        leaseExpiresAt: null,
+      });
+      repo.markSuperseded('u-4', ['running']);
+      expect(repo.create(mkInput('u-5', 5, 1))).toBe(true);
+      expect(() =>
+        repo.markRunning('u-5', ['pending'], {
+          taskId: 't-dup',
+          claimedBy: 'x',
+          leaseExpiresAt: null,
+        }),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('2. claim/task binding rollback：task 创建 PK 冲突 → 整事务回滚，无 execution 残留', async () => {
+    const db = freshDb();
+    try {
+      // 确定性 id 序列：runId → CHAPTER_PLAN exec → DRAFT exec → DRAFT task
+      const ids = ['run-rollback', 'cp-exec', 'd-exec', 'd-task'];
+      const idGen = () => ids.shift() ?? 'overflow';
+      const kit = buildKit(db, { idGenerator: idGen });
+      // 预插入与 claim 生成的 taskId 冲突的 task → 事务内 task 创建 PK 冲突 → 整事务回滚
+      new RealTaskRepoAdapter(db).create({
+        id: 'd-task',
+        projectId: 'p1',
+        taskType: 'CHAPTER_DRAFT',
+        inputVersionJson: '{}',
+        payloadJson: '{}',
+        dedupeKey: 'other',
+      });
       const run = seedChapterRun(db, kit.deps, 'c-rollback');
       const runId = run.run.workflowRunId;
       await driveRun(kit.deps, 'p1', runId);
-      // 无任何 DRAFT execution 残留（claim 事务整体回滚）
+      // 无任何 DRAFT execution 残留（claim 事务整体回滚，含 execution 与 task）
       const all = db.getNodeExecutionRepository().listActiveByRun(runId);
       expect(all.filter((e) => e.nodeId === 'DRAFT')).toHaveLength(0);
+      // 也没有第二个 DRAFT task（唯一 task 仍是最初预插入的）
+      const draftTasks = db.getTaskRepository().listByProject('p1');
+      expect(draftTasks.filter((t) => t.taskType === 'CHAPTER_DRAFT')).toHaveLength(1);
       // run 被 fail-closed（节点无法执行 → 原子失败路径）
       const state = db.getGraphRunRepository().getById(runId)!.state;
       expect(state.nodeStatuses[DRAFT]).toBe('failed');
@@ -787,7 +1029,20 @@ describe('node execution settlement (real SQLite)', () => {
         claimedBy: 'test-runner',
         leaseExpiresAt: NOW,
       });
-      // 校验通过（真实 bundle 匹配）
+      // 持久化 execution→artifact provenance（settlement 同事务会做；此处直接模拟）
+      kit.deps.tx.runInTransaction((repos) =>
+        repos.artifactProvenanceRepo.upsert({
+          artifactKind: 'researchBundle',
+          artifactId: 'rb-owner',
+          version: 1,
+          projectId: 'p1',
+          graphRunId: runId,
+          nodeId: 'RESEARCH_EXECUTE',
+          executionId: 'e-owner',
+          createdAt: NOW,
+        }),
+      );
+      // 校验通过（provenance + 真实 bundle 匹配）
       const ok = kit.deps.tx.runInTransaction((repos) =>
         kit.deps.artifactResolver.resolve(repos, {
           projectId: 'p1',
@@ -804,6 +1059,24 @@ describe('node execution settlement (real SQLite)', () => {
         }),
       );
       expect(ok.artifactId).toBe('rb-owner');
+      // 跨 execution 引用（provenance 归属其他 execution）→ 拒绝
+      expect(() =>
+        kit.deps.tx.runInTransaction((repos) =>
+          kit.deps.artifactResolver.resolve(repos, {
+            projectId: 'p1',
+            graphRunId: runId,
+            graphVersion: state.graphVersion,
+            nodeId: 'RESEARCH_EXECUTE',
+            executionId: 'e-other',
+            proposed: {
+              kind: 'researchBundle',
+              artifactId: 'rb-owner',
+              producerNodeId: 'RESEARCH_EXECUTE' as never,
+              version: 1,
+            },
+          }),
+        ),
+      ).toThrow();
       // project 不匹配 → 拒绝
       expect(() =>
         kit.deps.tx.runInTransaction((repos) =>
@@ -908,6 +1181,145 @@ describe('node execution settlement (real SQLite)', () => {
       const all = db.getNodeExecutionRepository().listActiveByRun(runId);
       expect(all.filter((e) => e.nodeId === 'DRAFT')).toHaveLength(1);
       expect(kit.prepareCalls.filter((c) => c.nodeId === 'DRAFT')).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('13. B10 并发 race：两个连接同时 driveRun → 恰好一个 executor/task（真实 partial unique 门）', async () => {
+    const dbA = freshDb();
+    const dbB = freshDb();
+    try {
+      const kitA = buildKit(dbA);
+      const run = seedChapterRun(dbA, kitA.deps, 'c-race');
+      const runId = run.run.workflowRunId;
+      // 连接 B 复用 A 的 executor/registry（共享 prepareTask 计数）
+      const kitB = buildKit(dbB);
+      const depsB: NodeRunnerDeps = {
+        ...kitB.deps,
+        registry: kitA.deps.registry,
+        runners: kitA.deps.runners,
+      };
+      // 同时推进（Promise.all 制造并发窗口）
+      await Promise.all([driveRun(kitA.deps, 'p1', runId), driveRun(depsB, 'p1', runId)]);
+      // exactly-once：DRAFT 恰好一个 execution + 一个 task + 一次 prepareTask
+      const draftExecs = [...dbA.getNodeExecutionRepository().listActiveByRun(runId)].filter(
+        (e) => e.nodeId === 'DRAFT',
+      );
+      expect(draftExecs).toHaveLength(1);
+      expect(kitA.prepareCalls.filter((c) => c.nodeId === 'DRAFT')).toHaveLength(1);
+      const taskId = draftExecs[0].taskId!;
+      expect(taskId).not.toBeNull();
+    } finally {
+      dbA.close();
+      dbB.close();
+    }
+  });
+
+  it('14. B10 真实 finalization：executeChapterDraft 对 ProjectDatabase + 强制失败 → 补偿 FAILED', async () => {
+    const db = freshDb();
+    try {
+      const kit = buildKit(db);
+      const run = seedChapterRun(db, kit.deps, 'c-final-real');
+      const runId = run.run.workflowRunId;
+      await driveRun(kit.deps, 'p1', runId);
+      const exec = db.getNodeExecutionRepository().getInFlightByRunNode(runId, 'DRAFT')!;
+      // 预插入冲突 envelope → 最终事务 saveOrVerifySame 抛错
+      db.getNodeExecutionResultStore().save({
+        executionId: exec.id,
+        projectId: 'p1',
+        graphRunId: runId,
+        nodeId: 'DRAFT',
+        taskId: exec.taskId,
+        activationNo: exec.activationNo,
+        attemptNo: exec.attemptNo,
+        executorId: 'chapter-draft-v1',
+        executorVersion: 'v1',
+        inputHash: exec.inputHash,
+        artifactKind: 'generationRun',
+        artifactId: 'gen-other',
+        artifactVersion: 1,
+        contentJson: JSON.stringify({
+          kind: 'generationRun',
+          draft: { title: 'X', content: 'Y', scenePlans: [] },
+        }),
+        outcome: null,
+        createdAt: NOW,
+      });
+      const engineDeps = buildChapterDraftEngineDeps(db);
+      await expect(executeChapterDraft(engineDeps, exec.taskId!, 'prompt')).rejects.toThrow();
+      // 补偿：invocation / task 都 FAILED，不留 RUNNING 半成品
+      const task = engineDeps.taskRepo.getById(exec.taskId!)!;
+      expect(task.status).toBe('FAILED');
+      expect(task.errorCode).toBe('TASK_EXECUTION_FAILED');
+      const invocation = engineDeps.invocationRepo.getById('inv-1');
+      expect(invocation).not.toBeNull();
+      expect(invocation!.status).toBe('FAILED');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('15. B10 跨 run provenance：其他 run 产出 researchBundle → 拒绝', async () => {
+    const db = freshDb();
+    try {
+      const kit = buildKit(db, { resolver: realResolver() });
+      const run1 = seedProjectRun(db, kit.deps, 'c-prov-1');
+      const runId1 = run1.run.workflowRunId;
+      const run2 = seedProjectRun(db, kit.deps, 'c-prov-2');
+      const runId2 = run2.run.workflowRunId;
+      db.getResearchBundleRepository().save(
+        { id: 'rb-cross', projectId: 'p1', version: 1, depth: 'none' } as never,
+        NOW,
+      );
+      // run1 的 execution 产出 rb-cross
+      const state1 = db.getGraphRunRepository().getById(runId1)!.state;
+      db.getNodeExecutionRepository().create({
+        id: 'e-cross',
+        graphRunId: runId1,
+        graphId: state1.graphId,
+        graphVersion: state1.graphVersion,
+        nodeId: 'RESEARCH_EXECUTE',
+        activationNo: 1,
+        attemptNo: 1,
+        executorId: 'research-execute-v1',
+        executorVersion: 'v1',
+        recoveryPolicy: 'replayable',
+        inputSnapshotJson: '{}',
+        inputHash: inputHashFor(kit.deps, state1, 'RESEARCH_EXECUTE', 1),
+        createdAt: NOW,
+        updatedAt: NOW,
+      });
+      kit.deps.tx.runInTransaction((repos) =>
+        repos.artifactProvenanceRepo.upsert({
+          artifactKind: 'researchBundle',
+          artifactId: 'rb-cross',
+          version: 1,
+          projectId: 'p1',
+          graphRunId: runId1,
+          nodeId: 'RESEARCH_EXECUTE',
+          executionId: 'e-cross',
+          createdAt: NOW,
+        }),
+      );
+      // 在 run2 中引用 rb-cross → provenance 的 graphRunId 不匹配 → 拒绝
+      expect(() =>
+        kit.deps.tx.runInTransaction((repos) =>
+          kit.deps.artifactResolver.resolve(repos, {
+            projectId: 'p1',
+            graphRunId: runId2,
+            graphVersion: 'v1',
+            nodeId: 'RESEARCH_EXECUTE',
+            executionId: 'e-cross',
+            proposed: {
+              kind: 'researchBundle',
+              artifactId: 'rb-cross',
+              producerNodeId: 'RESEARCH_EXECUTE' as never,
+              version: 1,
+            },
+          }),
+        ),
+      ).toThrow();
     } finally {
       db.close();
     }

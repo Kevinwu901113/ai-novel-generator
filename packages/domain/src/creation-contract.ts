@@ -276,6 +276,19 @@ function codePointCompare(a: string, b: string): number {
 
 export { codePointCompare };
 
+/**
+ * 仓库统一 canonical JSON 序列化（RW-1-R5 复用，供 application 层 input hash / 幂等指纹）。
+ *
+ * 语义（强于普通 JSON.stringify）：
+ * - 字符串 NFC 规范化；key 排序用 code-point 比较（含 astral code point），非 localeCompare；
+ * - NFC 后 key 冲突（两个不同 raw key 规范化到同一 key）→ 抛错；
+ * - undefined / BigInt / Symbol / function / 非有限数（NaN/Infinity）→ 抛错；
+ * - 数组保序，对象递归。
+ */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
+
 function canonicalize(value: unknown): unknown {
   if (value === undefined) throw new Error('canonical 序列化不支持 undefined');
   if (value === null) return null;

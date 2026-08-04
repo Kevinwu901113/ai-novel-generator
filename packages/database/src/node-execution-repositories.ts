@@ -13,6 +13,8 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import type {
+  ArtifactProvenanceRecord,
+  ArtifactProvenanceRepoPort,
   CreateNodeExecutionInput,
   NodeExecutionRecord,
   NodeExecutionRepositoryPort,
@@ -42,6 +44,23 @@ function isUniqueViolation(err: unknown): boolean {
     return msg.includes('UNIQUE constraint failed');
   }
   return false;
+}
+
+/**
+ * 仅 `uq_node_executions_run_node_inflight`（同 run+node in-flight 并发门）解释为并发 claim。
+ *
+ * SQLite 错误信息报告被违反的列（不含索引名）：
+ * - in-flight（2 列）：`node_executions.graph_run_id, node_executions.node_id`
+ * - activation/attempt（4 列）：额外含 activation_no / attempt_no
+ * - task_id：`node_executions.task_id`；PK：`node_executions.id`
+ */
+function isInFlightUniqueConflict(err: unknown): boolean {
+  if (!isUniqueViolation(err)) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes('node_executions.graph_run_id, node_executions.node_id') &&
+    !msg.includes('activation_no')
+  );
 }
 
 interface DbNodeExecutionRow {
@@ -128,8 +147,16 @@ export class NodeExecutionRepositoryImpl implements NodeExecutionRepositoryPort 
         );
       return result.changes === 1;
     } catch (err) {
-      // 仅明确 UNIQUE 冲突（同 run+node 已有 in-flight）视为并发；其它错误必须抛出
-      if (isUniqueViolation(err)) return false;
+      // Blocker 4：仅 in-flight partial unique（同 run+node 并发 claim）→ false；
+      // 重复 PK / (run,node,activation,attempt) / task_id 等其它 UNIQUE 必须抛出。
+      // SQLite 在"重复 PK 且旧行仍 in-flight"时也报告 in-flight 列 → 用 id 存在性区分。
+      if (isInFlightUniqueConflict(err)) {
+        const existing = this.db
+          .prepare('SELECT 1 FROM node_executions WHERE id = ?')
+          .get(input.id);
+        if (existing !== undefined) throw err; // 重复 execution id → 真实错误
+        return false; // 同 run+node 已有 in-flight → 并发 claim
+      }
       throw err;
     }
   }
@@ -263,6 +290,32 @@ interface DbResultRow {
 }
 
 function decodeResult(row: DbResultRow): NodeExecutionResultEnvelope {
+  // Blocker 9：持久化 JSON fail-closed（损坏 → 抛错，不返回半成品）
+  let outcome: NodeExecutionResultEnvelope['outcome'] = null;
+  if (row.outcome_json !== null) {
+    try {
+      outcome = JSON.parse(row.outcome_json) as NodeExecutionResultEnvelope['outcome'];
+    } catch {
+      throw new Error(`execution ${row.execution_id} 的 outcome_json 损坏`);
+    }
+  }
+  if (row.content_json !== null) {
+    try {
+      JSON.parse(row.content_json);
+    } catch {
+      throw new Error(`execution ${row.execution_id} 的 content_json 损坏`);
+    }
+  }
+  const artifactKind = (row.artifact_kind ?? null) as NodeExecutionResultEnvelope['artifactKind'];
+  const artifactId = row.artifact_id;
+  const artifactVersion = row.artifact_version;
+  // Blocker 9：artifact 三元组 all-null / all-present 不变量（DB CHECK 之外的二次防线）
+  const kindPresent = artifactKind !== null;
+  if (kindPresent !== (artifactId !== null) || kindPresent !== (artifactVersion !== null)) {
+    throw new Error(
+      `execution ${row.execution_id} 的 artifact 三元组不完整（非 all-null / all-present）`,
+    );
+  }
   return {
     executionId: row.execution_id,
     projectId: row.project_id,
@@ -274,13 +327,11 @@ function decodeResult(row: DbResultRow): NodeExecutionResultEnvelope {
     executorId: row.executor_id,
     executorVersion: row.executor_version,
     inputHash: row.input_hash,
-    artifactKind: (row.artifact_kind ?? null) as NodeExecutionResultEnvelope['artifactKind'],
-    artifactId: row.artifact_id,
-    artifactVersion: row.artifact_version,
+    artifactKind,
+    artifactId,
+    artifactVersion,
     contentJson: row.content_json,
-    outcome: row.outcome_json
-      ? (JSON.parse(row.outcome_json) as NodeExecutionResultEnvelope['outcome'])
-      : null,
+    outcome,
     createdAt: row.created_at,
   };
 }
@@ -356,5 +407,84 @@ export class NodeExecutionResultStoreImpl implements NodeExecutionResultStorePor
       .prepare('SELECT * FROM node_execution_results WHERE execution_id = ?')
       .get(executionId) as DbResultRow | undefined;
     return row ? decodeResult(row) : null;
+  }
+
+  getByArtifactId(artifactId: string): NodeExecutionResultEnvelope | null {
+    const row = this.db
+      .prepare('SELECT * FROM node_execution_results WHERE artifact_id = ? LIMIT 1')
+      .get(artifactId) as DbResultRow | undefined;
+    return row ? decodeResult(row) : null;
+  }
+}
+
+interface DbProvenanceRow {
+  artifact_kind: string;
+  artifact_id: string;
+  version: number;
+  project_id: string;
+  graph_run_id: string;
+  node_id: string;
+  execution_id: string;
+  created_at: string;
+}
+
+function decodeProvenance(row: DbProvenanceRow): ArtifactProvenanceRecord {
+  return {
+    artifactKind: row.artifact_kind as ArtifactProvenanceRecord['artifactKind'],
+    artifactId: row.artifact_id,
+    version: row.version,
+    projectId: row.project_id,
+    graphRunId: row.graph_run_id,
+    nodeId: row.node_id,
+    executionId: row.execution_id,
+    createdAt: row.created_at,
+  };
+}
+
+/** execution→artifact 溯源仓库（Blocker 5） */
+export class NodeArtifactProvenanceRepositoryImpl implements ArtifactProvenanceRepoPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  upsert(record: ArtifactProvenanceRecord): void {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO node_artifact_provenance (
+           artifact_kind, artifact_id, version, project_id, graph_run_id, node_id, execution_id, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.artifactKind,
+        record.artifactId,
+        record.version,
+        record.projectId,
+        record.graphRunId,
+        record.nodeId,
+        record.executionId,
+        record.createdAt,
+      );
+    const existing = this.getByArtifact(record.artifactKind, record.artifactId);
+    if (existing !== null) {
+      if (
+        existing.executionId !== record.executionId ||
+        existing.version !== record.version ||
+        existing.graphRunId !== record.graphRunId ||
+        existing.nodeId !== record.nodeId ||
+        existing.projectId !== record.projectId
+      ) {
+        throw new Error(
+          `artifact ${record.artifactKind}:${record.artifactId} 已由其他 execution/run 产出，拒绝覆盖`,
+        );
+      }
+    }
+  }
+
+  getByArtifact(
+    artifactKind: ArtifactProvenanceRecord['artifactKind'],
+    artifactId: string,
+  ): ArtifactProvenanceRecord | null {
+    const row = this.db
+      .prepare('SELECT * FROM node_artifact_provenance WHERE artifact_kind = ? AND artifact_id = ?')
+      .get(artifactKind, artifactId) as DbProvenanceRow | undefined;
+    return row ? decodeProvenance(row) : null;
   }
 }

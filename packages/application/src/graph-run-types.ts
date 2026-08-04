@@ -13,6 +13,8 @@ import type {
 } from './node-execution-types.js';
 import type { ResearchBundleRepositoryPort } from './research.js';
 import type { StoryBlueprintRepositoryPort } from './blueprint.js';
+import type { TaskRepositoryPort } from './types.js';
+import type { ArtifactProvenanceRepoPort } from './node-execution-types.js';
 
 // ── run 类型 ────────────────────────────────────────────────────
 
@@ -89,6 +91,10 @@ export interface GraphRunTransactionRepositories {
   readonly researchBundleRepo: ResearchBundleRepositoryPort;
   /** 真实 artifact 权威存储（transaction-scoped resolver 校验 storyBlueprint） */
   readonly storyBlueprintRepo: StoryBlueprintRepositoryPort;
+  /** 任务仓库（execution、task 创建与绑定在同一事务内；Blocker 3） */
+  readonly taskRepo: TaskRepositoryPort;
+  /** execution→artifact 溯源（Blocker 5；sync 产物的权威 provenance） */
+  readonly artifactProvenanceRepo: ArtifactProvenanceRepoPort;
 }
 
 /** 原子 transition 辅助：拥有 BEGIN IMMEDIATE / COMMIT / ROLLBACK / 嵌套检测 */
