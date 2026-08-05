@@ -1,8 +1,8 @@
 /**
  * Durable Node Execution & Settlement 真实 SQLite 集成测试（RW-1-R5）。
  *
- * 覆盖（用户指定 12 项）：
- * 1. 并发 runner exactly-once executor/task（partial unique 原子门）
+ * 覆盖：
+ * 1. 跨连接幂等：连接 A claim 后连接 B 不重复 dispatch（partial unique 原子门）
  * 2. claim/task binding rollback（task 创建失败 → 整事务回滚，无 execution 残留）
  * 3. task-backed infra retry（TASK_INTERRUPTED → 统一 claim 新 attempt 新 task）
  * 4. activation ordering（activation_no DESC, attempt_no DESC）
@@ -45,12 +45,14 @@ import {
 } from '@ai-novel/application';
 import {
   BLUEPRINT_GENERATE,
+  BLUEPRINT_USER_GATE,
   CHAPTER_GENERATION_GRAPH_V1,
   DRAFT,
   IDEA_CAPTURE,
   IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
   SPEC_EXTRACT,
 } from '@ai-novel/domain';
+import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
 import type {
   ModelInvocationRepositoryPort,
@@ -227,8 +229,12 @@ function realResolver(): ArtifactResolverPort {
           if (env.graphRunId !== input.graphRunId) throw new Error('generationRun run 不匹配');
           break;
         }
-        default:
-          throw new Error(`unsupported kind: ${input.proposed.kind}`);
+        case 'idea':
+        case 'creationSpec':
+        case 'manuscript':
+          // 与生产 resolver 一致：provenance 已校验 producer 归属；
+          // 底层权威存储绑定属于 GE-3 / GE-7（此前此处误抛 unsupported kind，与生产不一致）
+          break;
       }
       return {
         kind: input.proposed.kind,
@@ -599,7 +605,11 @@ describe('node execution settlement (real SQLite)', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('1. 并发 runner exactly-once executor/task（两个连接同一文件，partial unique 原子门）', async () => {
+  // 如实标注（B2-RW）：node:sqlite 是同步 API，单线程内无法构造两个 runner 真正同时进入
+  // claim 的竞速；本用例验证的是**跨连接幂等**——连接 A 已 claim 后，连接 B 在同一 run 上
+  // 不会重复 dispatch/建 task/调 prepareTask。真并发的原子性由 partial unique 索引 +
+  // BEGIN IMMEDIATE 在 schema/事务层保证（见用例 2b 的 UNIQUE 分类矩阵）。
+  it('1. 跨连接幂等：连接 A claim 后连接 B 不重复 dispatch（partial unique 原子门）', async () => {
     const dbA = freshDb();
     const dbB = freshDb();
     try {
@@ -1255,6 +1265,111 @@ describe('node execution settlement (real SQLite)', () => {
       const invocation = engineDeps.invocationRepo.getById('inv-1');
       expect(invocation).not.toBeNull();
       expect(invocation!.status).toBe('FAILED');
+    } finally {
+      db.close();
+    }
+  });
+
+  /**
+   * B2-RW Blocker 1 回归。
+   *
+   * 此前所有走完整 settleNodeExecution 的用例都用 permissiveResolver / acceptingResolver，
+   * realResolver 只被直接调用且由用例手工预置 provenance —— 因此"生产 resolver 下真实
+   * settlement"这条路径从未被覆盖，导致 provenance 时序死锁（resolve 早于 upsert，而
+   * upsert 是全仓库唯一的 provenance 写入者）连过三轮 review。
+   *
+   * 本用例用生产等价 resolver 驱动真实 run，覆盖 generationRun 之外的三类 artifact
+   * （idea / creationSpec / storyBlueprint）。修复前它必然失败：首个产出 artifact 的节点
+   * 就会因"无 provenance"而 fail，applyNodeFailure 直接把 run 打成终态 failed。
+   */
+  it('16. B2-RW：生产等价 resolver 端到端 settlement（idea / creationSpec / storyBlueprint）', async () => {
+    const db = freshDb();
+    try {
+      const kit = buildKit(db, { resolver: realResolver() });
+      const run = seedProjectRun(db, kit.deps, 'c-e2e-prov');
+      const runId = run.run.workflowRunId;
+      // storyBlueprint 需在权威表内真实存在（resolver 校验底层存储 + version）
+      db.getStoryBlueprintRepository().save(
+        { id: 'bp-real-1', projectId: 'p1', version: 1 } as never,
+        false,
+        NOW,
+      );
+
+      const settled = await driveRun(kit.deps, 'p1', runId);
+
+      const settledNodes = settled.filter((s) => s.settled).map((s) => s.nodeId);
+      expect(settledNodes).toContain('IDEA_CAPTURE');
+      expect(settledNodes).toContain('SPEC_EXTRACT');
+      expect(settledNodes).toContain('BLUEPRINT_GENERATE');
+
+      const state = db.getGraphRunRepository().getById(runId)!.state as IdeaToNovelProjectRunState;
+      // run 未被打成终态；停在蓝图人工确认
+      expect(state.terminalStatus).toBeNull();
+      expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('succeeded');
+      expect(state.nodeStatuses[SPEC_EXTRACT]).toBe('succeeded');
+      expect(state.nodeStatuses[BLUEPRINT_GENERATE]).toBe('succeeded');
+      expect(state.pendingHumanDecision?.nodeId).toBe(BLUEPRINT_USER_GATE);
+
+      // Graph artifact ref 指向真实持久化对象
+      expect(state.artifacts.idea?.artifactId).toBe('idea-real-1');
+      expect(state.artifacts.creationSpec?.artifactId).toBe('spec-real-1');
+      expect(state.artifacts.storyBlueprint?.artifactId).toBe('bp-real-1');
+
+      // provenance 在 settlement 同事务内写入，且绑定真实 execution
+      const prov = kit.deps.tx.runInTransaction((repos) => ({
+        idea: repos.artifactProvenanceRepo.getByArtifact('idea', 'idea-real-1'),
+        spec: repos.artifactProvenanceRepo.getByArtifact('creationSpec', 'spec-real-1'),
+        blueprint: repos.artifactProvenanceRepo.getByArtifact('storyBlueprint', 'bp-real-1'),
+      }));
+      const ideaExec = db.getNodeExecutionRepository().getLatestByRunNode(runId, 'IDEA_CAPTURE')!;
+      const bpExec = db
+        .getNodeExecutionRepository()
+        .getLatestByRunNode(runId, 'BLUEPRINT_GENERATE')!;
+      expect(prov.idea?.executionId).toBe(ideaExec.id);
+      expect(prov.idea?.graphRunId).toBe(runId);
+      expect(prov.spec?.nodeId).toBe('SPEC_EXTRACT');
+      expect(prov.blueprint?.executionId).toBe(bpExec.id);
+      expect(ideaExec.status).toBe('settled');
+      expect(bpExec.status).toBe('settled');
+    } finally {
+      db.close();
+    }
+  });
+
+  /**
+   * B2-RW Blocker 1 的另一面：把 provenance upsert 提到 resolve 之前，不得削弱归属保护。
+   * provenance 主键 (artifact_kind, artifact_id) 即归属闸门 —— 另一 run 的 execution
+   * 引用同一 artifactId 时 upsert 冲突，settlement 失败。
+   */
+  it('17. B2-RW：provenance 主键即归属闸门（他 run execution 引用已归属 artifact → settlement 失败）', async () => {
+    const db = freshDb();
+    try {
+      const kit = buildKit(db, { resolver: realResolver() });
+      const runA = seedProjectRun(db, kit.deps, 'c-own-a');
+      const runIdA = runA.run.workflowRunId;
+      db.getStoryBlueprintRepository().save(
+        { id: 'bp-real-1', projectId: 'p1', version: 1 } as never,
+        false,
+        NOW,
+      );
+      await driveRun(kit.deps, 'p1', runIdA);
+      const stateA = db.getGraphRunRepository().getById(runIdA)!
+        .state as IdeaToNovelProjectRunState;
+      expect(stateA.artifacts.idea?.artifactId).toBe('idea-real-1');
+
+      // run B 的 IDEA_CAPTURE 产出同一个 idea artifactId（executor 默认输出即 idea-real-1）
+      const runB = seedProjectRun(db, kit.deps, 'c-own-b');
+      const runIdB = runB.run.workflowRunId;
+      await driveRun(kit.deps, 'p1', runIdB);
+
+      // 归属冲突 → 确定性失败：run B 被 fail-closed，artifact 归属仍属 run A
+      const stateB = db.getGraphRunRepository().getById(runIdB)!.state;
+      expect(stateB.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+      expect(stateB.terminalStatus).toBe('failed');
+      const provIdea = kit.deps.tx.runInTransaction((repos) =>
+        repos.artifactProvenanceRepo.getByArtifact('idea', 'idea-real-1'),
+      );
+      expect(provIdea?.graphRunId).toBe(runIdA);
     } finally {
       db.close();
     }

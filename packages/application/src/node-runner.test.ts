@@ -33,6 +33,7 @@ import {
   type PersistedArtifactReceipt,
   type TaskData,
 } from './index.js';
+import { GraphRunTransactionBusyError, INFRA_MAX_ATTEMPTS } from './index.js';
 import { createTestDeps } from './graph-run-test-fakes.js';
 import {
   BLUEPRINT_GENERATE,
@@ -265,7 +266,12 @@ function seedRunningExecution(
   runId: string,
   nodeId: string,
   executionId: string,
-  opts: { activationNo?: number; attemptNo?: number } = {},
+  opts: {
+    activationNo?: number;
+    attemptNo?: number;
+    executorId?: string;
+    recoveryPolicy?: NodeExecutorDescriptor['recoveryPolicy'];
+  } = {},
 ): void {
   const state = base.graphRunRepo.getById(runId)!.state;
   const activationNo = opts.activationNo ?? 1;
@@ -281,9 +287,9 @@ function seedRunningExecution(
     nodeId,
     activationNo,
     attemptNo: opts.attemptNo ?? 1,
-    executorId: 'idea-capture-v1',
+    executorId: opts.executorId ?? 'idea-capture-v1',
     executorVersion: 'v1',
-    recoveryPolicy: 'replayable',
+    recoveryPolicy: opts.recoveryPolicy ?? 'replayable',
     inputSnapshotJson: serializeInputSnapshot(
       computeNodeInputSnapshot(base.deps.projectGraph, state, nodeId, activationNo),
     ),
@@ -1067,5 +1073,140 @@ describe('NodeRunner crash windows', () => {
     const state = getRunProgress(deps, { projectId: 'p1', runId });
     expect(state.terminalStatus).toBeNull();
     expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
+  });
+
+  // ── B2-RW Blocker 2：lease 抢占必须与非 override 分支共用同一守卫 ──
+
+  function leaseKit(executorId: string): { deps: NodeRunnerDeps; runId: string } {
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const idea = syncRunner(
+      syncDescriptor(IDEA_CAPTURE, executorId, 'replayable'),
+      ideaCaptureOutput(),
+    );
+    register(registry, runners, idea.descriptor, idea);
+    const deps = runnerDeps(base, {
+      registry,
+      runners,
+      resolver: acceptingResolver(() => true),
+    });
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: `c-${executorId}` });
+    return { deps, runId: run.workflowRunId };
+  }
+
+  function executionsOf(runId: string, nodeId: string): ReadonlyArray<{ attemptNo: number }> {
+    return [...base.executions.values()].filter(
+      (e) => e.graphRunId === runId && e.nodeId === nodeId,
+    );
+  }
+
+  it('21. B2-RW：lease 过期但 attempt 已达 INFRA_MAX_ATTEMPTS → 不重放，fail-closed', async () => {
+    const { deps, runId } = leaseKit('idea-lease-cap');
+    // 过期 lease（seed 用 NOW，时钟也是 NOW → 已过期）+ attempt 已用满配额
+    seedRunningExecution(base, runId, IDEA_CAPTURE, 'e-cap', {
+      attemptNo: INFRA_MAX_ATTEMPTS,
+      executorId: 'idea-lease-cap',
+    });
+
+    const settled = await driveRun(deps, 'p1', runId);
+
+    expect(settled).toHaveLength(0);
+    // 未创建新 attempt（修复前会得到 attempt = INFRA_MAX_ATTEMPTS + 1）
+    expect(executionsOf(runId, IDEA_CAPTURE)).toHaveLength(1);
+    expect(base.nodeExecutionRepo.getById('e-cap')?.status).toBe('failed');
+    expect(base.nodeExecutionRepo.getById('e-cap')?.errorCode).toBe('INFRA_RETRY_EXHAUSTED');
+    const state = getRunProgress(deps, { projectId: 'p1', runId });
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+    expect(state.terminalStatus).toBe('failed');
+  });
+
+  it('22. B2-RW：lease 过期但 recoveryPolicy 非 replayable → 不重放，fail-closed', async () => {
+    const { deps, runId } = leaseKit('idea-lease-policy');
+    seedRunningExecution(base, runId, IDEA_CAPTURE, 'e-policy', {
+      attemptNo: 1,
+      executorId: 'idea-lease-policy',
+      recoveryPolicy: 'fail_closed',
+    });
+
+    const settled = await driveRun(deps, 'p1', runId);
+
+    expect(settled).toHaveLength(0);
+    expect(executionsOf(runId, IDEA_CAPTURE)).toHaveLength(1);
+    expect(base.nodeExecutionRepo.getById('e-policy')?.status).toBe('failed');
+    const state = getRunProgress(deps, { projectId: 'p1', runId });
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+  });
+
+  // ── B2-RW Blocker 3：基础设施瞬时错误不得判为确定性失败 ──
+
+  it('23. B2-RW：settlement 遇 SQLITE_BUSY → 不失败节点，execution 保持 running 待重试', async () => {
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const idea = syncRunner(
+      syncDescriptor(IDEA_CAPTURE, 'idea-busy-settle', 'replayable'),
+      ideaCaptureOutput(),
+    );
+    register(registry, runners, idea.descriptor, idea);
+    const deps = runnerDeps(base, {
+      registry,
+      runners,
+      // 事务适配器在 SQLITE_BUSY / SQLITE_LOCKED 时抛出的正是该类型
+      resolver: {
+        resolve(): never {
+          throw new GraphRunTransactionBusyError(new Error('SQLITE_BUSY'));
+        },
+      },
+    });
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c-busy-settle' });
+    const runId = run.workflowRunId;
+
+    const settled = await driveRun(deps, 'p1', runId);
+
+    expect(settled).toHaveLength(0);
+    // 修复前：整条 run 被判确定性失败并置为终态 failed（一次锁竞争永久杀死 run）
+    const state = getRunProgress(deps, { projectId: 'p1', runId });
+    expect(state.terminalStatus).toBeNull();
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
+    const exec = base.nodeExecutionRepo.getLatestByRunNode(runId, IDEA_CAPTURE)!;
+    expect(exec.status).toBe('running');
+    expect(exec.errorCode).toBeNull();
+  });
+
+  it('24. B2-RW：claim 遇 SQLITE_BUSY → 不失败节点，无 execution 残留', async () => {
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const idea = syncRunner(
+      syncDescriptor(IDEA_CAPTURE, 'idea-busy-claim', 'replayable'),
+      ideaCaptureOutput(),
+    );
+    register(registry, runners, idea.descriptor, idea);
+    const deps = runnerDeps(base, {
+      registry,
+      runners,
+      resolver: acceptingResolver(() => true),
+    });
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c-busy-claim' });
+    const runId = run.workflowRunId;
+
+    const originalCreate = base.nodeExecutionRepo.create.bind(base.nodeExecutionRepo);
+    base.nodeExecutionRepo.create = () => {
+      throw new GraphRunTransactionBusyError(new Error('SQLITE_BUSY'));
+    };
+    try {
+      const settled = await driveRun(deps, 'p1', runId);
+      expect(settled).toHaveLength(0);
+    } finally {
+      base.nodeExecutionRepo.create = originalCreate;
+    }
+
+    // 节点保持 active，等待下一轮/下次启动重试；不得 fail-closed
+    const state = getRunProgress(deps, { projectId: 'p1', runId });
+    expect(state.terminalStatus).toBeNull();
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
+    expect(executionsOf(runId, IDEA_CAPTURE)).toHaveLength(0);
+
+    // 恢复后正常推进（证明只是被推迟，未被永久判死）
+    const settledAfter = await driveRun(deps, 'p1', runId);
+    expect(settledAfter.some((s) => s.nodeId === IDEA_CAPTURE && s.settled)).toBe(true);
   });
 });

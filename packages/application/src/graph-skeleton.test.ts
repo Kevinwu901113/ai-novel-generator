@@ -10,14 +10,14 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  advanceNode,
   applyHumanDecision,
   createChapterRun,
   createProjectRun,
-  failNode,
   runFakeUntilHumanOrTerminal,
   type FakeExecutorConfig,
 } from './index.js';
+// advanceNode / failNode 已收窄为包内部入口（非人工节点的合法完成路径是 NodeSettlementService）
+import { advanceNode, failNode } from './graph-run.js';
 import { createTestDeps } from './graph-run-test-fakes.js';
 import {
   BLUEPRINT_GENERATE,

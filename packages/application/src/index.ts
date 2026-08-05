@@ -365,12 +365,21 @@ export type {
   GraphRunTransitionResult,
 } from './graph-run.js';
 
+// B2-RW：`advanceNode` / `failNode` 不再以裸名从包公共入口导出。
+// 二者可在不经 NodeSettlementService 的情况下直接推进/失败 Graph 节点，且 `advanceNode`
+// 对 `artifactRef` 不做任何存在性/归属校验。RW-1 之后，非人工节点的唯一合法完成路径是
+// NodeRunner + NodeSettlementService（artifact 必须过 provenance 登记与 resolver 校验）。
+// 包内使用走内部入口 `./graph-run.js`；跨包只保留下面这对显式标注的骨架测试专用别名，
+// 使任何生产代码中的使用一眼可见、可 grep。
+export {
+  advanceNode as advanceNodeForSkeletonTestsOnly,
+  failNode as failNodeForSkeletonTestsOnly,
+} from './graph-run.js';
+
 export {
   createProjectRun,
   createChapterRun,
   getRunProgress,
-  advanceNode,
-  failNode,
   applyArtifactChange,
   requestHumanDecision,
   applyHumanDecision,

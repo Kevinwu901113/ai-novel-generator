@@ -15,6 +15,10 @@
  *   （纯函数、无副作用），绝不预先用空 visitId/inputHash 调用；
  * - 仅明确基础设施错误码（TASK_INTERRUPTED / NODE_INTERRUPTED）可 infra retry；
  *   sync execution 有 lease（claimed_by + lease_expires_at），未过期不得被其他 runner retry；
+ *   **lease 抢占与 task infra 重试共用同一守卫 canInfraRetryCount**（recoveryPolicy +
+ *   attempt 上限），配额用尽 → fail-closed，不得无界重放（B2-RW Blocker 2）；
+ * - **基础设施瞬时错误（SQLITE_BUSY/LOCKED → GraphRunTransactionBusyError）不判为确定性
+ *   失败**：保持 execution 现状、本轮不计进展、下一轮重试（B2-RW Blocker 3）；
  * - 失败走原子路径 failExecutionAndNodeInTransaction（execution failed + applyNodeFailure
  *   + Graph CAS + command log 同一事务）；禁止 blanket catch failNode；
  * - settlement 错误分类：确定性失败 → 原子失败；Graph CAS conflict → 可重试不误标 failed。
@@ -29,6 +33,7 @@ import type { GraphRunDeps } from './graph-run.js';
 import { failNodeInTransaction, getRunProgress } from './graph-run.js';
 import {
   GraphRunStateConflictError,
+  GraphRunTransactionBusyError,
   GraphRunValidationError,
   GraphRunVersionConflictError,
 } from './graph-run-errors.js';
@@ -122,6 +127,18 @@ function isRetryableConflict(err: unknown): boolean {
   return err instanceof GraphRunVersionConflictError;
 }
 
+/**
+ * 基础设施瞬时错误（B2-RW Blocker 3）。
+ *
+ * `GraphRunTransactionBusyError` 由事务适配器在 SQLITE_BUSY / SQLITE_LOCKED 时抛出，
+ * 表示"这次没拿到锁"，不表示业务结果错误。若把它判为确定性失败，`applyNodeFailure`
+ * 会把整条 run 置为终态 failed 且不可复活——一次普通锁竞争就永久杀死 run。
+ * 因此这类错误一律不失败节点：保持 execution 现状，本轮不计进展，下一轮/下次启动重试。
+ */
+function isInfraTransient(err: unknown): boolean {
+  return err instanceof GraphRunTransactionBusyError;
+}
+
 function errorCodeOf(err: unknown): string {
   return err instanceof NodeSettlementError ? err.code : 'NODE_EXECUTION_FAILED';
 }
@@ -139,7 +156,11 @@ interface ClaimSuccess {
 }
 
 type ClaimResult =
-  ClaimSuccess | { readonly status: 'not_active' } | { readonly status: 'concurrent' };
+  | ClaimSuccess
+  | { readonly status: 'not_active' }
+  | { readonly status: 'concurrent' }
+  /** 同 activation 的 infra retry 配额已用尽或 recoveryPolicy 不允许重放 */
+  | { readonly status: 'exhausted' };
 
 /**
  * 在已打开事务内原子 claim：
@@ -175,6 +196,13 @@ function claimExecution(
   let activationNo: number;
   let attemptNo: number;
   if (previousOverride) {
+    // B2-RW Blocker 2：override（lease 抢占 / task infra 中断）与非 override 分支共用
+    // 同一守卫 canInfraRetryCount（recoveryPolicy === 'replayable' 且 attempt < 上限）。
+    // 缺少该守卫时，过期 lease 会绕过 INFRA_MAX_ATTEMPTS 无界重放，且 fail_closed /
+    // settle_if_result 策略的节点也会被静默重放。
+    if (!canInfraRetryCount(previousOverride)) {
+      return { status: 'exhausted' };
+    }
     previous = previousOverride;
     activationNo = previous.activationNo;
     attemptNo = previous.attemptNo + 1;
@@ -332,7 +360,14 @@ export async function driveRun(
 
     let anyProgress = false;
     for (const node of frontier) {
-      const progressed = await dispatchNode(deps, projectId, runId, node.id, drive);
+      let progressed: boolean;
+      try {
+        progressed = await dispatchNode(deps, projectId, runId, node.id, drive);
+      } catch (err) {
+        // B2-RW Blocker 3：瞬时锁竞争不失败节点，本轮跳过该节点，下一轮/下次启动重试
+        if (!isInfraTransient(err)) throw err;
+        progressed = false;
+      }
       if (progressed) anyProgress = true;
     }
     if (!anyProgress) break;
@@ -368,7 +403,12 @@ async function dispatchNode(
   return claimAndDispatch(deps, projectId, runId, nodeId, drive, undefined);
 }
 
-/** 统一 claim + dispatch（initial 或 infra retry） */
+/**
+ * 统一 claim + dispatch（initial 或 infra retry）。
+ *
+ * `exhaustedErrorCode`：当 infra retry 配额用尽 / recoveryPolicy 不允许重放时，
+ * 用于 fail-closed 的错误码（task 路径透传原始 task 错误码，保持既有语义）。
+ */
 async function claimAndDispatch(
   deps: NodeRunnerDeps,
   projectId: string,
@@ -376,6 +416,7 @@ async function claimAndDispatch(
   nodeId: string,
   drive: DriveState,
   previousOverride?: NodeExecutionRecord,
+  exhaustedErrorCode = 'INFRA_RETRY_EXHAUSTED',
 ): Promise<boolean> {
   const state = getRunProgress(deps, { projectId, runId });
   const descriptor = descriptorFor(deps, state, nodeId);
@@ -401,11 +442,17 @@ async function claimAndDispatch(
         previousOverride,
       }),
     );
-  } catch {
+  } catch (err) {
+    // B2-RW Blocker 3：只有确定性错误才 fail-closed；瞬时锁竞争保持现状等待下一轮
+    if (isInfraTransient(err)) return false;
     // claim 事务失败（prepareTask / task 创建失败）→ fail-closed（无 execution 残留）
     return failClosedNode(deps, projectId, runId, nodeId, undefined, 'EXECUTOR_ERROR');
   }
   if (claim.status === 'not_active') return true;
+  if (claim.status === 'exhausted') {
+    // infra retry 配额用尽：确定性终止（execution + 节点原子失败）
+    return failClosedNode(deps, projectId, runId, nodeId, previousOverride?.id, exhaustedErrorCode);
+  }
   if (claim.status === 'concurrent') {
     const inFlight = deps.tx.runInTransaction((repos) =>
       repos.nodeExecutionRepo.getInFlightByRunNode(runId, nodeId),
@@ -542,18 +589,14 @@ async function reconcileTaskBackedRunning(
     return settleWithClassification(deps, projectId, runId, nodeId, exec.id, undefined, drive);
   }
   if (task.status === 'FAILED') {
-    // 仅明确基础设施错误可 infra retry（统一 claim path 创建/绑定/调度新 task）
-    if (canInfraRetryCount(exec) && isInfraInterrupted(task.errorCode)) {
-      return claimAndDispatch(deps, projectId, runId, nodeId, drive, exec);
+    const failureCode = task.errorCode ?? 'TASK_EXECUTION_FAILED';
+    // "这次失败是不是基础设施性的" 只有 task 错误码能回答（本地信息）；
+    // "还允不允许再花一次 infra attempt" 由 claimExecution 的统一守卫回答（B2-RW Blocker 2：
+    // 不在此处复制 canInfraRetryCount 判定）。配额用尽时透传原始 task 错误码 fail-closed。
+    if (isInfraInterrupted(task.errorCode)) {
+      return claimAndDispatch(deps, projectId, runId, nodeId, drive, exec, failureCode);
     }
-    return failClosedNode(
-      deps,
-      projectId,
-      runId,
-      nodeId,
-      exec.id,
-      task.errorCode ?? 'TASK_EXECUTION_FAILED',
-    );
+    return failClosedNode(deps, projectId, runId, nodeId, exec.id, failureCode);
   }
   if (task.status === 'PENDING') {
     // 幂等重新调度（每 driveRun 至多一次；worker 侧 schedule 幂等）
@@ -587,6 +630,10 @@ async function settleWithClassification(
     if (isRetryableConflict(err)) {
       // Graph CAS/version 冲突：可重试，execution 保持 running，不误标 failed
       return true;
+    }
+    if (isInfraTransient(err)) {
+      // B2-RW Blocker 3：瞬时锁竞争，execution 保持 running，本轮不计进展，下一轮重试
+      return false;
     }
     // 确定性失败（artifact invalid/stale/task 未成功 等）→ 原子失败
     return failClosedNode(deps, projectId, runId, nodeId, executionId, errorCodeOf(err));

@@ -13,7 +13,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ProjectDatabase } from '@ai-novel/database';
 import {
-  advanceNode,
+  // GE-2 骨架专用：非人工节点的生产完成路径是 NodeSettlementService（见 index.ts 的说明）
+  advanceNodeForSkeletonTestsOnly as advanceNode,
   applyHumanDecision,
   createProjectRun,
   createChapterRun,

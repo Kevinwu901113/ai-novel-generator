@@ -203,19 +203,20 @@ export function settleNodeExecution(
       proposed = input.output.artifact;
     }
 
-    // ── artifact 校验（transaction-scoped resolver 查询真实 repository）──
+    // ── artifact 归属登记 + 校验（同一事务）──
+    //
+    // 顺序即语义（B2-RW Blocker 1）：**先 upsert provenance，再 resolve**。
+    // provenance 表的主键 (artifact_kind, artifact_id) 是 artifact 归属的原子闸门：
+    // - 该 artifact 尚无归属 → 本 execution 登记为唯一产出者；
+    // - 已归属其它 execution/run/node/version → upsert 抛错 → 整事务回滚（拒绝引用他人产物）。
+    // 随后 resolver 从**已持久化的 provenance 行**（而非调用方字段）复核归属，并校验底层
+    // 权威存储的存在性与 version。若反过来先 resolve，要求 provenance 行预先存在，则由于
+    // 全仓库只有此处写 provenance，除 generationRun 外任何 artifact 都永远无法 settlement。
+    //
+    // generationRun 的权威 provenance 即 execution-bound envelope（含 execution_id + artifact_id
+    // 唯一索引），不占用 provenance 表。
     let receipt = null;
     if (proposed !== undefined) {
-      receipt = deps.artifactResolver.resolve(repos, {
-        projectId: input.projectId,
-        graphRunId: execution.graphRunId,
-        graphVersion: execution.graphVersion,
-        nodeId: execution.nodeId,
-        executionId: execution.id,
-        proposed,
-      });
-      // Blocker 5：持久化 execution→artifact provenance（同一事务）。
-      // generationRun 的权威 provenance 即 execution-bound envelope（含 execution_id），无需单独行。
       if (proposed.kind !== 'generationRun') {
         repos.artifactProvenanceRepo.upsert({
           artifactKind: proposed.kind,
@@ -228,6 +229,14 @@ export function settleNodeExecution(
           createdAt: deps.clock.now(),
         });
       }
+      receipt = deps.artifactResolver.resolve(repos, {
+        projectId: input.projectId,
+        graphRunId: execution.graphRunId,
+        graphVersion: execution.graphVersion,
+        nodeId: execution.nodeId,
+        executionId: execution.id,
+        proposed,
+      });
     }
 
     // ── outcome 形状校验 ──
