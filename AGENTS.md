@@ -22,10 +22,15 @@
 
 ## 模型配置
 
-- 固定 MiMo V2.5 Pro（Anthropic-compatible）
-- API Key 存 macOS Keychain（service: `com.ai-novel-generator.provider.mimo-token-plan-cn`）
-- app.sqlite provider_profiles 只存非敏感配置
-- Base URL 和 Model 只读
+按 D6（2026-08-05，见 `docs/development/decision-log.md`）支持多 provider 配置，只做最小形态：
+
+- 协议适配层：`anthropic-messages` + `openai-chat`（覆盖 OpenAI 兼容端点）
+- Provider Profile：`{ id, label, protocol, baseUrl, model, secretRef }`，持久化于 app.sqlite
+- 现有 MiMo V2.5 Pro 作为一个 `anthropic-messages` profile 继续可用
+- 路由只有两层：全局默认 provider + 按任务类型可选覆盖
+- 不做负载均衡、自动 fallback、流式、复杂路由 DAG
+- API Key 存 macOS Keychain，每 profile 一个 key 槽位
+- app.sqlite provider_profiles 只存非敏感配置（Key 不入库、不进项目备份）
 
 ## 模块边界
 

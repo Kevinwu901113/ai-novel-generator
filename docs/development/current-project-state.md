@@ -111,7 +111,8 @@ Manuscript、Export、重启恢复。
 - 生成候选 ≠ 权威稿件；仅 MANUSCRIPT_COMMIT 后可写 Manuscript
 - 人工 Gate 处不得自动接受或提交
 - 不建立长期集成分支
-- 不提前建设多 Provider、任务 DAG 或复杂 Agent 平台
+- 多 Provider 按 D6（2026-08-05）只做最小形态：两种协议适配 + profile + 两层路由；
+  仍不建设任务 DAG 或复杂 Agent 平台（不做负载均衡 / 自动 fallback / 流式）
 - 不静默覆盖用户正文（CAS / 版本化 / 显式写入）
 - 未合并 PR 不计入 main 能力
 ```
@@ -129,11 +130,17 @@ GE-3 Idea Intake+Spec    → 🔶 REWORK（BACKEND 有：intake.* / 播种 / 失
 GE-4 Web Research        → 🔶 REWORK（BACKEND 有：research-engine / research.execute(fake)；节点未接，无 UI）
 GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
-RW-1 执行与 Settlement   → Draft PR（跨阶段门禁，GE-3..6 共同依赖；待 Principal Architect 验收）
+RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
 GE-8 端到端验收          → 待开始
 GE-9 质量增强            → 待开始
 ```
+
+RW-1 验收记录：2026-08-05 独立验收先判 REWORK（3 blocker：artifact provenance 登记与校验时序死锁、
+lease 抢占绕过 infra 重试上限、基础设施瞬时错误被判为确定性失败），返工并补齐回归测试后复查 ACCEPT 合并。
+
+下一步：**B1**（Model Gateway 多 provider 最小形态，D6）与 **B3**（GE-3 wiring，开工第一任务为 TD-020）
+互不依赖，可并行。批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。
 
