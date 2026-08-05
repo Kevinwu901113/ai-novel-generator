@@ -129,6 +129,7 @@ GE-3 Idea Intake+Spec    → 🔶 REWORK（BACKEND 有：intake.* / 播种 / 失
 GE-4 Web Research        → 🔶 REWORK（BACKEND 有：research-engine / research.execute(fake)；节点未接，无 UI）
 GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
+RW-1 执行与 Settlement   → Draft PR（跨阶段门禁，GE-3..6 共同依赖；待 Principal Architect 验收）
 GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
 GE-8 端到端验收          → 待开始
 GE-9 质量增强            → 待开始

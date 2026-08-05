@@ -404,6 +404,12 @@ describe('确定性序列化', () => {
           id: 'A',
           kind: 'IDEA_INPUT',
           label,
+          input: {
+            requiresArtifacts: [],
+            requiresOutcomes: [],
+            requiresBudgetKeys: [],
+            requiresBindings: false,
+          },
           output: {
             requiredOutcomeCondition: null,
             allowedArtifactKind: 'idea',

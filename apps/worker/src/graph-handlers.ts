@@ -11,14 +11,11 @@
 import type { Clock, IdGenerator } from '@ai-novel/application';
 import {
   AppError,
-  advanceNode as advanceNodeService,
   applyHumanDecision as applyHumanDecisionService,
   createChapterRun as createChapterRunService,
   createProjectRun as createProjectRunService,
-  failNode as failNodeService,
   getRunProgress as getRunProgressService,
   listRuns as listRunsService,
-  requestHumanDecision as requestHumanDecisionService,
 } from '@ai-novel/application';
 import type {
   ApplyHumanDecisionInputDto,
@@ -26,11 +23,9 @@ import type {
   GraphRunSummaryDto,
 } from '@ai-novel/contracts';
 import {
-  isValidAdvanceNodeInput,
   isValidApplyHumanDecisionInput,
   isValidCreateChapterRunInput,
   isValidCreateProjectRunInput,
-  isValidFailNodeInput,
   isValidGetRunProgressInput,
   isValidListRunsInput,
 } from '@ai-novel/contracts';
@@ -154,47 +149,8 @@ export function dispatchGraphCommand(
       });
       return toProgressDto(deps, state);
     }
-    case 'graph.advanceNode': {
-      if (!isValidAdvanceNodeInput(payload)) {
-        throw new AppError('VALIDATION_ERROR', '非法 graph.advanceNode 输入');
-      }
-      const deps = buildDeps(ctx, payload.projectId);
-      const result = advanceNodeService(deps, {
-        projectId: payload.projectId,
-        runId: payload.runId,
-        nodeId: payload.nodeId,
-        outcome: payload.outcome,
-        artifactRef: payload.artifactRef,
-        idempotencyKey: payload.idempotencyKey,
-      });
-      return toProgressDto(deps, result.run);
-    }
-    case 'graph.failNode': {
-      if (!isValidFailNodeInput(payload)) {
-        throw new AppError('VALIDATION_ERROR', '非法 graph.failNode 输入');
-      }
-      const deps = buildDeps(ctx, payload.projectId);
-      const result = failNodeService(deps, {
-        projectId: payload.projectId,
-        runId: payload.runId,
-        nodeId: payload.nodeId,
-        idempotencyKey: payload.idempotencyKey,
-      });
-      return toProgressDto(deps, result.run);
-    }
-    case 'graph.requestHumanDecision': {
-      if (!isValidFailNodeInput(payload)) {
-        throw new AppError('VALIDATION_ERROR', '非法 graph.requestHumanDecision 输入');
-      }
-      const deps = buildDeps(ctx, payload.projectId);
-      const result = requestHumanDecisionService(deps, {
-        projectId: payload.projectId,
-        runId: payload.runId,
-        nodeId: payload.nodeId,
-        idempotencyKey: payload.idempotencyKey,
-      });
-      return toProgressDto(deps, result.run);
-    }
+    // RW-1 公共安全边界：advanceNode / failNode / requestHumanDecision 已从 RPC 面移除。
+    // 非人工节点推进只能是 Worker 内部 NodeRunner + NodeSettlementService 的可信能力。
     case 'graph.applyHumanDecision': {
       if (!isValidApplyHumanDecisionInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.applyHumanDecision 输入');

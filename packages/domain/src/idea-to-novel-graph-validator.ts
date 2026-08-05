@@ -66,6 +66,7 @@ export type GraphValidationErrorCode =
   | 'MISSING_NODE_KEY'
   | 'MISSING_EDGE_KEY'
   | 'MISSING_OUTPUT_KEY'
+  | 'MISSING_INPUT_KEY'
   | 'MISSING_JOIN_KEY'
   | 'MISSING_LOOP_KEY'
   | 'MISSING_REQUIREMENT_KEY'
@@ -115,10 +116,12 @@ export type GraphValidationErrorCode =
   | 'INVALID_EDGE_KIND'
   | 'INVALID_EDGE_MODE'
   | 'INVALID_OUTPUT_CONTRACT'
+  | 'INVALID_INPUT_CONTRACT'
   | 'UNKNOWN_GRAPH_KEY'
   | 'UNKNOWN_NODE_KEY'
   | 'UNKNOWN_EDGE_KEY'
   | 'UNKNOWN_OUTPUT_KEY'
+  | 'UNKNOWN_INPUT_KEY'
   | 'UNKNOWN_JOIN_KEY'
   | 'UNKNOWN_LOOP_KEY'
   | 'UNKNOWN_REQUIREMENT_KEY'
@@ -158,7 +161,7 @@ const GRAPH_REQUIRED: ReadonlyArray<string> = [
 ];
 const GRAPH_KEYS = new Set(GRAPH_REQUIRED);
 
-const NODE_REQUIRED: ReadonlyArray<string> = ['id', 'kind', 'label', 'output'];
+const NODE_REQUIRED: ReadonlyArray<string> = ['id', 'kind', 'label', 'input', 'output'];
 const NODE_KEYS = new Set([
   ...NODE_REQUIRED,
   'promptId',
@@ -168,6 +171,14 @@ const NODE_KEYS = new Set([
   'joinAggregationPolicy',
   'terminalStatus',
 ]);
+
+const INPUT_REQUIRED: ReadonlyArray<string> = [
+  'requiresArtifacts',
+  'requiresOutcomes',
+  'requiresBudgetKeys',
+  'requiresBindings',
+];
+const INPUT_KEYS = new Set(INPUT_REQUIRED);
 
 const EDGE_REQUIRED: ReadonlyArray<string> = ['id', 'from', 'to', 'kind', 'mode'];
 const EDGE_KEYS = new Set([...EDGE_REQUIRED, 'requiredOutcomes', 'loop']);
@@ -511,6 +522,11 @@ function validateGraphDefinition(
   }
 
   const nodeIds = nodes.filter((n) => typeof n.id === 'string').map((n) => n.id);
+  const nodeIdSet = new Set<string>(nodeIds as string[]);
+  const nodeById = new Map<string, IdeaToNovelGraphNodeDefinition>();
+  for (const n of nodes) {
+    if (typeof n.id === 'string') nodeById.set(n.id, n);
+  }
 
   // 入口节点存在
   if (typeof graph.entryNodeId === 'string' && !nodeIds.includes(graph.entryNodeId)) {
@@ -540,6 +556,62 @@ function validateGraphDefinition(
           typeof node.id === 'string' ? node.id : undefined,
         ),
       );
+    }
+
+    // 输入契约（required + exact；RW-1-R5 canonical input contract）
+    if (!isPlainObject(node.input)) {
+      errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 input 不是对象`, node.id));
+    } else {
+      checkRequiredKeys(errors, node.input, INPUT_REQUIRED, 'MISSING_INPUT_KEY', `${where}.input`);
+      checkExactKeys(errors, node.input, INPUT_KEYS, 'UNKNOWN_INPUT_KEY', `${where}.input`);
+      const { requiresArtifacts, requiresOutcomes, requiresBudgetKeys, requiresBindings } =
+        node.input;
+      if (
+        !Array.isArray(requiresArtifacts) ||
+        !requiresArtifacts.every((k) => typeof k === 'string' && artifactKinds.includes(k))
+      ) {
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresArtifacts 非法`, node.id));
+      }
+      if (
+        !Array.isArray(requiresOutcomes) ||
+        !requiresOutcomes.every((id) => typeof id === 'string' && nodeIdSet.has(id))
+      ) {
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 非法`, node.id));
+      } else if (Array.isArray(requiresOutcomes)) {
+        const seenOutcome = new Set<string>();
+        for (const depId of requiresOutcomes) {
+          if (typeof depId !== 'string') continue;
+          if (depId === node.id) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 含自依赖 ${depId}`),
+            );
+          }
+          if (seenOutcome.has(depId)) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 的 requiresOutcomes 含重复 ${depId}`),
+            );
+          }
+          seenOutcome.add(depId);
+          const depNode = nodeById.get(depId);
+          if (depNode && safeOutput(depNode).requiredOutcomeCondition === null) {
+            errors.push(
+              err('INVALID_INPUT_CONTRACT', `${where} 依赖节点 ${depId} 不产出 outcome（noOut）`),
+            );
+          }
+        }
+      }
+      if (
+        !Array.isArray(requiresBudgetKeys) ||
+        !requiresBudgetKeys.every((k) => typeof k === 'string' && budgetKeys.includes(k))
+      ) {
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresBudgetKeys 非法`, node.id));
+      }
+      if (typeof requiresBindings !== 'boolean') {
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 的 requiresBindings 非法`, node.id));
+      } else if (requiresBindings === true && graph.kind === 'project') {
+        // 项目图无 run binding 引用；只有 chapter 图可声明 requiresBindings
+        errors.push(err('INVALID_INPUT_CONTRACT', `${where} 在 project 图上声明 requiresBindings`));
+      }
     }
 
     // 输出契约（required + exact）

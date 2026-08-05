@@ -114,8 +114,17 @@ import {
   type ResearchHandlerContext,
 } from './research-handlers.js';
 import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
-import { recoverInFlightRuns, type GraphRunDeps } from '@ai-novel/application';
-import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
+import {
+  ExecutorRegistry,
+  type ArtifactResolverPort,
+  type NodeExecutorRunner,
+  type NodeRunnerDeps,
+} from '@ai-novel/application';
+import {
+  IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
+  CHAPTER_GENERATION_GRAPH_V1,
+  isArtifactKind,
+} from '@ai-novel/domain';
 import {
   scheduleContractDraftRun,
   settleContractDraftRunnerFailure,
@@ -123,6 +132,8 @@ import {
   type ContractDraftRunnerDeps,
   type ContractDraftScheduleResult,
 } from './contract-draft-runner.js';
+import { scheduleGraphTask, type GraphTaskRunnerDeps } from './graph-task-runner.js';
+import { runProjectRecovery } from './recovery-bootstrap.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -736,7 +747,12 @@ function reconcile(dataRoot: string): void {
   fileSystem.cleanupTemp(dataRoot, 60 * 60 * 1000);
 }
 
-function initialize(): void {
+/**
+ * 异步初始化（RW-1-R5 readiness recovery）：
+ * 全部数据一致性恢复 + **await recoverGraphRuns** 完成后才返回 —— 调用方在返回后才
+ * 发布 Worker READY / 接受 RPC，保证启动恢复先行。
+ */
+async function initialize(): Promise<void> {
   const dataRoot = getDataRoot();
   projectsDir = join(dataRoot, 'projects');
 
@@ -761,43 +777,193 @@ function initialize(): void {
   // 恢复中断的任务
   reconcileTasks(dataRoot);
 
-  // 恢复 PENDING 的 Grill 规划任务（异步调度）
+  // 恢复 PENDING 的 Grill 规划任务（幂等重新调度，CAS claim）
   recoverPendingGrillPlans(dataRoot);
 
-  // 恢复 PENDING 的创作契约草案任务（异步调度）
+  // 恢复 PENDING 的创作契约草案任务（幂等重新调度，CAS claim）
   recoverPendingContractDrafts(dataRoot);
 
-  // 恢复中断的 Graph run（active 节点 → failed；waiting_for_human 不触碰）
-  recoverGraphRuns();
+  // 恢复中断的 Graph run（await runner 后关 DB；按 recoveryPolicy reconcile）
+  await recoverGraphRuns();
 }
 
 /**
- * Graph run 启动恢复：对每个项目的非终态 run 中处于 active 的节点执行 fail 路径。
- * 安全可重放（CAS + 幂等键 recover:{runId}:{nodeId}:{expectedVersion}）。
+ * RW-1 生产 bootstrap（共享，不每项目重建）—— GE-3..6 注册真实 executor 时填充。
+ * 当前无具体 executor（GE-3..6 前），active 节点 → fail-closed；但已有 execution 会按
+ * 其 stored recoveryPolicy reconcile（TASK_INTERRUPTED → 受控新 attempt）。
  */
-function recoverGraphRuns(): void {
+const productionRegistry = new ExecutorRegistry();
+const productionRunners = new Map<string, NodeExecutorRunner>();
+
+/**
+ * RW-1-R5 生产 artifact 边界：transaction-scoped resolver。
+ * 从**持久化 provenance**（而非调用方字段）校验 kind/id/version/project/run/node/execution；
+ * 删除旧的 artifactId===executionId 伪校验。
+ * - researchBundle / storyBlueprint：provenance 行 + 真实表（research_bundles / story_blueprints）；
+ * - generationRun：权威 execution-bound durable envelope（按真实 artifactId 可寻址）；
+ * - idea / creationSpec / manuscript：provenance 行校验 producer 归属（GE-3/GE-7 接底层存储）。
+ */
+const productionArtifactResolver: ArtifactResolverPort = {
+  resolve(repos, input) {
+    if (!isArtifactKind(input.proposed.kind)) throw new Error('非法 artifact kind');
+    if (input.proposed.producerNodeId !== input.nodeId) {
+      throw new Error('producer node 不匹配');
+    }
+    // 公共 provenance 校验：execution 必须是该 artifact 的真实产出者
+    if (input.proposed.kind !== 'generationRun') {
+      const prov = repos.artifactProvenanceRepo.getByArtifact(
+        input.proposed.kind,
+        input.proposed.artifactId,
+      );
+      if (!prov)
+        throw new Error(
+          `artifact ${input.proposed.kind}:${input.proposed.artifactId} 无 provenance`,
+        );
+      if (
+        prov.executionId !== input.executionId ||
+        prov.graphRunId !== input.graphRunId ||
+        prov.nodeId !== input.nodeId ||
+        prov.projectId !== input.projectId ||
+        prov.version !== input.proposed.version
+      ) {
+        throw new Error('artifact provenance 与当前 execution/run/node 不匹配');
+      }
+    }
+    switch (input.proposed.kind) {
+      case 'researchBundle': {
+        const bundle = repos.researchBundleRepo.getById(input.projectId, input.proposed.artifactId);
+        if (!bundle) throw new Error('researchBundle 不存在');
+        if (bundle.version !== input.proposed.version) {
+          throw new Error('researchBundle version 不匹配');
+        }
+        break;
+      }
+      case 'storyBlueprint': {
+        const bp = repos.storyBlueprintRepo.getById(input.projectId, input.proposed.artifactId);
+        if (!bp) throw new Error('storyBlueprint 不存在');
+        if (bp.blueprint.version !== input.proposed.version) {
+          throw new Error('storyBlueprint version 不匹配');
+        }
+        break;
+      }
+      case 'generationRun': {
+        // 按真实 artifactId 可寻址（Blocker 5）+ execution 归属校验
+        const envelope = repos.nodeExecutionResultStore.getByArtifactId(input.proposed.artifactId);
+        if (!envelope) throw new Error('generationRun 无权威 result envelope（按 artifactId）');
+        if (envelope.executionId !== input.executionId) {
+          throw new Error('generationRun 非当前 execution 产出');
+        }
+        if (envelope.artifactVersion !== input.proposed.version) {
+          throw new Error('generationRun version 不匹配');
+        }
+        if (envelope.projectId !== input.projectId || envelope.graphRunId !== input.graphRunId) {
+          throw new Error('generationRun project/run 不匹配');
+        }
+        break;
+      }
+      case 'idea':
+      case 'creationSpec':
+      case 'manuscript':
+        // provenance 已校验 producer 归属；底层权威存储属于 GE-3 / GE-7
+        break;
+    }
+    return {
+      kind: input.proposed.kind,
+      artifactId: input.proposed.artifactId,
+      producerNodeId: input.proposed.producerNodeId,
+      projectId: input.projectId,
+      graphRunId: input.graphRunId,
+      graphVersion: input.graphVersion,
+      version: input.proposed.version,
+    };
+  },
+};
+
+/**
+ * RW-1 启动恢复：对每个项目的非终态 run **await** NodeRunner，全部完成后才关闭 ProjectDatabase。
+ * 替换旧的无差别 active→failed 行为：有 execution record 时按 recoveryPolicy reconcile
+ * （task succeeded+unsettled → 幂等 settlement；TASK_INTERRUPTED → 受控新 attempt；
+ *  deterministic failed → applyNodeFailure）；无 execution / 未知 executor / 不可重放 → fail-closed。
+ * 每 project / run 错误隔离（ProjectDatabase 构造在每项目 try 内）；只有全部项目 DB 恢复结束
+ * 才返回（readiness 门禁）。
+ *
+ * Blocker 2：接真实 idempotent `scheduleTask` —— PENDING Graph task 在启动恢复中真正重新调度。
+ */
+
+/** 启动恢复可注入选项（集成测试覆盖 registry / scheduleTask） */
+export interface RecoveryOptions {
+  readonly registry?: ExecutorRegistry;
+  readonly runners?: Map<string, NodeExecutorRunner>;
+  readonly resolver?: ArtifactResolverPort;
+  readonly scheduleTask?: (projectId: string, taskId: string) => void;
+}
+
+/** 构建真实 Graph task scheduler（幂等；执行 CHAPTER_DRAFT 任务） */
+function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
+  return {
+    openDb: (projectId: string) => getProjectDb(projectId),
+    buildEngineDeps: (projDb: ProjectDatabase) => {
+      const clock = createClock();
+      return {
+        taskRepo: new TaskRepositoryAdapter(projDb),
+        invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
+        secretStore: secretStore!,
+        providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+        idGenerator: createIdGenerator(),
+        clock,
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
+        nodeExecutionResultStore: projDb.getNodeExecutionResultStore(),
+        nodeExecutionRepo: projDb.getNodeExecutionRepository(),
+      };
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+  };
+}
+
+async function recoverGraphRuns(opts: RecoveryOptions = {}): Promise<void> {
   if (!appDb) return;
-  const projects = appDb.getProjectIndexRepository().list();
-  for (const project of projects) {
-    const dbPath = join(project.projectDirectory, 'project.sqlite');
-    if (!existsSync(dbPath)) continue;
-    try {
-      const projDb = new ProjectDatabase(dbPath);
-      const deps: GraphRunDeps = {
+  await runProjectRecovery({
+    listProjects: () =>
+      appDb!
+        .getProjectIndexRepository()
+        .list()
+        .map((p) => ({
+          projectId: p.id,
+          projectDirectory: p.projectDirectory,
+        })),
+    openProjectDb: (dbPath) => new ProjectDatabase(dbPath),
+    buildRunnerDeps: (projDb, projectId) => {
+      const runnerDeps: NodeRunnerDeps = {
         idGenerator: createIdGenerator(),
         clock: createClock(),
         hashPayload: (payload: string) => sha256Hex(payload),
         tx: projDb.getGraphRunTransaction(),
         projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
         chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
+        registry: opts.registry ?? productionRegistry,
+        runners: opts.runners ?? productionRunners,
+        artifactResolver: opts.resolver ?? productionArtifactResolver,
+        runnerId: `worker-recover:${process.pid}`,
+        scheduleTask: (taskId) => {
+          if (opts.scheduleTask) {
+            opts.scheduleTask(projectId, taskId);
+          } else {
+            scheduleGraphTask(buildGraphTaskRunnerDeps(), projectId, taskId);
+          }
+        },
       };
-      recoverInFlightRuns(deps);
-      projDb.close();
-    } catch (err) {
-      // 非致命：单个项目恢复失败不阻断启动
-      console.error(`recoverGraphRuns: project ${project.id} failed`, err);
-    }
-  }
+      return runnerDeps;
+    },
+  });
 }
 
 /**
@@ -1536,12 +1702,12 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
         data = dispatchContractCommand(request.command, request.payload, contractCtx);
         break;
       }
+      // 仅保留 renderer 安全命令：start / read progress / human decision / list。
+      // advanceNode / failNode / requestHumanDecision 已从 RPC 面移除（RW-1 公共安全边界）：
+      // 非人工节点推进只能是 Worker 内部 NodeRunner + NodeSettlementService 的可信能力。
       case 'graph.createProjectRun':
       case 'graph.createChapterRun':
       case 'graph.getRunProgress':
-      case 'graph.advanceNode':
-      case 'graph.failNode':
-      case 'graph.requestHumanDecision':
       case 'graph.applyHumanDecision':
       case 'graph.listRuns': {
         const graphCtx: GraphHandlerContext = {
@@ -1661,24 +1827,27 @@ function shutdown(): void {
 
 // ── 启动 ──────────────────────────────────────────────────────────
 
-try {
-  initialize();
+void (async () => {
+  try {
+    // RW-1-R5：await 全部恢复（含 recoverGraphRuns）后才发布 READY / 接受 RPC
+    await initialize();
 
-  // 监听来自 Main Process 的消息
-  if (typeof process.parentPort !== 'undefined') {
-    process.parentPort.on('message', (event: { data: unknown }) => {
-      handleMessage(event.data);
-    });
+    // 监听来自 Main Process 的消息
+    if (typeof process.parentPort !== 'undefined') {
+      process.parentPort.on('message', (event: { data: unknown }) => {
+        handleMessage(event.data);
+      });
+    }
+
+    // 发送就绪信号
+    sendToParent({ type: 'ready' } satisfies ReadyMessage);
+  } catch (err) {
+    // 初始化失败，发送错误信号
+    const message = err instanceof Error ? err.message : 'Worker 初始化失败';
+    sendToParent({ type: 'error', message });
+    process.exit(1);
   }
-
-  // 发送就绪信号
-  sendToParent({ type: 'ready' } satisfies ReadyMessage);
-} catch (err) {
-  // 初始化失败，发送错误信号
-  const message = err instanceof Error ? err.message : 'Worker 初始化失败';
-  sendToParent({ type: 'error', message });
-  process.exit(1);
-}
+})();
 
 // 处理进程退出
 process.on('SIGTERM', shutdown);

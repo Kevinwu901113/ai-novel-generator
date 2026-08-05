@@ -29,6 +29,14 @@ import {
   GraphRunRepositoryImpl,
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
+import {
+  NodeArtifactProvenanceRepositoryImpl,
+  NodeExecutionRepositoryImpl,
+  NodeExecutionResultStoreImpl,
+} from './node-execution-repositories.js';
+import { ResearchBundleRepositoryImpl } from './research-repositories.js';
+import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
+import { TaskRepositoryPortAdapter } from './task-repository-port-adapter.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
@@ -82,12 +90,24 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly graphRunRepo: GraphRunRepositoryImpl;
   private readonly commandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly intakeAnswerPort: IdeaIntakeAnswerPortImpl;
+  private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
+  private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
+  private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
+  private readonly storyBlueprintRepo: StoryBlueprintRepositoryImpl;
+  private readonly taskRepo: TaskRepositoryPortAdapter;
+  private readonly artifactProvenanceRepo: NodeArtifactProvenanceRepositoryImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
     this.graphRunRepo = new GraphRunRepositoryImpl(db);
     this.commandLogRepo = new GraphRunCommandLogRepositoryImpl(db);
     this.intakeAnswerPort = new IdeaIntakeAnswerPortImpl(db);
+    this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(db);
+    this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(db);
+    this.researchBundleRepo = new ResearchBundleRepositoryImpl(db);
+    this.storyBlueprintRepo = new StoryBlueprintRepositoryImpl(db);
+    this.taskRepo = new TaskRepositoryPortAdapter(db);
+    this.artifactProvenanceRepo = new NodeArtifactProvenanceRepositoryImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -107,6 +127,12 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       graphRunRepo: this.graphRunRepo,
       commandLog: this.commandLogRepo,
       intakeAnswer: this.intakeAnswerPort,
+      nodeExecutionRepo: this.nodeExecutionRepo,
+      nodeExecutionResultStore: this.nodeExecutionResultStore,
+      researchBundleRepo: this.researchBundleRepo,
+      storyBlueprintRepo: this.storyBlueprintRepo,
+      taskRepo: this.taskRepo,
+      artifactProvenanceRepo: this.artifactProvenanceRepo,
     };
 
     try {

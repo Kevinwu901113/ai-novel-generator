@@ -324,6 +324,10 @@ gate 决策、终态）。
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
 - **下一步（依依赖顺序）**：
+  - **RW-1（跨阶段门禁，GE-3..GE-6 共同依赖）**：Durable Node Execution & Settlement Bridge ——
+    持久化 execution 模型（migration v12）、Executor Registry、NodeRunner、NodeSettlementService
+    （唯一非人工节点完成路径，同事务原子）、ArtifactResolver 严格边界、task 产物持久化、按
+    recoveryPolicy 恢复、关闭伪造节点完成通道。已提交 Draft PR，**待 Principal Architect 验收后才算 RW-1 完成**。
   - A. 补完 GE-3：真实 Idea Intake 节点 executor 闭环 + 自然对话 UI + CreationSpec 编辑器；
   - B. 补完 GE-4：真实 Search/Fetch provider + Research Graph 节点闭环 + Research UI；
   - C. 补完 GE-5：真实 Blueprint executor + Project Graph 模糊想法→PROJECT_READY E2E；

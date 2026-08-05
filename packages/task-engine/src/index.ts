@@ -25,6 +25,7 @@ import type {
   ProviderProfileRepository,
   IdGenerator,
   Clock,
+  NodeExecutionResultStorePort,
 } from '@ai-novel/application';
 import type { ErrorCode } from '@ai-novel/contracts';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
@@ -46,6 +47,8 @@ export interface TaskEngineDeps {
     prompt: string;
   }) => Promise<ModelInvocationOutput>;
   readonly transaction: <T>(fn: () => T) => T;
+  /** RW-1：task 成功前持久化 execution-bound 完整解析结果的权威存储（task-backed 节点必需） */
+  readonly nodeExecutionResultStore?: NodeExecutionResultStorePort;
 }
 
 /** 任务执行结果（公开数据，不含 prompt 或 API Key） */
@@ -290,4 +293,8 @@ export type {
 } from './contract-draft-context.js';
 
 export { executeChapterDraft, parseChapterDraftV1 } from './chapter-generation.js';
-export type { ChapterDraftV1, ChapterDraftExecutionResult } from './chapter-generation.js';
+export type {
+  ChapterDraftV1,
+  ChapterDraftExecutionResult,
+  ChapterDraftExecutionDeps,
+} from './chapter-generation.js';

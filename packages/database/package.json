@@ -21,6 +21,7 @@
     "@ai-novel/research-engine": "workspace:*"
   },
   "devDependencies": {
+    "@ai-novel/task-engine": "workspace:*",
     "typescript": "^5.8.0"
   }
 }

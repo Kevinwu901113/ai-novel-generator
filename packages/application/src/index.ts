@@ -365,12 +365,21 @@ export type {
   GraphRunTransitionResult,
 } from './graph-run.js';
 
+// B2-RW：`advanceNode` / `failNode` 不再以裸名从包公共入口导出。
+// 二者可在不经 NodeSettlementService 的情况下直接推进/失败 Graph 节点，且 `advanceNode`
+// 对 `artifactRef` 不做任何存在性/归属校验。RW-1 之后，非人工节点的唯一合法完成路径是
+// NodeRunner + NodeSettlementService（artifact 必须过 provenance 登记与 resolver 校验）。
+// 包内使用走内部入口 `./graph-run.js`；跨包只保留下面这对显式标注的骨架测试专用别名，
+// 使任何生产代码中的使用一眼可见、可 grep。
+export {
+  advanceNode as advanceNodeForSkeletonTestsOnly,
+  failNode as failNodeForSkeletonTestsOnly,
+} from './graph-run.js';
+
 export {
   createProjectRun,
   createChapterRun,
   getRunProgress,
-  advanceNode,
-  failNode,
   applyArtifactChange,
   requestHumanDecision,
   applyHumanDecision,
@@ -415,3 +424,57 @@ export {
 
 export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';
 export { fakeProducerForNode, runFakeUntilHumanOrTerminal } from './graph-skeleton.js';
+
+// ── RW-1 Durable Node Execution & Settlement ─────────────────────
+
+export type {
+  NodeExecutorKind,
+  NodeRecoveryPolicy,
+  NodeExecutorDescriptor,
+  ExecutorKey,
+  NodeExecutionStatus,
+  NodeExecutionRecord,
+  CreateNodeExecutionInput,
+  NodeExecutionRepositoryPort,
+  NodeTaskSpec,
+  StrictNodeOutcome,
+  NodeExecutionResultEnvelope,
+  NodeExecutionResultStorePort,
+  ArtifactPayload,
+  PersistedArtifactReceipt,
+  NodeOutput,
+  ArtifactResolverPort,
+  ArtifactResolveInput,
+  NodeSettlementResult,
+  NodeExecutionInputContext,
+  NodeExecutorRunner,
+  SyncNodeExecutor,
+  TaskBackedNodeExecutor,
+  ArtifactProvenanceRecord,
+  ArtifactProvenanceRepoPort,
+} from './node-execution-types.js';
+export {
+  INFRA_MAX_ATTEMPTS,
+  INFRA_RETRYABLE_CODES,
+  SYNC_LEASE_MS,
+} from './node-execution-types.js';
+export { canonicalJson } from './canonical-json.js';
+export { computeNodeInputSnapshot, inputHashOf, serializeInputSnapshot } from './node-input.js';
+
+export { ExecutorRegistry } from './executor-registry.js';
+
+export {
+  settleNodeExecution,
+  failExecutionAndNodeInTransaction,
+  NodeSettlementError,
+} from './node-settlement.js';
+export type { NodeSettlementDeps, SettleNodeExecutionInput } from './node-settlement.js';
+
+export { driveRun, runTerminalStatusOf } from './node-runner.js';
+export type { NodeDispatchResult, NodeRunnerDeps } from './node-runner.js';
+
+export {
+  applyTransitionInTransaction,
+  parkHumanNodes,
+  failNodeInTransaction,
+} from './graph-run.js';

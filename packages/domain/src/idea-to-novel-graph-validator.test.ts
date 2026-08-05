@@ -583,6 +583,65 @@ describe('Project / Chapter 图节点边界（Run 边界语义）', () => {
   });
 });
 
+describe('输入契约语义校验（RW-1-R5, Blocker 8）', () => {
+  function setNodeInput(
+    g: Record<string, unknown>,
+    nodeId: string,
+    input: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const nodes = (g.nodes as Array<Record<string, unknown>>).map((n) => {
+      if (n.id !== nodeId) return n;
+      return { ...n, input };
+    });
+    return { ...g, nodes };
+  }
+
+  it('requiresOutcomes 依赖 noOut 节点 → 拒绝', () => {
+    // RESEARCH_EXECUTE 依赖 RESEARCH_PLAN（noOut）→ 非法
+    const g = projectGraph();
+    const broken = setNodeInput(g, 'RESEARCH_EXECUTE', {
+      requiresArtifacts: ['idea', 'creationSpec', 'researchBundle'],
+      requiresOutcomes: ['RESEARCH_PLAN'],
+      requiresBudgetKeys: ['researchRetry'],
+      requiresBindings: false,
+    });
+    expectBroken(broken, 'INVALID_INPUT_CONTRACT');
+  });
+
+  it('requiresOutcomes 含自依赖 → 拒绝', () => {
+    const g = projectGraph();
+    const broken = setNodeInput(g, 'RESEARCH_DECISION', {
+      requiresArtifacts: ['idea', 'creationSpec'],
+      requiresOutcomes: ['RESEARCH_DECISION'],
+      requiresBudgetKeys: [],
+      requiresBindings: false,
+    });
+    expectBroken(broken, 'INVALID_INPUT_CONTRACT');
+  });
+
+  it('requiresOutcomes 含重复 → 拒绝', () => {
+    const g = projectGraph();
+    const broken = setNodeInput(g, 'RESEARCH_PLAN', {
+      requiresArtifacts: ['idea', 'creationSpec'],
+      requiresOutcomes: ['RESEARCH_DECISION', 'RESEARCH_DECISION'],
+      requiresBudgetKeys: [],
+      requiresBindings: false,
+    });
+    expectBroken(broken, 'INVALID_INPUT_CONTRACT');
+  });
+
+  it('project 图节点声明 requiresBindings → 拒绝', () => {
+    const g = projectGraph();
+    const broken = setNodeInput(g, 'IDEA_CAPTURE', {
+      requiresArtifacts: [],
+      requiresOutcomes: [],
+      requiresBudgetKeys: [],
+      requiresBindings: true,
+    });
+    expectBroken(broken, 'INVALID_INPUT_CONTRACT');
+  });
+});
+
 describe('malformed 剩余抛异常路径回归（永不抛异常）', () => {
   /** 校验一个损坏图：不抛异常、不返回 valid、返回至少一条错误 */
   function expectNoThrowBroken(g: Record<string, unknown>): void {
