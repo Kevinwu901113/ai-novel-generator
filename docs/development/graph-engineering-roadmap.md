@@ -312,27 +312,34 @@ gate 决策、终态）。
 > 已交付的是 FOUNDATION / BACKEND 能力；Graph 节点真实 executor、运行时接线、产品 UI 与 E2E 均为后续。
 > 详见 `docs/development/post-merge-acceptance.md`。**在 GE-6 原退出条件通过前，下一步不写 GE-7。**
 
-| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）               | PRODUCT_UI | E2E             |
-| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | --------------------------------------------- | ---------- | --------------- |
-| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                             | —          | —               |
-| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）  | —          | —               |
-| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用） | ❌         | ⚠️ 骨架测试达成 |
-| GE-3 Idea Intake + CreationSpec     | 🔶 REWORK           | ✅         | ✅（intake.* helper）                 | ❌ 节点未接                                   | ❌         | ❌              |
-| GE-4 Web Research + ResearchBundle  | 🔶 REWORK           | ✅         | ✅（research.execute, fake provider） | ❌ 节点未接                                   | ❌         | ❌              |
-| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子      | ❌         | ❌              |
-| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线           | ❌         | ❌              |
+| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI | E2E             |
+| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ---------- | --------------- |
+| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —               |
+| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —               |
+| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成 |
+| GE-3 Idea Intake + CreationSpec     | 🔶 REWORK           | ✅         | ✅（intake.* helper）                 | ❌ 节点未接                                    | ❌         | ❌              |
+| GE-4 Web Research + ResearchBundle  | 🔶 REWORK           | ✅         | ✅（research.execute, fake provider） | ❌ 节点未接                                    | ❌         | ❌              |
+| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌              |
+| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌              |
+| RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite  |
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
-- **下一步（依依赖顺序）**：
-  - **RW-1（跨阶段门禁，GE-3..GE-6 共同依赖）**：Durable Node Execution & Settlement Bridge ——
-    持久化 execution 模型（migration v12）、Executor Registry、NodeRunner、NodeSettlementService
-    （唯一非人工节点完成路径，同事务原子）、ArtifactResolver 严格边界、task 产物持久化、按
-    recoveryPolicy 恢复、关闭伪造节点完成通道。已提交 Draft PR，**待 Principal Architect 验收后才算 RW-1 完成**。
-  - A. 补完 GE-3：真实 Idea Intake 节点 executor 闭环 + 自然对话 UI + CreationSpec 编辑器；
-  - B. 补完 GE-4：真实 Search/Fetch provider + Research Graph 节点闭环 + Research UI；
-  - C. 补完 GE-5：真实 Blueprint executor + Project Graph 模糊想法→PROJECT_READY E2E；
-  - D. 补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
-  - **E. 仅 D 完成后才启动 GE-7 MANUSCRIPT_COMMIT**。
+- **RW-1（跨阶段门禁，GE-3..GE-6 共同依赖）— MERGED ON MAIN**：Durable Node Execution & Settlement
+  Bridge —— 持久化 execution 模型（migration v12）、Executor Registry、NodeRunner、
+  NodeSettlementService（唯一非人工节点完成路径，同事务原子）、ArtifactResolver 严格边界、
+  task 产物持久化、按 recoveryPolicy 恢复、关闭伪造节点完成通道。
+  **验收记录**：2026-08-05 独立验收先判 REWORK（3 blocker：artifact provenance 登记与校验时序死锁导致
+  除 generationRun 外无 artifact 可结算、lease 抢占绕过 infra 重试上限、基础设施瞬时错误被判为确定性失败
+  而永久杀死 run），返工并补齐对应回归测试后复查 ACCEPT，PR #39 合并（merge commit `ec1e8e7`）。
+- **下一步（依依赖顺序，批次定义见 `docs/development/takeover-plan-2026-08-05.md`）**：
+  - **B0**：D1–D9 决策落地与文档同步（本次）；
+  - **B1**：Model Gateway 多 provider 最小形态（D6）——与 B3 无依赖，可并行；
+  - **B3**：补完 GE-3 wiring：真实 Idea Intake 节点 executor 闭环（B4 配套最小 UI）；
+    开工第一任务为 TD-020（空 registry 启动恢复不得判死在途 run）；
+  - **B5/B6**：补完 GE-4：Tavily provider（D7）+ Research 节点闭环 + Research UI；
+  - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
+  - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
+  - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
 
 ## 16. 已删除的历史资料
 

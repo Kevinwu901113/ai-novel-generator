@@ -294,7 +294,8 @@
 - provider_profiles 表中只有一条固定记录
 - 未来多提供商需要扩展
 
-**状态**：已确认
+**状态**：已废弃（2026-08-05 被 D6「Model Gateway 升级为多 provider」取代；
+MiMo V2.5 Pro 迁移为一个 `anthropic-messages` profile 继续可用）
 
 ### 2026-07-27 不安装 Anthropic SDK
 
@@ -492,6 +493,153 @@ CAS 原子持久化。Renderer / Worker / Task Engine 均不得直接拼装或�
 **影响**：GE-7 需明确"生成候选失效 vs 已提交稿件"的边界。
 
 **状态**：待 GE-7 处理
+
+---
+
+## 2026-08-05 接手执行方案决策（D1–D9）
+
+> 决策人：项目负责人授权的接手会话（Principal Architect 通道），2026-08-05。
+> 来源：`docs/development/takeover-plan-2026-08-05.md`（接手执行方案，非新权威层级）。
+> 本节即该方案 §2 的正式落地；落地后仍以 L1–L4 权威层级为准，方案文档只作交接记录。
+
+### 2026-08-05 D1 不重构仓库
+
+**背景**：接手时可能倾向于重写后端或重建仓库。
+
+**决策**：维持 Controlled Pivot。分层、内核、migration、测试资产全部保留；禁止以"接手"为由重写。
+
+**理由**：与 PRODUCT_DIRECTION §17 一致；已合并资产经过验收，重写会丢失已锁定的不变量与测试证据。
+
+**影响**：GE-3..GE-6 只做补完，不做重建。
+
+**状态**：已确认
+
+### 2026-08-05 D2 节点执行器 = 持久化任务 + settlement 桥
+
+**背景**：GE-3..GE-6 缺的是把节点接到 GraphRunService 的执行器与结算桥。
+
+**决策**：所有需要模型/搜索调用的节点，执行路径固定为：节点 active → executor 创建持久化 Task（绑定
+runId + nodeId + attempt）→ 任务完成后 settlement 把结果写入权威存储并取得真实 artifact id →
+以幂等 command key 经 GraphRunService 推进。settlement 必须幂等可重放。纯逻辑节点可用同步 executor，
+但同样只能经 GraphRunService 推进。worker 端建立 executor registry（nodeId/kind → executor）。
+
+**理由**：崩溃后重放 settlement 时，commandLog 去重保证 Graph 只推进一次。
+
+**影响**：RW-1（PR #39，merge commit `ec1e8e7`）即本决策的实现载体。
+
+**状态**：已确认（RW-1 已合并）
+
+### 2026-08-05 D3 Recovery 语义与任务状态协同
+
+**背景**：`recoverInFlightRuns` 原为无差别 fail-closed。
+
+**决策**：节点 active 且绑定任务已终态成功 → 启动时补跑 settlement；任务失败 / TASK_INTERRUPTED →
+按基础设施重试配额受控重试，配额用尽走 `applyNodeFailure`；无任务记录（同步 executor 中断）→ 维持 fail；
+`waiting_for_human` 不触碰。
+
+**理由**：区分基础设施中断与业务失败，避免结果丢失，也避免无界重放。
+
+**影响**：RW-1 已实现；B2 验收补充了 `canInfraRetryCount` 对 lease 抢占路径的统一守卫。
+
+**状态**：已确认
+
+### 2026-08-05 D4 artifact ref 必须指向真实持久化对象
+
+**背景**：GE-3..GE-6 的 artifact ref 曾是 `art-${nodeId}` 占位。
+
+**决策**：settlement 只接受真实持久化 id；artifact 必须经事务内 resolver 校验存在性/归属/version，
+并在同一事务登记 execution→artifact provenance。骨架测试可注入宽松 resolver，生产接线必须注入真实 resolver。
+
+**理由**：没有存在性与归属校验的 artifact ref 会让下游节点消费不存在或他人的产物。
+
+**影响**：RW-1 以 `ArtifactResolverPort` + `node_artifact_provenance` 实现，并把 provenance 主键
+`(artifact_kind, artifact_id)` 作为归属的原子闸门（B2 验收修正了登记与校验的时序）。
+
+**状态**：已确认
+
+### 2026-08-05 D5 GE-2 直推 main 的一次性豁免
+
+**背景**：GE-2（`4b26c60`）未走 PR 直接推 main。
+
+**决策**：不改写历史；记录该次流程违规为一次性豁免。今后一切变更（包括纯文档）必须走 PR。
+
+**理由**：改写已发布历史的代价高于收益；规则前瞻生效即可。
+
+**影响**：本条之后的所有提交均需 PR + CI 门禁。
+
+**状态**：已确认
+
+### 2026-08-05 D6 Model Gateway 升级为多 provider（修订原锁定决策）
+
+**背景**：原锁定决策为"不提前建设多 Provider"。项目负责人明确要求支持多 provider 配置。
+
+**决策**：修订该锁定决策为**支持多 provider，但只做最小形态**：协议适配层 `anthropic-messages` +
+`openai-chat`；Provider Profile `{ id, label, protocol, baseUrl, model, secretRef }` 持久化，
+secret-store 每 profile 一个 key 槽位；路由只有"全局默认 + 按任务类型可选覆盖"两层；
+**不做**负载均衡、自动 fallback、流式、复杂路由 DAG。现有 MiMo V2.5 Pro 迁移为一个
+`anthropic-messages` profile 并继续可用。
+
+**理由**：项目负责人的产品决策；最小形态可控，不引入 Agent 平台复杂度。
+
+**影响**：`AGENTS.md` 模型配置段已同步；`current-project-state.md` §7 的锁定决策同步修订；
+实现批次为 B1。
+
+**状态**：已确认（取代 `current-project-state.md` §7 原锁定项"不提前建设多 Provider"，
+并使 2026-07-27「固定 MiMo V2.5 Pro 作为唯一提供商」转为已废弃）
+
+### 2026-08-05 D7 联网搜索使用 Tavily
+
+**背景**：GE-4 的 WebSearchPort 只有 fake provider。
+
+**决策**：实现 TavilySearchProvider，key 存 secret-store（不写进代码或配置文件）。返回正文仍需过既有 V1
+安全边界（协议/私网/重定向/字节数/超时）。fake provider 保留用于测试与无 key 环境。
+
+**理由**：项目负责人选定；既有安全边界不因换 provider 而放宽。
+
+**影响**：实现批次为 B5；需要项目负责人提供 Tavily API key。
+
+**状态**：已确认
+
+### 2026-08-05 D8 每个 GE 阶段配最小产品 UI，wiring 与 UI 分离为两个 PR
+
+**背景**：既往阶段只交付 backend，用户无法真实操作。
+
+**决策**：每阶段先合 wiring PR（人工 Gate 由测试注入决策，E2E 绿），紧接着合该阶段最小 UI PR。
+GE-3 的 UI 批次同时把默认入口从 Grill 工作台切换为 Idea-to-Novel 四阶段旅程。UI 必须遵守
+PRODUCT_DIRECTION §4：不出现 run / node / task / token 等工程概念。
+
+**理由**：保证每阶段结束时用户可真实使用，同时保持 PR 可审查。
+
+**影响**：批次序列 B3/B4、B5/B6、B7/B8、B9/B10。
+
+**状态**：已确认
+
+### 2026-08-05 D9 GE-7 继续后置
+
+**背景**：稿件提交闭环诱人但依赖前置链路。
+
+**决策**：GE-6 原退出条件（真实章节生成全链到 CANDIDATE_GATE 绿）通过前，不启动 GE-7。
+
+**理由**：与既有锁定不变量一致（候选 ≠ 权威稿件）。
+
+**影响**：本轮方案不含 GE-7 批次。
+
+**状态**：已确认
+
+### 2026-08-05 空 registry 下的启动恢复不得判死在途 run
+
+**背景**：B2 验收返工过程中发现：生产 `recoverGraphRuns` 使用的 registry 在 GE-3 前为空，
+任何 active 非人工节点在启动恢复时会得到 `EXECUTOR_NOT_REGISTERED` → `applyNodeFailure` →
+run 终态 failed 且按不变量不可复活。
+
+**决策**：registry 缺少该节点 executor 时，启动恢复**跳过该节点、保持原状**，不 fail-closed。
+该修改是 B3 开工的第一个任务。
+
+**理由**：executor 尚未注册是部署/推进阶段的事实，不是业务失败；用不可复活的终态惩罚它会销毁用户数据。
+
+**影响**：见 `tech-debt.md` TD-020；B3 前置。
+
+**状态**：已确认（待 B3 实施）
 
 ---
 

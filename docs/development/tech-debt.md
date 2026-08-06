@@ -401,3 +401,79 @@ PlotPilot 是外部项目。商业分发前需要单独审查其许可证条款�
 
 - 商业分发前进行许可审查
 - 必要时联系 PlotPilot 作者获取授权
+
+---
+
+## TD-019: 测试 `realResolver` 与生产 artifact resolver 各写一份，已发生漂移
+
+**状态**: OPEN
+**优先级**: B3 前置（开工前解决）
+**最后核验基线**: ec1e8e7
+
+### 问题
+
+生产 artifact resolver 在 `apps/worker/src/index.ts`（`productionArtifactResolver`），测试的"生产等价"
+resolver 在 `packages/database/src/node-execution-integration.test.ts`（`realResolver()`）。两者是两份手写
+实现。RW-1 的 B2 验收期间已确认漂移：测试版对 `idea` / `creationSpec` / `manuscript` 抛
+`unsupported kind`，而生产版显式放行；该分歧直接导致新增端到端测试首次运行时给出误导性的红。
+
+### 影响
+
+- "生产等价 resolver 下的行为"这一测试断言可能不成立，削弱端到端覆盖的可信度
+- GE-3/GE-4/GE-5 每新增一类 artifact，都要在两处同步修改，漂移会重复发生
+
+### 后续动作
+
+- 把 resolver 提取为单一实现（application 层，接受注入的 repository 端口），生产与测试共用
+- 测试只允许注入宽松 resolver 作为显式替身，不得另写一份"仿生产"实现
+
+---
+
+## TD-020: 空 registry 下启动恢复会把一切在途 run 判为终态 failed
+
+**状态**: OPEN
+**优先级**: B3 开工第一任务（GE-3 wiring 之前）
+**最后核验基线**: ec1e8e7
+
+### 问题
+
+生产 `recoverGraphRuns`（`apps/worker/src/index.ts`）使用的 `productionRegistry` 在 GE-3 之前为空。
+启动恢复对每个非终态 run 调用 `driveRun`，任何 active 非人工节点因查不到 executor 走
+`EXECUTOR_NOT_REGISTERED` → `applyNodeFailure`；而 `applyNodeFailure` 直接把 run 置为终态 `failed`，
+按锁定不变量该 run 不可复活。
+
+### 影响
+
+- 当前无真实 run，故实际影响为零；但 GE-3 注册 executor 之前，任何遗留在途 run 会在 worker 启动时被永久判死
+- 未来任一节点的 executor 未注册（版本回滚、部署不一致）都会造成同类数据损失
+
+### 后续动作
+
+- registry 缺少该节点 executor 时，启动恢复跳过该节点、保持原状，不 fail-closed（见 decision-log 2026-08-05 同名决策）
+- 补测试：空 registry 恢复后 run 仍为非终态、节点仍 active
+
+---
+
+## TD-021: NodeRunner 中两处不可达分支
+
+**状态**: DESIGN_DECISION
+**优先级**: 低（只需注释澄清，不删代码）
+**最后核验基线**: ec1e8e7
+
+### 问题
+
+`packages/application/src/node-runner.ts` 有两处当前不可达的防御性分支：
+
+1. `reDispatchPending` 的 sync 分支 —— `claimExecution` 要么在同一事务内 `markRunning`，要么抛错回滚，
+   不会留下 pending 状态的 sync execution；
+2. `claimExecution` 的"latest failed + infra retryable → 同 activation 续 attempt"分支 ——
+   `applyNodeFailure` 直接把 run 置终态，失败节点不会再次 active。
+
+### 影响
+
+- 无功能影响；但会让后续读者误以为存在对应的运行时路径，进而在这些分支上叠加逻辑
+
+### 后续动作
+
+- 保留代码作为防御性兜底，在两处补注释说明为何当前不可达、以及什么变化会使其可达
+- 若将来 `applyNodeFailure` 语义改为可路由回业务循环，需重新评估第 2 处的 activation 归属判定

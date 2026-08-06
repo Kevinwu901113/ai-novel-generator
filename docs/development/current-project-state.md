@@ -2,20 +2,20 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：2（2026-08-04）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：3（2026-08-05）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
 
 ## 0. Snapshot Metadata
 
-| 项              | 值                                                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 2                                                                                                                    |
-| 更新日期        | 2026-08-04                                                                                                           |
-| 基线 main SHA   | `54c6b314bf00c0203895e54fd4253871de672261`（PR #32 合并后，含两张权威 Graph）                                        |
-| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含新增 graph 模块）、数据库 migration v1–v7、CI |
-| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）                                                                          |
+| 项              | 值                                                                                                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 3                                                                                                                 |
+| 更新日期        | 2026-08-05                                                                                                        |
+| 基线 main SHA   | `ec1e8e78b07add2856a533f74e7827f5c0e9f7e6`（PR #39 合并后，含 RW-1 执行与 settlement 桥）                         |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v12、CI |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）                                                                       |
 
 ## 1. 权威层级
 
@@ -111,7 +111,8 @@ Manuscript、Export、重启恢复。
 - 生成候选 ≠ 权威稿件；仅 MANUSCRIPT_COMMIT 后可写 Manuscript
 - 人工 Gate 处不得自动接受或提交
 - 不建立长期集成分支
-- 不提前建设多 Provider、任务 DAG 或复杂 Agent 平台
+- 多 Provider 按 D6（2026-08-05）只做最小形态：两种协议适配 + profile + 两层路由；
+  仍不建设任务 DAG 或复杂 Agent 平台（不做负载均衡 / 自动 fallback / 流式）
 - 不静默覆盖用户正文（CAS / 版本化 / 显式写入）
 - 未合并 PR 不计入 main 能力
 ```
@@ -129,11 +130,17 @@ GE-3 Idea Intake+Spec    → 🔶 REWORK（BACKEND 有：intake.* / 播种 / 失
 GE-4 Web Research        → 🔶 REWORK（BACKEND 有：research-engine / research.execute(fake)；节点未接，无 UI）
 GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
-RW-1 执行与 Settlement   → Draft PR（跨阶段门禁，GE-3..6 共同依赖；待 Principal Architect 验收）
+RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
 GE-8 端到端验收          → 待开始
 GE-9 质量增强            → 待开始
 ```
+
+RW-1 验收记录：2026-08-05 独立验收先判 REWORK（3 blocker：artifact provenance 登记与校验时序死锁、
+lease 抢占绕过 infra 重试上限、基础设施瞬时错误被判为确定性失败），返工并补齐回归测试后复查 ACCEPT 合并。
+
+下一步：**B1**（Model Gateway 多 provider 最小形态，D6）与 **B3**（GE-3 wiring，开工第一任务为 TD-020）
+互不依赖，可并行。批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。
 
@@ -157,6 +164,6 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 | `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0）                                                                  |
 | `git diff --check`  | —                                                             | PASS                                                                            |
 | macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁                                                           |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 109 passed / 1 skipped（110）；Tests 2805 passed / 6 skipped（2811） |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 122 passed / 1 skipped（123）；Tests 2915 passed / 6 skipped（2921） |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。
