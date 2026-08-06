@@ -294,7 +294,8 @@
 - provider_profiles 表中只有一条固定记录
 - 未来多提供商需要扩展
 
-**状态**：已确认
+**状态**：已废弃（2026-08-05 被 D6「Model Gateway 升级为多 provider」取代；
+MiMo V2.5 Pro 迁移为一个 `anthropic-messages` profile 继续可用）
 
 ### 2026-07-27 不安装 Anthropic SDK
 
@@ -583,7 +584,8 @@ secret-store 每 profile 一个 key 槽位；路由只有"全局默认 + 按任�
 **影响**：`AGENTS.md` 模型配置段已同步；`current-project-state.md` §7 的锁定决策同步修订；
 实现批次为 B1。
 
-**状态**：已确认（取代原"不提前建设多 Provider"）
+**状态**：已确认（取代 `current-project-state.md` §7 原锁定项"不提前建设多 Provider"，
+并使 2026-07-27「固定 MiMo V2.5 Pro 作为唯一提供商」转为已废弃）
 
 ### 2026-08-05 D7 联网搜索使用 Tavily
 
