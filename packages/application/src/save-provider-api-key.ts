@@ -1,17 +1,15 @@
 /**
  * SaveProviderApiKey 用例。
  *
- * 验证输入、写入 Keychain、返回公开状态。
- * 不在数据库中保存 API Key 明文。
+ * 按 profileId 定位 provider profile，验证输入、写入 Keychain（每 profile 独立槽位），
+ * 返回公开状态。不在数据库中保存 API Key 明文。
  */
 
-import type { ProviderPublicState } from '@ai-novel/contracts';
+import type { ProviderPublicState, SaveApiKeyInput } from '@ai-novel/contracts';
 import { unicodeCodePointLength } from '@ai-novel/domain';
 import type { SecretStore, ProviderProfileRepository, Clock } from './types.js';
 import { ValidationError, ApiKeyStoreFailedError, ProviderNotConfiguredError } from './errors.js';
-
-/** 固定 MiMo profile ID */
-const FIXED_PROVIDER_ID = 'mimo-token-plan-cn';
+import { toProviderPublicState } from './provider-profiles.js';
 
 /** API Key 最大长度（Unicode code points） */
 const MAX_API_KEY_LENGTH = 4096;
@@ -23,20 +21,15 @@ export interface SaveProviderApiKeyDeps {
   readonly clock: Clock;
 }
 
-/** SaveProviderApiKey 输入 */
-export interface SaveProviderApiKeyInput {
-  readonly apiKey: string;
-}
-
 /**
  * 保存 API Key。
  *
- * 验证 → 写入 Keychain → 返回新的公开状态。
+ * 验证 → 按 profileId 定位 profile → 写入该 profile 的 Keychain 槽位 → 返回新的公开状态。
  * 失败时不改变数据库测试状态。
  */
 export async function saveProviderApiKey(
   deps: SaveProviderApiKeyDeps,
-  input: SaveProviderApiKeyInput,
+  input: SaveApiKeyInput,
 ): Promise<ProviderPublicState> {
   const { providerRepo, secretStore } = deps;
 
@@ -49,13 +42,13 @@ export async function saveProviderApiKey(
     throw new ValidationError(`API Key 不能超过 ${MAX_API_KEY_LENGTH} 个字符`);
   }
 
-  // 获取固定 profile
-  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
+  // 按 profileId 定位 profile
+  const profile = providerRepo.getById(input.profileId);
   if (!profile) {
     throw new ProviderNotConfiguredError();
   }
 
-  // 写入 Keychain
+  // 写入该 profile 独立的 Keychain 槽位
   try {
     await secretStore.setSecret(profile.keychainService, profile.keychainAccount, trimmed);
   } catch (err) {
@@ -64,17 +57,5 @@ export async function saveProviderApiKey(
   }
 
   // 返回新的公开状态
-  return {
-    id: profile.id,
-    displayName: profile.displayName,
-    providerType: profile.providerType as ProviderPublicState['providerType'],
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    enabled: profile.enabled,
-    hasApiKey: true,
-    lastTestedAt: profile.lastTestedAt,
-    lastTestStatus: (profile.lastTestStatus ?? 'never') as ProviderPublicState['lastTestStatus'],
-    lastTestErrorCode: profile.lastTestErrorCode,
-    lastTestLatencyMs: profile.lastTestLatencyMs,
-  };
+  return toProviderPublicState({ secretStore }, profile);
 }

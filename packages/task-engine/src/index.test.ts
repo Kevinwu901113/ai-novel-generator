@@ -82,22 +82,71 @@ function createMockInvocation(overrides: Partial<ModelInvocationData> = {}): Mod
   };
 }
 
-function createMockProviderProfile(): ProviderProfileData {
+function createMockProviderProfile(overrides: Partial<ProviderProfileData> = {}): ProviderProfileData {
   return {
     id: 'mimo-token-plan-cn',
-    providerType: 'anthropic-compatible',
+    providerType: 'anthropic-messages',
     displayName: 'Xiaomi MiMo Token Plan CN',
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     model: 'mimo-v2.5-pro',
     keychainService: 'com.ai-novel-generator.provider.mimo-token-plan-cn',
     keychainAccount: 'api-key',
     enabled: true,
+    isDefault: true,
     createdAt: '2024-01-01T00:00:00.000Z',
     updatedAt: '2024-01-01T00:00:00.000Z',
     lastTestedAt: null,
     lastTestStatus: null,
     lastTestErrorCode: null,
     lastTestLatencyMs: null,
+    ...overrides,
+  };
+}
+
+/**
+ * 构造 D6 两层路由 ProviderProfileRepository 假实现：
+ * getById / getDefault / getRoute 是 resolveProviderForTask 实际依赖的能力；
+ * 其余方法（create/update/delete/setRoute/deleteRoute）本引擎不使用，抛错以便
+ * 误用时测试立即失败，而不是被 any 掩盖。
+ */
+function createFakeProviderRepo(
+  options: {
+    profiles?: ReadonlyArray<ProviderProfileData>;
+    defaultId?: string | null;
+    routes?: Readonly<Record<string, string>>;
+  } = {},
+): ProviderProfileRepository {
+  const profiles = new Map<string, ProviderProfileData>(
+    (options.profiles ?? [createMockProviderProfile()]).map((p) => [p.id, p]),
+  );
+  const defaultId =
+    options.defaultId !== undefined ? options.defaultId : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
+  const routes = new Map<string, string>(Object.entries(options.routes ?? {}));
+
+  return {
+    getById: vi.fn((id: string) => profiles.get(id) ?? null),
+    list: vi.fn(() => [...profiles.values()]),
+    getDefault: vi.fn(() => (defaultId ? (profiles.get(defaultId) ?? null) : null)),
+    create: vi.fn(() => {
+      throw new Error('未使用：create');
+    }),
+    update: vi.fn(() => {
+      throw new Error('未使用：update');
+    }),
+    delete: vi.fn(() => {
+      throw new Error('未使用：delete');
+    }),
+    setDefault: vi.fn(() => {
+      throw new Error('未使用：setDefault');
+    }),
+    getRoute: vi.fn((taskType: string) => routes.get(taskType) ?? null),
+    setRoute: vi.fn(() => {
+      throw new Error('未使用：setRoute');
+    }),
+    deleteRoute: vi.fn(() => {
+      throw new Error('未使用：deleteRoute');
+    }),
+    updateTestResult: vi.fn(),
   };
 }
 
@@ -152,6 +201,7 @@ function createMockDeps(
     invokeResult?: ModelInvocationOutput;
     invokeError?: Error;
     apiKey?: string | null;
+    providerRepo?: ProviderProfileRepository;
   } = {},
 ): MockDeps {
   const task = overrides.task ?? createMockTask();
@@ -260,10 +310,8 @@ function createMockDeps(
     deleteSecret: vi.fn(async () => {}),
   };
 
-  const providerRepo: ProviderProfileRepository = {
-    getById: vi.fn(() => createMockProviderProfile()),
-    updateTestResult: vi.fn(),
-  };
+  const providerRepo: ProviderProfileRepository =
+    overrides.providerRepo ?? createFakeProviderRepo();
 
   const idGenerator: IdGenerator = {
     generate: vi.fn(() => 'inv-mock-id'),
@@ -403,8 +451,9 @@ describe('executeModelInvocationTest', () => {
   });
 
   it('provider 不存在时应该抛出 PROVIDER_NOT_CONFIGURED（claim 前）', async () => {
-    const { deps, taskStore } = createMockDeps();
-    (deps.providerRepo.getById as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const { deps, taskStore } = createMockDeps({
+      providerRepo: createFakeProviderRepo({ profiles: [], defaultId: null }),
+    });
 
     await expect(executeModelInvocationTest(deps, 'task-1', '测试')).rejects.toThrow(
       TaskExecutionError,
@@ -416,6 +465,75 @@ describe('executeModelInvocationTest', () => {
     expect(task.attemptCount).toBe(0);
     expect(task.status).toBe('PENDING');
   });
+
+  it('无任何 provider 时任务按既有失败语义落库：PROVIDER_NOT_CONFIGURED，task 仍 PENDING', async () => {
+    const { deps, taskStore } = createMockDeps({
+      providerRepo: createFakeProviderRepo({ profiles: [], defaultId: null }),
+    });
+
+    try {
+      await executeModelInvocationTest(deps, 'task-1', '测试');
+      expect.fail('应该抛出错误');
+    } catch (err) {
+      expect(err).toBeInstanceOf(TaskExecutionError);
+      expect((err as TaskExecutionError).code).toBe('PROVIDER_NOT_CONFIGURED');
+    }
+
+    const task = taskStore.get('task-1')!;
+    expect(task.status).toBe('PENDING');
+    expect(task.attemptCount).toBe(0);
+  });
+
+  it('无路由覆盖时使用全局默认 provider，providerProfileId 等于该 profile 的 id', async () => {
+    const defaultProfile = createMockProviderProfile({ id: 'provider-default' });
+    const { deps } = createMockDeps({
+      providerRepo: createFakeProviderRepo({
+        profiles: [defaultProfile],
+        defaultId: defaultProfile.id,
+      }),
+    });
+
+    await executeModelInvocationTest(deps, 'task-1', '测试');
+
+    const createCall = (deps.invocationRepo.create as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(createCall[0].providerProfileId).toBe('provider-default');
+  });
+
+  it('存在任务类型路由覆盖时使用被覆盖的 provider', async () => {
+    const defaultProfile = createMockProviderProfile({ id: 'provider-default' });
+    const routedProfile = createMockProviderProfile({
+      id: 'provider-routed',
+      providerType: 'openai-chat',
+    });
+    const { deps } = createMockDeps({
+      providerRepo: createFakeProviderRepo({
+        profiles: [defaultProfile, routedProfile],
+        defaultId: defaultProfile.id,
+        routes: { MODEL_INVOCATION_TEST: routedProfile.id },
+      }),
+    });
+
+    await executeModelInvocationTest(deps, 'task-1', '测试');
+
+    const createCall = (deps.invocationRepo.create as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(createCall[0].providerProfileId).toBe('provider-routed');
+  });
+
+  it.each(['anthropic-messages', 'openai-chat'] as const)(
+    'protocol 应该正确透传给 invokeModel：%s',
+    async (protocol) => {
+      const profile = createMockProviderProfile({ id: 'provider-protocol', providerType: protocol });
+      const { deps } = createMockDeps({
+        providerRepo: createFakeProviderRepo({ profiles: [profile], defaultId: profile.id }),
+      });
+
+      await executeModelInvocationTest(deps, 'task-1', '测试');
+
+      expect(deps.invokeModel).toHaveBeenCalledWith(
+        expect.objectContaining({ protocol }),
+      );
+    },
+  );
 
   it('provider failure 时应该原子提交失败', async () => {
     const { deps } = createMockDeps({ invokeResult: createMockErrorOutput() });

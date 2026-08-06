@@ -163,13 +163,14 @@ function makeOutput(text: string, errorCode: ErrorCode | null = null): ModelInvo
 function makeProviderProfile(): ProviderProfileData {
   return {
     id: 'provider-1',
-    providerType: 'anthropic-compatible',
+    providerType: 'anthropic-messages',
     displayName: 'Test Provider',
     baseUrl: 'https://example.test/anthropic',
     model: 'test-model',
     keychainService: 'svc',
     keychainAccount: 'acct',
     enabled: true,
+    isDefault: true,
     createdAt: NOW,
     updatedAt: NOW,
     lastTestedAt: null,
@@ -439,8 +440,21 @@ function buildDeps(overrides: Partial<ContractDraftEngineDeps> = {}): ContractDr
     deleteSecret: async () => {},
   };
 
+  // 多 provider 之后端口变宽：只有解析路径需要的方法有行为，其余显式抛错
+  const unusedRepoMethod = (name: string): never => {
+    throw new Error(`providerRepo.${name} 不应在本测试中被调用`);
+  };
   const providerRepo: ProviderProfileRepository = {
     getById: () => state.providerProfile,
+    list: () => (state.providerProfile ? [state.providerProfile] : []),
+    getDefault: () => state.providerProfile,
+    getRoute: () => null,
+    create: () => unusedRepoMethod('create'),
+    update: () => unusedRepoMethod('update'),
+    delete: () => unusedRepoMethod('delete'),
+    setDefault: () => unusedRepoMethod('setDefault'),
+    setRoute: () => unusedRepoMethod('setRoute'),
+    deleteRoute: () => unusedRepoMethod('deleteRoute'),
     updateTestResult: () => {},
   };
 

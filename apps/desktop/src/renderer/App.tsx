@@ -5,6 +5,7 @@ import type {
   OpenProjectResult,
   DataServiceStatus,
   ProviderPublicState,
+  CreateProviderProfileInput,
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
@@ -35,8 +36,8 @@ export function App() {
   // 追踪是否已加载过项目列表
   const hasLoadedProjects = useRef(false);
 
-  // 提供商状态
-  const [providerState, setProviderState] = useState<ProviderPublicState | null>(null);
+  // 模型服务列表
+  const [providers, setProviders] = useState<ReadonlyArray<ProviderPublicState>>([]);
 
   // Grill 工作区焦点管理
   const grillSectionRef = useRef<HTMLElement | null>(null);
@@ -108,13 +109,13 @@ export function App() {
     }
   }, []);
 
-  // 加载提供商状态
-  const loadProviderState = useCallback(async () => {
+  // 加载模型服务列表
+  const loadProviders = useCallback(async () => {
     try {
-      const state = await window.desktop.provider.getState();
-      setProviderState(state);
+      const list = await window.desktop.provider.list();
+      setProviders(list);
     } catch {
-      // 提供商状态加载失败不阻塞
+      // 模型服务列表加载失败不阻塞
     }
   }, []);
 
@@ -126,9 +127,9 @@ export function App() {
 
   useEffect(() => {
     if (dataServiceStatus === 'ready') {
-      void loadProviderState();
+      void loadProviders();
     }
-  }, [dataServiceStatus, loadProviderState]);
+  }, [dataServiceStatus, loadProviders]);
 
   // 创建项目
   const handleCreate = useCallback(
@@ -212,24 +213,45 @@ export function App() {
     }
   }, [shouldFocusCreate, currentProject]);
 
-  // Provider 操作
-  const handleSaveApiKey = useCallback(async (apiKey: string) => {
-    const state = await window.desktop.provider.saveApiKey({ apiKey });
-    setProviderState(state);
+  // 模型服务操作
+  const handleCreateProvider = useCallback(
+    async (input: CreateProviderProfileInput) => {
+      await window.desktop.provider.create(input);
+      await loadProviders();
+    },
+    [loadProviders],
+  );
+
+  const handleSetDefaultProvider = useCallback(async (profileId: string) => {
+    const list = await window.desktop.provider.setDefault({ profileId });
+    setProviders(list);
   }, []);
 
-  const handleDeleteApiKey = useCallback(async () => {
-    const state = await window.desktop.provider.deleteApiKey();
-    setProviderState(state);
+  const handleRemoveProvider = useCallback(async (profileId: string) => {
+    const list = await window.desktop.provider.remove({ profileId });
+    setProviders(list);
   }, []);
 
-  const handleTestConnection = useCallback(async () => {
-    try {
-      await window.desktop.provider.testConnection();
-    } finally {
-      await loadProviderState();
-    }
-  }, [loadProviderState]);
+  const handleSaveApiKey = useCallback(async (profileId: string, apiKey: string) => {
+    const state = await window.desktop.provider.saveApiKey({ profileId, apiKey });
+    setProviders((prev) => prev.map((p) => (p.id === state.id ? state : p)));
+  }, []);
+
+  const handleDeleteApiKey = useCallback(async (profileId: string) => {
+    const state = await window.desktop.provider.deleteApiKey({ profileId });
+    setProviders((prev) => prev.map((p) => (p.id === state.id ? state : p)));
+  }, []);
+
+  const handleTestConnection = useCallback(
+    async (profileId: string) => {
+      try {
+        await window.desktop.provider.testConnection({ profileId });
+      } finally {
+        await loadProviders();
+      }
+    },
+    [loadProviders],
+  );
 
   const isDataServiceReady = dataServiceStatus === 'ready';
   const isDataServiceStarting = dataServiceStatus === 'starting';
@@ -392,8 +414,11 @@ export function App() {
                 <h3 id="provider-heading">模型服务</h3>
                 <RendererErrorBoundary label="模型服务">
                   <ProviderRegion
-                    providerState={providerState}
+                    providers={providers}
                     dataServiceStatus={dataServiceStatus}
+                    onCreate={handleCreateProvider}
+                    onSetDefault={handleSetDefaultProvider}
+                    onRemove={handleRemoveProvider}
                     onSaveApiKey={handleSaveApiKey}
                     onDeleteApiKey={handleDeleteApiKey}
                     onTestConnection={handleTestConnection}

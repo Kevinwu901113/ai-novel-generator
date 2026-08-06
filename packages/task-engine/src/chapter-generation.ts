@@ -17,6 +17,8 @@ import { createHash } from 'node:crypto';
 import { TaskExecutionError } from './index.js';
 import { sha256Hex, type TaskEngineDeps, type TaskExecutionResult } from './index.js';
 import type { NodeExecutionRepositoryPort } from '@ai-novel/application';
+import { resolveProviderForTask, ProviderNotConfiguredError } from '@ai-novel/application';
+import { isProviderProtocol, type ProviderProtocol } from '@ai-novel/contracts';
 
 /** 章节草稿（严格解析 V1） */
 export interface ChapterDraftV1 {
@@ -136,8 +138,19 @@ export async function executeChapterDraft(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
   }
 
-  const profile = providerRepo.getById('mimo-token-plan-cn');
-  if (!profile) throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+  let profile;
+  try {
+    profile = resolveProviderForTask({ providerRepo }, task.taskType);
+  } catch (err) {
+    if (err instanceof ProviderNotConfiguredError) {
+      throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+    }
+    throw err;
+  }
+  if (!isProviderProtocol(profile.providerType)) {
+    throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商协议不合法');
+  }
+  const protocol: ProviderProtocol = profile.providerType;
 
   let apiKey: string | null;
   try {
@@ -176,7 +189,7 @@ export async function executeChapterDraft(
     id: invocationId,
     projectId: task.projectId,
     taskId: task.id,
-    providerProfileId: 'mimo-token-plan-cn',
+    providerProfileId: profile.id,
     model: profile.model,
     attemptNumber: updatedTask.attemptCount,
     requestKind: 'chapter_draft',
@@ -192,6 +205,7 @@ export async function executeChapterDraft(
     model: profile.model,
     apiKey,
     prompt,
+    protocol,
   }).catch(async (err: unknown) => {
     const message = err instanceof Error ? err.message : '模型调用异常';
     transaction(() => {

@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeFakeProviderRepo, makeTestProviderProfile } from './provider-test-fixtures.js';
 import {
   scheduleGrillPlanRun,
   settleGrillPlanRunnerFailure,
@@ -212,25 +213,9 @@ function createRunnerDeps(
           setSecret: async () => {},
           deleteSecret: async () => {},
         },
-        providerRepo: {
-          getById: () => ({
-            id: 'provider-1',
-            providerType: 'anthropic-compatible',
-            displayName: 'Test',
-            baseUrl: 'https://test.example',
-            model: 'test-model',
-            keychainService: 'svc',
-            keychainAccount: 'acct',
-            enabled: true,
-            createdAt: NOW,
-            updatedAt: NOW,
-            lastTestedAt: null,
-            lastTestStatus: null,
-            lastTestErrorCode: null,
-            lastTestLatencyMs: null,
-          }),
-          updateTestResult: () => {},
-        },
+        providerRepo: makeFakeProviderRepo(
+          makeTestProviderProfile({ keychainService: 'svc', keychainAccount: 'acct' }),
+        ),
         idGenerator: { generate: () => `id-${state.invocations.length + 1}` },
         clock: { now: () => NOW },
         sessionRepo: {
@@ -354,7 +339,7 @@ describe('scheduleGrillPlanRun', () => {
         const base = createRunnerDeps(state).buildEngineDeps(createMockProjDb(state));
         return {
           ...base,
-          providerRepo: { getById: () => null, updateTestResult: () => {} },
+          providerRepo: makeFakeProviderRepo(null),
         };
       },
     });

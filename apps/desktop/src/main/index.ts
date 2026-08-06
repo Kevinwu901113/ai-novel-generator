@@ -17,6 +17,9 @@ import {
   isValidCreateProjectInput,
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
+  isValidProviderProfileIdInput,
+  isValidCreateProviderProfileInput,
+  isValidUpdateProviderProfileInput,
   isValidCreateModelInvocationTestInput,
   isValidGrillCreateSessionInput,
   isValidGrillSessionIdInput,
@@ -170,18 +173,90 @@ ipcMain.handle(
   },
 );
 
-// ── 提供商 IPC 处理器 ──────────────────────────────────────────────
+// ── 提供商 IPC 处理器（多 provider；按 profileId 定位）───────────────
 
-ipcMain.handle(IPC_CHANNELS.PROVIDER_GET_STATE, async (): Promise<ProviderPublicState> => {
+ipcMain.handle(IPC_CHANNELS.PROVIDER_LIST, async (): Promise<ReadonlyArray<ProviderPublicState>> => {
   const requestId = crypto.randomUUID();
   const result = await forwardToWorker({
     requestId,
-    command: 'provider.getState',
+    command: 'provider.list',
     payload: null,
   });
 
-  return result as ProviderPublicState;
+  return result as ReadonlyArray<ProviderPublicState>;
 });
+
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_CREATE,
+  async (_event, input: unknown): Promise<ProviderPublicState> => {
+    if (!isValidCreateProviderProfileInput(input)) {
+      throw Object.assign(new Error('无效的创建提供商配置输入'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.create',
+      payload: input,
+    });
+
+    return result as ProviderPublicState;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_UPDATE,
+  async (_event, input: unknown): Promise<ProviderPublicState> => {
+    if (!isValidUpdateProviderProfileInput(input)) {
+      throw Object.assign(new Error('无效的更新提供商配置输入'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.update',
+      payload: input,
+    });
+
+    return result as ProviderPublicState;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_DELETE,
+  async (_event, input: unknown): Promise<ReadonlyArray<ProviderPublicState>> => {
+    if (!isValidProviderProfileIdInput(input)) {
+      throw Object.assign(new Error('无效的提供商配置 ID'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.delete',
+      payload: input,
+    });
+
+    return result as ReadonlyArray<ProviderPublicState>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_SET_DEFAULT,
+  async (_event, input: unknown): Promise<ReadonlyArray<ProviderPublicState>> => {
+    if (!isValidProviderProfileIdInput(input)) {
+      throw Object.assign(new Error('无效的提供商配置 ID'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.setDefault',
+      payload: input,
+    });
+
+    return result as ReadonlyArray<ProviderPublicState>;
+  },
+);
 
 ipcMain.handle(
   IPC_CHANNELS.PROVIDER_SAVE_API_KEY,
@@ -201,27 +276,41 @@ ipcMain.handle(
   },
 );
 
-ipcMain.handle(IPC_CHANNELS.PROVIDER_DELETE_API_KEY, async (): Promise<ProviderPublicState> => {
-  const requestId = crypto.randomUUID();
-  const result = await forwardToWorker({
-    requestId,
-    command: 'provider.deleteApiKey',
-    payload: null,
-  });
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_DELETE_API_KEY,
+  async (_event, input: unknown): Promise<ProviderPublicState> => {
+    if (!isValidProviderProfileIdInput(input)) {
+      throw Object.assign(new Error('无效的提供商配置 ID'), { code: 'VALIDATION_ERROR' });
+    }
 
-  return result as ProviderPublicState;
-});
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.deleteApiKey',
+      payload: input,
+    });
 
-ipcMain.handle(IPC_CHANNELS.PROVIDER_TEST_CONNECTION, async (): Promise<ConnectionTestResult> => {
-  const requestId = crypto.randomUUID();
-  const result = await forwardToWorker({
-    requestId,
-    command: 'provider.testConnection',
-    payload: null,
-  });
+    return result as ProviderPublicState;
+  },
+);
 
-  return result as ConnectionTestResult;
-});
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_TEST_CONNECTION,
+  async (_event, input: unknown): Promise<ConnectionTestResult> => {
+    if (!isValidProviderProfileIdInput(input)) {
+      throw Object.assign(new Error('无效的提供商配置 ID'), { code: 'VALIDATION_ERROR' });
+    }
+
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.testConnection',
+      payload: input,
+    });
+
+    return result as ConnectionTestResult;
+  },
+);
 
 // ── 任务 IPC 处理器 ────────────────────────────────────────────────
 

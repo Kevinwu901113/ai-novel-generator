@@ -9,7 +9,11 @@ const IPC_CHANNELS = {
   PROJECT_CREATE: 'ipc:project-create',
   PROJECT_LIST: 'ipc:project-list',
   PROJECT_OPEN: 'ipc:project-open',
-  PROVIDER_GET_STATE: 'ipc:provider-get-state',
+  PROVIDER_LIST: 'ipc:provider-list',
+  PROVIDER_CREATE: 'ipc:provider-create',
+  PROVIDER_UPDATE: 'ipc:provider-update',
+  PROVIDER_DELETE: 'ipc:provider-delete',
+  PROVIDER_SET_DEFAULT: 'ipc:provider-set-default',
   PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
   PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
   PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
@@ -70,6 +74,9 @@ import type {
   OpenProjectResult,
   DataServiceStatusResponse,
   ProviderPublicState,
+  CreateProviderProfileInput,
+  UpdateProviderProfileInput,
+  ProviderProfileIdInput,
   SaveApiKeyInput,
   ConnectionTestResult,
   CreateModelInvocationTestInput,
@@ -150,20 +157,36 @@ const desktopAPI: DesktopAPI = {
   },
 
   provider: {
-    async getState(): Promise<ProviderPublicState> {
-      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_GET_STATE);
+    async list(): Promise<ReadonlyArray<ProviderPublicState>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_LIST);
+    },
+
+    async create(input: CreateProviderProfileInput): Promise<ProviderPublicState> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_CREATE, input);
+    },
+
+    async update(input: UpdateProviderProfileInput): Promise<ProviderPublicState> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_UPDATE, input);
+    },
+
+    async remove(input: ProviderProfileIdInput): Promise<ReadonlyArray<ProviderPublicState>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_DELETE, input);
+    },
+
+    async setDefault(input: ProviderProfileIdInput): Promise<ReadonlyArray<ProviderPublicState>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_SET_DEFAULT, input);
     },
 
     async saveApiKey(input: SaveApiKeyInput): Promise<ProviderPublicState> {
       return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_SAVE_API_KEY, input);
     },
 
-    async deleteApiKey(): Promise<ProviderPublicState> {
-      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_DELETE_API_KEY);
+    async deleteApiKey(input: ProviderProfileIdInput): Promise<ProviderPublicState> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_DELETE_API_KEY, input);
     },
 
-    async testConnection(): Promise<ConnectionTestResult> {
-      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_TEST_CONNECTION);
+    async testConnection(input: ProviderProfileIdInput): Promise<ConnectionTestResult> {
+      return ipcRenderer.invoke(IPC_CHANNELS.PROVIDER_TEST_CONNECTION, input);
     },
   },
 

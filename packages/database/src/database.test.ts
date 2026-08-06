@@ -385,7 +385,7 @@ describe('ProviderProfileRepository', () => {
 
     const profile = repo.getById('mimo-token-plan-cn');
     expect(profile).not.toBeNull();
-    expect(profile!.providerType).toBe('anthropic-compatible');
+    expect(profile!.providerType).toBe('anthropic-messages');
     expect(profile!.displayName).toBe('Xiaomi MiMo Token Plan CN');
     expect(profile!.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
     expect(profile!.model).toBe('mimo-v2.5-pro');
@@ -410,7 +410,7 @@ describe('ProviderProfileRepository', () => {
     const repo2 = appDb2.getProviderProfileRepository();
     const profile = repo2.getById('mimo-token-plan-cn');
     expect(profile).not.toBeNull();
-    expect(profile!.providerType).toBe('anthropic-compatible');
+    expect(profile!.providerType).toBe('anthropic-messages');
 
     appDb2.close();
   });
@@ -558,10 +558,10 @@ describe('Migration 4: provider_profiles CHECK 约束', () => {
     const appDb = new AppDatabase(dbPath);
     const repo = appDb.getProviderProfileRepository();
 
-    // 固定 profile 应该存在且有正确的约束
+    // 固定 profile 应该存在且有正确的约束（迁移链已推进到 v5，协议标识为 anthropic-messages）
     const profile = repo.getById('mimo-token-plan-cn');
     expect(profile).not.toBeNull();
-    expect(profile!.providerType).toBe('anthropic-compatible');
+    expect(profile!.providerType).toBe('anthropic-messages');
 
     appDb.close();
   });
@@ -764,8 +764,12 @@ describe('Migration 4: provider_profiles CHECK 约束', () => {
   });
 });
 
-describe('固定 Profile 完整性', () => {
-  it('URL 被修改后应该被修复', () => {
+describe('固定 Profile 只播种一次（不覆盖已存在行，D6 多 provider 语义）', () => {
+  // Migration 5 起 ensureFixedProviderProfile 改为 ON CONFLICT(id) DO NOTHING：
+  // 固定 profile 只在不存在时插入，一旦存在（无论是首次播种还是用户改动），
+  // 重新打开数据库都不会再覆盖任何字段。
+
+  it('URL 被直接修改后重新打开不应被覆盖', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
 
@@ -777,15 +781,15 @@ describe('固定 Profile 完整性', () => {
     db.close();
     appDb1.close();
 
-    // 重新打开，应该修复 URL
+    // 重新打开，不应该覆盖已修改的 URL
     const appDb2 = new AppDatabase(dbPath);
     const repo = appDb2.getProviderProfileRepository();
     const profile = repo.getById('mimo-token-plan-cn');
-    expect(profile!.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
+    expect(profile!.baseUrl).toBe('https://evil.com');
     appDb2.close();
   });
 
-  it('model 被修改后应该被修复', () => {
+  it('model 被直接修改后重新打开不应被覆盖', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
 
@@ -799,11 +803,11 @@ describe('固定 Profile 完整性', () => {
     const appDb2 = new AppDatabase(dbPath);
     const repo = appDb2.getProviderProfileRepository();
     const profile = repo.getById('mimo-token-plan-cn');
-    expect(profile!.model).toBe('mimo-v2.5-pro');
+    expect(profile!.model).toBe('gpt-4');
     appDb2.close();
   });
 
-  it('keychain_service 被修改后应该被修复', () => {
+  it('keychain_service 被直接修改后重新打开不应被覆盖', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
 
@@ -817,11 +821,11 @@ describe('固定 Profile 完整性', () => {
     const appDb2 = new AppDatabase(dbPath);
     const repo = appDb2.getProviderProfileRepository();
     const profile = repo.getById('mimo-token-plan-cn');
-    expect(profile!.keychainService).toBe('com.ai-novel-generator.provider.mimo-token-plan-cn');
+    expect(profile!.keychainService).toBe('wrong-service');
     appDb2.close();
   });
 
-  it('keychain_account 被修改后应该被修复', () => {
+  it('keychain_account 被直接修改后重新打开不应被覆盖', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
 
@@ -835,11 +839,11 @@ describe('固定 Profile 完整性', () => {
     const appDb2 = new AppDatabase(dbPath);
     const repo = appDb2.getProviderProfileRepository();
     const profile = repo.getById('mimo-token-plan-cn');
-    expect(profile!.keychainAccount).toBe('api-key');
+    expect(profile!.keychainAccount).toBe('wrong-account');
     appDb2.close();
   });
 
-  it('修复后测试状态应该保留', () => {
+  it('直接修改字段与测试状态应同时保留', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
     const repo1 = appDb1.getProviderProfileRepository();
@@ -852,7 +856,7 @@ describe('固定 Profile 完整性', () => {
       lastTestLatencyMs: 150,
     });
 
-    // 同时修改 URL（触发修复）
+    // 同时直接修改 URL
     const db = new DatabaseSync(dbPath);
     db.prepare("UPDATE provider_profiles SET base_url = 'https://evil.com' WHERE id = ?").run(
       'mimo-token-plan-cn',
@@ -865,8 +869,8 @@ describe('固定 Profile 完整性', () => {
     const repo2 = appDb2.getProviderProfileRepository();
     const profile = repo2.getById('mimo-token-plan-cn');
 
-    // URL 应该被修复
-    expect(profile!.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
+    // URL 修改应该保留（不被覆盖）
+    expect(profile!.baseUrl).toBe('https://evil.com');
     // 测试状态应该保留
     expect(profile!.lastTestedAt).toBe('2024-06-15T12:00:00.000Z');
     expect(profile!.lastTestStatus).toBe('success');
@@ -875,7 +879,7 @@ describe('固定 Profile 完整性', () => {
     appDb2.close();
   });
 
-  it('enabled 不应该被修复覆盖', () => {
+  it('enabled 不应该被覆盖', () => {
     const dbPath = join(tempDir, 'app.sqlite');
     const appDb1 = new AppDatabase(dbPath);
 
@@ -889,14 +893,42 @@ describe('固定 Profile 完整性', () => {
     const appDb2 = new AppDatabase(dbPath);
     const repo = appDb2.getProviderProfileRepository();
     const profile = repo.getById('mimo-token-plan-cn');
-    expect(profile!.enabled).toBe(false); // 不被修复覆盖
+    expect(profile!.enabled).toBe(false); // 不被覆盖
+    appDb2.close();
+  });
+
+  it('ensureFixedProviderProfile 幂等且不覆盖用户通过 repo.update 所做的改动', () => {
+    const dbPath = join(tempDir, 'app.sqlite');
+
+    const appDb1 = new AppDatabase(dbPath);
+    const repo1 = appDb1.getProviderProfileRepository();
+    const fixed = repo1.getById('mimo-token-plan-cn')!;
+
+    // 用户通过仓库方法改名、改模型（而非直接改 SQL）
+    repo1.update({
+      id: fixed.id,
+      providerType: fixed.providerType,
+      displayName: '我的 MiMo（改名）',
+      baseUrl: fixed.baseUrl,
+      model: 'mimo-v3-custom',
+      enabled: fixed.enabled,
+      updatedAt: '2024-07-01T00:00:00.000Z',
+    });
+    appDb1.close();
+
+    // 重新打开同一文件路径，ensureFixedProviderProfile 应该是幂等的，不覆盖用户改动
+    const appDb2 = new AppDatabase(dbPath);
+    const repo2 = appDb2.getProviderProfileRepository();
+    const profile = repo2.getById('mimo-token-plan-cn');
+    expect(profile!.displayName).toBe('我的 MiMo（改名）');
+    expect(profile!.model).toBe('mimo-v3-custom');
     appDb2.close();
   });
 
   it('FIXED_PROVIDER_PROFILE 应该包含所有固定字段', async () => {
     const { FIXED_PROVIDER_PROFILE } = await import('./app-database.js');
     expect(FIXED_PROVIDER_PROFILE.id).toBe('mimo-token-plan-cn');
-    expect(FIXED_PROVIDER_PROFILE.providerType).toBe('anthropic-compatible');
+    expect(FIXED_PROVIDER_PROFILE.providerType).toBe('anthropic-messages');
     expect(FIXED_PROVIDER_PROFILE.displayName).toBe('Xiaomi MiMo Token Plan CN');
     expect(FIXED_PROVIDER_PROFILE.baseUrl).toBe('https://token-plan-cn.xiaomimimo.com/anthropic');
     expect(FIXED_PROVIDER_PROFILE.model).toBe('mimo-v2.5-pro');
@@ -904,5 +936,202 @@ describe('固定 Profile 完整性', () => {
       'com.ai-novel-generator.provider.mimo-token-plan-cn',
     );
     expect(FIXED_PROVIDER_PROFILE.keychainAccount).toBe('api-key');
+  });
+});
+
+describe('Migration 5: 多 provider 最小形态（D6）', () => {
+  /** 创建一个只有 v1-v4 迁移的数据库（模拟旧版 v4，provider_type CHECK 仅允许 anthropic-compatible） */
+  function createV4Database(dbPath: string): void {
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        initial_idea TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'idea',
+        project_directory TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_opened_at TEXT
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS project_creations (
+        project_id TEXT PRIMARY KEY,
+        temp_directory_name TEXT NOT NULL,
+        final_directory_name TEXT NOT NULL,
+        phase TEXT NOT NULL DEFAULT 'preparing',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      ) STRICT;
+
+      CREATE TABLE IF NOT EXISTS provider_profiles (
+        id TEXT PRIMARY KEY,
+        provider_type TEXT NOT NULL CHECK (provider_type = 'anthropic-compatible'),
+        display_name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        model TEXT NOT NULL,
+        keychain_service TEXT NOT NULL,
+        keychain_account TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_tested_at TEXT,
+        last_test_status TEXT CHECK (last_test_status IS NULL OR last_test_status IN ('never', 'success', 'failed')),
+        last_test_error_code TEXT,
+        last_test_latency_ms INTEGER CHECK (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+      ) STRICT;
+    `);
+
+    for (const version of [1, 2, 3, 4]) {
+      db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(
+        version,
+        new Date().toISOString(),
+      );
+    }
+
+    // 手动插入一条旧版 MiMo 行（v4 语义：provider_type 恒为 anthropic-compatible）
+    db.prepare(
+      `INSERT INTO provider_profiles
+         (id, provider_type, display_name, base_url, model,
+          keychain_service, keychain_account, enabled,
+          created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'mimo-token-plan-cn',
+      'anthropic-compatible',
+      'Xiaomi MiMo Token Plan CN',
+      'https://token-plan-cn.xiaomimimo.com/anthropic',
+      'mimo-v2.5-pro',
+      'com.ai-novel-generator.provider.mimo-token-plan-cn',
+      'api-key',
+      1,
+      '2024-01-01T00:00:00.000Z',
+      '2024-01-01T00:00:00.000Z',
+    );
+
+    db.close();
+  }
+
+  it('v4 数据库升级到 v5：provider_type 重写为 anthropic-messages，keychain 槽位不变，且被设为默认', () => {
+    const dbPath = join(tempDir, 'app.sqlite');
+    createV4Database(dbPath);
+
+    const appDb = new AppDatabase(dbPath);
+    const repo = appDb.getProviderProfileRepository();
+    const profile = repo.getById('mimo-token-plan-cn');
+
+    expect(profile).not.toBeNull();
+    expect(profile!.providerType).toBe('anthropic-messages');
+    expect(profile!.keychainService).toBe('com.ai-novel-generator.provider.mimo-token-plan-cn');
+    expect(profile!.keychainAccount).toBe('api-key');
+    // 迁移后无默认时，取创建时间最早的一条（即这条既有 MiMo 行）设为默认
+    expect(profile!.isDefault).toBe(true);
+
+    appDb.close();
+  });
+
+  it('setDefault 应该原子地保证至多一个默认 provider', () => {
+    const dbPath = join(tempDir, 'app.sqlite');
+    const appDb = new AppDatabase(dbPath);
+    const repo = appDb.getProviderProfileRepository();
+    const now = '2024-08-01T00:00:00.000Z';
+
+    repo.create({
+      id: 'profile-a',
+      providerType: 'anthropic-messages',
+      displayName: 'Profile A',
+      baseUrl: 'https://a.example.com',
+      model: 'model-a',
+      keychainService: 'svc-a',
+      keychainAccount: 'acct-a',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    repo.create({
+      id: 'profile-b',
+      providerType: 'openai-chat',
+      displayName: 'Profile B',
+      baseUrl: 'https://b.example.com',
+      model: 'model-b',
+      keychainService: 'svc-b',
+      keychainAccount: 'acct-b',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    expect(repo.setDefault('profile-a')).toBe(true);
+    expect(repo.getById('profile-a')!.isDefault).toBe(true);
+    expect(repo.getById('profile-b')!.isDefault).toBe(false);
+
+    expect(repo.setDefault('profile-b')).toBe(true);
+    expect(repo.getById('profile-a')!.isDefault).toBe(false);
+    expect(repo.getById('profile-b')!.isDefault).toBe(true);
+
+    // 不存在的 id：返回 false，原默认不变
+    expect(repo.setDefault('does-not-exist')).toBe(false);
+    expect(repo.getById('profile-a')!.isDefault).toBe(false);
+    expect(repo.getById('profile-b')!.isDefault).toBe(true);
+
+    appDb.close();
+  });
+
+  it('create/update/delete 往返：update 不改 keychain，delete 级联清理路由', () => {
+    const dbPath = join(tempDir, 'app.sqlite');
+    const appDb = new AppDatabase(dbPath);
+    const repo = appDb.getProviderProfileRepository();
+    const now = '2024-08-01T00:00:00.000Z';
+
+    repo.create({
+      id: 'profile-c',
+      providerType: 'anthropic-messages',
+      displayName: 'Profile C',
+      baseUrl: 'https://c.example.com',
+      model: 'model-c',
+      keychainService: 'svc-c',
+      keychainAccount: 'acct-c',
+      enabled: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    repo.update({
+      id: 'profile-c',
+      providerType: 'openai-chat',
+      displayName: 'Profile C 改名',
+      baseUrl: 'https://c2.example.com',
+      model: 'model-c2',
+      enabled: false,
+      updatedAt: '2024-08-02T00:00:00.000Z',
+    });
+
+    const updated = repo.getById('profile-c');
+    expect(updated!.providerType).toBe('openai-chat');
+    expect(updated!.displayName).toBe('Profile C 改名');
+    expect(updated!.baseUrl).toBe('https://c2.example.com');
+    expect(updated!.model).toBe('model-c2');
+    expect(updated!.enabled).toBe(false);
+    // keychain 槽位不受 update 影响
+    expect(updated!.keychainService).toBe('svc-c');
+    expect(updated!.keychainAccount).toBe('acct-c');
+
+    repo.setRoute('CHAPTER_DRAFT', 'profile-c', '2024-08-02T00:00:00.000Z');
+    expect(repo.getRoute('CHAPTER_DRAFT')).toBe('profile-c');
+
+    const deleted = repo.delete('profile-c');
+    expect(deleted).toBe(true);
+    expect(repo.getById('profile-c')).toBeNull();
+    expect(repo.getRoute('CHAPTER_DRAFT')).toBeNull();
+
+    // 再次删除应返回 false
+    expect(repo.delete('profile-c')).toBe(false);
+
+    appDb.close();
   });
 });

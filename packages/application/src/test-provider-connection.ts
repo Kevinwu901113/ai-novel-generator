@@ -1,12 +1,13 @@
 /**
  * TestProviderConnection 用例。
  *
- * 从 Keychain 临时读取 API Key，调用 Model Gateway 测试连接，
- * 保存测试结果，返回清理后的结果。
- * 无论成功失败，都确保不把 Key 留在长期状态。
+ * 按 profileId 定位 provider profile，从其 Keychain 槽位临时读取 API Key，
+ * 调用 Model Gateway（按该 profile 的协议）测试连接，保存测试结果，
+ * 返回清理后的结果。无论成功失败，都确保不把 Key 留在长期状态。
  */
 
-import type { ConnectionTestResult } from '@ai-novel/contracts';
+import type { ConnectionTestResult, ProviderProtocol } from '@ai-novel/contracts';
+import { isProviderProtocol } from '@ai-novel/contracts';
 import type { SecretStore, ProviderProfileRepository, Clock } from './types.js';
 import {
   ApiKeyRequiredError,
@@ -14,15 +15,17 @@ import {
   ProviderNotConfiguredError,
 } from './errors.js';
 
-/** 固定 MiMo profile ID */
-const FIXED_PROVIDER_ID = 'mimo-token-plan-cn';
-
 /** TestProviderConnection 用例依赖 */
 export interface TestProviderConnectionDeps {
   readonly providerRepo: ProviderProfileRepository;
   readonly secretStore: SecretStore;
   readonly clock: Clock;
-  readonly testConnection: (input: { baseUrl: string; model: string; apiKey: string }) => Promise<{
+  readonly testConnection: (input: {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    protocol: ProviderProtocol;
+  }) => Promise<{
     success: boolean;
     latencyMs: number;
     errorCode: string | null;
@@ -33,26 +36,31 @@ export interface TestProviderConnectionDeps {
 /**
  * 测试提供商连接。
  *
- * 1. 获取固定 profile
- * 2. 从 Keychain 临时读取 API Key
+ * 1. 按 profileId 获取 profile
+ * 2. 从其 Keychain 槽位临时读取 API Key
  * 3. 缺少 Key → throw API_KEY_REQUIRED
- * 4. 调用 model gateway
+ * 4. 调用 model gateway（传入该 profile 的协议）
  * 5. 保存测试结果到 repo
  * 6. 不保存上游完整响应
  * 7. 返回清理后的 ConnectionTestResult
  */
 export async function testProviderConnection(
   deps: TestProviderConnectionDeps,
+  profileId: string,
 ): Promise<ConnectionTestResult> {
   const { providerRepo, secretStore, clock, testConnection: doTest } = deps;
 
-  // 1. 获取固定 profile
-  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
+  // 1. 按 profileId 获取 profile
+  const profile = providerRepo.getById(profileId);
   if (!profile) {
     throw new ProviderNotConfiguredError();
   }
+  if (!isProviderProtocol(profile.providerType)) {
+    throw new ProviderNotConfiguredError();
+  }
+  const protocol = profile.providerType;
 
-  // 2. 从 Keychain 临时读取 API Key
+  // 2. 从该 profile 独立的 Keychain 槽位临时读取 API Key
   let apiKey: string | null;
   try {
     apiKey = await secretStore.getSecret(profile.keychainService, profile.keychainAccount);
@@ -79,11 +87,12 @@ export async function testProviderConnection(
       baseUrl: profile.baseUrl,
       model: profile.model,
       apiKey,
+      protocol,
     });
   } catch {
     // 确保异常也被记录
     const now = clock.now();
-    providerRepo.updateTestResult(FIXED_PROVIDER_ID, {
+    providerRepo.updateTestResult(profileId, {
       lastTestedAt: now,
       lastTestStatus: 'failed',
       lastTestErrorCode: 'PROVIDER_CONNECTION_FAILED',
@@ -97,7 +106,7 @@ export async function testProviderConnection(
 
   // 5. 保存测试结果到 repo
   const now = clock.now();
-  providerRepo.updateTestResult(FIXED_PROVIDER_ID, {
+  providerRepo.updateTestResult(profileId, {
     lastTestedAt: now,
     lastTestStatus: result.success ? 'success' : 'failed',
     lastTestErrorCode: result.errorCode,

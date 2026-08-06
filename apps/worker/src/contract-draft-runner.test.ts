@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { makeFakeProviderRepo, makeTestProviderProfile } from './provider-test-fixtures.js';
 import {
   scheduleContractDraftRun,
   settleContractDraftRunnerFailure,
@@ -242,25 +243,9 @@ function createContractEngineDeps(state: MockState): ContractDraftEngineDeps {
       setSecret: async () => {},
       deleteSecret: async () => {},
     },
-    providerRepo: {
-      getById: () => ({
-        id: 'provider-1',
-        providerType: 'anthropic-compatible',
-        displayName: 'Test',
-        baseUrl: 'https://test.example',
-        model: 'test-model',
-        keychainService: 'svc',
-        keychainAccount: 'acct',
-        enabled: true,
-        createdAt: NOW,
-        updatedAt: NOW,
-        lastTestedAt: null,
-        lastTestStatus: null,
-        lastTestErrorCode: null,
-        lastTestLatencyMs: null,
-      }),
-      updateTestResult: () => {},
-    },
+    providerRepo: makeFakeProviderRepo(
+      makeTestProviderProfile({ keychainService: 'svc', keychainAccount: 'acct' }),
+    ),
     idGenerator: { generate: () => `gen-${state.invocations.length + 1}` },
     clock: { now: () => NOW },
     sessionRepo: {

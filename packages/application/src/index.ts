@@ -78,11 +78,22 @@ export type { ListProjectsDeps, ProjectListItem } from './list-projects.js';
 export { openProject } from './open-project.js';
 export type { OpenProjectDeps, OpenProjectInput } from './open-project.js';
 
-export { getProviderState } from './get-provider-state.js';
-export type { GetProviderStateDeps } from './get-provider-state.js';
+export {
+  toProviderPublicState,
+  listProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider,
+  setDefaultProvider,
+  resolveProviderForTask,
+} from './provider-profiles.js';
+export type { ProviderProfileDeps } from './provider-profiles.js';
+
+export { secretRefForProfile, isValidProviderProfileId } from './provider-secret-ref.js';
+export type { ProviderSecretRef } from './provider-secret-ref.js';
 
 export { saveProviderApiKey } from './save-provider-api-key.js';
-export type { SaveProviderApiKeyDeps, SaveProviderApiKeyInput } from './save-provider-api-key.js';
+export type { SaveProviderApiKeyDeps } from './save-provider-api-key.js';
 
 export { deleteProviderApiKey } from './delete-provider-api-key.js';
 export type { DeleteProviderApiKeyDeps } from './delete-provider-api-key.js';

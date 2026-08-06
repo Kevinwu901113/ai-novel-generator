@@ -16,6 +16,10 @@ import {
   isValidGrillAcceptQuestionPlanProposalInput,
   isValidGrillListQuestionPlanProposalsInput,
   isValidGrillQuestionPlanProposalIdInput,
+  isProviderProtocol,
+  isValidCreateProviderProfileInput,
+  isValidUpdateProviderProfileInput,
+  isValidProviderProfileIdInput,
   type HealthCheckResponse,
   type ProviderPublicState,
   type ConnectionTestResult,
@@ -202,7 +206,9 @@ describe('isAppError', () => {
 
 describe('isValidSaveApiKeyInput', () => {
   it('应该接受有效输入', () => {
-    expect(isValidSaveApiKeyInput({ apiKey: 'test-secret-not-a-real-key' })).toBe(true);
+    expect(
+      isValidSaveApiKeyInput({ profileId: 'mimo-token-plan-cn', apiKey: 'test-secret-not-a-real-key' }),
+    ).toBe(true);
   });
 
   it('应该拒绝 null', () => {
@@ -214,22 +220,27 @@ describe('isValidSaveApiKeyInput', () => {
   });
 
   it('应该拒绝缺少 apiKey 的对象', () => {
-    expect(isValidSaveApiKeyInput({})).toBe(false);
+    expect(isValidSaveApiKeyInput({ profileId: 'mimo-token-plan-cn' })).toBe(false);
+  });
+
+  it('应该拒绝缺少 profileId 的对象', () => {
+    expect(isValidSaveApiKeyInput({ apiKey: 'test-secret-not-a-real-key' })).toBe(false);
   });
 
   it('应该拒绝 apiKey 类型错误', () => {
-    expect(isValidSaveApiKeyInput({ apiKey: 123 })).toBe(false);
+    expect(isValidSaveApiKeyInput({ profileId: 'mimo-token-plan-cn', apiKey: 123 })).toBe(false);
   });
 });
 
 describe('isValidProviderPublicState', () => {
   const validState: ProviderPublicState = {
     id: 'mimo-token-plan-cn',
-    displayName: 'Xiaomi MiMo Token Plan CN',
-    providerType: 'anthropic-compatible',
+    label: 'Xiaomi MiMo Token Plan CN',
+    protocol: 'anthropic-messages',
     baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
     model: 'mimo-v2.5-pro',
     enabled: true,
+    isDefault: true,
     hasApiKey: false,
     lastTestedAt: null,
     lastTestStatus: 'never',
@@ -274,12 +285,29 @@ describe('isValidProviderPublicState', () => {
     expect(isValidProviderPublicState({ ...validState, id: undefined })).toBe(false);
   });
 
-  it('应该拒绝无效的 providerType', () => {
-    expect(isValidProviderPublicState({ ...validState, providerType: 'openai' })).toBe(false);
+  it('应该拒绝无效的 protocol', () => {
+    expect(isValidProviderPublicState({ ...validState, protocol: 'openai' })).toBe(false);
   });
 
   it('应该拒绝无效的 lastTestStatus', () => {
     expect(isValidProviderPublicState({ ...validState, lastTestStatus: 'unknown' })).toBe(false);
+  });
+
+  it('应该拒绝旧形态（displayName/providerType）', () => {
+    const legacy = {
+      id: 'mimo-token-plan-cn',
+      displayName: 'Xiaomi MiMo Token Plan CN',
+      providerType: 'anthropic-compatible',
+      baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+      model: 'mimo-v2.5-pro',
+      enabled: true,
+      hasApiKey: false,
+      lastTestedAt: null,
+      lastTestStatus: 'never',
+      lastTestErrorCode: null,
+      lastTestLatencyMs: null,
+    };
+    expect(isValidProviderPublicState(legacy)).toBe(false);
   });
 
   it('公开状态不应包含 secret 字段', () => {
@@ -291,6 +319,113 @@ describe('isValidProviderPublicState', () => {
     for (const key of keys) {
       expect(key).not.toMatch(secretPatterns);
     }
+  });
+});
+
+describe('isProviderProtocol', () => {
+  it('应该接受合法协议值', () => {
+    expect(isProviderProtocol('anthropic-messages')).toBe(true);
+    expect(isProviderProtocol('openai-chat')).toBe(true);
+  });
+
+  it('应该拒绝旧值 anthropic-compatible', () => {
+    expect(isProviderProtocol('anthropic-compatible')).toBe(false);
+  });
+
+  it('应该拒绝其它非法值', () => {
+    expect(isProviderProtocol('openai')).toBe(false);
+    expect(isProviderProtocol('')).toBe(false);
+    expect(isProviderProtocol(null)).toBe(false);
+    expect(isProviderProtocol(undefined)).toBe(false);
+    expect(isProviderProtocol(123)).toBe(false);
+  });
+});
+
+describe('isValidCreateProviderProfileInput', () => {
+  const validInput = {
+    label: 'Xiaomi MiMo Token Plan CN',
+    protocol: 'anthropic-messages',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+    model: 'mimo-v2.5-pro',
+  };
+
+  it('应该接受合法输入', () => {
+    expect(isValidCreateProviderProfileInput(validInput)).toBe(true);
+  });
+
+  it('应该拒绝 null / 非对象', () => {
+    expect(isValidCreateProviderProfileInput(null)).toBe(false);
+    expect(isValidCreateProviderProfileInput('string')).toBe(false);
+  });
+
+  it('应该拒绝空 label', () => {
+    expect(isValidCreateProviderProfileInput({ ...validInput, label: '' })).toBe(false);
+  });
+
+  it('应该拒绝纯空白 label', () => {
+    expect(isValidCreateProviderProfileInput({ ...validInput, label: '   ' })).toBe(false);
+  });
+
+  it('应该拒绝非法协议值', () => {
+    expect(isValidCreateProviderProfileInput({ ...validInput, protocol: 'openai' })).toBe(false);
+  });
+
+  it('应该拒绝非 http(s) 的 baseUrl', () => {
+    expect(
+      isValidCreateProviderProfileInput({ ...validInput, baseUrl: 'ftp://example.com' }),
+    ).toBe(false);
+  });
+
+  it('应该拒绝含空白字符的 baseUrl', () => {
+    expect(
+      isValidCreateProviderProfileInput({
+        ...validInput,
+        baseUrl: 'https://example.com/ path',
+      }),
+    ).toBe(false);
+  });
+
+  it('应该拒绝空 model', () => {
+    expect(isValidCreateProviderProfileInput({ ...validInput, model: '' })).toBe(false);
+  });
+});
+
+describe('isValidUpdateProviderProfileInput', () => {
+  const validInput = {
+    profileId: 'mimo-token-plan-cn',
+    label: 'Xiaomi MiMo Token Plan CN',
+    protocol: 'anthropic-messages',
+    baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
+    model: 'mimo-v2.5-pro',
+    enabled: true,
+  };
+
+  it('应该接受合法输入', () => {
+    expect(isValidUpdateProviderProfileInput(validInput)).toBe(true);
+  });
+
+  it('应该拒绝缺少 profileId 的对象', () => {
+    const { profileId: _profileId, ...rest } = validInput;
+    expect(isValidUpdateProviderProfileInput(rest)).toBe(false);
+  });
+
+  it('应该拒绝 enabled 非布尔值', () => {
+    expect(isValidUpdateProviderProfileInput({ ...validInput, enabled: 'true' })).toBe(false);
+  });
+});
+
+describe('isValidProviderProfileIdInput', () => {
+  it('应该接受合法输入', () => {
+    expect(isValidProviderProfileIdInput({ profileId: 'mimo-token-plan-cn' })).toBe(true);
+  });
+
+  it('应该拒绝空字符串 profileId', () => {
+    expect(isValidProviderProfileIdInput({ profileId: '' })).toBe(false);
+  });
+
+  it('应该拒绝 null / 非对象', () => {
+    expect(isValidProviderProfileIdInput(null)).toBe(false);
+    expect(isValidProviderProfileIdInput('string')).toBe(false);
   });
 });
 

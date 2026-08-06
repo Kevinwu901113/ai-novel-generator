@@ -130,6 +130,7 @@ export interface ProviderProfileRow {
   readonly keychainService: string;
   readonly keychainAccount: string;
   readonly enabled: boolean;
+  readonly isDefault: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly lastTestedAt: string | null;
@@ -138,16 +139,49 @@ export interface ProviderProfileRow {
   readonly lastTestLatencyMs: number | null;
 }
 
+/** 创建提供商配置数据 */
+export interface CreateProviderProfileData {
+  readonly id: string;
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly keychainService: string;
+  readonly keychainAccount: string;
+  readonly enabled: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 更新提供商配置数据（不含 keychain 槽位与 is_default，需通过专用方法变更） */
+export interface UpdateProviderProfileData {
+  readonly id: string;
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly enabled: boolean;
+  readonly updatedAt: string;
+}
+
 /** 提供商配置仓库 */
 export interface ProviderProfileRepository {
   getById(id: string): ProviderProfileRow | null;
   list(): ReadonlyArray<ProviderProfileRow>;
-  upsert(
-    data: Omit<
-      ProviderProfileRow,
-      'lastTestedAt' | 'lastTestStatus' | 'lastTestErrorCode' | 'lastTestLatencyMs'
-    >,
-  ): void;
+  /** 获取当前全局默认 provider（D6 路由第一层），无则 null */
+  getDefault(): ProviderProfileRow | null;
+  create(data: CreateProviderProfileData): void;
+  update(data: UpdateProviderProfileData): void;
+  /** 删除 profile 及其路由覆盖，返回是否确有删除 */
+  delete(id: string): boolean;
+  /** 原子设置全局默认 provider；id 不存在返回 false，原默认不变 */
+  setDefault(id: string): boolean;
+  /** 获取任务类型的路由覆盖（D6 路由第二层），无则 null */
+  getRoute(taskType: string): string | null;
+  /** 设置/更新任务类型的路由覆盖 */
+  setRoute(taskType: string, profileId: string, updatedAt: string): void;
+  /** 删除任务类型的路由覆盖 */
+  deleteRoute(taskType: string): void;
   updateTestResult(
     id: string,
     result: {

@@ -119,14 +119,25 @@ const mockStats: TaskStatsPublicData = {
 };
 
 const mockProviderState: ProviderPublicState = {
-  displayName: 'OpenAI',
+  id: 'provider-1',
+  label: 'OpenAI',
+  protocol: 'openai-chat',
+  baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4',
-  providerType: 'openai',
+  enabled: true,
+  isDefault: true,
   hasApiKey: true,
   lastTestStatus: 'never',
   lastTestErrorCode: null,
   lastTestedAt: null,
   lastTestLatencyMs: null,
+};
+
+/** ProviderRegion 组件级测试的通用无操作回调（新增/设默认/删除服务本身不在这些用例的验证范围内） */
+const noopProviderListHandlers = {
+  onCreate: async () => {},
+  onSetDefault: async () => {},
+  onRemove: async () => {},
 };
 
 const mockProjectId = 'proj-00000001';
@@ -168,10 +179,19 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       createModelInvocationTest: vi.fn(),
     },
     provider: {
-      getState: vi.fn().mockResolvedValue(mockProviderState),
+      list: vi.fn().mockResolvedValue([mockProviderState]),
+      create: vi.fn().mockResolvedValue(mockProviderState),
+      update: vi.fn().mockResolvedValue(mockProviderState),
+      remove: vi.fn().mockResolvedValue([]),
+      setDefault: vi.fn().mockResolvedValue([mockProviderState]),
       saveApiKey: vi.fn().mockResolvedValue({ ...mockProviderState, hasApiKey: true }),
       deleteApiKey: vi.fn().mockResolvedValue({ ...mockProviderState, hasApiKey: false }),
-      testConnection: vi.fn().mockResolvedValue(undefined),
+      testConnection: vi.fn().mockResolvedValue({
+        success: true,
+        latencyMs: 10,
+        errorCode: null,
+        errorMessage: null,
+      }),
     },
     ...overrides,
   } as unknown as DesktopAPI;
@@ -973,8 +993,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('API Key 有 label', () => {
     render(
       <ProviderRegion
-        providerState={{ ...mockProviderState, hasApiKey: false }}
+        providers={[{ ...mockProviderState, hasApiKey: false }]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -989,8 +1010,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('API Key 不出现在 aria 属性', () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1012,8 +1034,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('删除确认获得焦点', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1035,8 +1058,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('Escape 取消删除确认', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1065,8 +1089,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('Escape 取消后焦点恢复到删除按钮', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1100,8 +1125,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('点击取消后焦点恢复到删除按钮', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1138,8 +1164,9 @@ describe('五、Provider 焦点与键盘行为', () => {
     const onDelete = vi.fn().mockResolvedValue(undefined);
     const { rerender } = render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={onDelete}
         onTestConnection={async () => {}}
@@ -1165,8 +1192,9 @@ describe('五、Provider 焦点与键盘行为', () => {
     await act(async () => {
       rerender(
         <ProviderRegion
-          providerState={{ ...mockProviderState, hasApiKey: false }}
+          providers={[{ ...mockProviderState, hasApiKey: false }]}
           dataServiceStatus="ready"
+          {...noopProviderListHandlers}
           onSaveApiKey={async () => {}}
           onDeleteApiKey={onDelete}
           onTestConnection={async () => {}}
@@ -1185,8 +1213,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('删除失败后焦点不移动到 API Key 输入', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {
           throw new Error('删除失败');
@@ -1224,8 +1253,9 @@ describe('五、Provider 焦点与键盘行为', () => {
   it('错误 role=alert', async () => {
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {
@@ -1251,8 +1281,9 @@ describe('五、Provider 焦点与键盘行为', () => {
     const deferred = createDeferred<void>();
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={() => deferred.promise}
@@ -1540,8 +1571,9 @@ describe('八、App-level 债务测试', () => {
 
     render(
       <ProviderRegion
-        providerState={mockProviderState}
+        providers={[mockProviderState]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={onTestConnection}
@@ -1563,8 +1595,9 @@ describe('八、App-level 债务测试', () => {
   it('provider 状态变化后重新渲染', async () => {
     const { rerender } = render(
       <ProviderRegion
-        providerState={{ ...mockProviderState, hasApiKey: false }}
+        providers={[{ ...mockProviderState, hasApiKey: false }]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}
@@ -1575,8 +1608,9 @@ describe('八、App-level 债务测试', () => {
 
     rerender(
       <ProviderRegion
-        providerState={{ ...mockProviderState, hasApiKey: true }}
+        providers={[{ ...mockProviderState, hasApiKey: true }]}
         dataServiceStatus="ready"
+        {...noopProviderListHandlers}
         onSaveApiKey={async () => {}}
         onDeleteApiKey={async () => {}}
         onTestConnection={async () => {}}

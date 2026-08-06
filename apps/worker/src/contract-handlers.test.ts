@@ -14,6 +14,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ProjectDatabase } from '@ai-novel/database';
+import type { ProviderProfileData } from '@ai-novel/application';
+import { makeTestProviderProfile } from './provider-test-fixtures.js';
 import {
   AppError,
   type TaskData,
@@ -77,23 +79,13 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
-function makeProviderProfile() {
-  return {
-    id: 'provider-1',
-    providerType: 'anthropic-compatible' as const,
-    displayName: 'Test',
-    baseUrl: 'https://test.example',
-    model: 'test-model',
+function makeProviderProfile(): ProviderProfileData {
+  return makeTestProviderProfile({
     keychainService: 'svc',
     keychainAccount: 'acct',
-    enabled: true,
     createdAt: NOW,
     updatedAt: NOW,
-    lastTestedAt: null,
-    lastTestStatus: null,
-    lastTestErrorCode: null,
-    lastTestLatencyMs: null,
-  };
+  });
 }
 
 // 全局递增 ID 生成器，模拟 Worker 的 randomUUID（跨命令唯一）

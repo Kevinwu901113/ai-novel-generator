@@ -8,13 +8,14 @@ import type { SecretStore, ProviderProfileData, Clock } from './types.js';
 
 const FIXED_PROFILE: ProviderProfileData = {
   id: 'mimo-token-plan-cn',
-  providerType: 'anthropic-compatible',
+  providerType: 'anthropic-messages',
   displayName: 'Xiaomi MiMo Token Plan CN',
   baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
   model: 'mimo-v2.5-pro',
   keychainService: 'com.ai-novel-generator.provider.mimo-token-plan-cn',
   keychainAccount: 'api-key',
   enabled: true,
+  isDefault: true,
   createdAt: '2024-01-01T00:00:00.000Z',
   updatedAt: '2024-01-01T00:00:00.000Z',
   lastTestedAt: null,
@@ -26,6 +27,15 @@ const FIXED_PROFILE: ProviderProfileData = {
 function createMockProviderRepo(profile: ProviderProfileData | null = FIXED_PROFILE) {
   return {
     getById: () => profile,
+    list: () => (profile ? [profile] : []),
+    getDefault: () => (profile?.isDefault ? profile : null),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(() => true),
+    setDefault: vi.fn(() => true),
+    getRoute: () => null,
+    setRoute: vi.fn(),
+    deleteRoute: vi.fn(),
     updateTestResult: vi.fn(),
   };
 }
@@ -65,7 +75,10 @@ describe('saveProviderApiKey', () => {
     const secretStore = createMockSecretStore();
     const deps = createDeps({ secretStore });
 
-    const state = await saveProviderApiKey(deps, { apiKey: 'test-secret-not-a-real-key' });
+    const state = await saveProviderApiKey(deps, {
+      profileId: 'mimo-token-plan-cn',
+      apiKey: 'test-secret-not-a-real-key',
+    });
 
     expect(state.hasApiKey).toBe(true);
     expect(secretStore.stored).toHaveLength(1);
@@ -76,25 +89,34 @@ describe('saveProviderApiKey', () => {
     const secretStore = createMockSecretStore();
     const deps = createDeps({ secretStore });
 
-    await saveProviderApiKey(deps, { apiKey: '  test-secret-not-a-real-key  ' });
+    await saveProviderApiKey(deps, {
+      profileId: 'mimo-token-plan-cn',
+      apiKey: '  test-secret-not-a-real-key  ',
+    });
 
     expect(secretStore.stored[0].secret).toBe('test-secret-not-a-real-key');
   });
 
   it('应该拒绝空 API Key', async () => {
     const deps = createDeps();
-    await expect(saveProviderApiKey(deps, { apiKey: '' })).rejects.toThrow(/API Key 不能为空/);
+    await expect(
+      saveProviderApiKey(deps, { profileId: 'mimo-token-plan-cn', apiKey: '' }),
+    ).rejects.toThrow(/API Key 不能为空/);
   });
 
   it('应该拒绝纯空白 API Key', async () => {
     const deps = createDeps();
-    await expect(saveProviderApiKey(deps, { apiKey: '   ' })).rejects.toThrow(/API Key 不能为空/);
+    await expect(
+      saveProviderApiKey(deps, { profileId: 'mimo-token-plan-cn', apiKey: '   ' }),
+    ).rejects.toThrow(/API Key 不能为空/);
   });
 
   it('应该拒绝超长 API Key', async () => {
     const deps = createDeps();
     const longKey = 'a'.repeat(4097);
-    await expect(saveProviderApiKey(deps, { apiKey: longKey })).rejects.toThrow(/不能超过 4096/);
+    await expect(
+      saveProviderApiKey(deps, { profileId: 'mimo-token-plan-cn', apiKey: longKey }),
+    ).rejects.toThrow(/不能超过 4096/);
   });
 
   it('应该接受 4096 个字符的 API Key', async () => {
@@ -102,7 +124,7 @@ describe('saveProviderApiKey', () => {
     const deps = createDeps({ secretStore });
     const maxKey = 'a'.repeat(4096);
 
-    await saveProviderApiKey(deps, { apiKey: maxKey });
+    await saveProviderApiKey(deps, { profileId: 'mimo-token-plan-cn', apiKey: maxKey });
 
     expect(secretStore.stored[0].secret).toBe(maxKey);
   });
@@ -118,9 +140,9 @@ describe('saveProviderApiKey', () => {
     };
     const deps = createDeps({ secretStore: failingSecretStore });
 
-    await expect(saveProviderApiKey(deps, { apiKey: 'test-secret' })).rejects.toThrow(
-      /Keychain error/,
-    );
+    await expect(
+      saveProviderApiKey(deps, { profileId: 'mimo-token-plan-cn', apiKey: 'test-secret' }),
+    ).rejects.toThrow(/Keychain error/);
   });
 
   it('profile 不存在时应抛出 PROVIDER_NOT_CONFIGURED', async () => {
@@ -128,14 +150,40 @@ describe('saveProviderApiKey', () => {
       providerRepo: createMockProviderRepo(null),
     });
 
-    await expect(saveProviderApiKey(deps, { apiKey: 'test-secret' })).rejects.toThrow(
-      /模型提供商未配置/,
-    );
+    await expect(
+      saveProviderApiKey(deps, { profileId: 'missing', apiKey: 'test-secret' }),
+    ).rejects.toThrow(/模型提供商未配置/);
+  });
+
+  it('两个 profile 的 key 应该互不影响', async () => {
+    const secretStore = createMockSecretStore();
+    const profileB: ProviderProfileData = {
+      ...FIXED_PROFILE,
+      id: 'profile-b',
+      isDefault: false,
+      keychainService: 'com.ai-novel-generator.provider.profile-b',
+    };
+    const providerRepo = {
+      ...createMockProviderRepo(),
+      getById: (id: string) => (id === profileB.id ? profileB : FIXED_PROFILE),
+    };
+    const deps = createDeps({ providerRepo, secretStore });
+
+    await saveProviderApiKey(deps, { profileId: FIXED_PROFILE.id, apiKey: 'key-a' });
+    await saveProviderApiKey(deps, { profileId: profileB.id, apiKey: 'key-b' });
+
+    const keyA = secretStore.stored.find((s) => s.service === FIXED_PROFILE.keychainService);
+    const keyB = secretStore.stored.find((s) => s.service === profileB.keychainService);
+    expect(keyA?.secret).toBe('key-a');
+    expect(keyB?.secret).toBe('key-b');
   });
 
   it('返回的公开状态不应包含 API Key', async () => {
     const deps = createDeps();
-    const state = await saveProviderApiKey(deps, { apiKey: 'test-secret-not-a-real-key' });
+    const state = await saveProviderApiKey(deps, {
+      profileId: 'mimo-token-plan-cn',
+      apiKey: 'test-secret-not-a-real-key',
+    });
 
     const keys = Object.keys(state);
     const secretPatterns = /^(apiKey|keychain|authorization|secret|password)$/i;

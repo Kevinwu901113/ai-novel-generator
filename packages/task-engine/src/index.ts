@@ -27,7 +27,8 @@ import type {
   Clock,
   NodeExecutionResultStorePort,
 } from '@ai-novel/application';
-import type { ErrorCode } from '@ai-novel/contracts';
+import { resolveProviderForTask, ProviderNotConfiguredError } from '@ai-novel/application';
+import { isProviderProtocol, type ErrorCode, type ProviderProtocol } from '@ai-novel/contracts';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
 
 // ── 依赖接口 ──────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ export interface TaskEngineDeps {
     model: string;
     apiKey: string;
     prompt: string;
+    protocol?: ProviderProtocol;
   }) => Promise<ModelInvocationOutput>;
   readonly transaction: <T>(fn: () => T) => T;
   /** RW-1：task 成功前持久化 execution-bound 完整解析结果的权威存储（task-backed 节点必需） */
@@ -56,10 +58,6 @@ export interface TaskExecutionResult {
   readonly task: TaskData;
   readonly invocation: ModelInvocationData | null;
 }
-
-// ── 常量 ──────────────────────────────────────────────────────────
-
-const FIXED_PROVIDER_ID = 'mimo-token-plan-cn';
 
 // ── 工具函数 ──────────────────────────────────────────────────────
 
@@ -119,11 +117,20 @@ export async function executeModelInvocationTest(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
   }
 
-  // 2. 验证 provider profile（claim 前，不增加 attempt_count）
-  const profile = providerRepo.getById(FIXED_PROVIDER_ID);
-  if (!profile) {
-    throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+  // 2. 解析 provider profile（D6 两层路由：任务类型覆盖 → 全局默认；claim 前，不增加 attempt_count）
+  let profile;
+  try {
+    profile = resolveProviderForTask({ providerRepo }, task.taskType);
+  } catch (err) {
+    if (err instanceof ProviderNotConfiguredError) {
+      throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商未配置');
+    }
+    throw err;
   }
+  if (!isProviderProtocol(profile.providerType)) {
+    throw new TaskExecutionError('PROVIDER_NOT_CONFIGURED', '模型提供商协议不合法');
+  }
+  const protocol: ProviderProtocol = profile.providerType;
 
   // 3. 读取 API Key（claim 前，不增加 attempt_count）
   let apiKey: string | null;
@@ -154,7 +161,7 @@ export async function executeModelInvocationTest(
     id: invocationId,
     projectId: task.projectId,
     taskId: task.id,
-    providerProfileId: FIXED_PROVIDER_ID,
+    providerProfileId: profile.id,
     model: profile.model,
     attemptNumber: updatedTask.attemptCount,
     requestKind: 'model_invocation_test',
@@ -178,6 +185,7 @@ export async function executeModelInvocationTest(
       model: profile.model,
       apiKey,
       prompt,
+      protocol,
     });
   } catch {
     // 调用异常：invocation + task 同事务标记 FAILED，每个 CAS 必须成功

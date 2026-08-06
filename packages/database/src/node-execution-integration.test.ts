@@ -562,23 +562,39 @@ function buildChapterDraftEngineDeps(
     getSecret: async () => 'test-key',
     deleteSecret: async () => {},
   };
+  const providerProfile = {
+    id: 'mimo-token-plan-cn',
+    providerType: 'anthropic-messages',
+    displayName: 'MiMo',
+    baseUrl: 'https://x',
+    model: 'mimo-v2.5-pro',
+    keychainService: 'svc',
+    keychainAccount: 'acc',
+    enabled: true,
+    isDefault: true,
+    createdAt: NOW,
+    updatedAt: NOW,
+    lastTestedAt: null,
+    lastTestStatus: null,
+    lastTestErrorCode: null,
+    lastTestLatencyMs: null,
+  } as const;
+  // 本文件只验证 node execution / settlement，provider 侧仅需能解析出唯一默认 profile；
+  // 未使用的仓库方法显式抛错，避免静默走到未预期的分支。
+  const unused = (name: string): never => {
+    throw new Error(`providerRepo.${name} 不应在本测试中被调用`);
+  };
   const providerRepo: ProviderProfileRepository = {
-    getById: () => ({
-      id: 'mimo-token-plan-cn',
-      providerType: 'anthropic-compatible',
-      displayName: 'MiMo',
-      baseUrl: 'https://x',
-      model: 'mimo-v2.5-pro',
-      keychainService: 'svc',
-      keychainAccount: 'acc',
-      enabled: true,
-      createdAt: NOW,
-      updatedAt: NOW,
-      lastTestedAt: null,
-      lastTestStatus: null,
-      lastTestErrorCode: null,
-      lastTestLatencyMs: null,
-    }),
+    getById: () => providerProfile,
+    list: () => [providerProfile],
+    getDefault: () => providerProfile,
+    getRoute: () => null,
+    create: () => unused('create'),
+    update: () => unused('update'),
+    delete: () => unused('delete'),
+    setDefault: () => unused('setDefault'),
+    setRoute: () => unused('setRoute'),
+    deleteRoute: () => unused('deleteRoute'),
     updateTestResult: () => {},
   };
   return {
