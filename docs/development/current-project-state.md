@@ -2,20 +2,20 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：2（2026-08-04）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：3（2026-08-05）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
 
 ## 0. Snapshot Metadata
 
-| 项              | 值                                                                                                                   |
-| --------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 2                                                                                                                    |
-| 更新日期        | 2026-08-04                                                                                                           |
-| 基线 main SHA   | `54c6b314bf00c0203895e54fd4253871de672261`（PR #32 合并后，含两张权威 Graph）                                        |
-| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含新增 graph 模块）、数据库 migration v1–v7、CI |
-| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）                                                                          |
+| 项              | 值                                                                                                                |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 3                                                                                                                 |
+| 更新日期        | 2026-08-05                                                                                                        |
+| 基线 main SHA   | `ec1e8e78b07add2856a533f74e7827f5c0e9f7e6`（PR #39 合并后，含 RW-1 执行与 settlement 桥）                         |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v12、CI |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）                                                                       |
 
 ## 1. 权威层级
 
@@ -164,6 +164,6 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 | `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0）                                                                  |
 | `git diff --check`  | —                                                             | PASS                                                                            |
 | macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁                                                           |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 109 passed / 1 skipped（110）；Tests 2805 passed / 6 skipped（2811） |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 122 passed / 1 skipped（123）；Tests 2915 passed / 6 skipped（2921） |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。
