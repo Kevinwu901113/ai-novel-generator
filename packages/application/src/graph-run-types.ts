@@ -80,6 +80,16 @@ export interface IdeaIntakeAnswerPort {
 
 // ── 事务端口 ────────────────────────────────────────────────────
 
+/** idea artifact 底层权威存储读端口（B3/D-B3-2：idea = 播种后的 intake session 行） */
+export interface IntakeSessionReadPort {
+  getById(id: string): { readonly id: string; readonly projectId: string } | null;
+}
+
+/** creationSpec artifact 底层权威存储读端口（B3/D-B3-2：creation_contract_versions 行） */
+export interface CreationSpecVersionReadPort {
+  getById(projectId: string, id: string): { readonly id: string; readonly version: number } | null;
+}
+
 /** 事务内可用的仓库集合 */
 export interface GraphRunTransactionRepositories {
   readonly graphRunRepo: GraphRunRepositoryPort;
@@ -91,6 +101,10 @@ export interface GraphRunTransactionRepositories {
   readonly researchBundleRepo: ResearchBundleRepositoryPort;
   /** 真实 artifact 权威存储（transaction-scoped resolver 校验 storyBlueprint） */
   readonly storyBlueprintRepo: StoryBlueprintRepositoryPort;
+  /** 真实 artifact 权威存储（transaction-scoped resolver 校验 idea；B3/D-B3-2） */
+  readonly intakeSessionReadRepo: IntakeSessionReadPort;
+  /** 真实 artifact 权威存储（transaction-scoped resolver 校验 creationSpec；B3/D-B3-2） */
+  readonly creationSpecVersionReadRepo: CreationSpecVersionReadPort;
   /** 任务仓库（execution、task 创建与绑定在同一事务内；Blocker 3） */
   readonly taskRepo: TaskRepositoryPort;
   /** execution→artifact 溯源（Blocker 5；sync 产物的权威 provenance） */

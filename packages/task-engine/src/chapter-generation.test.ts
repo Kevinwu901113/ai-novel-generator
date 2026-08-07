@@ -120,7 +120,9 @@ function createFakeProviderRepo(
     (options.profiles ?? [mockProviderProfile()]).map((p) => [p.id, p]),
   );
   const defaultId =
-    options.defaultId !== undefined ? options.defaultId : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
+    options.defaultId !== undefined
+      ? options.defaultId
+      : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
   const routes = new Map<string, string>(Object.entries(options.routes ?? {}));
 
   return {

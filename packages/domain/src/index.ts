@@ -54,7 +54,8 @@ export type TaskType =
   | 'MODEL_INVOCATION_TEST'
   | 'GRILL_QUESTION_PLAN'
   | 'CREATION_CONTRACT_DRAFT'
-  | 'CHAPTER_DRAFT';
+  | 'CHAPTER_DRAFT'
+  | 'SPEC_EXTRACT';
 
 /** 模型调用状态 */
 export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

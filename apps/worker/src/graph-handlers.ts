@@ -47,6 +47,11 @@ export interface GraphHandlerContext {
   getProjectDb: (projectId: string) => ProjectDatabase;
   idGenerator: IdGenerator;
   clock: Clock;
+  /**
+   * D-B3-1 live drive：run 创建 / 人工决策落地后异步驱动一次 NodeRunner
+   * （fire-and-forget；实现自行吞错，权威兜底仍是启动恢复）。
+   */
+  driveAfter?: (projectId: string, runId: string) => void;
 }
 
 function graphOf(deps: GraphRunDeps, graphId: string): AnyIdeaToNovelGraphV1 {
@@ -121,6 +126,8 @@ export function dispatchGraphCommand(
         projectId: payload.projectId,
         idempotencyKey: payload.idempotencyKey,
       });
+      // D-B3-1：创建后立即驱动（IDEA_CAPTURE 起步）；进度经 getRunProgress 轮询可见
+      ctx.driveAfter?.(payload.projectId, result.run.workflowRunId);
       return toProgressDto(deps, result.run);
     }
     case 'graph.createChapterRun': {
@@ -162,6 +169,8 @@ export function dispatchGraphCommand(
         deps,
         rest as Parameters<typeof applyHumanDecisionService>[1],
       );
+      // D-B3-1：人工决策落地后立即驱动后续节点（answer→SPEC_EXTRACT 回环等）
+      ctx.driveAfter?.(payload.projectId, result.run.workflowRunId);
       return toProgressDto(deps, result.run);
     }
     case 'graph.listRuns': {

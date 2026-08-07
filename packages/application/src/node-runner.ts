@@ -19,6 +19,8 @@
  *   attempt 上限），配额用尽 → fail-closed，不得无界重放（B2-RW Blocker 2）；
  * - **基础设施瞬时错误（SQLITE_BUSY/LOCKED → GraphRunTransactionBusyError）不判为确定性
  *   失败**：保持 execution 现状、本轮不计进展、下一轮重试（B2-RW Blocker 3）；
+ * - **registry 缺 executor 不判为节点失败（TD-020）**：新派发、pending 重派发与已完成任务的
+ *   结算一律跳过保持原状，等有该能力的 worker 版本，不得把能力缺口打成 run 终态 failed；
  * - 失败走原子路径 failExecutionAndNodeInTransaction（execution failed + applyNodeFailure
  *   + Graph CAS + command log 同一事务）；禁止 blanket catch failNode；
  * - settlement 错误分类：确定性失败 → 原子失败；Graph CAS conflict → 可重试不误标 failed。
@@ -67,6 +69,11 @@ export interface NodeRunnerDeps extends NodeSettlementDeps {
   readonly runnerId: string;
   /** 提交后调度 task-backed 任务（Worker 接线；RW-1 测试可为 no-op） */
   readonly scheduleTask?: (taskId: string) => void;
+  /**
+   * TD-020：registry 缺该节点 executor（或 runner 未注册）时的观测回调。
+   * 该情形节点被跳过、状态保持原样 —— 不 fail-closed，不推进。
+   */
+  readonly onExecutorMissing?: (nodeId: string, reason: 'unregistered' | 'runner_missing') => void;
 }
 
 function isHumanGateKind(kind: string): boolean {
@@ -420,14 +427,23 @@ async function claimAndDispatch(
 ): Promise<boolean> {
   const state = getRunProgress(deps, { projectId, runId });
   const descriptor = descriptorFor(deps, state, nodeId);
-  if (!descriptor || descriptor.kind === 'human') {
+  if (descriptor && descriptor.kind === 'human') {
+    // registry 把可执行节点登记成 human 是配置损坏，与能力缺口不同 —— 保持 fail-closed
     return failClosedNode(deps, projectId, runId, nodeId, undefined, 'EXECUTOR_NOT_REGISTERED');
+  }
+  if (!descriptor) {
+    // TD-020：registry 缺该节点 executor = 能力缺口 ≠ 节点失败。
+    // 跳过（本轮不计进展），run 保持非终态，等有该能力的 worker 版本再推进。
+    deps.onExecutorMissing?.(nodeId, 'unregistered');
+    return false;
   }
   let runner: NodeExecutorRunner;
   try {
     runner = runnerFor(deps, descriptor);
   } catch {
-    return failClosedNode(deps, projectId, runId, nodeId, undefined, 'EXECUTOR_NOT_FOUND');
+    // 同上：descriptor 在而 runner 未注入（部分部署）也按能力缺口处理
+    deps.onExecutorMissing?.(nodeId, 'runner_missing');
+    return false;
   }
 
   let claim: ClaimResult;
@@ -533,8 +549,13 @@ async function reDispatchPending(
 ): Promise<boolean> {
   const state = getRunProgress(deps, { projectId, runId });
   const descriptor = descriptorFor(deps, state, nodeId);
-  if (!descriptor || descriptor.kind === 'human') {
+  if (descriptor && descriptor.kind === 'human') {
     return failClosedNode(deps, projectId, runId, nodeId, exec.id, 'EXECUTOR_NOT_FOUND');
+  }
+  if (!descriptor) {
+    // TD-020：pending execution 同样保持原状等待有能力的 worker，不 fail-closed
+    deps.onExecutorMissing?.(nodeId, 'unregistered');
+    return false;
   }
   if (descriptor.kind === 'sync') {
     const running = deps.tx.runInTransaction((repos) =>
@@ -633,6 +654,12 @@ async function settleWithClassification(
     }
     if (isInfraTransient(err)) {
       // B2-RW Blocker 3：瞬时锁竞争，execution 保持 running，本轮不计进展，下一轮重试
+      return false;
+    }
+    if (err instanceof NodeSettlementError && err.code === 'NODE_EXECUTOR_UNAVAILABLE') {
+      // TD-020：registry 缺该节点 executor —— durable 结果保留、execution 保持现状，
+      // 本轮不计进展，等有该能力的 worker 再结算，不 fail-closed
+      deps.onExecutorMissing?.(nodeId, 'unregistered');
       return false;
     }
     // 确定性失败（artifact invalid/stale/task 未成功 等）→ 原子失败

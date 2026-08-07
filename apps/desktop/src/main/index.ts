@@ -175,16 +175,19 @@ ipcMain.handle(
 
 // ── 提供商 IPC 处理器（多 provider；按 profileId 定位）───────────────
 
-ipcMain.handle(IPC_CHANNELS.PROVIDER_LIST, async (): Promise<ReadonlyArray<ProviderPublicState>> => {
-  const requestId = crypto.randomUUID();
-  const result = await forwardToWorker({
-    requestId,
-    command: 'provider.list',
-    payload: null,
-  });
+ipcMain.handle(
+  IPC_CHANNELS.PROVIDER_LIST,
+  async (): Promise<ReadonlyArray<ProviderPublicState>> => {
+    const requestId = crypto.randomUUID();
+    const result = await forwardToWorker({
+      requestId,
+      command: 'provider.list',
+      payload: null,
+    });
 
-  return result as ReadonlyArray<ProviderPublicState>;
-});
+    return result as ReadonlyArray<ProviderPublicState>;
+  },
+);
 
 ipcMain.handle(
   IPC_CHANNELS.PROVIDER_CREATE,

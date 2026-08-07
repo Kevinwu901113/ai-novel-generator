@@ -82,7 +82,9 @@ function createMockInvocation(overrides: Partial<ModelInvocationData> = {}): Mod
   };
 }
 
-function createMockProviderProfile(overrides: Partial<ProviderProfileData> = {}): ProviderProfileData {
+function createMockProviderProfile(
+  overrides: Partial<ProviderProfileData> = {},
+): ProviderProfileData {
   return {
     id: 'mimo-token-plan-cn',
     providerType: 'anthropic-messages',
@@ -120,7 +122,9 @@ function createFakeProviderRepo(
     (options.profiles ?? [createMockProviderProfile()]).map((p) => [p.id, p]),
   );
   const defaultId =
-    options.defaultId !== undefined ? options.defaultId : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
+    options.defaultId !== undefined
+      ? options.defaultId
+      : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
   const routes = new Map<string, string>(Object.entries(options.routes ?? {}));
 
   return {
@@ -522,16 +526,17 @@ describe('executeModelInvocationTest', () => {
   it.each(['anthropic-messages', 'openai-chat'] as const)(
     'protocol 应该正确透传给 invokeModel：%s',
     async (protocol) => {
-      const profile = createMockProviderProfile({ id: 'provider-protocol', providerType: protocol });
+      const profile = createMockProviderProfile({
+        id: 'provider-protocol',
+        providerType: protocol,
+      });
       const { deps } = createMockDeps({
         providerRepo: createFakeProviderRepo({ profiles: [profile], defaultId: profile.id }),
       });
 
       await executeModelInvocationTest(deps, 'task-1', '测试');
 
-      expect(deps.invokeModel).toHaveBeenCalledWith(
-        expect.objectContaining({ protocol }),
-      );
+      expect(deps.invokeModel).toHaveBeenCalledWith(expect.objectContaining({ protocol }));
     },
   );
 

@@ -207,7 +207,10 @@ describe('isAppError', () => {
 describe('isValidSaveApiKeyInput', () => {
   it('应该接受有效输入', () => {
     expect(
-      isValidSaveApiKeyInput({ profileId: 'mimo-token-plan-cn', apiKey: 'test-secret-not-a-real-key' }),
+      isValidSaveApiKeyInput({
+        profileId: 'mimo-token-plan-cn',
+        apiKey: 'test-secret-not-a-real-key',
+      }),
     ).toBe(true);
   });
 
@@ -371,9 +374,9 @@ describe('isValidCreateProviderProfileInput', () => {
   });
 
   it('应该拒绝非 http(s) 的 baseUrl', () => {
-    expect(
-      isValidCreateProviderProfileInput({ ...validInput, baseUrl: 'ftp://example.com' }),
-    ).toBe(false);
+    expect(isValidCreateProviderProfileInput({ ...validInput, baseUrl: 'ftp://example.com' })).toBe(
+      false,
+    );
   });
 
   it('应该拒绝含空白字符的 baseUrl', () => {

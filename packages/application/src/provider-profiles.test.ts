@@ -416,9 +416,7 @@ describe('resolveProviderForTask', () => {
 
   it('无默认且无路由覆盖时应抛 ProviderNotConfiguredError', () => {
     const providerRepo = new FakeProviderProfileRepo();
-    expect(() => resolveProviderForTask({ providerRepo }, 'ANY_TASK')).toThrow(
-      /模型提供商未配置/,
-    );
+    expect(() => resolveProviderForTask({ providerRepo }, 'ANY_TASK')).toThrow(/模型提供商未配置/);
   });
 });
 

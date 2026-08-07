@@ -30,9 +30,9 @@ import {
   ExecutorRegistry,
   failExecutionAndNodeInTransaction,
   inputHashOf,
+  productionArtifactResolver,
   serializeInputSnapshot,
   type ArtifactResolverPort,
-  type ArtifactResolveInput,
   type CreateTaskInput,
   type NodeExecutionInputContext,
   type NodeExecutorDescriptor,
@@ -51,6 +51,9 @@ import {
   IDEA_CAPTURE,
   IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
   SPEC_EXTRACT,
+  canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
+  validateCreationContractSections,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
@@ -180,74 +183,8 @@ function permissiveResolver(): ArtifactResolverPort {
   };
 }
 
-/** transaction-scoped 真实 artifact resolver（provenance + 底层存储；Blocker 5） */
-function realResolver(): ArtifactResolverPort {
-  return {
-    resolve(repos, input: ArtifactResolveInput): PersistedArtifactReceipt {
-      if (input.proposed.producerNodeId !== input.nodeId) {
-        throw new Error('producer node 不匹配');
-      }
-      // 从持久化 provenance 校验 producer 归属（非调用方字段）
-      if (input.proposed.kind !== 'generationRun') {
-        const prov = repos.artifactProvenanceRepo.getByArtifact(
-          input.proposed.kind,
-          input.proposed.artifactId,
-        );
-        if (!prov) throw new Error('artifact 无 provenance');
-        if (
-          prov.executionId !== input.executionId ||
-          prov.graphRunId !== input.graphRunId ||
-          prov.nodeId !== input.nodeId ||
-          prov.projectId !== input.projectId ||
-          prov.version !== input.proposed.version
-        ) {
-          throw new Error('artifact provenance 与当前 execution/run/node 不匹配');
-        }
-      }
-      switch (input.proposed.kind) {
-        case 'researchBundle': {
-          const b = repos.researchBundleRepo.getById(input.projectId, input.proposed.artifactId);
-          if (!b) throw new Error('researchBundle 不存在');
-          if (b.version !== input.proposed.version)
-            throw new Error('researchBundle version 不匹配');
-          break;
-        }
-        case 'storyBlueprint': {
-          const bp = repos.storyBlueprintRepo.getById(input.projectId, input.proposed.artifactId);
-          if (!bp) throw new Error('storyBlueprint 不存在');
-          if (bp.blueprint.version !== input.proposed.version) {
-            throw new Error('storyBlueprint version 不匹配');
-          }
-          break;
-        }
-        case 'generationRun': {
-          const env = repos.nodeExecutionResultStore.getByExecutionId(input.executionId);
-          if (!env) throw new Error('generationRun 无权威 envelope');
-          if (env.artifactId !== input.proposed.artifactId) {
-            throw new Error('generationRun artifactId 不匹配');
-          }
-          if (env.graphRunId !== input.graphRunId) throw new Error('generationRun run 不匹配');
-          break;
-        }
-        case 'idea':
-        case 'creationSpec':
-        case 'manuscript':
-          // 与生产 resolver 一致：provenance 已校验 producer 归属；
-          // 底层权威存储绑定属于 GE-3 / GE-7（此前此处误抛 unsupported kind，与生产不一致）
-          break;
-      }
-      return {
-        kind: input.proposed.kind,
-        artifactId: input.proposed.artifactId,
-        producerNodeId: input.proposed.producerNodeId,
-        projectId: input.projectId,
-        graphRunId: input.graphRunId,
-        graphVersion: input.graphVersion,
-        version: input.proposed.version,
-      };
-    },
-  };
-}
+// TD-019：本地 realResolver 已删除，改用 @ai-novel/application 的
+// productionArtifactResolver（与 apps/worker 生产实现共用同一份，避免再次漂移）。
 
 // ── runner deps 构造 ───────────────────────────────────────────────
 
@@ -394,6 +331,52 @@ function buildKit(
 
 function seedProjectRun(_db: ProjectDatabase, deps: NodeRunnerDeps, key: string) {
   return createProjectRun(deps, { projectId: 'p1', idempotencyKey: key });
+}
+
+/**
+ * B3/D-B3-2：生产 resolver 现在校验 idea / creationSpec 的底层权威存储。
+ * 为生产等价 resolver 的用例预置真实行：idea = grill session（artifactId=sessionId）、
+ * creationSpec = creation_contract_versions 行（version 与 artifact version 一致）。
+ */
+function seedIntakeArtifactRows(db: ProjectDatabase): void {
+  db.getGrillSessionRepository().create({
+    id: 'idea-real-1',
+    projectId: 'p1',
+    goal: '一个模糊的创作想法',
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const sections = validateCreationContractSections({
+    premise: 'settlement 集成测试用创作要求',
+    genre: ['sci-fi'],
+    tone: ['dark'],
+    targetAudience: 'adults',
+    narrativePov: 'FIRST',
+    tense: 'PRESENT',
+    protagonist: { characterKey: 'protag', name: 'Protagonist' },
+  });
+  const sectionsJson = canonicalSerializeContractSections(sections);
+  db.getCreationContractVersionRepository().create({
+    id: 'spec-real-1',
+    projectId: 'p1',
+    version: 1,
+    schemaVersion: 1,
+    sourceProposalId: null,
+    basedOnGrillSessionId: null,
+    basedOnGrillSessionVersion: null,
+    sectionsJson,
+    lockedFieldPathsJson: '[]',
+    contractSnapshotHash: sha256Utf8(
+      canonicalSerializeContractSnapshot({
+        sections,
+        lockedFieldPaths: [],
+        schemaVersion: 1,
+      }),
+    ),
+    provenanceJson: '[]',
+    createdAt: NOW,
+    createdBy: 'user',
+  });
 }
 
 function seedChapterRun(_db: ProjectDatabase, deps: NodeRunnerDeps, key: string) {
@@ -1015,7 +998,7 @@ describe('node execution settlement (real SQLite)', () => {
   it('8. artifact ownership：transaction-scoped resolver 拒绝 project/run 不匹配', async () => {
     const db = freshDb();
     try {
-      const kit = buildKit(db, { resolver: realResolver() });
+      const kit = buildKit(db, { resolver: productionArtifactResolver });
       const run = seedProjectRun(db, kit.deps, 'c-owner');
       const runId = run.run.workflowRunId;
       const state = db.getGraphRunRepository().getById(runId)!.state;
@@ -1301,7 +1284,7 @@ describe('node execution settlement (real SQLite)', () => {
   it('16. B2-RW：生产等价 resolver 端到端 settlement（idea / creationSpec / storyBlueprint）', async () => {
     const db = freshDb();
     try {
-      const kit = buildKit(db, { resolver: realResolver() });
+      const kit = buildKit(db, { resolver: productionArtifactResolver });
       const run = seedProjectRun(db, kit.deps, 'c-e2e-prov');
       const runId = run.run.workflowRunId;
       // storyBlueprint 需在权威表内真实存在（resolver 校验底层存储 + version）
@@ -1310,6 +1293,8 @@ describe('node execution settlement (real SQLite)', () => {
         false,
         NOW,
       );
+      // idea / creationSpec 同样需真实底层行（B3/D-B3-2）
+      seedIntakeArtifactRows(db);
 
       const settled = await driveRun(kit.deps, 'p1', runId);
 
@@ -1360,7 +1345,7 @@ describe('node execution settlement (real SQLite)', () => {
   it('17. B2-RW：provenance 主键即归属闸门（他 run execution 引用已归属 artifact → settlement 失败）', async () => {
     const db = freshDb();
     try {
-      const kit = buildKit(db, { resolver: realResolver() });
+      const kit = buildKit(db, { resolver: productionArtifactResolver });
       const runA = seedProjectRun(db, kit.deps, 'c-own-a');
       const runIdA = runA.run.workflowRunId;
       db.getStoryBlueprintRepository().save(
@@ -1368,6 +1353,8 @@ describe('node execution settlement (real SQLite)', () => {
         false,
         NOW,
       );
+      // idea / creationSpec 底层真实行（B3/D-B3-2）
+      seedIntakeArtifactRows(db);
       await driveRun(kit.deps, 'p1', runIdA);
       const stateA = db.getGraphRunRepository().getById(runIdA)!
         .state as IdeaToNovelProjectRunState;
@@ -1394,7 +1381,7 @@ describe('node execution settlement (real SQLite)', () => {
   it('15. B10 跨 run provenance：其他 run 产出 researchBundle → 拒绝', async () => {
     const db = freshDb();
     try {
-      const kit = buildKit(db, { resolver: realResolver() });
+      const kit = buildKit(db, { resolver: productionArtifactResolver });
       const run1 = seedProjectRun(db, kit.deps, 'c-prov-1');
       const runId1 = run1.run.workflowRunId;
       const run2 = seedProjectRun(db, kit.deps, 'c-prov-2');
