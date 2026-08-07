@@ -531,3 +531,20 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
 ### 后续动作
 
 - B4 或维护批次：新建时 abandon 前一 ACTIVE 会话；resolver 增状态白名单；问题写入走用例层。
+
+---
+
+## TD-025: B3 修复验证随行三项（复查 ACCEPT 附带 notes，2026-08-07）
+
+**状态**: OPEN
+**优先级**: 低-中
+**来源**: PR #42 对抗式复查修复验证
+
+1. **ASK_QUESTION 多问题批次重放双标**（良性残留）：批次 >1 时崩溃重放会把第二问也标 ASKED
+   （悬挂问题，run 存活）。注意：把幂等检查提到 PLANNED 判断之前是错误修法——skip 语义下会
+   死循环到预算耗尽；需先调整 skip 对问题状态的处理再收此残留。
+2. **BLK-3 附带语义**：用户在抽取在途手工修改创作要求 → 本次抽取作废 → task 确定性 FAILED →
+   run fail-closed 终态。数据完整性正确（用户版本必胜），但体验上是"编辑杀 run"；
+   后续可把该冲突转为新 activation 重抽而非杀 run。
+3. **配置修复后无自动重驱动**：BLK-2 使任务在 provider/key 未配置时保持 PENDING，但配置成功后
+   需重启应用才会重调度；建议 provider 配置成功事件触发一次 driveRun。
