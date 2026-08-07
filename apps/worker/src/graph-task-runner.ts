@@ -9,8 +9,14 @@
  */
 
 import type { ProjectDatabase } from '@ai-novel/database';
-import type { TaskData } from '@ai-novel/application';
-import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
+import type { NodeRunnerDeps, TaskData } from '@ai-novel/application';
+import { driveRun } from '@ai-novel/application';
+import {
+  executeChapterDraft,
+  executeSpecExtract,
+  type ChapterDraftExecutionDeps,
+  type SpecExtractExecutionDeps,
+} from '@ai-novel/task-engine';
 import {
   settleRunnerFailure,
   isTerminalStatus,
@@ -18,8 +24,17 @@ import {
   type SettleMessages,
 } from './runner-kernel.js';
 
-/** 复用 runner-kernel 依赖契约（openDb + buildEngineDeps + getTaskRepo + getInvocationRepo） */
-export type GraphTaskRunnerDeps = RunnerKernelDeps<ChapterDraftExecutionDeps>;
+/** Graph 任务引擎 deps：CHAPTER_DRAFT 与 SPEC_EXTRACT 的并集（B3） */
+export type GraphEngineDeps = ChapterDraftExecutionDeps & SpecExtractExecutionDeps;
+
+/**
+ * 复用 runner-kernel 依赖契约（openDb + buildEngineDeps + getTaskRepo + getInvocationRepo）。
+ * B3 增 `buildNodeRunnerDeps`（可选）：任务执行终结后在同一 projDb 上驱动一次 driveRun，
+ * 结算刚完成的 task-backed 节点并推进后续 frontier（live drive 的任务侧一半，D-B3-1）。
+ */
+export type GraphTaskRunnerDeps = RunnerKernelDeps<GraphEngineDeps> & {
+  readonly buildNodeRunnerDeps?: (projDb: ProjectDatabase, projectId: string) => NodeRunnerDeps;
+};
 
 const GRAPH_TASK_MESSAGES: SettleMessages = {
   settleErrorCode: 'TASK_EXECUTION_FAILED',
@@ -71,7 +86,7 @@ export function scheduleGraphTask(
     }
   };
 
-  let engineDeps: ChapterDraftExecutionDeps;
+  let engineDeps: GraphEngineDeps;
   try {
     engineDeps = deps.buildEngineDeps(projDb);
     const task = engineDeps.taskRepo.getById(taskId);
@@ -79,16 +94,33 @@ export function scheduleGraphTask(
       closeDb();
       return { scheduled: false, reason: 'TERMINAL' };
     }
-    if (task.taskType !== 'CHAPTER_DRAFT') {
+    if (task.taskType !== 'CHAPTER_DRAFT' && task.taskType !== 'SPEC_EXTRACT') {
       closeDb();
       return { scheduled: false, reason: 'UNSUPPORTED' };
     }
+    const taskType = task.taskType;
     const prompt = readPrompt(task);
     void (async () => {
       try {
-        await executeChapterDraft(engineDeps, taskId, prompt);
+        if (taskType === 'CHAPTER_DRAFT') {
+          await executeChapterDraft(engineDeps, taskId, prompt);
+        } else {
+          await executeSpecExtract(engineDeps, taskId);
+        }
       } catch {
         settleRunnerFailure(deps, projDb, taskId, GRAPH_TASK_MESSAGES);
+      }
+      // D-B3-1：任务终结（成功或失败）后驱动一次 driveRun —— 结算刚完成的节点并
+      // 推进后续 frontier。失败被吞：推进属尽力而为，权威路径仍是启动恢复的 driveRun。
+      try {
+        if (deps.buildNodeRunnerDeps) {
+          const exec = engineDeps.nodeExecutionRepo.getByTaskId(taskId);
+          if (exec) {
+            await driveRun(deps.buildNodeRunnerDeps(projDb, projectId), projectId, exec.graphRunId);
+          }
+        }
+      } catch {
+        // 推进失败不影响任务终态；下一次 driveRun（人工决策/重启）会重试
       } finally {
         closeDb();
       }

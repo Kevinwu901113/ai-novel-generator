@@ -140,6 +140,9 @@ import {
 } from './contract-draft-runner.js';
 import { scheduleGraphTask, type GraphTaskRunnerDeps } from './graph-task-runner.js';
 import { runProjectRecovery } from './recovery-bootstrap.js';
+import { driveRun } from '@ai-novel/application';
+import { registerIntakeExecutors } from './intake-executors.js';
+import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
 
@@ -862,6 +865,33 @@ async function initialize(): Promise<void> {
 const productionRegistry = new ExecutorRegistry();
 const productionRunners = new Map<string, NodeExecutorRunner>();
 
+// GE-3（B3）：注册 Idea Intake 三个真实 executor（IDEA_CAPTURE / ASK_QUESTION sync、
+// SPEC_EXTRACT task-backed）。COLLECT_ANSWER / INTAKE_ESCALATION 是人工 Gate，无 executor。
+registerIntakeExecutors(productionRegistry, productionRunners, {
+  getProjectDb: (projectId: string) => getProjectDb(projectId),
+  idGenerator: createIdGenerator(),
+  clock: createClock(),
+});
+
+/** D-B3-1 live drive 与任务后推进共用的 NodeRunnerDeps 构造（同一 projDb 生命周期内使用） */
+function buildLiveNodeRunnerDeps(projDb: ProjectDatabase, projectId: string): NodeRunnerDeps {
+  return {
+    idGenerator: createIdGenerator(),
+    clock: createClock(),
+    hashPayload: (payload: string) => sha256Hex(payload),
+    tx: projDb.getGraphRunTransaction(),
+    projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
+    chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
+    registry: productionRegistry,
+    runners: productionRunners,
+    artifactResolver: productionArtifactResolver,
+    runnerId: `worker-live:${process.pid}`,
+    scheduleTask: (taskId) => {
+      scheduleGraphTask(buildGraphTaskRunnerDeps(), projectId, taskId);
+    },
+  };
+}
+
 /**
  * RW-1-R5 生产 artifact 边界：transaction-scoped resolver。
  * 实现已抽到 @ai-novel/application 的 productionArtifactResolver（TD-019），
@@ -887,34 +917,51 @@ export interface RecoveryOptions {
   readonly scheduleTask?: (projectId: string, taskId: string) => void;
 }
 
-/** 构建真实 Graph task scheduler（幂等；执行 CHAPTER_DRAFT 任务） */
+/** 构建真实 Graph task scheduler（幂等；执行 CHAPTER_DRAFT / SPEC_EXTRACT 任务） */
 function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
   return {
     openDb: (projectId: string) => getProjectDb(projectId),
     buildEngineDeps: (projDb: ProjectDatabase) => {
       const clock = createClock();
+      const idGenerator = createIdGenerator();
+      const grillDeps = buildGrillDepsForEngine(projDb, {
+        getProjectDb: (projectId: string) => getProjectDb(projectId),
+        idGenerator,
+        clock,
+      });
       return {
         taskRepo: new TaskRepositoryAdapter(projDb),
         invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
         secretStore: secretStore!,
         providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
-        idGenerator: createIdGenerator(),
+        idGenerator,
         clock,
         invokeModel: async (input: {
           baseUrl: string;
           model: string;
           apiKey: string;
           prompt: string;
+          systemPrompt?: string;
+          protocol?: ProviderProtocol;
         }) => {
           return invokeModel({ fetch: globalThis.fetch, clock }, input);
         },
         transaction: <T>(fn: () => T) => projDb.transactionImmediate(fn),
         nodeExecutionResultStore: projDb.getNodeExecutionResultStore(),
         nodeExecutionRepo: projDb.getNodeExecutionRepository(),
+        // SPEC_EXTRACT（B3）：intake 会话上下文 + CreationSpec 版本基座
+        sessionRepo: grillDeps.sessionRepo,
+        questionRepo: grillDeps.questionRepo,
+        answerRepo: grillDeps.answerRepo,
+        versionRepo: projDb.getCreationContractVersionRepository(),
+        currentRepo: projDb.getCreationContractCurrentRepository(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
     getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+    // D-B3-1：任务终结后在同一 projDb 上驱动结算与后续推进
+    buildNodeRunnerDeps: (projDb: ProjectDatabase, projectId: string) =>
+      buildLiveNodeRunnerDeps(projDb, projectId),
   };
 }
 
@@ -1749,6 +1796,13 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           getProjectDb,
           idGenerator: createIdGenerator(),
           clock: createClock(),
+          // D-B3-1 live drive：fire-and-forget 驱动 NodeRunner，失败静默（启动恢复兜底）
+          driveAfter: (projectId, runId) => {
+            void (async () => {
+              const projDb = getProjectDb(projectId);
+              await driveRun(buildLiveNodeRunnerDeps(projDb, projectId), projectId, runId);
+            })().catch(() => {});
+          },
         };
         data = dispatchGraphCommand(request.command, request.payload, graphCtx);
         break;
