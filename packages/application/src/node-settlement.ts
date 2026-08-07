@@ -51,6 +51,7 @@ export type NodeSettlementErrorCode =
   | 'NODE_EXECUTION_NOT_FOUND'
   | 'NODE_EXECUTION_STATE_CONFLICT'
   | 'NODE_EXECUTION_IDENTITY_MISMATCH'
+  | 'NODE_EXECUTOR_UNAVAILABLE'
   | 'NODE_SETTLEMENT_ARTIFACT_MISSING'
   | 'NODE_SETTLEMENT_ARTIFACT_INVALID'
   | 'NODE_SETTLEMENT_STALE_INPUT'
@@ -134,8 +135,16 @@ export function settleNodeExecution(
     }
     const graphKind = run.state.graphId === deps.projectGraph.id ? 'project' : 'chapter';
     const descriptor = deps.registry.get({ graphKind, nodeId: execution.nodeId });
+    if (!descriptor) {
+      // TD-020：registry 缺该节点 executor 是能力缺口，不是结果非法。
+      // 已完成任务的 durable 结果必须保留，等有该能力的 worker 再结算，
+      // 不得借 identity 校验把 run 打成终态 failed。
+      throw new NodeSettlementError(
+        'NODE_EXECUTOR_UNAVAILABLE',
+        'registry 缺该节点 executor，结果保留待可结算 worker',
+      );
+    }
     if (
-      !descriptor ||
       descriptor.executorId !== execution.executorId ||
       descriptor.executorVersion !== execution.executorVersion
     ) {

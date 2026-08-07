@@ -1,7 +1,7 @@
 /**
  * NodeRunner / NodeSettlementService 崩溃窗口测试（RW-1-R5）。
  *
- * 覆盖：active 无 execution 分发、未知 executor fail-closed、task RUNNING 保持、
+ * 覆盖：active 无 execution 分发、未知 executor 跳过保持原状（TD-020）、task RUNNING 保持、
  * task 成功+未 settlement 幂等、重复 settlement、CAS 冲突回滚、forged artifact、
  * wrong version、non-replayable、waiting_for_human、terminal 不复活、并发 claim、
  * **loop reactivation（新 activation 新 execution）**、**fan-out 全量 dispatch**、
@@ -328,16 +328,115 @@ describe('NodeRunner crash windows', () => {
     ).toBe('settled');
   });
 
-  it('2. 未知 executor（空 registry）→ fail-closed', async () => {
-    const deps = runnerDeps(base, { registry: new ExecutorRegistry() });
-    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c2' });
-    await driveRun(deps, 'p1', run.workflowRunId);
-    const state = getRunProgress(deps, {
+  it('2. TD-020：未知 executor（空 registry）→ 跳过保持原状，注册后同一 run 可推进', async () => {
+    const skips: string[] = [];
+    const emptyDeps: NodeRunnerDeps = {
+      ...runnerDeps(base, { registry: new ExecutorRegistry() }),
+      onExecutorMissing: (nodeId, reason) => skips.push(`${nodeId}:${reason}`),
+    };
+    const { run } = createProjectRun(emptyDeps, { projectId: 'p1', idempotencyKey: 'c2' });
+    await driveRun(emptyDeps, 'p1', run.workflowRunId);
+    const state = getRunProgress(emptyDeps, {
       projectId: 'p1',
       runId: run.workflowRunId,
     }) as IdeaToNovelProjectRunState;
-    expect(state.terminalStatus).toBe('failed');
-    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+    // 能力缺口 ≠ 失败：run 非终态、节点保持 active、无 execution 残留
+    expect(state.terminalStatus).toBeNull();
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
+    expect(base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, IDEA_CAPTURE)).toBeNull();
+    expect(skips).toContain(`${IDEA_CAPTURE}:unregistered`);
+
+    // 有该能力的 worker（完整 registry）接手同一 run → 正常推进
+    const fullDeps = fullProjectDeps(base);
+    await driveRun(fullDeps, 'p1', run.workflowRunId);
+    const after = getRunProgress(fullDeps, {
+      projectId: 'p1',
+      runId: run.workflowRunId,
+    }) as IdeaToNovelProjectRunState;
+    expect(after.nodeStatuses[IDEA_CAPTURE]).toBe('succeeded');
+  });
+
+  it('2b. TD-020：descriptor 已注册但 runner 未注入 → 跳过保持原状（runner_missing）', async () => {
+    const registry = new ExecutorRegistry();
+    registry.register(syncDescriptor('IDEA_CAPTURE', 'idea-capture-v1'));
+    const skips: string[] = [];
+    const deps: NodeRunnerDeps = {
+      ...runnerDeps(base, { registry }),
+      onExecutorMissing: (nodeId, reason) => skips.push(`${nodeId}:${reason}`),
+    };
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c2b' });
+    await driveRun(deps, 'p1', run.workflowRunId);
+    const state = getRunProgress(deps, { projectId: 'p1', runId: run.workflowRunId });
+    expect(state.terminalStatus).toBeNull();
+    expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('active');
+    expect(skips).toContain(`${IDEA_CAPTURE}:runner_missing`);
+  });
+
+  it('2c. TD-020：task 成功 + durable result + 空 registry 恢复 → 结果保留；registry 恢复后结算', async () => {
+    // 跑到 DRAFT task RUNNING，模拟崩溃窗口（同用例 4）
+    const deps = chapterDeps(base);
+    const { run } = createChapterRun(deps, {
+      projectId: 'p1',
+      creationSpecVersionId: 'spec-1',
+      researchBundleId: null,
+      storyBlueprintId: 'bp-1',
+      blueprintChapterId: 'ch-1',
+      idempotencyKey: 'cch-td20',
+    });
+    await driveRun(deps, 'p1', run.workflowRunId);
+    const draftExec = base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, 'DRAFT');
+    expect(draftExec).not.toBeNull();
+    const taskId = draftExec!.taskId!;
+    base.fakeTasks.set(taskId, {
+      ...base.fakeTasks.get(taskId)!,
+      status: 'SUCCEEDED',
+      resultJson: '{}',
+    });
+    base.nodeExecutionResultStore.saveOrVerifySame({
+      executionId: draftExec!.id,
+      projectId: 'p1',
+      graphRunId: run.workflowRunId,
+      nodeId: 'DRAFT',
+      taskId,
+      activationNo: draftExec!.activationNo,
+      attemptNo: draftExec!.attemptNo,
+      executorId: 'chapter-draft-v1',
+      executorVersion: 'v1',
+      inputHash: draftExec!.inputHash,
+      artifactKind: 'generationRun',
+      artifactId: 'gen-td20-1',
+      artifactVersion: 1,
+      contentJson: JSON.stringify({
+        kind: 'generationRun',
+        draft: { title: '第一章', content: '正文', scenePlans: [] },
+      }),
+      outcome: null,
+      createdAt: NOW,
+    });
+
+    // 空 registry 的 worker 重启恢复：不得杀 run，durable 结果与 execution 全部保留
+    const skips: string[] = [];
+    const emptyDeps: NodeRunnerDeps = {
+      ...runnerDeps(base, { registry: new ExecutorRegistry() }),
+      onExecutorMissing: (nodeId, reason) => skips.push(`${nodeId}:${reason}`),
+    };
+    const settledEmpty = await driveRun(emptyDeps, 'p1', run.workflowRunId);
+    expect(settledEmpty).toHaveLength(0);
+    const mid = getRunProgress(emptyDeps, { projectId: 'p1', runId: run.workflowRunId });
+    expect(mid.terminalStatus).toBeNull();
+    expect(mid.nodeStatuses[DRAFT]).toBe('active');
+    expect(base.nodeExecutionRepo.getById(draftExec!.id)?.status).toBe('running');
+    expect(skips).toContain('DRAFT:unregistered');
+
+    // 有该能力的 worker 接手 → 幂等结算成功，真实 artifactId 入图
+    const settled = await driveRun(chapterDeps(base), 'p1', run.workflowRunId);
+    expect(settled.some((s) => s.nodeId === 'DRAFT' && s.settled)).toBe(true);
+    const after = getRunProgress(deps, {
+      projectId: 'p1',
+      runId: run.workflowRunId,
+    }) as ChapterGenerationRunState;
+    expect(after.nodeStatuses[DRAFT]).toBe('succeeded');
+    expect(after.artifacts.generationRun?.artifactId).toBe('gen-td20-1');
   });
 
   it('3. task RUNNING 中断 → 保持（不误 fail、不 spin）', async () => {
@@ -637,10 +736,24 @@ describe('NodeRunner crash windows', () => {
   });
 
   it('11. terminal run 不复活', async () => {
-    const deps = runnerDeps(base, { registry: new ExecutorRegistry() });
+    // TD-020 后空 registry 不再致死；用 executor 抛错（EXECUTOR_ERROR fail-closed）制造终态
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const descriptor = syncDescriptor('IDEA_CAPTURE', 'idea-capture-v1');
+    register(registry, runners, descriptor, {
+      descriptor,
+      execute: () => {
+        throw new Error('executor 崩溃');
+      },
+    });
+    const deps = runnerDeps(base, { registry, runners });
     const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c5' });
     await driveRun(deps, 'p1', run.workflowRunId);
-    const settled = await driveRun(deps, 'p1', run.workflowRunId);
+    expect(getRunProgress(deps, { projectId: 'p1', runId: run.workflowRunId }).terminalStatus).toBe(
+      'failed',
+    );
+    // 终态后即便换成有完整能力的 worker，也不得复活
+    const settled = await driveRun(fullProjectDeps(base), 'p1', run.workflowRunId);
     expect(settled).toHaveLength(0);
     expect(getRunProgress(deps, { projectId: 'p1', runId: run.workflowRunId }).terminalStatus).toBe(
       'failed',
