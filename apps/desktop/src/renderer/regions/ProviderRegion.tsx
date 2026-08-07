@@ -138,7 +138,11 @@ function ProviderCreateForm({ isReady, onCreate }: ProviderCreateFormProps) {
       e.preventDefault();
       setAttempted(true);
       if (!isReady || isSubmitting) return;
-      if (labelTrimmed.length === 0 || !isValidBaseUrl(baseUrlTrimmed) || modelTrimmed.length === 0) {
+      if (
+        labelTrimmed.length === 0 ||
+        !isValidBaseUrl(baseUrlTrimmed) ||
+        modelTrimmed.length === 0
+      ) {
         return;
       }
 

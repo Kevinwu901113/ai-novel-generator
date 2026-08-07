@@ -55,7 +55,6 @@ import {
   canonicalSerializeContractSnapshot,
   validateCreationContractSections,
 } from '@ai-novel/domain';
-import { sha256Utf8 } from './creation-contract-repositories.js';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
 import type {

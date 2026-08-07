@@ -524,9 +524,7 @@ class ProviderProfileRepositoryImpl implements ProviderProfileRepository {
   setDefault(id: string): boolean {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db
-        .prepare('UPDATE provider_profiles SET is_default = 0 WHERE is_default = 1')
-        .run();
+      this.db.prepare('UPDATE provider_profiles SET is_default = 0 WHERE is_default = 1').run();
       const result = this.db
         .prepare('UPDATE provider_profiles SET is_default = 1 WHERE id = ?')
         .run(id);

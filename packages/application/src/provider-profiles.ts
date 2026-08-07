@@ -16,7 +16,13 @@ import {
   type UpdateProviderProfileInput,
 } from '@ai-novel/contracts';
 import { secretRefForProfile, isValidProviderProfileId } from './provider-secret-ref.js';
-import type { SecretStore, ProviderProfileRepository, ProviderProfileData, IdGenerator, Clock } from './types.js';
+import type {
+  SecretStore,
+  ProviderProfileRepository,
+  ProviderProfileData,
+  IdGenerator,
+  Clock,
+} from './types.js';
 import { AppError, ApiKeyReadFailedError, ProviderNotConfiguredError } from './errors.js';
 
 /** ProviderProfile 用例依赖 */

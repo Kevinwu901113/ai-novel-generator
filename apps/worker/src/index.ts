@@ -475,7 +475,7 @@ function isDedupeUniqueConstraintError(err: unknown): boolean {
   return msg.includes('tasks.dedupe_key') || msg.includes('idx_tasks_dedupe_active');
 }
 
-class TaskRepositoryAdapter implements TaskRepositoryPort {
+export class TaskRepositoryAdapter implements TaskRepositoryPort {
   constructor(private readonly projDb: ProjectDatabase) {}
 
   create(data: CreateTaskInput): void {
@@ -573,7 +573,7 @@ class TaskRepositoryAdapter implements TaskRepositoryPort {
 
 // ── 模型调用仓库适配器 ────────────────────────────────────────────
 
-class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort {
+export class ModelInvocationRepositoryAdapter implements ModelInvocationRepositoryPort {
   constructor(private readonly projDb: ProjectDatabase) {}
 
   create(data: CreateInvocationInput): void {

@@ -220,7 +220,12 @@ describe('provider commands（8 个新命令）', () => {
 
     // 新建第二个 profile，再把它设为默认
     const created = await createProvider(
-      { providerRepo: repo, secretStore, idGenerator: { generate: () => 'second-provider' }, clock },
+      {
+        providerRepo: repo,
+        secretStore,
+        idGenerator: { generate: () => 'second-provider' },
+        clock,
+      },
       {
         label: '第二个 Provider',
         protocol: 'openai-chat',
@@ -257,7 +262,10 @@ describe('provider commands（8 个新命令）', () => {
     const afterList = await listProviders({ providerRepo: repo, secretStore, idGenerator, clock });
     expect(afterList.find((p) => p.id === SEEDED_PROVIDER_ID)?.hasApiKey).toBe(true);
 
-    const deleted = await deleteProviderApiKey({ providerRepo: repo, secretStore, clock }, SEEDED_PROVIDER_ID);
+    const deleted = await deleteProviderApiKey(
+      { providerRepo: repo, secretStore, clock },
+      SEEDED_PROVIDER_ID,
+    );
     expect(deleted.hasApiKey).toBe(false);
 
     appDb.close();

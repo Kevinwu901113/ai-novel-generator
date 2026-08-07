@@ -162,7 +162,9 @@ describe('ProviderRegion 测试连接', () => {
     render(<ProviderRegion {...makeProps({ onTestConnection })} />);
 
     const items = screen.getAllByRole('listitem');
-    const defaultItem = items.find((li) => li.textContent?.includes('MiMo V2.5 Pro')) as HTMLElement;
+    const defaultItem = items.find((li) =>
+      li.textContent?.includes('MiMo V2.5 Pro'),
+    ) as HTMLElement;
     const testBtn = within(defaultItem).getByRole('button', { name: '测试连接' });
 
     await user.click(testBtn);
@@ -174,17 +176,17 @@ describe('ProviderRegion 测试连接', () => {
 
   it('测试连接失败时只展示归一化中文消息，不泄露上游内容', async () => {
     const user = userEvent.setup();
-    const onTestConnection = vi
-      .fn()
-      .mockRejectedValue(
-        Object.assign(new Error('upstream 500: /Users/secret/leak sk-abc123456789'), {
-          code: 'PROVIDER_TIMEOUT',
-        }),
-      );
+    const onTestConnection = vi.fn().mockRejectedValue(
+      Object.assign(new Error('upstream 500: /Users/secret/leak sk-abc123456789'), {
+        code: 'PROVIDER_TIMEOUT',
+      }),
+    );
     render(<ProviderRegion {...makeProps({ onTestConnection })} />);
 
     const items = screen.getAllByRole('listitem');
-    const defaultItem = items.find((li) => li.textContent?.includes('MiMo V2.5 Pro')) as HTMLElement;
+    const defaultItem = items.find((li) =>
+      li.textContent?.includes('MiMo V2.5 Pro'),
+    ) as HTMLElement;
     const testBtn = within(defaultItem).getByRole('button', { name: '测试连接' });
 
     await user.click(testBtn);
@@ -203,7 +205,9 @@ describe('ProviderRegion 测试连接', () => {
     render(<ProviderRegion {...makeProps({ onTestConnection })} />);
 
     const items = screen.getAllByRole('listitem');
-    const defaultItem = items.find((li) => li.textContent?.includes('MiMo V2.5 Pro')) as HTMLElement;
+    const defaultItem = items.find((li) =>
+      li.textContent?.includes('MiMo V2.5 Pro'),
+    ) as HTMLElement;
     const testBtn = within(defaultItem).getByRole('button', { name: '测试连接' });
 
     await act(async () => {
