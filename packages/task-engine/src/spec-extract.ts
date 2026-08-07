@@ -515,13 +515,21 @@ export async function executeSpecExtract(
         sectionsJson,
         lockedFieldPathsJson,
         contractSnapshotHash: snapshotHash,
-        provenanceJson: JSON.stringify({
-          kind: 'spec-extract-v1',
-          taskId,
-          invocationId,
-          executionId: execution.id,
-          graphRunId: execution.graphRunId,
-        }),
+        // provenance 数组形状受 validateProvenanceArray 强校验（每 sectionKey 唯一）；
+        // 版本级溯源记在 /premise 一条：AI 直接抽取 + task/invocation 引用
+        provenanceJson: JSON.stringify([
+          {
+            sectionKey: '/premise',
+            source: 'AI_PROPOSAL',
+            grillAnswerIds: [],
+            grillProposalIds: [],
+            aiTaskId: taskId,
+            modelInvocationId: invocationId,
+            sourceProposalId: null,
+            previousFieldHash: null,
+            rationale: `spec-extract-v1 直接抽取（execution ${execution.id}）`,
+          },
+        ]),
         createdAt: now,
         createdBy: 'ai-proposal-accepted',
       });

@@ -298,6 +298,19 @@ export function createFakeGraphRunRepos() {
     },
   };
 
+  // idea / creationSpec 底层权威存储 fake（B3/D-B3-2）
+  const fakeIntakeSessions = new Map<string, { id: string; projectId: string }>();
+  const intakeSessionReadRepo: import('./graph-run-types.js').IntakeSessionReadPort = {
+    getById: (id) => fakeIntakeSessions.get(id) ?? null,
+  };
+  const fakeSpecVersions = new Map<string, { id: string; projectId: string; version: number }>();
+  const creationSpecVersionReadRepo: import('./graph-run-types.js').CreationSpecVersionReadPort = {
+    getById: (projectId, id) => {
+      const row = fakeSpecVersions.get(id);
+      return row && row.projectId === projectId ? row : null;
+    },
+  };
+
   // 任务仓库 fake（Blocker 3：execution、task 创建/绑定同一事务内）
   const fakeTasks = new Map<string, import('./types.js').TaskData>();
   const taskRepo: import('./types.js').TaskRepositoryPort = {
@@ -385,6 +398,8 @@ export function createFakeGraphRunRepos() {
         nodeExecutionResultStore: NodeExecutionResultStorePort;
         researchBundleRepo: ResearchBundleRepositoryPort;
         storyBlueprintRepo: StoryBlueprintRepositoryPort;
+        intakeSessionReadRepo: import('./graph-run-types.js').IntakeSessionReadPort;
+        creationSpecVersionReadRepo: import('./graph-run-types.js').CreationSpecVersionReadPort;
         taskRepo: import('./types.js').TaskRepositoryPort;
         artifactProvenanceRepo: import('./node-execution-types.js').ArtifactProvenanceRepoPort;
       }) => T,
@@ -397,6 +412,8 @@ export function createFakeGraphRunRepos() {
         nodeExecutionResultStore,
         researchBundleRepo,
         storyBlueprintRepo,
+        intakeSessionReadRepo,
+        creationSpecVersionReadRepo,
         taskRepo,
         artifactProvenanceRepo,
       });
@@ -411,6 +428,10 @@ export function createFakeGraphRunRepos() {
     nodeExecutionResultStore,
     researchBundleRepo,
     storyBlueprintRepo,
+    intakeSessionReadRepo,
+    creationSpecVersionReadRepo,
+    fakeIntakeSessions,
+    fakeSpecVersions,
     taskRepo,
     fakeTasks,
     artifactProvenanceRepo,

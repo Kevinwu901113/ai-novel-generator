@@ -73,10 +73,27 @@ export const productionArtifactResolver: ArtifactResolverPort = {
         }
         break;
       }
-      case 'idea':
-      case 'creationSpec':
+      case 'idea': {
+        // B3（D-B3-2）：idea artifact = 播种后的 intake session 行（见 b3-intake-wiring-design.md）
+        const sess = repos.intakeSessionReadRepo.getById(input.proposed.artifactId);
+        if (!sess) throw new Error('idea 对应的 intake session 不存在');
+        if (sess.projectId !== input.projectId) throw new Error('idea session project 不匹配');
+        break;
+      }
+      case 'creationSpec': {
+        // B3（D-B3-2）：creationSpec artifact = creation_contract_versions 行
+        const ver = repos.creationSpecVersionReadRepo.getById(
+          input.projectId,
+          input.proposed.artifactId,
+        );
+        if (!ver) throw new Error('creationSpec 版本不存在');
+        if (ver.version !== input.proposed.version) {
+          throw new Error('creationSpec version 不匹配');
+        }
+        break;
+      }
       case 'manuscript':
-        // provenance 已校验 producer 归属；底层权威存储属于 GE-3 / GE-7
+        // provenance 已校验 producer 归属；底层权威存储属于 GE-7
         break;
     }
     return {

@@ -51,7 +51,11 @@ import {
   IDEA_CAPTURE,
   IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
   SPEC_EXTRACT,
+  canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
+  validateCreationContractSections,
 } from '@ai-novel/domain';
+import { sha256Utf8 } from './creation-contract-repositories.js';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
 import type {
@@ -328,6 +332,52 @@ function buildKit(
 
 function seedProjectRun(_db: ProjectDatabase, deps: NodeRunnerDeps, key: string) {
   return createProjectRun(deps, { projectId: 'p1', idempotencyKey: key });
+}
+
+/**
+ * B3/D-B3-2：生产 resolver 现在校验 idea / creationSpec 的底层权威存储。
+ * 为生产等价 resolver 的用例预置真实行：idea = grill session（artifactId=sessionId）、
+ * creationSpec = creation_contract_versions 行（version 与 artifact version 一致）。
+ */
+function seedIntakeArtifactRows(db: ProjectDatabase): void {
+  db.getGrillSessionRepository().create({
+    id: 'idea-real-1',
+    projectId: 'p1',
+    goal: '一个模糊的创作想法',
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const sections = validateCreationContractSections({
+    premise: 'settlement 集成测试用创作要求',
+    genre: ['sci-fi'],
+    tone: ['dark'],
+    targetAudience: 'adults',
+    narrativePov: 'FIRST',
+    tense: 'PRESENT',
+    protagonist: { characterKey: 'protag', name: 'Protagonist' },
+  });
+  const sectionsJson = canonicalSerializeContractSections(sections);
+  db.getCreationContractVersionRepository().create({
+    id: 'spec-real-1',
+    projectId: 'p1',
+    version: 1,
+    schemaVersion: 1,
+    sourceProposalId: null,
+    basedOnGrillSessionId: null,
+    basedOnGrillSessionVersion: null,
+    sectionsJson,
+    lockedFieldPathsJson: '[]',
+    contractSnapshotHash: sha256Utf8(
+      canonicalSerializeContractSnapshot({
+        sections,
+        lockedFieldPaths: [],
+        schemaVersion: 1,
+      }),
+    ),
+    provenanceJson: '[]',
+    createdAt: NOW,
+    createdBy: 'user',
+  });
 }
 
 function seedChapterRun(_db: ProjectDatabase, deps: NodeRunnerDeps, key: string) {
@@ -1244,6 +1294,8 @@ describe('node execution settlement (real SQLite)', () => {
         false,
         NOW,
       );
+      // idea / creationSpec 同样需真实底层行（B3/D-B3-2）
+      seedIntakeArtifactRows(db);
 
       const settled = await driveRun(kit.deps, 'p1', runId);
 
@@ -1302,6 +1354,8 @@ describe('node execution settlement (real SQLite)', () => {
         false,
         NOW,
       );
+      // idea / creationSpec 底层真实行（B3/D-B3-2）
+      seedIntakeArtifactRows(db);
       await driveRun(kit.deps, 'p1', runIdA);
       const stateA = db.getGraphRunRepository().getById(runIdA)!
         .state as IdeaToNovelProjectRunState;

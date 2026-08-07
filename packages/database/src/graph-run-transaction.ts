@@ -37,6 +37,8 @@ import {
 import { ResearchBundleRepositoryImpl } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import { TaskRepositoryPortAdapter } from './task-repository-port-adapter.js';
+import { GrillSessionRepositoryImpl } from './grill-repositories.js';
+import { CreationContractVersionRepositoryImpl } from './creation-contract-repositories.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
@@ -96,6 +98,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly storyBlueprintRepo: StoryBlueprintRepositoryImpl;
   private readonly taskRepo: TaskRepositoryPortAdapter;
   private readonly artifactProvenanceRepo: NodeArtifactProvenanceRepositoryImpl;
+  private readonly intakeSessionReadRepo: GrillSessionRepositoryImpl;
+  private readonly creationSpecVersionReadRepo: CreationContractVersionRepositoryImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
@@ -108,6 +112,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
     this.storyBlueprintRepo = new StoryBlueprintRepositoryImpl(db);
     this.taskRepo = new TaskRepositoryPortAdapter(db);
     this.artifactProvenanceRepo = new NodeArtifactProvenanceRepositoryImpl(db);
+    this.intakeSessionReadRepo = new GrillSessionRepositoryImpl(db);
+    this.creationSpecVersionReadRepo = new CreationContractVersionRepositoryImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -131,6 +137,8 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       nodeExecutionResultStore: this.nodeExecutionResultStore,
       researchBundleRepo: this.researchBundleRepo,
       storyBlueprintRepo: this.storyBlueprintRepo,
+      intakeSessionReadRepo: this.intakeSessionReadRepo,
+      creationSpecVersionReadRepo: this.creationSpecVersionReadRepo,
       taskRepo: this.taskRepo,
       artifactProvenanceRepo: this.artifactProvenanceRepo,
     };
