@@ -484,6 +484,8 @@ export type { NodeSettlementDeps, SettleNodeExecutionInput } from './node-settle
 export { driveRun, runTerminalStatusOf } from './node-runner.js';
 export type { NodeDispatchResult, NodeRunnerDeps } from './node-runner.js';
 
+export { productionArtifactResolver } from './production-artifact-resolver.js';
+
 export {
   applyTransitionInTransaction,
   parkHumanNodes,
