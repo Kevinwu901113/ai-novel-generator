@@ -1800,7 +1800,16 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           driveAfter: (projectId, runId) => {
             void (async () => {
               const projDb = getProjectDb(projectId);
-              await driveRun(buildLiveNodeRunnerDeps(projDb, projectId), projectId, runId);
+              try {
+                await driveRun(buildLiveNodeRunnerDeps(projDb, projectId), projectId, runId);
+              } finally {
+                // 复查 Note-2：getProjectDb 每次新建连接，必须随驱动结束关闭
+                try {
+                  projDb.close();
+                } catch {
+                  // 关闭失败不产生 unhandled rejection
+                }
+              }
             })().catch(() => {});
           },
         };

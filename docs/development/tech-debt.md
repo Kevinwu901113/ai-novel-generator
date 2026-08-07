@@ -477,3 +477,57 @@ resolver 在 `packages/database/src/node-execution-integration.test.ts`（`realR
 
 - 保留代码作为防御性兜底，在两处补注释说明为何当前不可达、以及什么变化会使其可达
 - 若将来 `applyNodeFailure` 语义改为可路由回业务循环，需重新评估第 2 处的 activation 归属判定
+
+---
+
+## TD-022: settle_if_result 任务 RUNNING 中断 = intake run 报废（缺产品化恢复）
+
+**状态**: OPEN
+**优先级**: 中（B4/产品层处理）
+**来源**: B3 对抗式复查 Note-1（2026-08-07）
+
+### 问题
+
+SPEC_EXTRACT 任务 RUNNING 时应用退出 → 启动 `reconcileTasks` 标 `TASK_INTERRUPTED` →
+settle_if_result 策略不允许重放（防重复计费）→ run 终态 failed。策略自洽，但"抽取进行中退出
+应用 = intake run 报废"对产品第一入口不可接受。
+
+### 后续动作
+
+- 产品层给 failed intake run 一键重建（复用既有 CreationSpec/session），或允许
+  settle_if_result 在 TASK_INTERRUPTED 下有界重试（需重复计费评估）。
+
+---
+
+## TD-023: graph-handlers buildDeps 的 ProjectDatabase 连接泄漏（main 既有）
+
+**状态**: OPEN
+**优先级**: 中
+**来源**: B3 对抗式复查 Note-2（2026-08-07）
+
+### 问题
+
+`graph-handlers.ts` `buildDeps` 每次 RPC 打开 `ProjectDatabase` 从不 close（grill handlers
+均 finally close）。B3 的 driveAfter 已修（随驱动结束关闭）；buildDeps 的 main 既有泄漏未动。
+
+### 后续动作
+
+- 对齐 grill handlers 模式：graph.* 五条命令 finally close；或引入连接池/共享句柄。
+
+---
+
+## TD-024: intake 孤儿 ACTIVE session 清理 + resolver 不校验 session 状态
+
+**状态**: OPEN
+**优先级**: 低
+**来源**: B3 设计声明偏离 + 对抗式复查 Note-6（2026-08-07）
+
+### 问题
+
+IDEA_CAPTURE 每次执行新建 session（provenance 唯一闸门要求），重试/重启组合会留下未使用的
+ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可结算）；
+`executeSpecExtract` 直接 `questionRepo.create` 绕过 `addGrillQuestions` 的 ACTIVE 检查。
+
+### 后续动作
+
+- B4 或维护批次：新建时 abandon 前一 ACTIVE 会话；resolver 增状态白名单；问题写入走用例层。

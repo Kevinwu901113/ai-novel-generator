@@ -342,6 +342,9 @@ export async function executeSpecExtract(
     answer: answerByQuestion.get(q.id) ?? null,
   }));
   const currentPointer = deps.currentRepo.get(task.projectId);
+  // BLK-3：并发防护基线——最终事务将与此值比对。模型调用在途期间用户手工修改
+  // 创作要求（current 指针移动）时，本次抽取基于旧 baseline，必须作废而非静默覆盖。
+  const expectedCurrentVersionId = currentPointer?.currentVersionId ?? null;
   const baselineVersion = currentPointer
     ? deps.versionRepo.getById(task.projectId, currentPointer.currentVersionId)
     : null;
@@ -499,6 +502,14 @@ export async function executeSpecExtract(
   try {
     transaction(() => {
       const pointer = deps.currentRepo.get(task.projectId);
+      // BLK-3：与调用前捕获的期望指针比对（事务内重读再自比是自证式伪 CAS，挡不住
+      // 装配→模型调用→落库窗口内的用户修改）。不一致 → 本次抽取作废，用户版本保持 current。
+      if ((pointer?.currentVersionId ?? null) !== expectedCurrentVersionId) {
+        throw new TaskExecutionError(
+          'TASK_STATE_CONFLICT',
+          '创作要求在抽取期间被用户修改，本次抽取结果作废',
+        );
+      }
       const current = pointer
         ? deps.versionRepo.getById(task.projectId, pointer.currentVersionId)
         : null;

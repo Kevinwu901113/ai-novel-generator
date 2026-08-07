@@ -44,10 +44,14 @@ import {
   ASK_QUESTION,
   COLLECT_ANSWER,
   RESEARCH_DECISION,
+  canonicalSerializeContractSections,
+  canonicalSerializeContractSnapshot,
+  validateCreationContractSections,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { registerIntakeExecutors } from './intake-executors.js';
 import { buildGrillSessionDeps } from './grill-handlers.js';
+import { scheduleGraphTask } from './graph-task-runner.js';
 import { TaskRepositoryAdapter, ModelInvocationRepositoryAdapter } from './index.js';
 
 const NOW = '2026-08-07T00:00:00.000Z';
@@ -380,6 +384,157 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
       expect(projectState(env.deps, runId).artifacts.creationSpec?.artifactId).toBe(
         'user-edited-version',
       );
+    } finally {
+      db.close();
+    }
+  });
+
+  it('5. BLK-1 回归：ASK_QUESTION 重放幂等（问题已 ASKED 时返回空输出而非杀 run）', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const specDeps = buildSpecDeps(db, [askMoreJson()]);
+      const { run } = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-5' });
+      const runId = run.workflowRunId;
+      await driveRun(env.deps, 'p1', runId);
+      await executeSpecExtract(specDeps, uniq(env.scheduled)[0]);
+      await driveRun(env.deps, 'p1', runId); // ASK_QUESTION 已执行：问题被 markAsked
+      const state = projectState(env.deps, runId);
+      const sessionId = state.artifacts.idea!.artifactId;
+
+      // 模拟崩溃窗口重放：直接再次调用 ask-question executor（问题已是 ASKED、无答案）
+      const registry = new ExecutorRegistry();
+      const runners = new Map<string, NodeExecutorRunner>();
+      registerIntakeExecutors(registry, runners, { getProjectDb: () => db, idGenerator, clock });
+      const runner = runners.get('ask-question-v1')!;
+      const output = (
+        runner as unknown as {
+          execute: (ctx: unknown) => unknown;
+        }
+      ).execute({
+        projectId: 'p1',
+        graphRunId: runId,
+        nodeId: ASK_QUESTION,
+        executionId: 'replay-exec',
+        activationNo: 1,
+        attemptNo: 2,
+        inputSnapshot: { artifacts: { idea: { artifactId: sessionId } } },
+        inputHash: 'replay-hash',
+      });
+      // 幂等：返回空输出，不抛错（修复前此处抛"没有待提出的追问问题"→ fail-closed 杀 run）
+      expect(output).toEqual({});
+    } finally {
+      db.close();
+    }
+  });
+
+  it('6. BLK-2 回归：provider 未配置时任务保持 PENDING，run 不被打成终态', async () => {
+    const dbPath = join(tempDir, `project-blk2-${++idCounter}.sqlite`);
+    const db = new ProjectDatabase(dbPath);
+    db.getProjectMetadataRepository().create({
+      id: 'p1',
+      name: '测试项目',
+      initialIdea: '一个想法',
+      status: 'ACTIVE',
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    try {
+      const env = buildRunnerEnv(db);
+      const { run } = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-6' });
+      const runId = run.workflowRunId;
+      await driveRun(env.deps, 'p1', runId);
+      const taskId = uniq(env.scheduled)[0];
+
+      // 用 graph-task-runner 的真实调度路径执行——engine deps 的 provider 解析必然失败
+      const noProviderDeps = buildSpecDeps(db, []);
+      const brokenDeps = {
+        ...noProviderDeps,
+        providerRepo: {
+          ...(noProviderDeps.providerRepo as object),
+          getDefault: () => null,
+          getRoute: () => null,
+        } as never,
+      };
+      const runnerDeps = {
+        openDb: () => new ProjectDatabase(dbPath),
+        buildEngineDeps: () => brokenDeps,
+        getTaskRepo: () => new TaskRepositoryAdapter(db),
+        getInvocationRepo: () => new ModelInvocationRepositoryAdapter(db),
+        buildNodeRunnerDeps: () => env.deps,
+      };
+      const result = scheduleGraphTask(runnerDeps as never, 'p1', taskId);
+      expect(result.scheduled).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 300)); // 等异步 IIFE 收尾
+
+      // 修复前：task 被 settleRunnerFailure 打成 FAILED + driveRun 把 run 打成 failed
+      const task = new TaskRepositoryAdapter(db).getById(taskId)!;
+      expect(task.status).toBe('PENDING');
+      expect(projectState(env.deps, runId).terminalStatus).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('7. BLK-3 回归：模型调用在途时用户修改创作要求 → 本次抽取作废，用户版本保持 current', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const { run } = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-7' });
+      const runId = run.workflowRunId;
+      await driveRun(env.deps, 'p1', runId);
+      const taskId = uniq(env.scheduled)[0];
+
+      // invokeModel 在途副作用：用户提交手工版本并占据 current 指针
+      const base = buildSpecDeps(db, [specCompleteJson()]);
+      const userSections = validateCreationContractSections({
+        premise: '用户手工修改的前提',
+        genre: ['sci-fi'],
+        tone: ['dark'],
+        targetAudience: 'adults',
+        narrativePov: 'FIRST',
+        tense: 'PRESENT',
+        protagonist: { characterKey: 'protag', name: '主角' },
+      });
+      const userSectionsJson = canonicalSerializeContractSections(userSections);
+      const midCallDeps = {
+        ...base,
+        invokeModel: async (...args: Parameters<typeof base.invokeModel>) => {
+          db.getCreationContractVersionRepository().create({
+            id: 'user-v1',
+            projectId: 'p1',
+            version: 1,
+            schemaVersion: 1,
+            sourceProposalId: null,
+            basedOnGrillSessionId: null,
+            basedOnGrillSessionVersion: null,
+            sectionsJson: userSectionsJson,
+            lockedFieldPathsJson: '[]',
+            contractSnapshotHash: sha256Hex(
+              canonicalSerializeContractSnapshot({
+                sections: userSections,
+                lockedFieldPaths: [],
+                schemaVersion: 1,
+              }),
+            ),
+            provenanceJson: '[]',
+            createdAt: NOW,
+            createdBy: 'user',
+          });
+          expect(db.getCreationContractCurrentRepository().insertFirst('p1', 'user-v1', NOW)).toBe(
+            true,
+          );
+          return base.invokeModel(...args);
+        },
+      };
+
+      // 修复前：任务 SUCCEEDED、AI 版本静默压过用户版本；修复后：抽取作废
+      await expect(executeSpecExtract(midCallDeps as never, taskId)).rejects.toThrow('作废');
+      const task = new TaskRepositoryAdapter(db).getById(taskId)!;
+      expect(task.status).toBe('FAILED');
+      // 用户版本仍是 current；AI 版本因事务回滚不存在
+      expect(db.getCreationContractCurrentRepository().get('p1')?.currentVersionId).toBe('user-v1');
+      expect(db.getCreationContractVersionRepository().listSummaries('p1')).toHaveLength(1);
     } finally {
       db.close();
     }

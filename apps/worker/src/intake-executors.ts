@@ -132,20 +132,33 @@ function askQuestionExecute(
   if (!session || session.projectId !== ectx.projectId) {
     throw new Error('intake session 不存在或不属于本项目');
   }
-  const pending = grillDeps.questionRepo
-    .listBySession(sessionId)
+  const questions = grillDeps.questionRepo.listBySession(sessionId);
+  const pending = questions
     .filter((q) => q.status === 'PLANNED')
     .sort((a, b) => a.sequence - b.sequence);
   if (pending.length === 0) {
-    // 图语义保证 ASK_QUESTION 只在 SPEC_EXTRACT ask_more（已写入问题）后激活；
-    // 无 PLANNED 问题属数据不变量破坏，fail-fast 交给 EXECUTOR_ERROR fail-closed
+    // 幂等重放（B3 复查 BLK-1）：markAsked 提交与 settlement 之间崩溃 / lease 过期后，
+    // replayable 策略会重放本节点——此时问题已是 ASKED。存在"已问出且尚无当前答案"的
+    // 问题即视为本 activation 职责已完成，返回空输出而非抛错（抛错会 fail-closed 杀 run）。
+    const answered = new Set(
+      grillDeps.answerRepo.listCurrentBySession(sessionId).map((a) => a.questionId),
+    );
+    const askedOpen = questions.some((q) => q.status === 'ASKED' && !answered.has(q.id));
+    if (askedOpen) return {};
+    // 既无 PLANNED 也无待回答的 ASKED：数据不变量破坏，fail-fast
     throw new Error('没有待提出的追问问题');
   }
-  markQuestionAsked(grillDeps, {
-    sessionId,
-    expectedVersion: session.version,
-    questionId: pending[0].id,
-  });
+  try {
+    markQuestionAsked(grillDeps, {
+      sessionId,
+      expectedVersion: session.version,
+      questionId: pending[0].id,
+    });
+  } catch (err) {
+    // 并发/重放下 CAS 失败：若问题实际已被标记 ASKED，同样视为职责完成（幂等）
+    const q = grillDeps.questionRepo.getById(pending[0].id);
+    if (q?.status !== 'ASKED') throw err;
+  }
   // 图契约 noOut：不产 outcome、不产 artifact
   return {};
 }

@@ -14,6 +14,7 @@ import { driveRun } from '@ai-novel/application';
 import {
   executeChapterDraft,
   executeSpecExtract,
+  TaskExecutionError,
   type ChapterDraftExecutionDeps,
   type SpecExtractExecutionDeps,
 } from '@ai-novel/task-engine';
@@ -41,6 +42,22 @@ const GRAPH_TASK_MESSAGES: SettleMessages = {
   settleErrorMessage: 'Graph 任务执行失败',
   settleInvocationError: '模型调用因任务异常而未完成',
 };
+
+/**
+ * 配置类错误（B3 复查 BLK-2）：任务引擎在 claim 前抛出，task 仍是 PENDING——设计意图
+ * 就是"可在用户配置后重试"。此类错误不得 settle 为 FAILED，也不得触发任务后 driveRun
+ * （否则 reDispatchPending 会与本失败形成热循环）；保持 PENDING，由用户配置后的下一次
+ * 驱动 / 启动恢复自然重调度。
+ */
+const CONFIG_ERROR_CODES: ReadonlySet<string> = new Set([
+  'PROVIDER_NOT_CONFIGURED',
+  'API_KEY_READ_FAILED',
+  'API_KEY_REQUIRED',
+]);
+
+function isConfigError(err: unknown): boolean {
+  return err instanceof TaskExecutionError && CONFIG_ERROR_CODES.has(err.code);
+}
 
 export type GraphTaskScheduleResult =
   | { readonly scheduled: true }
@@ -107,7 +124,12 @@ export function scheduleGraphTask(
         } else {
           await executeSpecExtract(engineDeps, taskId);
         }
-      } catch {
+      } catch (err) {
+        if (isConfigError(err)) {
+          // BLK-2：保持 PENDING，不 settle、不 drive，等配置后重调度
+          closeDb();
+          return;
+        }
         settleRunnerFailure(deps, projDb, taskId, GRAPH_TASK_MESSAGES);
       }
       // D-B3-1：任务终结（成功或失败）后驱动一次 driveRun —— 结算刚完成的节点并
