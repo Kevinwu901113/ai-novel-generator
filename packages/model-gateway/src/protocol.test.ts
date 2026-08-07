@@ -144,7 +144,11 @@ describe('openai-chat 响应解析', () => {
     const parsed = openAiChatAdapter.parse({
       id: 'x',
       choices: [{ message: { content: 'OK' } }],
-      usage: { prompt_tokens: 5, completion_tokens: 2, prompt_tokens_details: { cached_tokens: 3 } },
+      usage: {
+        prompt_tokens: 5,
+        completion_tokens: 2,
+        prompt_tokens_details: { cached_tokens: 3 },
+      },
     });
     expect(parsed!.usage.cacheReadTokens).toBe(3);
   });
@@ -182,7 +186,7 @@ describe('openai-chat 响应解析', () => {
 // ── anthropic-messages 回归 ───────────────────────────────────────
 
 describe('anthropic-messages 回归（重构后行为不变）', () => {
-  it('URL 补 /v1/messages，鉴权头仍为 api-key', () => {
+  it('URL 补 /v1/messages，鉴权头双发 api-key 与 x-api-key + anthropic-version', () => {
     const req = anthropicMessagesAdapter.buildRequest({
       baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic/',
       model: 'mimo-v2.5-pro',
@@ -192,6 +196,8 @@ describe('anthropic-messages 回归（重构后行为不变）', () => {
     });
     expect(req.url).toBe('https://token-plan-cn.xiaomimimo.com/anthropic/v1/messages');
     expect(req.headers['api-key']).toBe('k');
+    expect(req.headers['x-api-key']).toBe('k');
+    expect(req.headers['anthropic-version']).toBe('2023-06-01');
     expect(req.headers).not.toHaveProperty('authorization');
   });
 

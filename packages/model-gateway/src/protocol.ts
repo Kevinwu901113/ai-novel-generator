@@ -6,7 +6,8 @@
  * - HTTP 执行、超时、错误归一化在 `index.ts` 中只实现一次，两种协议共用。
  *
  * 支持的协议（D6 明确只做最小形态，不做负载均衡 / 自动 fallback / 流式 / 复杂路由）：
- * - `anthropic-messages`：`POST {baseUrl}/v1/messages`，鉴权头 `api-key`；
+ * - `anthropic-messages`：`POST {baseUrl}/v1/messages`，鉴权头双发 `api-key`（MiMo 兼容）
+ *   与 `x-api-key` + `anthropic-version`（标准 Anthropic 协议端点，含 DeepSeek /anthropic）；
  * - `openai-chat`：`POST {baseUrl}/chat/completions`，鉴权头 `authorization: Bearer`，
  *   覆盖 OpenAI 及其兼容端点（DeepSeek 等）。
  *
@@ -111,8 +112,12 @@ export const anthropicMessagesAdapter: ProtocolAdapter = {
     return {
       url: `${trimTrailingSlashes(input.baseUrl)}/v1/messages`,
       headers: {
-        // 保持与既有 MiMo profile 一致的鉴权头，不改动已验证的可用配置
+        // 双发鉴权头：`api-key` 保持与既有 MiMo profile 一致（已验证可用），
+        // `x-api-key` + `anthropic-version` 覆盖标准 Anthropic 协议端点
+        // （含 DeepSeek 的 /anthropic）。端点各取所需，互不干扰。
         'api-key': input.apiKey,
+        'x-api-key': input.apiKey,
+        'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
       body: JSON.stringify(body),
