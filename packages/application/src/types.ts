@@ -160,6 +160,8 @@ export interface ProviderProfileData {
   readonly keychainService: string;
   readonly keychainAccount: string;
   readonly enabled: boolean;
+  /** 是否为全局默认 provider（D6 路由第一层） */
+  readonly isDefault: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly lastTestedAt: string | null;
@@ -168,9 +170,55 @@ export interface ProviderProfileData {
   readonly lastTestLatencyMs: number | null;
 }
 
-/** 提供商配置仓库接口 */
+/** 新建 provider profile 的持久化输入（id 与 keychain 槽位均由应用层生成） */
+export interface CreateProviderProfileData {
+  readonly id: string;
+  /** 协议标识：'anthropic-messages' | 'openai-chat' */
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly keychainService: string;
+  readonly keychainAccount: string;
+  readonly enabled: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** 更新 provider profile 的可变字段（不含 keychain 槽位与 id） */
+export interface UpdateProviderProfileData {
+  readonly id: string;
+  readonly providerType: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly enabled: boolean;
+  readonly updatedAt: string;
+}
+
+/**
+ * 提供商配置仓库接口（B1 多 provider）。
+ *
+ * 约束：
+ * - `setDefault` 必须原子地清除旧默认并设置新默认（DB 侧 partial unique 保证至多一条）；
+ * - `delete` 同时清除该 profile 的任务类型路由覆盖；
+ * - 仓库只处理非敏感配置，API Key 由 SecretStore 独立管理。
+ */
 export interface ProviderProfileRepository {
   getById(id: string): ProviderProfileData | null;
+  list(): ReadonlyArray<ProviderProfileData>;
+  /** 全局默认 provider（D6 路由第一层）；无默认时返回 null */
+  getDefault(): ProviderProfileData | null;
+  create(data: CreateProviderProfileData): void;
+  update(data: UpdateProviderProfileData): void;
+  /** 删除 profile 及其路由覆盖；返回是否确有删除 */
+  delete(id: string): boolean;
+  /** 原子设置全局默认；id 不存在返回 false */
+  setDefault(id: string): boolean;
+  /** 任务类型路由覆盖（D6 路由第二层）；无覆盖返回 null */
+  getRoute(taskType: string): string | null;
+  setRoute(taskType: string, profileId: string, updatedAt: string): void;
+  deleteRoute(taskType: string): void;
   updateTestResult(
     id: string,
     result: {

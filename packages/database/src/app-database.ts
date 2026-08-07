@@ -18,6 +18,8 @@ import type {
   CreationPhase,
   ProviderProfileRepository,
   ProviderProfileRow,
+  CreateProviderProfileData,
+  UpdateProviderProfileData,
   Migration,
 } from './types.js';
 
@@ -126,6 +128,76 @@ const APP_MIGRATIONS: ReadonlyArray<Migration> = [
 
       DROP TABLE provider_profiles_v3_old;
       DROP TABLE IF EXISTS provider_profiles_v4_upgrade;
+    `,
+  },
+  {
+    version: 5,
+    sql: `
+      -- Migration 5：多 provider 最小形态（D6）。
+      --
+      -- 1. provider_type 列改为承载**协议标识**：'anthropic-messages' | 'openai-chat'。
+      --    既有唯一取值 'anthropic-compatible' 一次性重写为 'anthropic-messages'
+      --    （现有 MiMo V2.5 Pro 配置因此迁移为一个 anthropic-messages profile，不中断服务）。
+      --    为不丢用户配置，任何未知历史取值同样归一到 'anthropic-messages'。
+      -- 2. 新增 is_default：D6 路由第一层（全局默认 provider）。partial unique 保证至多一条。
+      -- 3. display_name 语义即 label；不改列名，避免为纯命名再做一次表重建。
+      -- 4. keychain_service / keychain_account 本就是 per-profile 的 key 槽位（secretRef），
+      --    多 provider 下每个 profile 各自一个槽位，无需结构变化。
+
+      ALTER TABLE provider_profiles RENAME TO provider_profiles_v4_old;
+
+      CREATE TABLE provider_profiles (
+        id TEXT PRIMARY KEY,
+        provider_type TEXT NOT NULL
+          CHECK (provider_type IN ('anthropic-messages', 'openai-chat')),
+        display_name TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        model TEXT NOT NULL,
+        keychain_service TEXT NOT NULL,
+        keychain_account TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        is_default INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_tested_at TEXT,
+        last_test_status TEXT CHECK (last_test_status IS NULL OR last_test_status IN ('never', 'success', 'failed')),
+        last_test_error_code TEXT,
+        last_test_latency_ms INTEGER CHECK (last_test_latency_ms IS NULL OR last_test_latency_ms >= 0)
+      ) STRICT;
+
+      INSERT INTO provider_profiles
+        (id, provider_type, display_name, base_url, model,
+         keychain_service, keychain_account, enabled, is_default,
+         created_at, updated_at, last_tested_at, last_test_status,
+         last_test_error_code, last_test_latency_ms)
+      SELECT
+        id,
+        CASE WHEN provider_type = 'openai-chat' THEN 'openai-chat' ELSE 'anthropic-messages' END,
+        display_name, base_url, model,
+        keychain_service, keychain_account, enabled, 0,
+        created_at, updated_at, last_tested_at, last_test_status,
+        last_test_error_code, last_test_latency_ms
+      FROM provider_profiles_v4_old;
+
+      DROP TABLE provider_profiles_v4_old;
+
+      -- 至多一个全局默认 provider
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_profiles_default
+        ON provider_profiles(is_default) WHERE is_default = 1;
+
+      -- 迁移后若尚无默认，取创建时间最早的一条（即既有 MiMo profile）作为默认
+      UPDATE provider_profiles
+      SET is_default = 1
+      WHERE id = (SELECT id FROM provider_profiles ORDER BY created_at, id LIMIT 1)
+        AND NOT EXISTS (SELECT 1 FROM provider_profiles WHERE is_default = 1);
+
+      -- D6 路由第二层：按任务类型覆盖默认 provider（可选；无行即用全局默认）
+      CREATE TABLE IF NOT EXISTS provider_routes (
+        task_type TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (profile_id) REFERENCES provider_profiles(id) ON DELETE CASCADE
+      ) STRICT;
     `,
   },
 ];
@@ -317,123 +389,91 @@ class ProjectCreationRepositoryImpl implements ProjectCreationRepository {
 
 // ── 提供商配置仓库实现 ──────────────────────────────────────────────
 
+/** provider_profiles 原始行（数据库列名） */
+interface ProviderProfileSqlRow {
+  id: string;
+  provider_type: string;
+  display_name: string;
+  base_url: string;
+  model: string;
+  keychain_service: string;
+  keychain_account: string;
+  enabled: number;
+  is_default: number;
+  created_at: string;
+  updated_at: string;
+  last_tested_at: string | null;
+  last_test_status: string | null;
+  last_test_error_code: string | null;
+  last_test_latency_ms: number | null;
+}
+
+function mapProviderProfileRow(row: ProviderProfileSqlRow): ProviderProfileRow {
+  return {
+    id: row.id,
+    providerType: row.provider_type,
+    displayName: row.display_name,
+    baseUrl: row.base_url,
+    model: row.model,
+    keychainService: row.keychain_service,
+    keychainAccount: row.keychain_account,
+    enabled: row.enabled === 1,
+    isDefault: row.is_default === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    lastTestedAt: row.last_tested_at,
+    lastTestStatus: row.last_test_status,
+    lastTestErrorCode: row.last_test_error_code,
+    lastTestLatencyMs: row.last_test_latency_ms,
+  };
+}
+
+const PROVIDER_PROFILE_SELECT_COLUMNS = `id, provider_type, display_name, base_url, model,
+                keychain_service, keychain_account, enabled, is_default,
+                created_at, updated_at, last_tested_at, last_test_status,
+                last_test_error_code, last_test_latency_ms`;
+
 class ProviderProfileRepositoryImpl implements ProviderProfileRepository {
   constructor(private readonly db: DatabaseSync) {}
 
   getById(id: string): ProviderProfileRow | null {
     const row = this.db
-      .prepare(
-        `SELECT id, provider_type, display_name, base_url, model,
-                keychain_service, keychain_account, enabled,
-                created_at, updated_at, last_tested_at, last_test_status,
-                last_test_error_code, last_test_latency_ms
-         FROM provider_profiles WHERE id = ?`,
-      )
-      .get(id) as
-      | {
-          id: string;
-          provider_type: string;
-          display_name: string;
-          base_url: string;
-          model: string;
-          keychain_service: string;
-          keychain_account: string;
-          enabled: number;
-          created_at: string;
-          updated_at: string;
-          last_tested_at: string | null;
-          last_test_status: string | null;
-          last_test_error_code: string | null;
-          last_test_latency_ms: number | null;
-        }
-      | undefined;
+      .prepare(`SELECT ${PROVIDER_PROFILE_SELECT_COLUMNS} FROM provider_profiles WHERE id = ?`)
+      .get(id) as ProviderProfileSqlRow | undefined;
 
     if (!row) return null;
-
-    return {
-      id: row.id,
-      providerType: row.provider_type,
-      displayName: row.display_name,
-      baseUrl: row.base_url,
-      model: row.model,
-      keychainService: row.keychain_service,
-      keychainAccount: row.keychain_account,
-      enabled: row.enabled === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastTestedAt: row.last_tested_at,
-      lastTestStatus: row.last_test_status,
-      lastTestErrorCode: row.last_test_error_code,
-      lastTestLatencyMs: row.last_test_latency_ms,
-    };
+    return mapProviderProfileRow(row);
   }
 
   list(): ReadonlyArray<ProviderProfileRow> {
     const rows = this.db
       .prepare(
-        `SELECT id, provider_type, display_name, base_url, model,
-                keychain_service, keychain_account, enabled,
-                created_at, updated_at, last_tested_at, last_test_status,
-                last_test_error_code, last_test_latency_ms
-         FROM provider_profiles ORDER BY created_at`,
+        `SELECT ${PROVIDER_PROFILE_SELECT_COLUMNS} FROM provider_profiles ORDER BY created_at`,
       )
-      .all() as Array<{
-      id: string;
-      provider_type: string;
-      display_name: string;
-      base_url: string;
-      model: string;
-      keychain_service: string;
-      keychain_account: string;
-      enabled: number;
-      created_at: string;
-      updated_at: string;
-      last_tested_at: string | null;
-      last_test_status: string | null;
-      last_test_error_code: string | null;
-      last_test_latency_ms: number | null;
-    }>;
+      .all() as unknown as Array<ProviderProfileSqlRow>;
 
-    return rows.map((row) => ({
-      id: row.id,
-      providerType: row.provider_type,
-      displayName: row.display_name,
-      baseUrl: row.base_url,
-      model: row.model,
-      keychainService: row.keychain_service,
-      keychainAccount: row.keychain_account,
-      enabled: row.enabled === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      lastTestedAt: row.last_tested_at,
-      lastTestStatus: row.last_test_status,
-      lastTestErrorCode: row.last_test_error_code,
-      lastTestLatencyMs: row.last_test_latency_ms,
-    }));
+    return rows.map(mapProviderProfileRow);
   }
 
-  upsert(
-    data: Omit<
-      ProviderProfileRow,
-      'lastTestedAt' | 'lastTestStatus' | 'lastTestErrorCode' | 'lastTestLatencyMs'
-    >,
-  ): void {
+  getDefault(): ProviderProfileRow | null {
+    const row = this.db
+      .prepare(
+        `SELECT ${PROVIDER_PROFILE_SELECT_COLUMNS} FROM provider_profiles WHERE is_default = 1`,
+      )
+      .get() as ProviderProfileSqlRow | undefined;
+
+    if (!row) return null;
+    return mapProviderProfileRow(row);
+  }
+
+  create(data: CreateProviderProfileData): void {
     this.db
       .prepare(
         `INSERT INTO provider_profiles
            (id, provider_type, display_name, base_url, model,
-            keychain_service, keychain_account, enabled,
+            keychain_service, keychain_account, enabled, is_default,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           provider_type = excluded.provider_type,
-           display_name = excluded.display_name,
-           base_url = excluded.base_url,
-           model = excluded.model,
-           keychain_service = excluded.keychain_service,
-           keychain_account = excluded.keychain_account,
-           enabled = excluded.enabled,
-           updated_at = excluded.updated_at`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(
         data.id,
@@ -447,6 +487,83 @@ class ProviderProfileRepositoryImpl implements ProviderProfileRepository {
         data.createdAt,
         data.updatedAt,
       );
+  }
+
+  update(data: UpdateProviderProfileData): void {
+    this.db
+      .prepare(
+        `UPDATE provider_profiles
+         SET provider_type = ?, display_name = ?, base_url = ?, model = ?,
+             enabled = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        data.providerType,
+        data.displayName,
+        data.baseUrl,
+        data.model,
+        data.enabled ? 1 : 0,
+        data.updatedAt,
+        data.id,
+      );
+  }
+
+  delete(id: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM provider_routes WHERE profile_id = ?').run(id);
+      const result = this.db.prepare('DELETE FROM provider_profiles WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
+      return result.changes === 1;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  setDefault(id: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db
+        .prepare('UPDATE provider_profiles SET is_default = 0 WHERE is_default = 1')
+        .run();
+      const result = this.db
+        .prepare('UPDATE provider_profiles SET is_default = 1 WHERE id = ?')
+        .run(id);
+      if (result.changes !== 1) {
+        this.db.exec('ROLLBACK');
+        return false;
+      }
+      this.db.exec('COMMIT');
+      return true;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  getRoute(taskType: string): string | null {
+    const row = this.db
+      .prepare('SELECT profile_id FROM provider_routes WHERE task_type = ?')
+      .get(taskType) as { profile_id: string } | undefined;
+
+    return row ? row.profile_id : null;
+  }
+
+  setRoute(taskType: string, profileId: string, updatedAt: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO provider_routes (task_type, profile_id, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(task_type) DO UPDATE SET
+           profile_id = excluded.profile_id,
+           updated_at = excluded.updated_at`,
+      )
+      .run(taskType, profileId, updatedAt);
+  }
+
+  deleteRoute(taskType: string): void {
+    this.db.prepare('DELETE FROM provider_routes WHERE task_type = ?').run(taskType);
   }
 
   updateTestResult(
@@ -479,7 +596,7 @@ class ProviderProfileRepositoryImpl implements ProviderProfileRepository {
 
 export const FIXED_PROVIDER_PROFILE = {
   id: 'mimo-token-plan-cn',
-  providerType: 'anthropic-compatible',
+  providerType: 'anthropic-messages',
   displayName: 'Xiaomi MiMo Token Plan CN',
   baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
   model: 'mimo-v2.5-pro',
@@ -533,21 +650,15 @@ export class AppDatabase implements AppDatabaseManager {
 
   private ensureFixedProviderProfile(): void {
     const now = new Date().toISOString();
+    // 只播种一次：固定 profile 不存在时插入；已存在（含用户已改名/改址/改模型）时不覆盖。
     this.db
       .prepare(
         `INSERT INTO provider_profiles
            (id, provider_type, display_name, base_url, model,
-            keychain_service, keychain_account, enabled,
+            keychain_service, keychain_account, enabled, is_default,
             created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           provider_type = excluded.provider_type,
-           display_name = excluded.display_name,
-           base_url = excluded.base_url,
-           model = excluded.model,
-           keychain_service = excluded.keychain_service,
-           keychain_account = excluded.keychain_account,
-           updated_at = excluded.updated_at`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+         ON CONFLICT(id) DO NOTHING`,
       )
       .run(
         FIXED_PROVIDER_PROFILE.id,
@@ -561,5 +672,11 @@ export class AppDatabase implements AppDatabaseManager {
         now,
         now,
       );
+
+    // 若当前没有任何默认 provider（例如首次播种、或迁移场景），
+    // 把固定 profile 设为默认，保证 D6 路由第一层始终有值可用。
+    if (this.providerProfileRepo.getDefault() === null) {
+      this.providerProfileRepo.setDefault(FIXED_PROVIDER_PROFILE.id);
+    }
   }
 }

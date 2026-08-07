@@ -23,11 +23,15 @@ import {
   isValidCreateProjectInput,
   isValidOpenProjectInput,
   isValidSaveApiKeyInput,
+  isValidProviderProfileIdInput,
+  isValidCreateProviderProfileInput,
+  isValidUpdateProviderProfileInput,
   isValidCreateModelInvocationTestInput,
   isValidGrillRequestQuestionPlanInput,
   type AppError as AppErrorType,
   type ErrorCode,
   type ProviderPublicState,
+  type ProviderProtocol,
   type ConnectionTestResult,
   type TaskPublicData,
   type TaskStatsPublicData,
@@ -37,7 +41,12 @@ import {
   createProject,
   listProjects,
   openProject,
-  getProviderState,
+  listProviders,
+  createProvider,
+  updateProvider,
+  deleteProvider,
+  setDefaultProvider,
+  resolveProviderForTask,
   saveProviderApiKey,
   deleteProviderApiKey,
   testProviderConnection,
@@ -47,7 +56,7 @@ import {
   type CreateProjectDeps,
   type ListProjectsDeps,
   type OpenProjectDeps,
-  type GetProviderStateDeps,
+  type ProviderProfileDeps,
   type SaveProviderApiKeyDeps,
   type DeleteProviderApiKeyDeps,
   type TestProviderConnectionDeps,
@@ -347,6 +356,66 @@ class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
     return this.toAppData(row);
   }
 
+  list(): ReadonlyArray<ProviderProfileData> {
+    return this.appDb
+      .getProviderProfileRepository()
+      .list()
+      .map((row) => this.toAppData(row));
+  }
+
+  getDefault(): ProviderProfileData | null {
+    const row = this.appDb.getProviderProfileRepository().getDefault();
+    if (!row) return null;
+    return this.toAppData(row);
+  }
+
+  create(data: {
+    id: string;
+    providerType: string;
+    displayName: string;
+    baseUrl: string;
+    model: string;
+    keychainService: string;
+    keychainAccount: string;
+    enabled: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }): void {
+    this.appDb.getProviderProfileRepository().create(data);
+  }
+
+  update(data: {
+    id: string;
+    providerType: string;
+    displayName: string;
+    baseUrl: string;
+    model: string;
+    enabled: boolean;
+    updatedAt: string;
+  }): void {
+    this.appDb.getProviderProfileRepository().update(data);
+  }
+
+  delete(id: string): boolean {
+    return this.appDb.getProviderProfileRepository().delete(id);
+  }
+
+  setDefault(id: string): boolean {
+    return this.appDb.getProviderProfileRepository().setDefault(id);
+  }
+
+  getRoute(taskType: string): string | null {
+    return this.appDb.getProviderProfileRepository().getRoute(taskType);
+  }
+
+  setRoute(taskType: string, profileId: string, updatedAt: string): void {
+    this.appDb.getProviderProfileRepository().setRoute(taskType, profileId, updatedAt);
+  }
+
+  deleteRoute(taskType: string): void {
+    this.appDb.getProviderProfileRepository().deleteRoute(taskType);
+  }
+
   updateTestResult(
     id: string,
     result: {
@@ -369,6 +438,7 @@ class ProviderProfileRepositoryAdapter implements AppProviderProfileRepository {
       keychainService: row.keychainService,
       keychainAccount: row.keychainAccount,
       enabled: row.enabled,
+      isDefault: row.isDefault,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastTestedAt: row.lastTestedAt,
@@ -1124,17 +1194,51 @@ function handleOpenProject(payload: unknown): unknown {
 
 // ── 提供商命令处理 ─────────────────────────────────────────────────
 
-async function handleGetProviderState(): Promise<ProviderPublicState> {
+/** 构建 ProviderProfile 用例依赖（list/create/update/delete/setDefault 共用） */
+function buildProviderProfileDeps(): ProviderProfileDeps {
   if (!appDb || !secretStore) {
     throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
   }
-
-  const deps: GetProviderStateDeps = {
+  return {
     providerRepo: new ProviderProfileRepositoryAdapter(appDb),
     secretStore,
+    idGenerator: createIdGenerator(),
+    clock: createClock(),
   };
+}
 
-  return getProviderState(deps);
+async function handleListProviders(): Promise<ReadonlyArray<ProviderPublicState>> {
+  return listProviders(buildProviderProfileDeps());
+}
+
+async function handleCreateProvider(payload: unknown): Promise<ProviderPublicState> {
+  if (!isValidCreateProviderProfileInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的创建提供商输入');
+  }
+  return createProvider(buildProviderProfileDeps(), payload);
+}
+
+async function handleUpdateProvider(payload: unknown): Promise<ProviderPublicState> {
+  if (!isValidUpdateProviderProfileInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的更新提供商输入');
+  }
+  return updateProvider(buildProviderProfileDeps(), payload);
+}
+
+async function handleDeleteProvider(payload: unknown): Promise<ReadonlyArray<ProviderPublicState>> {
+  if (!isValidProviderProfileIdInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的提供商 id 输入');
+  }
+  return deleteProvider(buildProviderProfileDeps(), payload.profileId);
+}
+
+async function handleSetDefaultProvider(
+  payload: unknown,
+): Promise<ReadonlyArray<ProviderPublicState>> {
+  if (!isValidProviderProfileIdInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的提供商 id 输入');
+  }
+  return setDefaultProvider(buildProviderProfileDeps(), payload.profileId);
 }
 
 async function handleSaveProviderApiKey(payload: unknown): Promise<ProviderPublicState> {
@@ -1152,10 +1256,14 @@ async function handleSaveProviderApiKey(payload: unknown): Promise<ProviderPubli
     clock: createClock(),
   };
 
-  return saveProviderApiKey(deps, { apiKey: payload.apiKey });
+  return saveProviderApiKey(deps, { profileId: payload.profileId, apiKey: payload.apiKey });
 }
 
-async function handleDeleteProviderApiKey(): Promise<ProviderPublicState> {
+async function handleDeleteProviderApiKey(payload: unknown): Promise<ProviderPublicState> {
+  if (!isValidProviderProfileIdInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的提供商 id 输入');
+  }
+
   if (!appDb || !secretStore) {
     throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
   }
@@ -1166,10 +1274,14 @@ async function handleDeleteProviderApiKey(): Promise<ProviderPublicState> {
     clock: createClock(),
   };
 
-  return deleteProviderApiKey(deps);
+  return deleteProviderApiKey(deps, payload.profileId);
 }
 
-async function handleTestProviderConnection(): Promise<ConnectionTestResult> {
+async function handleTestProviderConnection(payload: unknown): Promise<ConnectionTestResult> {
+  if (!isValidProviderProfileIdInput(payload)) {
+    throw new AppError('VALIDATION_ERROR', '无效的提供商 id 输入');
+  }
+
   if (!appDb || !secretStore) {
     throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
   }
@@ -1178,12 +1290,17 @@ async function handleTestProviderConnection(): Promise<ConnectionTestResult> {
     providerRepo: new ProviderProfileRepositoryAdapter(appDb),
     secretStore,
     clock: createClock(),
-    testConnection: async (input: { baseUrl: string; model: string; apiKey: string }) => {
+    testConnection: async (input: {
+      baseUrl: string;
+      model: string;
+      apiKey: string;
+      protocol: ProviderProtocol;
+    }) => {
       return modelGatewayTestConnection({ fetch: globalThis.fetch, clock: createClock() }, input);
     },
   };
 
-  return testProviderConnection(deps);
+  return testProviderConnection(deps, payload.profileId);
 }
 
 // ── 任务命令处理 ─────────────────────────────────────────────────
@@ -1466,14 +1583,12 @@ async function handleRequestQuestionPlan(
     throw new AppError('WORKER_UNAVAILABLE', '数据库未初始化');
   }
 
-  // 从当前启用的产品提供商配置解析 providerProfileId（Renderer 不传递）
-  const enabledProfile = appDb
-    .getProviderProfileRepository()
-    .list()
-    .find((p) => p.enabled);
-  if (!enabledProfile) {
-    throw new AppError('PROVIDER_NOT_CONFIGURED', '请先配置模型提供商');
-  }
+  // 解析 provider（Renderer 不传递）：走 D6 两层路由（任务类型覆盖 → 全局默认）。
+  // 不再用"列表里第一个 enabled"的旧规则 —— 多 provider 之后那会与默认设置冲突。
+  const enabledProfile = resolveProviderForTask(
+    { providerRepo: new ProviderProfileRepositoryAdapter(appDb) },
+    'GRILL_QUESTION_PLAN',
+  );
 
   const projDb = getProjectDb(payload.projectId);
   try {
@@ -1598,17 +1713,29 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'project.open':
         data = handleOpenProject(request.payload);
         break;
-      case 'provider.getState':
-        data = await handleGetProviderState();
+      case 'provider.list':
+        data = await handleListProviders();
+        break;
+      case 'provider.create':
+        data = await handleCreateProvider(request.payload);
+        break;
+      case 'provider.update':
+        data = await handleUpdateProvider(request.payload);
+        break;
+      case 'provider.delete':
+        data = await handleDeleteProvider(request.payload);
+        break;
+      case 'provider.setDefault':
+        data = await handleSetDefaultProvider(request.payload);
         break;
       case 'provider.saveApiKey':
         data = await handleSaveProviderApiKey(request.payload);
         break;
       case 'provider.deleteApiKey':
-        data = await handleDeleteProviderApiKey();
+        data = await handleDeleteProviderApiKey(request.payload);
         break;
       case 'provider.testConnection':
-        data = await handleTestProviderConnection();
+        data = await handleTestProviderConnection(request.payload);
         break;
       case 'task.createModelInvocationTest':
         data = await handleCreateModelInvocationTest(request.payload);
@@ -1672,28 +1799,17 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           getProjectDb,
           idGenerator: createIdGenerator(),
           clock: createClock(),
+          // 走 D6 两层路由（任务类型覆盖 → 全局默认）；无可用 provider 时返回 null，
+          // 由调用方按既有语义处理。不再使用"列表里第一个 enabled"的旧规则。
           resolveEnabledProvider: () => {
-            const enabled = appDb!
-              .getProviderProfileRepository()
-              .list()
-              .find((p) => p.enabled);
-            if (!enabled) return null;
-            return {
-              id: enabled.id,
-              providerType: enabled.providerType,
-              displayName: enabled.displayName,
-              baseUrl: enabled.baseUrl,
-              model: enabled.model,
-              keychainService: enabled.keychainService,
-              keychainAccount: enabled.keychainAccount,
-              enabled: enabled.enabled,
-              createdAt: enabled.createdAt,
-              updatedAt: enabled.updatedAt,
-              lastTestedAt: enabled.lastTestedAt,
-              lastTestStatus: enabled.lastTestStatus,
-              lastTestErrorCode: enabled.lastTestErrorCode,
-              lastTestLatencyMs: enabled.lastTestLatencyMs,
-            };
+            try {
+              return resolveProviderForTask(
+                { providerRepo: new ProviderProfileRepositoryAdapter(appDb!) },
+                'CREATION_CONTRACT_DRAFT',
+              );
+            } catch {
+              return null;
+            }
           },
           getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
           scheduleContractDraft: (projectId: string, taskId: string) =>

@@ -157,8 +157,25 @@ export interface OpenProjectResult {
 
 // ── 提供商类型 ─────────────────────────────────────────────────────
 
-/** 提供商类型 */
-export type ProviderType = 'anthropic-compatible';
+/**
+ * 提供商协议（D6：只做两种最小形态的协议适配）。
+ *
+ * - `anthropic-messages`：Anthropic Messages API（`POST {baseUrl}/v1/messages`）；
+ * - `openai-chat`：OpenAI Chat Completions 兼容端点（`POST {baseUrl}/chat/completions`，
+ *   覆盖 OpenAI / DeepSeek 等兼容服务）。
+ *
+ * 不做负载均衡、自动 fallback、流式与复杂路由。
+ */
+export type ProviderProtocol = 'anthropic-messages' | 'openai-chat';
+
+export const PROVIDER_PROTOCOLS: ReadonlyArray<ProviderProtocol> = [
+  'anthropic-messages',
+  'openai-chat',
+];
+
+export function isProviderProtocol(value: unknown): value is ProviderProtocol {
+  return value === 'anthropic-messages' || value === 'openai-chat';
+}
 
 /** 连接测试状态 */
 export type ConnectionTestStatus = 'never' | 'success' | 'failed';
@@ -166,11 +183,13 @@ export type ConnectionTestStatus = 'never' | 'success' | 'failed';
 /** 提供商公开状态 —— 返回给 Renderer，不含 secret */
 export interface ProviderPublicState {
   readonly id: string;
-  readonly displayName: string;
-  readonly providerType: ProviderType;
+  readonly label: string;
+  readonly protocol: ProviderProtocol;
   readonly baseUrl: string;
   readonly model: string;
   readonly enabled: boolean;
+  /** 是否为全局默认 provider（D6 路由第一层） */
+  readonly isDefault: boolean;
   readonly hasApiKey: boolean;
   readonly lastTestedAt: string | null;
   readonly lastTestStatus: ConnectionTestStatus;
@@ -186,9 +205,33 @@ export interface ConnectionTestResult {
   readonly errorMessage: string | null;
 }
 
-/** 保存 API Key 输入 */
+/** 保存 API Key 输入（每 profile 一个 key 槽位） */
 export interface SaveApiKeyInput {
+  readonly profileId: string;
   readonly apiKey: string;
+}
+
+/** 仅按 profile id 定位的输入（删除 / 设为默认 / 删除 Key / 测试连接） */
+export interface ProviderProfileIdInput {
+  readonly profileId: string;
+}
+
+/** 新建 provider profile 输入（不含 API Key；Key 经 SaveApiKey 单独写入 Keychain） */
+export interface CreateProviderProfileInput {
+  readonly label: string;
+  readonly protocol: ProviderProtocol;
+  readonly baseUrl: string;
+  readonly model: string;
+}
+
+/** 更新 provider profile 输入（不含 API Key） */
+export interface UpdateProviderProfileInput {
+  readonly profileId: string;
+  readonly label: string;
+  readonly protocol: ProviderProtocol;
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly enabled: boolean;
 }
 
 // ── 任务类型 ──────────────────────────────────────────────────────
@@ -234,7 +277,11 @@ export const IPC_CHANNELS = {
   PROJECT_CREATE: 'ipc:project-create',
   PROJECT_LIST: 'ipc:project-list',
   PROJECT_OPEN: 'ipc:project-open',
-  PROVIDER_GET_STATE: 'ipc:provider-get-state',
+  PROVIDER_LIST: 'ipc:provider-list',
+  PROVIDER_CREATE: 'ipc:provider-create',
+  PROVIDER_UPDATE: 'ipc:provider-update',
+  PROVIDER_DELETE: 'ipc:provider-delete',
+  PROVIDER_SET_DEFAULT: 'ipc:provider-set-default',
   PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
   PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
   PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
@@ -299,12 +346,16 @@ export interface ProjectsAPI {
   open(projectId: string): Promise<OpenProjectResult>;
 }
 
-/** 提供商 API */
+/** 提供商 API（多 provider；每个操作按 profileId 定位） */
 export interface ProviderAPI {
-  getState(): Promise<ProviderPublicState>;
+  list(): Promise<ReadonlyArray<ProviderPublicState>>;
+  create(input: CreateProviderProfileInput): Promise<ProviderPublicState>;
+  update(input: UpdateProviderProfileInput): Promise<ProviderPublicState>;
+  remove(input: ProviderProfileIdInput): Promise<ReadonlyArray<ProviderPublicState>>;
+  setDefault(input: ProviderProfileIdInput): Promise<ReadonlyArray<ProviderPublicState>>;
   saveApiKey(input: SaveApiKeyInput): Promise<ProviderPublicState>;
-  deleteApiKey(): Promise<ProviderPublicState>;
-  testConnection(): Promise<ConnectionTestResult>;
+  deleteApiKey(input: ProviderProfileIdInput): Promise<ProviderPublicState>;
+  testConnection(input: ProviderProfileIdInput): Promise<ConnectionTestResult>;
 }
 
 /** 列出问题输入 */
@@ -730,23 +781,77 @@ export function isAppError(data: unknown): data is AppError {
 export function isValidSaveApiKeyInput(data: unknown): data is SaveApiKeyInput {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  return typeof obj.apiKey === 'string';
+  return (
+    typeof obj.profileId === 'string' && obj.profileId.length > 0 && typeof obj.apiKey === 'string'
+  );
+}
+
+/** 验证仅含 profileId 的输入 */
+export function isValidProviderProfileIdInput(data: unknown): data is ProviderProfileIdInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return typeof obj.profileId === 'string' && obj.profileId.length > 0;
+}
+
+/**
+ * provider baseUrl 的传输层校验：必须是 http/https 绝对 URL，无空白字符。
+ *
+ * contracts 是环境中立包（不引入 DOM / Node 类型），因此不使用 `URL` 构造器解析；
+ * 这里只挡明显非法输入，更严格的私网 / 重定向边界属于调用层。
+ */
+function isValidProviderBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 500) return false;
+  return /^https?:\/\/[^\s/?#]+[^\s]*$/i.test(value);
+}
+
+function isNonEmptyString(value: unknown, maxLength: number): boolean {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maxLength;
+}
+
+/** 验证新建 provider profile 输入 */
+export function isValidCreateProviderProfileInput(
+  data: unknown,
+): data is CreateProviderProfileInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    isNonEmptyString(obj.label, 100) &&
+    isProviderProtocol(obj.protocol) &&
+    isValidProviderBaseUrl(obj.baseUrl) &&
+    isNonEmptyString(obj.model, 200)
+  );
+}
+
+/** 验证更新 provider profile 输入 */
+export function isValidUpdateProviderProfileInput(
+  data: unknown,
+): data is UpdateProviderProfileInput {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    typeof obj.profileId === 'string' &&
+    obj.profileId.length > 0 &&
+    isNonEmptyString(obj.label, 100) &&
+    isProviderProtocol(obj.protocol) &&
+    isValidProviderBaseUrl(obj.baseUrl) &&
+    isNonEmptyString(obj.model, 200) &&
+    typeof obj.enabled === 'boolean'
+  );
 }
 
 /** 验证 ProviderPublicState 结构 */
 export function isValidProviderPublicState(data: unknown): data is ProviderPublicState {
   if (typeof data !== 'object' || data === null) return false;
   const obj = data as Record<string, unknown>;
-  const validProviderTypes: ReadonlySet<string> = new Set(['anthropic-compatible']);
   const validTestStatuses: ReadonlySet<string> = new Set(['never', 'success', 'failed']);
   return (
     typeof obj.id === 'string' &&
-    typeof obj.displayName === 'string' &&
-    typeof obj.providerType === 'string' &&
-    validProviderTypes.has(obj.providerType) &&
+    typeof obj.label === 'string' &&
+    isProviderProtocol(obj.protocol) &&
     typeof obj.baseUrl === 'string' &&
     typeof obj.model === 'string' &&
     typeof obj.enabled === 'boolean' &&
+    typeof obj.isDefault === 'boolean' &&
     typeof obj.hasApiKey === 'boolean' &&
     (obj.lastTestedAt === null || typeof obj.lastTestedAt === 'string') &&
     typeof obj.lastTestStatus === 'string' &&

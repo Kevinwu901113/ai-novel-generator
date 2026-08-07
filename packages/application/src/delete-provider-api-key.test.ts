@@ -8,13 +8,14 @@ import type { SecretStore, ProviderProfileData, Clock } from './types.js';
 
 const FIXED_PROFILE: ProviderProfileData = {
   id: 'mimo-token-plan-cn',
-  providerType: 'anthropic-compatible',
+  providerType: 'anthropic-messages',
   displayName: 'Xiaomi MiMo Token Plan CN',
   baseUrl: 'https://token-plan-cn.xiaomimimo.com/anthropic',
   model: 'mimo-v2.5-pro',
   keychainService: 'com.ai-novel-generator.provider.mimo-token-plan-cn',
   keychainAccount: 'api-key',
   enabled: true,
+  isDefault: true,
   createdAt: '2024-01-01T00:00:00.000Z',
   updatedAt: '2024-01-01T00:00:00.000Z',
   lastTestedAt: '2024-06-15T12:00:00.000Z',
@@ -27,6 +28,15 @@ function createMockProviderRepo(profile: ProviderProfileData = FIXED_PROFILE) {
   let currentProfile = { ...profile };
   return {
     getById: () => currentProfile,
+    list: () => [currentProfile],
+    getDefault: () => (currentProfile.isDefault ? currentProfile : null),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(() => true),
+    setDefault: vi.fn(() => true),
+    getRoute: () => null,
+    setRoute: vi.fn(),
+    deleteRoute: vi.fn(),
     updateTestResult: vi.fn(
       (_id: string, result: { lastTestedAt: string; lastTestStatus: string }) => {
         currentProfile = {
@@ -69,7 +79,7 @@ function createDeps(overrides: Partial<DeleteProviderApiKeyDeps> = {}): DeletePr
 describe('deleteProviderApiKey', () => {
   it('应该成功删除 API Key', async () => {
     const deps = createDeps();
-    const state = await deleteProviderApiKey(deps);
+    const state = await deleteProviderApiKey(deps, 'mimo-token-plan-cn');
 
     expect(state.hasApiKey).toBe(false);
   });
@@ -78,7 +88,7 @@ describe('deleteProviderApiKey', () => {
     const providerRepo = createMockProviderRepo();
     const deps = createDeps({ providerRepo });
 
-    await deleteProviderApiKey(deps);
+    await deleteProviderApiKey(deps, 'mimo-token-plan-cn');
 
     expect(providerRepo.updateTestResult).toHaveBeenCalledWith('mimo-token-plan-cn', {
       lastTestedAt: '2024-06-16T00:00:00.000Z',
@@ -90,7 +100,7 @@ describe('deleteProviderApiKey', () => {
 
   it('应该返回更新后的 lastTestStatus', async () => {
     const deps = createDeps();
-    const state = await deleteProviderApiKey(deps);
+    const state = await deleteProviderApiKey(deps, 'mimo-token-plan-cn');
 
     expect(state.lastTestStatus).toBe('never');
     expect(state.lastTestedAt).toBe('2024-06-16T00:00:00.000Z');
@@ -107,19 +117,19 @@ describe('deleteProviderApiKey', () => {
     };
     const deps = createDeps({ secretStore });
 
-    await expect(deleteProviderApiKey(deps)).resolves.not.toThrow();
-    expect((await deleteProviderApiKey(deps)).hasApiKey).toBe(false);
+    await expect(deleteProviderApiKey(deps, 'mimo-token-plan-cn')).resolves.not.toThrow();
+    expect((await deleteProviderApiKey(deps, 'mimo-token-plan-cn')).hasApiKey).toBe(false);
   });
 
   it('profile 不存在时应抛出 PROVIDER_NOT_CONFIGURED', async () => {
     const deps = createDeps({
       providerRepo: {
+        ...createMockProviderRepo(),
         getById: () => null,
-        updateTestResult: vi.fn(),
       },
     });
 
-    await expect(deleteProviderApiKey(deps)).rejects.toThrow(/模型提供商未配置/);
+    await expect(deleteProviderApiKey(deps, 'missing')).rejects.toThrow(/模型提供商未配置/);
   });
 
   it('Keychain 删除失败时应抛出 API_KEY_DELETE_FAILED', async () => {
@@ -133,6 +143,37 @@ describe('deleteProviderApiKey', () => {
     };
     const deps = createDeps({ secretStore: failingSecretStore });
 
-    await expect(deleteProviderApiKey(deps)).rejects.toThrow(/Keychain error/);
+    await expect(deleteProviderApiKey(deps, 'mimo-token-plan-cn')).rejects.toThrow(
+      /Keychain error/,
+    );
+  });
+
+  it('两个 profile 的 key 删除应该互相独立', async () => {
+    const profileB: ProviderProfileData = {
+      ...FIXED_PROFILE,
+      id: 'profile-b',
+      isDefault: false,
+      keychainService: 'com.ai-novel-generator.provider.profile-b',
+    };
+    const deletedServices: string[] = [];
+    const secretStore: SecretStore = {
+      hasSecret: async () => false,
+      setSecret: async () => {},
+      getSecret: async () => null,
+      deleteSecret: async (service: string) => {
+        deletedServices.push(service);
+      },
+    };
+    const providerRepo = {
+      ...createMockProviderRepo(),
+      getById: (id: string) => (id === profileB.id ? profileB : FIXED_PROFILE),
+    };
+    const deps = createDeps({ providerRepo, secretStore });
+
+    await deleteProviderApiKey(deps, FIXED_PROFILE.id);
+    await deleteProviderApiKey(deps, profileB.id);
+
+    expect(deletedServices).toContain(FIXED_PROFILE.keychainService);
+    expect(deletedServices).toContain(profileB.keychainService);
   });
 });

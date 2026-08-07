@@ -23,9 +23,13 @@ const mockProject1 = {
 };
 
 const mockProviderState = {
-  displayName: 'OpenAI',
+  id: 'provider-1',
+  label: 'OpenAI',
+  protocol: 'openai-chat',
+  baseUrl: 'https://api.openai.com/v1',
   model: 'gpt-4',
-  providerType: 'openai',
+  enabled: true,
+  isDefault: true,
   hasApiKey: true,
   lastTestStatus: 'never',
   lastTestErrorCode: null,
@@ -68,10 +72,19 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       createModelInvocationTest: vi.fn(),
     },
     provider: {
-      getState: vi.fn().mockResolvedValue(mockProviderState),
+      list: vi.fn().mockResolvedValue([mockProviderState]),
+      create: vi.fn().mockResolvedValue(mockProviderState),
+      update: vi.fn().mockResolvedValue(mockProviderState),
+      remove: vi.fn().mockResolvedValue([]),
+      setDefault: vi.fn().mockResolvedValue([mockProviderState]),
       saveApiKey: vi.fn().mockResolvedValue({ ...mockProviderState, hasApiKey: true }),
       deleteApiKey: vi.fn().mockResolvedValue({ ...mockProviderState, hasApiKey: false }),
-      testConnection: vi.fn().mockResolvedValue(undefined),
+      testConnection: vi.fn().mockResolvedValue({
+        success: true,
+        latencyMs: 10,
+        errorCode: null,
+        errorMessage: null,
+      }),
     },
     ...overrides,
   } as unknown as DesktopAPI;
@@ -405,8 +418,8 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 8. provider.testConnection finally 调用 getState 并渲染失败状态
-  it('testConnection finally 调用 getState 并渲染失败状态', async () => {
+  // 8. provider.testConnection finally 调用 provider.list 并渲染失败状态
+  it('testConnection finally 调用 provider.list 并渲染失败状态', async () => {
     const failedProviderState = {
       ...mockProviderState,
       lastTestStatus: 'failed',
@@ -419,10 +432,10 @@ describe('App 级别测试', () => {
       provider: {
         ...createMockDesktopAPI().provider,
         testConnection: vi.fn().mockRejectedValue(new Error('连接超时')),
-        getState: vi
+        list: vi
           .fn()
-          .mockResolvedValueOnce(mockProviderState)
-          .mockResolvedValueOnce(failedProviderState),
+          .mockResolvedValueOnce([mockProviderState])
+          .mockResolvedValueOnce([failedProviderState]),
       },
     });
     setupDesktop(api);
@@ -438,7 +451,7 @@ describe('App 级别测试', () => {
       { timeout: 10000 },
     );
 
-    const initialCalls = api.provider.getState.mock.calls.length;
+    const initialCalls = api.provider.list.mock.calls.length;
 
     const testBtn = screen.getByRole('button', { name: '测试连接' });
     await act(async () => {
@@ -447,7 +460,7 @@ describe('App 级别测试', () => {
 
     await waitFor(
       () => {
-        expect(api.provider.getState.mock.calls.length).toBeGreaterThan(initialCalls);
+        expect(api.provider.list.mock.calls.length).toBeGreaterThan(initialCalls);
       },
       { timeout: 5000 },
     );
@@ -524,7 +537,7 @@ describe('App 级别测试', () => {
               'ENOENT: /Users/secret/.env Bearer sk-1234567890abcdef\n    at connect (src/provider.ts:42:11)',
             ),
           ),
-        getState: vi.fn().mockResolvedValue(mockProviderState),
+        list: vi.fn().mockResolvedValue([mockProviderState]),
       },
     });
     setupDesktop(api);

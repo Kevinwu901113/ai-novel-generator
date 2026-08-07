@@ -102,19 +102,43 @@ let state: State;
 function makeProviderProfile(): ProviderProfileData {
   return {
     id: 'provider-1',
-    providerType: 'anthropic-compatible',
+    providerType: 'anthropic-messages',
     displayName: 'Test Provider',
     baseUrl: 'https://example.test/anthropic',
     model: 'test-model',
     keychainService: 'svc',
     keychainAccount: 'acct',
     enabled: true,
+    isDefault: true,
     createdAt: NOW,
     updatedAt: NOW,
     lastTestedAt: null,
     lastTestStatus: null,
     lastTestErrorCode: null,
     lastTestLatencyMs: null,
+  };
+}
+
+/**
+ * 完整实现 `ProviderProfileRepository`（多 provider 之后端口变宽）。
+ * 只有解析路径需要的方法有行为，其余显式抛错，避免测试静默走到写路径。
+ */
+function makeProviderRepo(): ProviderProfileRepository {
+  const unused = (name: string): never => {
+    throw new Error(`providerRepo.${name} 不应在本测试中被调用`);
+  };
+  return {
+    getById: () => makeProviderProfile(),
+    list: () => [makeProviderProfile()],
+    getDefault: () => makeProviderProfile(),
+    getRoute: () => null,
+    create: () => unused('create'),
+    update: () => unused('update'),
+    delete: () => unused('delete'),
+    setDefault: () => unused('setDefault'),
+    setRoute: () => unused('setRoute'),
+    deleteRoute: () => unused('deleteRoute'),
+    updateTestResult: () => {},
   };
 }
 
@@ -232,10 +256,7 @@ function buildDeps(): GrillQuestionPlanEngineDeps {
     deleteSecret: async () => {},
   };
 
-  const providerRepo: ProviderProfileRepository = {
-    getById: () => makeProviderProfile(),
-    updateTestResult: () => {},
-  };
+  const providerRepo: ProviderProfileRepository = makeProviderRepo();
 
   const sessionRepo: GrillSessionRepositoryPort = {
     create: vi.fn(),

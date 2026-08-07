@@ -16,6 +16,7 @@ import type {
   ModelInvocationRepositoryPort,
   SecretStore,
   ProviderProfileRepository,
+  ProviderProfileData,
   IdGenerator,
   Clock,
   TaskData,
@@ -83,6 +84,72 @@ function mockTask(taskId = 't1'): TaskData {
   };
 }
 
+function mockProviderProfile(overrides: Partial<ProviderProfileData> = {}): ProviderProfileData {
+  return {
+    id: 'mimo-token-plan-cn',
+    providerType: 'anthropic-messages',
+    displayName: 'MiMo',
+    baseUrl: 'https://x',
+    model: 'mimo-v2.5-pro',
+    keychainService: 'svc',
+    keychainAccount: 'acc',
+    enabled: true,
+    isDefault: true,
+    createdAt: NOW,
+    updatedAt: NOW,
+    lastTestedAt: null,
+    lastTestStatus: null,
+    lastTestErrorCode: null,
+    lastTestLatencyMs: null,
+    ...overrides,
+  };
+}
+
+/**
+ * D6 两层路由 ProviderProfileRepository 假实现（同 index.test.ts 的约定）：
+ * 本引擎只依赖 getById / getDefault / getRoute；其余方法未被使用，抛错而非用 any 掩盖误用。
+ */
+function createFakeProviderRepo(
+  options: {
+    profiles?: ReadonlyArray<ProviderProfileData>;
+    defaultId?: string | null;
+    routes?: Readonly<Record<string, string>>;
+  } = {},
+): ProviderProfileRepository {
+  const profiles = new Map<string, ProviderProfileData>(
+    (options.profiles ?? [mockProviderProfile()]).map((p) => [p.id, p]),
+  );
+  const defaultId =
+    options.defaultId !== undefined ? options.defaultId : (options.profiles?.[0]?.id ?? 'mimo-token-plan-cn');
+  const routes = new Map<string, string>(Object.entries(options.routes ?? {}));
+
+  return {
+    getById: vi.fn((id: string) => profiles.get(id) ?? null),
+    list: vi.fn(() => [...profiles.values()]),
+    getDefault: vi.fn(() => (defaultId ? (profiles.get(defaultId) ?? null) : null)),
+    create: vi.fn(() => {
+      throw new Error('未使用：create');
+    }),
+    update: vi.fn(() => {
+      throw new Error('未使用：update');
+    }),
+    delete: vi.fn(() => {
+      throw new Error('未使用：delete');
+    }),
+    setDefault: vi.fn(() => {
+      throw new Error('未使用：setDefault');
+    }),
+    getRoute: vi.fn((taskType: string) => routes.get(taskType) ?? null),
+    setRoute: vi.fn(() => {
+      throw new Error('未使用：setRoute');
+    }),
+    deleteRoute: vi.fn(() => {
+      throw new Error('未使用：deleteRoute');
+    }),
+    updateTestResult: vi.fn(),
+  };
+}
+
 function mockInvocation(data: CreateInvocationInput): ModelInvocationData {
   return {
     ...data,
@@ -110,6 +177,7 @@ function buildDeps(
     invokeError?: unknown;
     /** 预插入同 executionId 的不同内容 envelope → 最终事务 saveOrVerifySame 抛错 */
     preexistingResult?: NodeExecutionResultEnvelope;
+    providerRepo?: ProviderProfileRepository;
   } = {},
 ) {
   const taskStore = new Map<string, TaskData>([['t1', mockTask()]]);
@@ -188,25 +256,8 @@ function buildDeps(
     getSecret: vi.fn(async () => 'test-key'),
     deleteSecret: vi.fn(async () => {}),
   };
-  const providerRepo: ProviderProfileRepository = {
-    getById: vi.fn(() => ({
-      id: 'mimo-token-plan-cn',
-      providerType: 'anthropic-compatible',
-      displayName: 'MiMo',
-      baseUrl: 'https://x',
-      model: 'mimo-v2.5-pro',
-      keychainService: 'svc',
-      keychainAccount: 'acc',
-      enabled: true,
-      createdAt: NOW,
-      updatedAt: NOW,
-      lastTestedAt: null,
-      lastTestStatus: null,
-      lastTestErrorCode: null,
-      lastTestLatencyMs: null,
-    })),
-    updateTestResult: vi.fn(),
-  };
+  const providerRepo: ProviderProfileRepository =
+    overrides.providerRepo ?? createFakeProviderRepo();
   const idGenerator: IdGenerator = { generate: vi.fn(() => 'inv-1') };
   const clock: Clock = { now: vi.fn(() => NOW) };
 

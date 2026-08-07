@@ -1,13 +1,30 @@
 /**
  * @ai-novel/model-gateway
  *
- * Anthropic-compatible 模型网关。
+ * 多 provider 模型网关（B1 / D6，最小形态）。
  *
- * 本阶段支持 MiMo V2.5 Pro 连接测试和通用模型调用。
- * 不安装 Anthropic SDK，使用 Node 24 内置 fetch。
+ * 协议适配（`protocol.ts`）负责请求构造与响应解析；本文件只负责一次性的
+ * HTTP 执行、超时与错误归一化，两种协议共用同一条路径：
+ * - `anthropic-messages`（既有 MiMo V2.5 Pro 等）
+ * - `openai-chat`（OpenAI 兼容端点，含 DeepSeek）
+ *
+ * 不安装任何厂商 SDK，使用 Node 内置 fetch。不做流式、自动重试、负载均衡与 fallback。
+ *
+ * 安全：apiKey 与响应正文都不进入返回值、异常或日志；上游错误 body 读取后丢弃，
+ * 只以归一化 ErrorCode + 中文短消息返回。
  */
 
-import type { ErrorCode } from '@ai-novel/contracts';
+import type { ErrorCode, ProviderProtocol } from '@ai-novel/contracts';
+import { adapterFor, type ParsedInvocation, type ProtocolAdapter } from './protocol.js';
+
+export type {
+  ProtocolAdapter,
+  ProtocolRequest,
+  ProtocolRequestInput,
+  ParsedInvocation,
+  NormalizedUsage,
+} from './protocol.js';
+export { adapterFor, anthropicMessagesAdapter, openAiChatAdapter } from './protocol.js';
 
 // ── 类型 ──────────────────────────────────────────────────────────
 
@@ -17,8 +34,16 @@ export interface ModelGatewayDeps {
   readonly clock: { now(): string };
 }
 
+/**
+ * 协议是可选参数：缺省按 `anthropic-messages` 处理。
+ * 这保证 B1 之前只认识单一 Anthropic 端点的调用方在迁移期不断。
+ */
+interface ProtocolSelector {
+  readonly protocol?: ProviderProtocol;
+}
+
 /** 连接测试输入 */
-export interface ConnectionTestInput {
+export interface ConnectionTestInput extends ProtocolSelector {
   readonly baseUrl: string;
   readonly model: string;
   readonly apiKey: string;
@@ -27,6 +52,34 @@ export interface ConnectionTestInput {
 /** 连接测试输出 */
 export interface ConnectionTestOutput {
   readonly success: boolean;
+  readonly latencyMs: number;
+  readonly errorCode: ErrorCode | null;
+  readonly errorMessage: string | null;
+}
+
+/** 模型调用输入 */
+export interface ModelInvocationInput extends ProtocolSelector {
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly apiKey: string;
+  readonly prompt: string;
+  readonly maxTokens?: number;
+  readonly systemPrompt?: string;
+  readonly temperature?: number;
+}
+
+/** 模型调用安全结果 —— 不包含原始响应正文 */
+export interface ModelInvocationOutput {
+  readonly text: string;
+  readonly providerRequestId: string | null;
+  readonly finishReason: string | null;
+  readonly usage: {
+    readonly inputTokens: number | null;
+    readonly outputTokens: number | null;
+    readonly cacheReadTokens: number | null;
+    readonly cacheWriteTokens: number | null;
+    readonly totalTokens: number | null;
+  };
   readonly latencyMs: number;
   readonly errorCode: ErrorCode | null;
   readonly errorMessage: string | null;
@@ -45,7 +98,6 @@ function mapHttpStatusToErrorCode(status: number): ErrorCode {
     case 429:
       return 'PROVIDER_RATE_LIMITED';
     default:
-      if (status >= 500) return 'PROVIDER_CONNECTION_FAILED';
       return 'PROVIDER_CONNECTION_FAILED';
   }
 }
@@ -74,439 +126,181 @@ function errorCodeToMessage(code: ErrorCode): string {
   }
 }
 
-// ── 响应验证 ──────────────────────────────────────────────────────
-
-interface AnthropicContentBlock {
-  readonly type: string;
-  readonly text?: string;
-  readonly thinking?: string;
+function mapThrownToErrorCode(err: unknown): ErrorCode {
+  if (err instanceof Error && err.name === 'AbortError') return 'PROVIDER_TIMEOUT';
+  if (err instanceof TypeError || (err instanceof Error && err.message.includes('fetch'))) {
+    return 'NETWORK_UNAVAILABLE';
+  }
+  return 'PROVIDER_CONNECTION_FAILED';
 }
 
-interface AnthropicResponse {
-  readonly id?: string;
-  readonly content?: ReadonlyArray<AnthropicContentBlock>;
-  readonly stop_reason?: string;
-}
+// ── 共用执行路径 ──────────────────────────────────────────────────
 
-function isValidAnthropicResponse(data: unknown): data is AnthropicResponse {
-  if (typeof data !== 'object' || data === null) return false;
-  const obj = data as Record<string, unknown>;
-  if (!Array.isArray(obj.content)) return false;
-  return true;
-}
-
-function hasNonEmptyTextContent(content: ReadonlyArray<AnthropicContentBlock>): boolean {
-  return content.some(
-    (block) => block.type === 'text' && typeof block.text === 'string' && block.text.length > 0,
-  );
-}
-
-// ── 通用调用类型 ──────────────────────────────────────────────────
-
-/** 模型调用输入 */
-export interface ModelInvocationInput {
-  readonly baseUrl: string;
-  readonly model: string;
-  readonly apiKey: string;
-  readonly prompt: string;
-  readonly maxTokens?: number;
-  readonly systemPrompt?: string;
-  readonly temperature?: number;
-}
-
-/** 模型调用安全结果 —— 不包含原始响应正文 */
-export interface ModelInvocationOutput {
-  readonly text: string;
-  readonly providerRequestId: string | null;
-  readonly finishReason: string | null;
-  readonly usage: {
-    readonly inputTokens: number | null;
-    readonly outputTokens: number | null;
-    readonly cacheReadTokens: number | null;
-    readonly cacheWriteTokens: number | null;
-    readonly totalTokens: number | null;
-  };
-  readonly latencyMs: number;
-  readonly errorCode: ErrorCode | null;
-  readonly errorMessage: string | null;
-}
-
-// ── Anthropic 响应类型 ────────────────────────────────────────────
-
-interface AnthropicUsage {
-  readonly input_tokens?: number;
-  readonly output_tokens?: number;
-  readonly cache_read_input_tokens?: number;
-  readonly cache_creation_input_tokens?: number;
-}
-
-interface AnthropicFullResponse {
-  readonly id?: string;
-  readonly content?: ReadonlyArray<AnthropicContentBlock>;
-  readonly stop_reason?: string;
-  readonly usage?: AnthropicUsage;
-}
-
-// ── 连接测试 ──────────────────────────────────────────────────────
-
-const REQUEST_TIMEOUT_MS = 20_000;
-const MAX_TOKENS = 32;
+const TEST_TIMEOUT_MS = 20_000;
+const INVOCATION_TIMEOUT_MS = 120_000;
+const TEST_MAX_TOKENS = 32;
+const DEFAULT_MAX_TOKENS = 4096;
 const TEST_PROMPT = '只回复 OK';
 
+type ExecuteResult =
+  | { readonly ok: true; readonly parsed: ParsedInvocation; readonly latencyMs: number }
+  | { readonly ok: false; readonly errorCode: ErrorCode; readonly latencyMs: number };
+
+function selectAdapter(protocol: ProviderProtocol | undefined): ProtocolAdapter {
+  return adapterFor(protocol ?? 'anthropic-messages');
+}
+
 /**
- * 测试与 Anthropic-compatible 提供商的连接。
- *
- * 发送最小请求验证 API Key 和服务可用性。
- * 不自动重试，避免重复消耗配额。
+ * 执行一次非流式模型调用并归一化结果。
+ * 无论哪种协议，超时 / 网络 / HTTP 状态 / JSON 解析 / 结构校验的归一化都只在这里发生一次。
  */
-export async function testConnection(
+async function executeInvocation(
   deps: ModelGatewayDeps,
-  input: ConnectionTestInput,
-): Promise<ConnectionTestOutput> {
-  const { fetch } = deps;
+  adapter: ProtocolAdapter,
+  input: {
+    readonly baseUrl: string;
+    readonly model: string;
+    readonly apiKey: string;
+    readonly prompt: string;
+    readonly maxTokens: number;
+    readonly systemPrompt?: string;
+    readonly temperature?: number;
+  },
+  timeoutMs: number,
+): Promise<ExecuteResult> {
   const startTime = Date.now();
+  const request = adapter.buildRequest(input);
 
-  // 构造 URL（从固定 profile，不接受 Renderer URL）
-  const url = `${input.baseUrl.replace(/\/+$/, '')}/v1/messages`;
-
-  // 构造请求体
-  const requestBody = JSON.stringify({
-    model: input.model,
-    max_tokens: MAX_TOKENS,
-    messages: [{ role: 'user', content: TEST_PROMPT }],
-  });
-
-  // AbortController 超时
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
-    const response = await fetch(url, {
+    const response = await deps.fetch(request.url, {
       method: 'POST',
-      headers: {
-        'api-key': input.apiKey,
-        'content-type': 'application/json',
-      },
-      body: requestBody,
+      headers: { ...request.headers },
+      body: request.body,
       signal: controller.signal,
     });
-
     clearTimeout(timeoutId);
     const latencyMs = Date.now() - startTime;
 
-    // 检查 HTTP 状态
     if (!response.ok) {
-      // 读取 body 用于内部诊断（不发送给 Renderer）
+      // 读取并丢弃 body：避免连接悬挂，同时不把上游内容带进返回值
       try {
         await response.text();
       } catch {
         // 忽略读取错误
       }
-
-      const errorCode = mapHttpStatusToErrorCode(response.status);
-
-      return {
-        success: false,
-        latencyMs,
-        errorCode,
-        errorMessage: errorCodeToMessage(errorCode),
-      };
+      return { ok: false, errorCode: mapHttpStatusToErrorCode(response.status), latencyMs };
     }
 
-    // 解析响应
     let data: unknown;
     try {
       data = await response.json();
     } catch {
-      return {
-        success: false,
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
+      return { ok: false, errorCode: 'PROVIDER_RESPONSE_INVALID', latencyMs };
     }
 
-    // 验证响应结构
-    if (!isValidAnthropicResponse(data)) {
-      return {
-        success: false,
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
+    const parsed = adapter.parse(data);
+    if (!parsed) {
+      return { ok: false, errorCode: 'PROVIDER_RESPONSE_INVALID', latencyMs };
     }
-
-    // 验证至少存在非空 text content
-    if (!data.content || !hasNonEmptyTextContent(data.content)) {
-      return {
-        success: false,
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
-    }
-
-    return {
-      success: true,
-      latencyMs,
-      errorCode: null,
-      errorMessage: null,
-    };
+    return { ok: true, parsed, latencyMs };
   } catch (err) {
     clearTimeout(timeoutId);
-    const latencyMs = Date.now() - startTime;
+    return { ok: false, errorCode: mapThrownToErrorCode(err), latencyMs: Date.now() - startTime };
+  }
+}
 
-    // AbortError → 超时
-    if (err instanceof Error && err.name === 'AbortError') {
-      return {
-        success: false,
-        latencyMs,
-        errorCode: 'PROVIDER_TIMEOUT',
-        errorMessage: errorCodeToMessage('PROVIDER_TIMEOUT'),
-      };
-    }
+const EMPTY_USAGE = {
+  inputTokens: null,
+  outputTokens: null,
+  cacheReadTokens: null,
+  cacheWriteTokens: null,
+  totalTokens: null,
+} as const;
 
-    // 网络错误
-    if (err instanceof TypeError || (err instanceof Error && err.message.includes('fetch'))) {
-      return {
-        success: false,
-        latencyMs,
-        errorCode: 'NETWORK_UNAVAILABLE',
-        errorMessage: errorCodeToMessage('NETWORK_UNAVAILABLE'),
-      };
-    }
+// ── 连接测试 ──────────────────────────────────────────────────────
 
-    // 其他错误
+/**
+ * 测试与提供商的连接。
+ *
+ * 发送最小请求验证 API Key、端点与模型可用性；不自动重试，避免重复消耗配额。
+ * 判定成功的条件与调用路径一致：HTTP 成功 + 响应结构合法 + 有非空文本。
+ */
+export async function testConnection(
+  deps: ModelGatewayDeps,
+  input: ConnectionTestInput,
+): Promise<ConnectionTestOutput> {
+  const result = await executeInvocation(
+    deps,
+    selectAdapter(input.protocol),
+    {
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiKey: input.apiKey,
+      prompt: TEST_PROMPT,
+      maxTokens: TEST_MAX_TOKENS,
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  if (!result.ok) {
     return {
       success: false,
-      latencyMs,
-      errorCode: 'PROVIDER_CONNECTION_FAILED',
-      errorMessage: errorCodeToMessage('PROVIDER_CONNECTION_FAILED'),
+      latencyMs: result.latencyMs,
+      errorCode: result.errorCode,
+      errorMessage: errorCodeToMessage(result.errorCode),
     };
   }
+  return { success: true, latencyMs: result.latencyMs, errorCode: null, errorMessage: null };
 }
 
 // ── 通用模型调用 ──────────────────────────────────────────────────
 
-const INVOCATION_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_TOKENS = 4096;
-
 /**
- * 调用 Anthropic-compatible 模型。
+ * 调用模型（非流式）。
  *
- * 发送用户消息，返回安全结果（不含原始响应正文）。
- * 不自动重试。prompt 和 API Key 不进入异常。
+ * 返回安全结果（不含原始响应正文）。不自动重试。prompt 和 API Key 不进入异常。
  */
 export async function invokeModel(
   deps: ModelGatewayDeps,
   input: ModelInvocationInput,
 ): Promise<ModelInvocationOutput> {
-  const { fetch } = deps;
-  const startTime = Date.now();
+  const result = await executeInvocation(
+    deps,
+    selectAdapter(input.protocol),
+    {
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiKey: input.apiKey,
+      prompt: input.prompt,
+      maxTokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
+      ...(input.systemPrompt !== undefined ? { systemPrompt: input.systemPrompt } : {}),
+      ...(input.temperature !== undefined ? { temperature: input.temperature } : {}),
+    },
+    INVOCATION_TIMEOUT_MS,
+  );
 
-  const url = `${input.baseUrl.replace(/\/+$/, '')}/v1/messages`;
-
-  const messages: Array<{ role: string; content: string }> = [
-    { role: 'user', content: input.prompt },
-  ];
-
-  const requestBody: Record<string, unknown> = {
-    model: input.model,
-    max_tokens: input.maxTokens ?? DEFAULT_MAX_TOKENS,
-    messages,
-  };
-
-  if (input.systemPrompt) {
-    requestBody.system = input.systemPrompt;
-  }
-  if (input.temperature !== undefined) {
-    requestBody.temperature = input.temperature;
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), INVOCATION_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'api-key': input.apiKey,
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-    const latencyMs = Date.now() - startTime;
-
-    if (!response.ok) {
-      try {
-        await response.text();
-      } catch {
-        // 忽略
-      }
-
-      const errorCode = mapHttpStatusToErrorCode(response.status);
-      return {
-        text: '',
-        providerRequestId: null,
-        finishReason: null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode,
-        errorMessage: errorCodeToMessage(errorCode),
-      };
-    }
-
-    let data: unknown;
-    try {
-      data = await response.json();
-    } catch {
-      return {
-        text: '',
-        providerRequestId: null,
-        finishReason: null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
-    }
-
-    if (!isValidAnthropicResponse(data)) {
-      return {
-        text: '',
-        providerRequestId: null,
-        finishReason: null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
-    }
-
-    const fullData = data as AnthropicFullResponse;
-
-    // 提取文本
-    const textBlocks = fullData.content?.filter((b) => b.type === 'text' && b.text) ?? [];
-    const text = textBlocks.map((b) => b.text ?? '').join('');
-
-    if (!text) {
-      return {
-        text: '',
-        providerRequestId: fullData.id ?? null,
-        finishReason: fullData.stop_reason ?? null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode: 'PROVIDER_RESPONSE_INVALID',
-        errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
-      };
-    }
-
-    // 提取 usage
-    const usage = fullData.usage;
-    const inputTokens = usage?.input_tokens ?? null;
-    const outputTokens = usage?.output_tokens ?? null;
-    const cacheReadTokens = usage?.cache_read_input_tokens ?? null;
-    const cacheWriteTokens = usage?.cache_creation_input_tokens ?? null;
-    // total tokens 不自行推断，除非上游明确提供
-    const totalTokens =
-      inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null;
-
-    return {
-      text,
-      providerRequestId: fullData.id ?? null,
-      finishReason: fullData.stop_reason ?? null,
-      usage: {
-        inputTokens,
-        outputTokens,
-        cacheReadTokens,
-        cacheWriteTokens,
-        totalTokens,
-      },
-      latencyMs,
-      errorCode: null,
-      errorMessage: null,
-    };
-  } catch (err) {
-    clearTimeout(timeoutId);
-    const latencyMs = Date.now() - startTime;
-
-    if (err instanceof Error && err.name === 'AbortError') {
-      return {
-        text: '',
-        providerRequestId: null,
-        finishReason: null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode: 'PROVIDER_TIMEOUT',
-        errorMessage: errorCodeToMessage('PROVIDER_TIMEOUT'),
-      };
-    }
-
-    if (err instanceof TypeError || (err instanceof Error && err.message.includes('fetch'))) {
-      return {
-        text: '',
-        providerRequestId: null,
-        finishReason: null,
-        usage: {
-          inputTokens: null,
-          outputTokens: null,
-          cacheReadTokens: null,
-          cacheWriteTokens: null,
-          totalTokens: null,
-        },
-        latencyMs,
-        errorCode: 'NETWORK_UNAVAILABLE',
-        errorMessage: errorCodeToMessage('NETWORK_UNAVAILABLE'),
-      };
-    }
-
+  if (!result.ok) {
     return {
       text: '',
       providerRequestId: null,
       finishReason: null,
-      usage: {
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        totalTokens: null,
-      },
-      latencyMs,
-      errorCode: 'PROVIDER_CONNECTION_FAILED',
-      errorMessage: errorCodeToMessage('PROVIDER_CONNECTION_FAILED'),
+      usage: EMPTY_USAGE,
+      latencyMs: result.latencyMs,
+      errorCode: result.errorCode,
+      errorMessage: errorCodeToMessage(result.errorCode),
     };
   }
+
+  return {
+    text: result.parsed.text,
+    providerRequestId: result.parsed.providerRequestId,
+    finishReason: result.parsed.finishReason,
+    usage: result.parsed.usage,
+    latencyMs: result.latencyMs,
+    errorCode: null,
+    errorMessage: null,
+  };
 }

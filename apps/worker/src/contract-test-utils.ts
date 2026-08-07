@@ -7,6 +7,7 @@
 
 import type { ProjectDatabase } from '@ai-novel/database';
 import { sha256Utf8 } from '@ai-novel/database';
+import { makeFakeProviderRepo, makeTestProviderProfile } from './provider-test-fixtures.js';
 import {
   TaskDedupeConflictError,
   type TaskRepositoryPort,
@@ -327,25 +328,9 @@ export function buildEngineDeps(
       setSecret: async () => {},
       deleteSecret: async () => {},
     },
-    providerRepo: {
-      getById: () => ({
-        id: 'provider-1',
-        providerType: 'anthropic-compatible',
-        displayName: 'Test',
-        baseUrl: 'https://test.example',
-        model: 'test-model',
-        keychainService: 'svc',
-        keychainAccount: 'acct',
-        enabled: true,
-        createdAt: NOW,
-        updatedAt: NOW,
-        lastTestedAt: null,
-        lastTestStatus: null,
-        lastTestErrorCode: null,
-        lastTestLatencyMs: null,
-      }),
-      updateTestResult: () => {},
-    },
+    providerRepo: makeFakeProviderRepo(
+      makeTestProviderProfile({ keychainService: 'svc', keychainAccount: 'acct' }),
+    ),
     idGenerator: { generate: () => `gen-${Math.random().toString(36).slice(2, 10)}` },
     clock,
     sessionRepo: new GrillSessionRepositoryAdapter(projDb, clock),
