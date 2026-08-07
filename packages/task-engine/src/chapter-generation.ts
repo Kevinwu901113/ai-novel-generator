@@ -76,8 +76,9 @@ export function parseChapterDraftV1(text: string): ChapterDraftV1 {
   };
 }
 
-/** 补偿：最终提交事务失败后，仍 RUNNING 的 invocation/task 标记 FAILED（best-effort） */
-function compensateFinalization(
+/** 补偿：最终提交事务失败后，仍 RUNNING 的 invocation/task 标记 FAILED（best-effort）。
+ *  导出供其他 task-backed 执行器（spec-extract 等）复用同一补偿语义。 */
+export function compensateFinalization(
   deps: TaskEngineDeps,
   taskId: string,
   invocationId: string,

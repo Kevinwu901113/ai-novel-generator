@@ -46,6 +46,8 @@ export interface TaskEngineDeps {
     model: string;
     apiKey: string;
     prompt: string;
+    /** system/user 分离（B3 起 SPEC_EXTRACT 使用；model-gateway 原生支持） */
+    systemPrompt?: string;
     protocol?: ProviderProtocol;
   }) => Promise<ModelInvocationOutput>;
   readonly transaction: <T>(fn: () => T) => T;
@@ -306,3 +308,4 @@ export type {
   ChapterDraftExecutionResult,
   ChapterDraftExecutionDeps,
 } from './chapter-generation.js';
+export * from './spec-extract.js';
