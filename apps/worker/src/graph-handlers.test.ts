@@ -112,4 +112,51 @@ describe('dispatchGraphCommand', () => {
       ),
     ).toThrowError(expect.objectContaining({ code: 'GRAPH_RUN_NOT_FOUND' }) as AppError);
   });
+
+  it('TD-023：每条 graph.* 命令结束后 ProjectDatabase 连接关闭（含抛错路径）', () => {
+    const opened: Array<{ closed: boolean }> = [];
+    const ctx: GraphHandlerContext = {
+      ...buildCtx(),
+      getProjectDb: () => {
+        const db = openFreshDb();
+        const record = { closed: false };
+        const originalClose = db.close.bind(db);
+        db.close = () => {
+          record.closed = true;
+          originalClose();
+        };
+        opened.push(record);
+        return db;
+      },
+    };
+
+    dispatchGraphCommand(
+      'graph.createProjectRun',
+      { projectId: 'proj-1', idempotencyKey: 'c1' },
+      ctx,
+    );
+    const runs = dispatchGraphCommand(
+      'graph.listRuns',
+      { projectId: 'proj-1' },
+      ctx,
+    ) as ReadonlyArray<{
+      runId: string;
+    }>;
+    dispatchGraphCommand(
+      'graph.getRunProgress',
+      { projectId: 'proj-1', runId: runs[0].runId },
+      ctx,
+    );
+    // 抛错路径也必须 finally close
+    expect(() =>
+      dispatchGraphCommand(
+        'graph.getRunProgress',
+        { projectId: 'proj-1', runId: 'missing-run' },
+        ctx,
+      ),
+    ).toThrow();
+
+    expect(opened.length).toBeGreaterThanOrEqual(4);
+    expect(opened.every((r) => r.closed)).toBe(true);
+  });
 });
