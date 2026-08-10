@@ -19,7 +19,8 @@
     "@ai-novel/domain": "workspace:*",
     "@ai-novel/contracts": "workspace:*",
     "@ai-novel/application": "workspace:*",
-    "@ai-novel/model-gateway": "workspace:*"
+    "@ai-novel/model-gateway": "workspace:*",
+    "@ai-novel/research-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

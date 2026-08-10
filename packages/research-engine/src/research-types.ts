@@ -61,7 +61,7 @@ export interface FactNote {
   readonly sourceUrls: ReadonlyArray<string>;
 }
 
-/** 权威 ResearchBundle（版本化） */
+/** 权威 ResearchBundle（版本化；版本链以行链表达，D-B5-2） */
 export interface ResearchBundle {
   readonly id: string;
   readonly projectId: string;
@@ -71,6 +71,8 @@ export interface ResearchBundle {
   readonly factNotes: ReadonlyArray<FactNote>;
   readonly conclusion: string;
   readonly createdAt: string;
+  /** 重试路径上游 bundle（B5：validate→execute 回环时记链；首轮为空） */
+  readonly basedOnBundleId?: string | null;
 }
 
 /** 调研输入（供深度判断与编排） */

@@ -13,9 +13,11 @@ import type { NodeRunnerDeps, TaskData } from '@ai-novel/application';
 import { driveRun } from '@ai-novel/application';
 import {
   executeChapterDraft,
+  executeResearchRun,
   executeSpecExtract,
   TaskExecutionError,
   type ChapterDraftExecutionDeps,
+  type ResearchRunExecutionDeps,
   type SpecExtractExecutionDeps,
 } from '@ai-novel/task-engine';
 import {
@@ -25,8 +27,10 @@ import {
   type SettleMessages,
 } from './runner-kernel.js';
 
-/** Graph 任务引擎 deps：CHAPTER_DRAFT 与 SPEC_EXTRACT 的并集（B3） */
-export type GraphEngineDeps = ChapterDraftExecutionDeps & SpecExtractExecutionDeps;
+/** Graph 任务引擎 deps：CHAPTER_DRAFT / SPEC_EXTRACT / RESEARCH_RUN 的并集（B3/B5） */
+export type GraphEngineDeps = ChapterDraftExecutionDeps &
+  SpecExtractExecutionDeps &
+  ResearchRunExecutionDeps;
 
 /**
  * 复用 runner-kernel 依赖契约（openDb + buildEngineDeps + getTaskRepo + getInvocationRepo）。
@@ -53,6 +57,9 @@ const CONFIG_ERROR_CODES: ReadonlySet<string> = new Set([
   'PROVIDER_NOT_CONFIGURED',
   'API_KEY_READ_FAILED',
   'API_KEY_REQUIRED',
+  // B5（D-B5-7）：搜索服务 key 未配置同属配置类——保持 PENDING，key 录入后重驱动
+  'SEARCH_KEY_REQUIRED',
+  'SEARCH_KEY_READ_FAILED',
 ]);
 
 function isConfigError(err: unknown): boolean {
@@ -111,7 +118,11 @@ export function scheduleGraphTask(
       closeDb();
       return { scheduled: false, reason: 'TERMINAL' };
     }
-    if (task.taskType !== 'CHAPTER_DRAFT' && task.taskType !== 'SPEC_EXTRACT') {
+    if (
+      task.taskType !== 'CHAPTER_DRAFT' &&
+      task.taskType !== 'SPEC_EXTRACT' &&
+      task.taskType !== 'RESEARCH_RUN'
+    ) {
       closeDb();
       return { scheduled: false, reason: 'UNSUPPORTED' };
     }
@@ -121,6 +132,8 @@ export function scheduleGraphTask(
       try {
         if (taskType === 'CHAPTER_DRAFT') {
           await executeChapterDraft(engineDeps, taskId, prompt);
+        } else if (taskType === 'RESEARCH_RUN') {
+          await executeResearchRun(engineDeps, taskId);
         } else {
           await executeSpecExtract(engineDeps, taskId);
         }

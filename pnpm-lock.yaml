@@ -280,6 +280,9 @@ importers:
       '@ai-novel/model-gateway':
         specifier: workspace:*
         version: link:../model-gateway
+      '@ai-novel/research-engine':
+        specifier: workspace:*
+        version: link:../research-engine
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

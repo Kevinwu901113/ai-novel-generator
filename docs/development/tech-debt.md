@@ -605,3 +605,25 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
    provider 操作或重启。建议改为"在途时置 pending 标志、结束后补扫一次"。
 3. **intake E2E 测试 9 断言偏弱**：只断言追问未写入被弃用会话，未覆盖后续 settlement 走向
    （旧 run fail-closed 终态化）。补断言可固化该收敛语义。
+
+---
+
+## TD-027: B5 对抗式复查随行四项（REWORK 修复附带，非阻塞，2026-08-11）
+
+**状态**: OPEN
+**优先级**: 低-中
+**来源**: B5 独立对抗式复查（REWORK，blocker B-1 已修）随行 notes
+
+1. **SafeWebFetch 无 IP 钉连，DNS rebinding TOCTOU 残余**：校验（resolveHost）与连接
+   （fetch 内部再解析）之间存在解析结果变化窗口（D-B5-5 第 7 点已声明的设计残余）。
+   修复方向：校验通过后按已解析 IP 直连（Host header 保留原主机名），消除二次解析。
+2. **research E2E 覆盖缺口**：缺 light 深度全链用例与真实"任务 RUNNING 中断 → 重启恢复"
+   用例（现有覆盖为 none/deep 全链 + executeResearchRun 层的 key 缺失保持 PENDING）。
+3. **调研深度启发式不一致**：depth.ts 的 REAL_WORLD_REQUIRING_KEYWORDS 与 deepSignals
+   关键词集漂移（如"二战"命中前者判 light，"晚清"命中后者判 deep，粒度标准不一）；
+   且 worker 构造 ResearchInput 时 requiresFactuality 恒为 false，该输入位形同虚设。
+   需统一关键词集或改为单一信号源。
+4. **RESEARCH_RUN recoveryPolicy=settle_if_result 中断即 fail-closed**：重启后 RUNNING
+   任务标 TASK_INTERRUPTED 不重试（与 SPEC_EXTRACT 同则的有意保守，防重复计费/重复搜索）。
+   与 SPEC_EXTRACT 不同，RESEARCH_RUN 的搜索/抓取可幂等重放，可议改 replayable；
+   记录待议，暂维持保守策略。

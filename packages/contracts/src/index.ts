@@ -33,6 +33,8 @@ export type ErrorCode =
   | 'API_KEY_STORE_FAILED'
   | 'API_KEY_READ_FAILED'
   | 'API_KEY_DELETE_FAILED'
+  | 'SEARCH_KEY_REQUIRED'
+  | 'SEARCH_KEY_READ_FAILED'
   | 'PROVIDER_CONNECTION_FAILED'
   | 'PROVIDER_AUTH_FAILED'
   | 'PROVIDER_ACCESS_DENIED'
@@ -330,6 +332,9 @@ export const IPC_CHANNELS = {
   GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
   INTAKE_GET_ACTIVE_SESSION: 'ipc:intake-get-active-session',
   INTAKE_PROPAGATE_SPEC_INVALIDATION: 'ipc:intake-propagate-spec-invalidation',
+  SEARCH_SAVE_API_KEY: 'ipc:search-save-api-key',
+  SEARCH_DELETE_API_KEY: 'ipc:search-delete-api-key',
+  SEARCH_HAS_API_KEY: 'ipc:search-has-api-key',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -714,6 +719,32 @@ export function isValidPropagateSpecInvalidationInput(
   );
 }
 
+// ── Search key API（B5/D-B5-6：Tavily 槽位）──────────────────────
+
+/** search.saveApiKey 输入 */
+export interface SaveSearchApiKeyInputDto {
+  readonly apiKey: string;
+}
+
+/** search key 状态（key 本身永不回显） */
+export interface SearchKeyStateDto {
+  readonly hasApiKey: boolean;
+}
+
+/** 验证 search.saveApiKey 输入 */
+export function isValidSaveSearchApiKeyInput(input: unknown): input is SaveSearchApiKeyInputDto {
+  if (input === null || typeof input !== 'object') return false;
+  const obj = input as Record<string, unknown>;
+  return typeof obj.apiKey === 'string' && obj.apiKey.trim().length > 0;
+}
+
+/** 搜索服务（Tavily）key 管理：只写/删/查有无，不回显 */
+export interface SearchKeyAPI {
+  saveApiKey(input: SaveSearchApiKeyInputDto): Promise<SearchKeyStateDto>;
+  deleteApiKey(): Promise<SearchKeyStateDto>;
+  hasApiKey(): Promise<SearchKeyStateDto>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -726,6 +757,7 @@ export interface DesktopAPI {
   contract: ContractAPI;
   graph: GraphAPI;
   intake: IntakeAPI;
+  search: SearchKeyAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────
@@ -772,6 +804,8 @@ export function isAppError(data: unknown): data is AppError {
     'API_KEY_STORE_FAILED',
     'API_KEY_READ_FAILED',
     'API_KEY_DELETE_FAILED',
+    'SEARCH_KEY_REQUIRED',
+    'SEARCH_KEY_READ_FAILED',
     'PROVIDER_CONNECTION_FAILED',
     'PROVIDER_AUTH_FAILED',
     'PROVIDER_ACCESS_DENIED',

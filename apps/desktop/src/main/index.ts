@@ -53,7 +53,9 @@ import {
   isValidListRunsInput,
   isValidGetActiveIntakeSessionInput,
   isValidPropagateSpecInvalidationInput,
+  isValidSaveSearchApiKeyInput,
   type SpecInvalidationResultDto,
+  type SearchKeyStateDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -988,6 +990,41 @@ ipcMain.handle(
     })) as ReadonlyArray<SpecInvalidationResultDto>;
   },
 );
+
+// ── Search key（B5/D-B5-6：Tavily 槽位；key 只经 Keychain，不回显）──
+
+ipcMain.handle(
+  IPC_CHANNELS.SEARCH_SAVE_API_KEY,
+  async (_event, input: unknown): Promise<SearchKeyStateDto> => {
+    if (!isValidSaveSearchApiKeyInput(input)) {
+      throw Object.assign(new Error('无效的搜索 API Key 输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'search.saveApiKey',
+      payload: input,
+    })) as SearchKeyStateDto;
+  },
+);
+
+ipcMain.handle(IPC_CHANNELS.SEARCH_DELETE_API_KEY, async (): Promise<SearchKeyStateDto> => {
+  const requestId = crypto.randomUUID();
+  return (await forwardToWorker({
+    requestId,
+    command: 'search.deleteApiKey',
+    payload: {},
+  })) as SearchKeyStateDto;
+});
+
+ipcMain.handle(IPC_CHANNELS.SEARCH_HAS_API_KEY, async (): Promise<SearchKeyStateDto> => {
+  const requestId = crypto.randomUUID();
+  return (await forwardToWorker({
+    requestId,
+    command: 'search.hasApiKey',
+    payload: {},
+  })) as SearchKeyStateDto;
+});
 
 // ── Smoke test ────────────────────────────────────────────────────
 
