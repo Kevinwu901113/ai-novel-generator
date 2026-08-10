@@ -54,8 +54,8 @@ ai-novel-generator/
 │   ├── domain/           # 纯领域模型 + 两张权威 Graph（idea-to-novel-graph.ts）
 │   ├── application/      # 应用用例（含 GE-1 GraphRunService）
 │   ├── contracts/        # IPC 类型定义（DesktopAPI）
-│   ├── database/         # SQLite 持久化（migration v1–v8）
-│   ├── model-gateway/    # 模型网关（invokeModel / testConnection）
+│   ├── database/         # SQLite 持久化（migration v1–v13）
+│   ├── model-gateway/    # 模型网关（多 provider：invokeModel / testConnection）
 │   ├── task-engine/      # 持久化任务引擎（执行器底座）
 │   ├── secret-store/     # macOS Keychain
 │   ├── writing-evaluation/# 离线确定性评测
@@ -108,12 +108,14 @@ ai-novel-generator/
 
 ## 模型配置
 
-当前固定使用 MiMo V2.5 Pro（Anthropic-compatible）：
+按 D6（2026-08-05，见 `docs/development/decision-log.md`）支持多 provider 配置，只做最小形态：
 
-- Base URL: `https://token-plan-cn.xiaomimimo.com/anthropic`
-- Model: `mimo-v2.5-pro`
-
-Base URL 和 Model 为只读配置，不支持用户修改。
+- 协议适配：`anthropic-messages` + `openai-chat`（覆盖 OpenAI 兼容端点）
+- Provider Profile：`{ id, label, protocol, baseUrl, model, secretRef }`，非敏感配置存 app.sqlite
+- 路由两层：全局默认 provider + 按任务类型可选覆盖
+- API Key 存 macOS Keychain（每 profile 一个槽位），不入库、不进日志
+- 不做负载均衡、自动 fallback、流式
+- 原 MiMo V2.5 Pro 作为一个 `anthropic-messages` profile 继续可用
 
 ## 许可证
 

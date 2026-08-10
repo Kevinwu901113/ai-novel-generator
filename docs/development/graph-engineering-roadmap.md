@@ -311,13 +311,16 @@ gate 决策、终态）。
 > **Post-Merge Architecture Acceptance（2026-08-04）**：GE-3/4/5/6 的原始退出条件未达成。
 > 已交付的是 FOUNDATION / BACKEND 能力；Graph 节点真实 executor、运行时接线、产品 UI 与 E2E 均为后续。
 > 详见 `docs/development/post-merge-acceptance.md`。**在 GE-6 原退出条件通过前，下一步不写 GE-7。**
+>
+> **更新（2026-08-07，B3/PR #42）**：GE-3 原退出条件（Intake→CreationSpec 真实路径端到端绿）已达成；
+> 产品 UI 按 D8 拆分为独立批次 B4。GE-4/5/6 判定不变。
 
 | GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI | E2E             |
 | ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ---------- | --------------- |
 | GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —               |
 | GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —               |
 | GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成 |
-| GE-3 Idea Intake + CreationSpec     | 🔶 REWORK           | ✅         | ✅（intake.* helper）                 | ❌ 节点未接                                    | ❌         | ❌              |
+| GE-3 Idea Intake + CreationSpec     | 🟡 WIRING+E2E 达成  | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ❌（B4）   | ✅ 真实链路 E2E |
 | GE-4 Web Research + ResearchBundle  | 🔶 REWORK           | ✅         | ✅（research.execute, fake provider） | ❌ 节点未接                                    | ❌         | ❌              |
 | GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌              |
 | GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌              |
@@ -331,12 +334,15 @@ gate 决策、终态）。
   **验收记录**：2026-08-05 独立验收先判 REWORK（3 blocker：artifact provenance 登记与校验时序死锁导致
   除 generationRun 外无 artifact 可结算、lease 抢占绕过 infra 重试上限、基础设施瞬时错误被判为确定性失败
   而永久杀死 run），返工并补齐对应回归测试后复查 ACCEPT，PR #39 合并（merge commit `ec1e8e7`）。
-- **下一步（依依赖顺序，批次定义见 `docs/development/takeover-plan-2026-08-05.md`）**：
-  - **B0**：D1–D9 决策落地与文档同步（本次）；
-  - **B1**：Model Gateway 多 provider 最小形态（D6）——与 B3 无依赖，可并行；
-  - **B3**：补完 GE-3 wiring：真实 Idea Intake 节点 executor 闭环（B4 配套最小 UI）；
-    开工第一任务为 TD-020（空 registry 启动恢复不得判死在途 run）；
-  - **B5/B6**：补完 GE-4：Tavily provider（D7）+ Research 节点闭环 + Research UI；
+- **已完成批次**（批次定义见 `docs/development/takeover-plan-2026-08-05.md`）：
+  - **B0** ✅：D1–D9 决策落地与文档同步（PR #40，2026-08-07）；
+  - **B1** ✅：Model Gateway 多 provider 最小形态（D6；PR #41 + 鉴权头补丁 `9f98278`，2026-08-07）；
+  - **B3** ✅：GE-3 wiring：五节点真实 executor + SPEC_EXTRACT 任务执行器（v13）+ 真实链路 E2E
+    （PR #42，2026-08-07；对抗式复查 REWORK 3 blocker → 修复 `e73f5ab` → ACCEPT；
+    TD-019/020 同批解决，随行登记 TD-022..025）。
+- **下一步（依依赖顺序）**：
+  - **B4**：GE-3 UI：App shell 旅程改造 + 对话式访谈 + CreationSpec 编辑器（D8；可顺带消化 TD-022/024）；
+  - **B5/B6**：补完 GE-4：Tavily provider（D7，需负责人提供 API key）+ Research 节点闭环 + Research UI；
   - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
   - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
