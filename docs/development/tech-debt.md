@@ -600,11 +600,14 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
    仍允许同项目多个非终态 project run 并存；跨 run 弃用会话会使被替换 run 的 ASK_QUESTION
    fail-closed（收敛性可接受，见 spec-extract.ts 注释）。建议 application 层
    createProjectRun 增守卫：存在非终态 project run 时拒绝或返回既有 run。
-2. **provider 重驱动防抖无尾随重扫**：redriveAfterProviderConfig 在扫描在途时吞掉第二次
-   触发；极端时序（首扫已过该项目、配置恰在其后补齐）下任务可能滞留 PENDING 至下次
-   provider 操作或重启。建议改为"在途时置 pending 标志、结束后补扫一次"。
+2. ~~**provider 重驱动防抖无尾随重扫**~~：已由 B6（D-B6-8，TD-026-2）解决——
+   redriveAfterProviderConfig 改为 leading+trailing 防抖（`leading-trailing-debounce.ts`）：
+   扫描在途时的后续触发不再被丢弃，记为尾随请求，当前扫描结束后立即补跑一次；
+   多次触发合并为至多一次尾随执行。回归测试见 `leading-trailing-debounce.test.ts`
+   （先红：旧简单 in-flight 布尔丢弃模式下尾随触发被吞掉；后绿：新实现补跑）。
 3. **intake E2E 测试 9 断言偏弱**：只断言追问未写入被弃用会话，未覆盖后续 settlement 走向
    （旧 run fail-closed 终态化）。补断言可固化该收敛语义。
+   第 1、3 项仍 OPEN（留后续批次）。
 
 ---
 

@@ -123,6 +123,7 @@ import {
   type ResearchHandlerContext,
 } from './research-handlers.js';
 import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
+import { createLeadingTrailingDebouncer } from './leading-trailing-debounce.js';
 import {
   ExecutorRegistry,
   productionArtifactResolver,
@@ -982,20 +983,16 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
 }
 
 /**
- * TD-025-3（D-B4-8）：provider 配置成功后 fire-and-forget 重驱动一次全部非终态 run。
- * 复用启动恢复扫描（含 PENDING Graph task 重调度）——修复"未配 key 时任务保持 PENDING、
- * 配置成功后需重启应用才重调度"。in-flight 去重防抖；失败静默（启动恢复兜底）。
+ * TD-025-3（D-B4-8）：provider/search key 配置成功后 fire-and-forget 重驱动一次
+ * 全部非终态 run。复用启动恢复扫描（含 PENDING Graph task 重调度）——修复
+ * "未配 key 时任务保持 PENDING、配置成功后需重启应用才重调度"。
+ *
+ * TD-026-2（D-B6-8）：leading+trailing 防抖（见 leading-trailing-debounce.ts）——
+ * 旧的简单 in-flight 布尔丢弃在扫描在途时会丢掉窗口内的后续触发、无尾随重扫，
+ * 极端时序下 PENDING 任务会滞留到下次 provider/search key 操作或应用重启才被
+ * 捡起。改为窗口结束后如有尾随触发则补跑一次；失败静默（启动恢复兜底）。
  */
-let providerRedriveInFlight = false;
-function redriveAfterProviderConfig(): void {
-  if (providerRedriveInFlight) return;
-  providerRedriveInFlight = true;
-  void recoverGraphRuns()
-    .catch(() => {})
-    .finally(() => {
-      providerRedriveInFlight = false;
-    });
-}
+const redriveAfterProviderConfig = createLeadingTrailingDebouncer(() => recoverGraphRuns());
 
 async function recoverGraphRuns(opts: RecoveryOptions = {}): Promise<void> {
   if (!appDb) return;
@@ -1925,6 +1922,17 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           fetch: provider.fetch,
         };
         data = await dispatchResearchCommand(request.command, request.payload, researchCtx);
+        break;
+      }
+      // B6：只读调研态 + ResearchBundle 查看 + 来源排除——不发起搜索/抓取，
+      // 不复用 research.execute 的 fake provider ctx 装配（D-B6 交付说明）。
+      case 'research.getResearchState':
+      case 'research.getBundle':
+      case 'research.listBundles':
+      case 'research.setSourceExclusion':
+      case 'research.listSourceExclusions': {
+        const researchReadCtx: ResearchHandlerContext = { getProjectDb };
+        data = await dispatchResearchCommand(request.command, request.payload, researchReadCtx);
         break;
       }
       case 'blueprint.generate':

@@ -22,6 +22,19 @@ export interface ResearchBundleRepositoryPort {
   listByProject(projectId: string): ReadonlyArray<ResearchBundle>;
 }
 
+/**
+ * 来源排除端口（GE-4/B6，D-B6-2）。
+ *
+ * project 级 URL 排除：不改 research_bundles（artifact 不可变）、不触图 transition。
+ * 排除按 URL 作用于整个项目；消费方（B7 BLUEPRINT_GENERATE）读 bundle 时过滤。
+ */
+export interface ResearchSourceExclusionRepositoryPort {
+  /** excluded=true 记为已排除（幂等：重复调用不炸）；excluded=false 取消排除 */
+  setExclusion(projectId: string, url: string, excluded: boolean): void;
+  /** 按 created_at 升序返回该项目已排除的 URL 列表 */
+  listByProject(projectId: string): ReadonlyArray<string>;
+}
+
 export interface ExecuteResearchDeps {
   readonly search: WebSearchPort;
   readonly fetch: WebFetchPort;

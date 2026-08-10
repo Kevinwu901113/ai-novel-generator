@@ -6,7 +6,10 @@
 
 import type { DatabaseSync } from 'node:sqlite';
 import type { ResearchBundle } from '@ai-novel/research-engine';
-import type { ResearchBundleRepositoryPort } from '@ai-novel/application';
+import type {
+  ResearchBundleRepositoryPort,
+  ResearchSourceExclusionRepositoryPort,
+} from '@ai-novel/application';
 
 interface DbResearchBundleRow {
   id: string;
@@ -59,5 +62,39 @@ export class ResearchBundleRepositoryImpl implements ResearchBundleRepositoryPor
       .prepare('SELECT * FROM research_bundles WHERE project_id = ? ORDER BY created_at ASC')
       .all(projectId) as unknown as ReadonlyArray<DbResearchBundleRow>;
     return rows.map(decodeBundle);
+  }
+}
+
+/**
+ * 来源排除仓库（GE-4/B6，migration v15，D-B6-2）。
+ *
+ * project 级 URL 排除：set(excluded=true) 幂等插入（INSERT OR IGNORE，重复调用不炸）、
+ * set(excluded=false) 删除（不存在也不炸）；list 按 created_at 升序。
+ */
+export class ResearchSourceExclusionRepositoryImpl implements ResearchSourceExclusionRepositoryPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  setExclusion(projectId: string, url: string, excluded: boolean): void {
+    if (excluded) {
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO research_source_exclusions (project_id, url, created_at)
+           VALUES (?, ?, ?)`,
+        )
+        .run(projectId, url, new Date().toISOString());
+    } else {
+      this.db
+        .prepare('DELETE FROM research_source_exclusions WHERE project_id = ? AND url = ?')
+        .run(projectId, url);
+    }
+  }
+
+  listByProject(projectId: string): ReadonlyArray<string> {
+    const rows = this.db
+      .prepare(
+        'SELECT url FROM research_source_exclusions WHERE project_id = ? ORDER BY created_at ASC',
+      )
+      .all(projectId) as unknown as ReadonlyArray<{ url: string }>;
+    return rows.map((r) => r.url);
   }
 }

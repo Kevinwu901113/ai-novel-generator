@@ -99,7 +99,10 @@ export {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 export { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
-export { ResearchBundleRepositoryImpl } from './research-repositories.js';
+export {
+  ResearchBundleRepositoryImpl,
+  ResearchSourceExclusionRepositoryImpl,
+} from './research-repositories.js';
 export { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 export {
   NodeExecutionRepositoryImpl,
