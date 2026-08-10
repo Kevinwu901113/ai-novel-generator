@@ -61,6 +61,9 @@ const IPC_CHANNELS = {
   GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
   INTAKE_GET_ACTIVE_SESSION: 'ipc:intake-get-active-session',
   INTAKE_PROPAGATE_SPEC_INVALIDATION: 'ipc:intake-propagate-spec-invalidation',
+  SEARCH_SAVE_API_KEY: 'ipc:search-save-api-key',
+  SEARCH_DELETE_API_KEY: 'ipc:search-delete-api-key',
+  SEARCH_HAS_API_KEY: 'ipc:search-has-api-key',
 } as const;
 
 /**
@@ -128,6 +131,8 @@ import type {
   GetActiveIntakeSessionInputDto,
   PropagateSpecInvalidationInputDto,
   SpecInvalidationResultDto,
+  SaveSearchApiKeyInputDto,
+  SearchKeyStateDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -411,6 +416,20 @@ const desktopAPI: DesktopAPI = {
       input: PropagateSpecInvalidationInputDto,
     ): Promise<ReadonlyArray<SpecInvalidationResultDto>> {
       return ipcRenderer.invoke(IPC_CHANNELS.INTAKE_PROPAGATE_SPEC_INVALIDATION, input);
+    },
+  },
+
+  search: {
+    async saveApiKey(input: SaveSearchApiKeyInputDto): Promise<SearchKeyStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.SEARCH_SAVE_API_KEY, input);
+    },
+
+    async deleteApiKey(): Promise<SearchKeyStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.SEARCH_DELETE_API_KEY);
+    },
+
+    async hasApiKey(): Promise<SearchKeyStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.SEARCH_HAS_API_KEY);
     },
   },
 };

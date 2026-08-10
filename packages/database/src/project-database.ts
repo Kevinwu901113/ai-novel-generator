@@ -1033,6 +1033,60 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 14,
+    sql: `
+      -- ── 重建 tasks 表：task_type CHECK 加入 RESEARCH_RUN（GE-4 / B5）──
+      -- 镜像 v13 重建模式：创建 tasks_new → 复制 → 删除 → 重命名 → 重建索引。
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_version_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        result_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        dedupe_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        stale_at TEXT,
+        cancelled_at TEXT,
+        CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST', 'GRILL_QUESTION_PLAN', 'CREATION_CONTRACT_DRAFT', 'CHAPTER_DRAFT', 'SPEC_EXTRACT', 'RESEARCH_RUN')),
+        CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+        CHECK (attempt_count >= 0),
+        CHECK (json_valid(input_version_json)),
+        CHECK (json_valid(payload_json)),
+        CHECK (result_json IS NULL OR json_valid(result_json))
+      ) STRICT;
+
+      INSERT INTO tasks_new (
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      )
+      SELECT
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedupe_active
+        ON tasks(dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status IN ('PENDING', 'RUNNING');
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_id
+        ON tasks(project_id, id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────

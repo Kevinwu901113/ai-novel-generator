@@ -91,6 +91,8 @@ export type { ProviderProfileDeps } from './provider-profiles.js';
 
 export { secretRefForProfile, isValidProviderProfileId } from './provider-secret-ref.js';
 export type { ProviderSecretRef } from './provider-secret-ref.js';
+export { TAVILY_SEARCH_SECRET_REF } from './search-secret-ref.js';
+export type { SearchSecretRef } from './search-secret-ref.js';
 
 export { saveProviderApiKey } from './save-provider-api-key.js';
 export type { SaveProviderApiKeyDeps } from './save-provider-api-key.js';

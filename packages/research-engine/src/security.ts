@@ -80,3 +80,33 @@ export function isSafeSourceUrl(raw: string): boolean {
     return false;
   }
 }
+
+/**
+ * DNS 解析后的地址校验（B5/D-B5-5）：解析出的每个地址都必须通过本函数，
+ * 否则整个请求拒绝。覆盖 IPv4 私网段（同 isPrivateIpv4）与 IPv6
+ * loopback/unspecified/link-local(fe80::/10)/ULA(fc00::/7)/IPv4-mapped（还原后复检）。
+ * 纯函数：入参是已解析的 IP 字面量（node:dns lookup 结果），不发起网络请求。
+ */
+export function isPrivateResolvedAddress(address: string): boolean {
+  const raw = address
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '');
+  if (raw.length === 0) return true; // 空地址视为不可信
+  if (raw.includes(':')) {
+    // IPv6
+    if (raw === '::' || raw === '::1') return true;
+    // IPv4-mapped（::ffff:a.b.c.d）还原后按 IPv4 规则复检
+    const mapped = raw.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (mapped) return isPrivateIpv4(mapped[1]) || mapped[1].startsWith('0.');
+    const firstGroup = raw.split(':', 1)[0];
+    const first = firstGroup === '' ? 0 : Number.parseInt(firstGroup, 16);
+    if (Number.isNaN(first)) return true; // 无法解析按不可信处理
+    if (first >= 0xfe80 && first <= 0xfebf) return true; // link-local fe80::/10
+    if (first >= 0xfc00 && first <= 0xfdff) return true; // ULA fc00::/7
+    return false;
+  }
+  // IPv4
+  if (raw.startsWith('0.')) return true; // 0.0.0.0/8 当前网络
+  return isPrivateIpv4(raw);
+}

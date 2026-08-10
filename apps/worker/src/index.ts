@@ -126,6 +126,7 @@ import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './bluepr
 import {
   ExecutorRegistry,
   productionArtifactResolver,
+  TAVILY_SEARCH_SECRET_REF,
   type ArtifactResolverPort,
   type NodeExecutorRunner,
   type NodeRunnerDeps,
@@ -142,6 +143,8 @@ import { scheduleGraphTask, type GraphTaskRunnerDeps } from './graph-task-runner
 import { runProjectRecovery } from './recovery-bootstrap.js';
 import { driveRun } from '@ai-novel/application';
 import { registerIntakeExecutors } from './intake-executors.js';
+import { registerResearchExecutors } from './research-executors.js';
+import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
@@ -873,6 +876,14 @@ registerIntakeExecutors(productionRegistry, productionRunners, {
   clock: createClock(),
 });
 
+// GE-4（B5）：注册 Research 四个真实 executor（DECISION/PLAN/VALIDATE sync、
+// EXECUTE task-backed）。RESEARCH_ESCALATION 是人工 Gate，无 executor。
+registerResearchExecutors(productionRegistry, productionRunners, {
+  getProjectDb: (projectId: string) => getProjectDb(projectId),
+  idGenerator: createIdGenerator(),
+  clock: createClock(),
+});
+
 /** D-B3-1 live drive 与任务后推进共用的 NodeRunnerDeps 构造（同一 projDb 生命周期内使用） */
 function buildLiveNodeRunnerDeps(projDb: ProjectDatabase, projectId: string): NodeRunnerDeps {
   return {
@@ -955,6 +966,11 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         answerRepo: grillDeps.answerRepo,
         versionRepo: projDb.getCreationContractVersionRepository(),
         currentRepo: projDb.getCreationContractCurrentRepository(),
+        // RESEARCH_RUN（B5）：调研上下文 + Tavily/SafeWebFetch 端口（D-B5-3/5）
+        specVersionRepo: projDb.getCreationContractVersionRepository(),
+        researchRepo: projDb.getResearchBundleRepository(),
+        buildSearchPort: (apiKey: string) => createTavilySearchProvider({ apiKey }),
+        webFetch: createSafeWebFetch(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
@@ -1239,6 +1255,49 @@ async function handleSaveProviderApiKey(payload: unknown): Promise<ProviderPubli
   };
 
   return saveProviderApiKey(deps, { profileId: payload.profileId, apiKey: payload.apiKey });
+}
+
+// ── Search key（B5/D-B5-6：Tavily 槽位；key 永不入库、不回显）────
+
+async function handleSaveSearchApiKey(payload: unknown): Promise<{ hasApiKey: boolean }> {
+  const apiKey =
+    payload !== null && typeof payload === 'object'
+      ? (payload as Record<string, unknown>).apiKey
+      : undefined;
+  if (typeof apiKey !== 'string' || apiKey.trim().length === 0) {
+    throw new AppError('VALIDATION_ERROR', '无效的搜索 API Key 输入');
+  }
+  if (!secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '密钥服务未初始化');
+  }
+  await secretStore.setSecret(
+    TAVILY_SEARCH_SECRET_REF.service,
+    TAVILY_SEARCH_SECRET_REF.account,
+    apiKey.trim(),
+  );
+  return { hasApiKey: true };
+}
+
+async function handleDeleteSearchApiKey(): Promise<{ hasApiKey: boolean }> {
+  if (!secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '密钥服务未初始化');
+  }
+  await secretStore.deleteSecret(
+    TAVILY_SEARCH_SECRET_REF.service,
+    TAVILY_SEARCH_SECRET_REF.account,
+  );
+  return { hasApiKey: false };
+}
+
+async function handleHasSearchApiKey(): Promise<{ hasApiKey: boolean }> {
+  if (!secretStore) {
+    throw new AppError('WORKER_UNAVAILABLE', '密钥服务未初始化');
+  }
+  const has = await secretStore.hasSecret(
+    TAVILY_SEARCH_SECRET_REF.service,
+    TAVILY_SEARCH_SECRET_REF.account,
+  );
+  return { hasApiKey: has };
 }
 
 async function handleDeleteProviderApiKey(payload: unknown): Promise<ProviderPublicState> {
@@ -1719,6 +1778,17 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
         break;
       case 'provider.deleteApiKey':
         data = await handleDeleteProviderApiKey(request.payload);
+        break;
+      case 'search.saveApiKey':
+        data = await handleSaveSearchApiKey(request.payload);
+        // D-B5-6：搜索 key 补齐后重驱动（PENDING 的 RESEARCH_RUN 任务重调度）
+        redriveAfterProviderConfig();
+        break;
+      case 'search.deleteApiKey':
+        data = await handleDeleteSearchApiKey();
+        break;
+      case 'search.hasApiKey':
+        data = await handleHasSearchApiKey();
         break;
       case 'provider.testConnection':
         data = await handleTestProviderConnection(request.payload);

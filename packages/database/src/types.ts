@@ -275,7 +275,8 @@ export type DbTaskType =
   | 'GRILL_QUESTION_PLAN'
   | 'CREATION_CONTRACT_DRAFT'
   | 'CHAPTER_DRAFT'
-  | 'SPEC_EXTRACT';
+  | 'SPEC_EXTRACT'
+  | 'RESEARCH_RUN';
 
 /** 任务行 */
 export interface TaskRow {
