@@ -7,7 +7,9 @@
  * 3. 重定向手动跟随（≤ maxRedirects），每跳重新走 1+2；
  * 4. content-type 白名单；
  * 5. 响应字节上限（流式截断，不整段缓冲超限内容）；
- * 6. 连接/读取统一超时（AbortController 覆盖整个请求含 body 读取）。
+ * 6. 超时（AbortController 覆盖 fetch 请求与 body 读取；DNS 解析（resolveHost）
+ *    阶段不在其覆盖范围内，慢解析由系统 resolver 自身超时兜底）；
+ * 7. fetch 显式 credentials:'omit'，不携带任何环境凭据。
  *
  * 已知残余风险（设计记录 D-B5-5）：解析与连接之间的 DNS rebinding TOCTOU 窗口，
  * V1 不做 IP 钉连。resolveHost / fetchImpl / clock 可注入以便确定性测试。
@@ -127,7 +129,8 @@ async function assertHopAllowed(
   const validated = validateResearchTargetUrl(url);
   const hostname = new URL(validated).hostname;
   if (isIpLiteral(hostname)) {
-    // IPv4 字面量 validateResearchTargetUrl 已覆盖；IPv6 字面量在此统一复检
+    // validateResearchTargetUrl 已在 URL 层拒绝私网 IPv4/IPv6 字面量；
+    // 此处保留复检作为纵深防御（两层独立，任一失守另一兜底）
     if (isPrivateResolvedAddress(hostname)) {
       throw new Error(`拒绝访问目标（私有地址字面量）: ${hostname}`);
     }
@@ -163,6 +166,7 @@ export function createSafeWebFetch(options: SafeWebFetchOptions = {}): WebFetchP
           const response = await fetchImpl(currentUrl, {
             redirect: 'manual',
             signal: controller.signal,
+            credentials: 'omit',
             headers: { accept: allowedContentTypes.join(', ') },
           });
           if (REDIRECT_STATUSES.has(response.status)) {

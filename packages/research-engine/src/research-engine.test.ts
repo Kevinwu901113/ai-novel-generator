@@ -45,9 +45,25 @@ describe('security boundary', () => {
     expect(() => validateResearchTargetUrl('https://foo.internal/x')).toThrow();
   });
 
+  it('拒绝内嵌私网 IPv4 的 IPv6 字面量与 IPv4 组播/保留段（B5 复查 B-1）', () => {
+    // WHATWG URL 会把 [::ffff:127.0.0.1] 归一化为十六进制 [::ffff:7f00:1]
+    expect(() => validateResearchTargetUrl('http://[::ffff:127.0.0.1]/')).toThrow();
+    expect(() =>
+      validateResearchTargetUrl('http://[::ffff:169.254.169.254]/latest/meta-data/'),
+    ).toThrow();
+    expect(() => validateResearchTargetUrl('http://[::7f00:1]/')).toThrow();
+    expect(() => validateResearchTargetUrl('http://[64:ff9b::7f00:1]/')).toThrow();
+    expect(() => validateResearchTargetUrl('http://[2002:7f00:1::]/')).toThrow();
+    expect(() => validateResearchTargetUrl('http://[fe80::1]/')).toThrow();
+    expect(() => validateResearchTargetUrl('http://224.0.0.1/')).toThrow();
+    expect(() => validateResearchTargetUrl('http://255.255.255.255/')).toThrow();
+  });
+
   it('isSafeSourceUrl 对非法 URL 返回 false', () => {
     expect(isSafeSourceUrl('https://example.com')).toBe(true);
     expect(isSafeSourceUrl('http://127.0.0.1/')).toBe(false);
+    expect(isSafeSourceUrl('http://[::ffff:7f00:1]/')).toBe(false);
+    expect(isSafeSourceUrl('http://[2607:f8b0::1]/')).toBe(true);
     expect(isSafeSourceUrl('not-a-url')).toBe(false);
   });
 });

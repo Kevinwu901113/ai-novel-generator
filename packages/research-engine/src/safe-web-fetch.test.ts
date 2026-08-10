@@ -54,6 +54,36 @@ describe('isPrivateResolvedAddress', () => {
     expect(isPrivateResolvedAddress('2001:db8::1')).toBe(false);
     expect(isPrivateResolvedAddress('::ffff:93.184.216.34')).toBe(false);
   });
+
+  it('IPv6 十六进制内嵌 IPv4（mapped/compatible/NAT64/6to4）与 multicast 全部命中（B5 复查 B-1）', () => {
+    for (const ip of [
+      '::ffff:7f00:1', // IPv4-mapped 127.0.0.1（WHATWG URL 归一化产物）
+      '[::ffff:7f00:1]',
+      '::ffff:a9fe:a9fe', // IPv4-mapped 169.254.169.254（云元数据）
+      '::ffff:a00:1', // IPv4-mapped 10.0.0.1
+      '::7f00:1', // IPv4-compatible 127.0.0.1
+      '64:ff9b::7f00:1', // NAT64 内嵌 127.0.0.1
+      '2002:7f00:1::', // 6to4 内嵌 127.0.0.1
+      'ff02::1', // IPv6 multicast ff00::/8
+    ]) {
+      expect(isPrivateResolvedAddress(ip), ip).toBe(true);
+    }
+    expect(isPrivateResolvedAddress('2607:f8b0::1')).toBe(false);
+    expect(isPrivateResolvedAddress('::ffff:808:808')).toBe(false); // 8.8.8.8
+  });
+
+  it('IPv4 组播 224/4 与保留 240/4 判封禁', () => {
+    for (const ip of ['224.0.0.1', '239.255.255.255', '240.0.0.1', '255.255.255.255']) {
+      expect(isPrivateResolvedAddress(ip), ip).toBe(true);
+    }
+    expect(isPrivateResolvedAddress('8.8.8.8')).toBe(false);
+  });
+
+  it('zone id 或无法解析的 IPv6 按不可信处理', () => {
+    expect(isPrivateResolvedAddress('fe80::1%eth0')).toBe(true);
+    expect(isPrivateResolvedAddress('1::2::3')).toBe(true);
+    expect(isPrivateResolvedAddress('nonsense::zz')).toBe(true);
+  });
 });
 
 describe('createSafeWebFetch', () => {
@@ -75,6 +105,11 @@ describe('createSafeWebFetch', () => {
     expect(doc.extractedText).toContain('正文内容');
     expect(doc.extractedText).not.toContain('evil');
     expect(doc.fetchedAt).toBe('2026-08-10T00:00:00.000Z');
+    // 加固：不携带任何凭据
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://example.com/page',
+      expect.objectContaining({ credentials: 'omit' }),
+    );
   });
 
   it('DNS 解析到私网地址 → 拒绝（不发起 fetch）', async () => {
@@ -87,6 +122,22 @@ describe('createSafeWebFetch', () => {
     await expect(port.fetch({ url: 'https://rebind.example/', timeoutMs: 5000 })).rejects.toThrow(
       /私有地址/,
     );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('IPv4-mapped IPv6 字面量（URL 归一化为十六进制形式）在触达 fetch 前拒绝（B5 复查 B-1）', async () => {
+    const fetchImpl = vi.fn();
+    const port = createSafeWebFetch({
+      resolveHost: PUBLIC_RESOLVE,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      clock: CLOCK,
+    });
+    await expect(
+      port.fetch({ url: 'http://[::ffff:127.0.0.1]/', timeoutMs: 5000 }),
+    ).rejects.toThrow();
+    await expect(
+      port.fetch({ url: 'http://[::ffff:169.254.169.254]/latest/meta-data/', timeoutMs: 5000 }),
+    ).rejects.toThrow();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -171,7 +222,7 @@ describe('createSafeWebFetch', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('超时中止（AbortController 覆盖整个请求）', async () => {
+  it('超时中止（AbortController 覆盖 fetch 与 body 读取，不含 DNS 解析阶段）', async () => {
     const fetchImpl = vi.fn(
       (_url: string, init: { signal: AbortSignal }) =>
         new Promise((_resolve, reject) => {

@@ -104,7 +104,13 @@ function outcomeValueFromSnapshot(snapshot: unknown, nodeId: string): string {
   return value;
 }
 
-/** creationSpec sections 摘要（供深度判断；与 task-engine summarizeSpecSections 同则） */
+/**
+ * creationSpec sections 摘要——仅供 determineResearchDepth 的关键词启发式。
+ * 与 task-engine research-run.ts 的 summarizeSpecSections 有意不同：
+ * 本函数取 premise/genre/themes/structure（题材信号，服务深度判定）；
+ * 后者取 premise/genre/targetAudience/tone（写作要点，服务模型问题规划提示）。
+ * 两者消费者不同，勿互相"对齐"。
+ */
 function specSummaryFromSections(sectionsJson: string): string {
   try {
     const s = JSON.parse(sectionsJson) as Record<string, unknown>;

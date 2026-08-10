@@ -34,8 +34,16 @@
   实现 `WebFetchPort`，在既有纯函数校验（security.ts）之上补齐运行时边界：
   1. 请求前 `validateResearchTargetUrl`；
   2. **DNS 解析后校验**：`resolveHost`（可注入；生产用 node:dns/promises lookup all）对每个
-     解析地址过 `isPrivateResolvedAddress`（security.ts 新增导出：IPv4 私网段 + IPv6
-     loopback/::1、fe80::/10、fc00::/7、IPv4-mapped ::ffff:x.x.x.x 还原后复检）；
+     解析地址过 `isPrivateResolvedAddress`（security.ts 新增导出）。B5 复查 B-1 修复后的
+     覆盖面：IPv6 先全量归一化展开为 8 组 16-bit 再判定（WHATWG URL 会把
+     `[::ffff:127.0.0.1]` 归一化为十六进制 `[::ffff:7f00:1]`，点分正则不可靠）——
+     IPv4-mapped `::ffff:0:0/96` / IPv4-compatible `::/96` / NAT64 `64:ff9b::/96` /
+     6to4 `2002::/16` 均还原内嵌 IPv4 复检；`::`/`::1`、fe80::/10、fc00::/7、ff00::/8
+     直接拒绝；zone id（%）或解析失败按不可信处理。裸 IPv4 与内嵌还原共用同一封禁
+     函数（10/8、172.16/12、192.168/16、127/8、169.254/16、100.64/10、198.18/15、
+     0/8、组播 224/4、保留 240/4）。入口层 `isBlockedHostname` 对 IPv6 字面量同步收口：
+     `validateResearchTargetUrl` / `isSafeSourceUrl` 在 URL 校验层即拒绝私网 IPv6 字面量，
+     不依赖 safe-web-fetch 兜底；
   3. 重定向手动跟随（redirect:'manual'，≤3 跳），每跳重新走 1+2；
   4. content-type 白名单（text/html、text/plain、application/xhtml+xml、application/json）；
   5. 响应字节上限（默认 512 KiB，流式截断）；
