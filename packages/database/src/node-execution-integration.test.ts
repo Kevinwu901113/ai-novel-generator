@@ -346,6 +346,8 @@ function seedIntakeArtifactRows(db: ProjectDatabase): void {
     createdAt: NOW,
     updatedAt: NOW,
   });
+  // TD-024（D-B4-7）：resolver 白名单要求结算时会话为 ACTIVE（生产 IDEA_CAPTURE 创建后即 start）
+  db.getGrillSessionRepository().transitionStatus('idea-real-1', 1, 'ACTIVE', NOW);
   const sections = validateCreationContractSections({
     premise: 'settlement 集成测试用创作要求',
     genre: ['sci-fi'],
@@ -1332,6 +1334,34 @@ describe('node execution settlement (real SQLite)', () => {
       expect(prov.blueprint?.executionId).toBe(bpExec.id);
       expect(ideaExec.status).toBe('settled');
       expect(bpExec.status).toBe('settled');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('16b. TD-024：非 ACTIVE 会话不可结算为 idea artifact（resolver 状态白名单）', async () => {
+    const db = freshDb();
+    try {
+      const kit = buildKit(db, { resolver: productionArtifactResolver });
+      const run = seedProjectRun(db, kit.deps, 'c-td024-whitelist');
+      const runId = run.run.workflowRunId;
+      seedIntakeArtifactRows(db);
+      // 会话已被弃用（modify_idea 回环 / TD-022 重建后的旧会话）
+      const sess = db.getGrillSessionRepository().getById('idea-real-1')!;
+      db.getGrillSessionRepository().transitionStatus(
+        'idea-real-1',
+        sess.version,
+        'ABANDONED',
+        NOW,
+      );
+
+      await driveRun(kit.deps, 'p1', runId);
+
+      // resolver 白名单拒绝 → settlement fail-closed；artifact 不得写入
+      const state = db.getGraphRunRepository().getById(runId)!.state as IdeaToNovelProjectRunState;
+      expect(state.artifacts.idea ?? null).toBeNull();
+      expect(state.nodeStatuses[IDEA_CAPTURE]).toBe('failed');
+      expect(state.terminalStatus).toBe('failed');
     } finally {
       db.close();
     }

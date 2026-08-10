@@ -328,6 +328,8 @@ export const IPC_CHANNELS = {
   GRAPH_GET_RUN_PROGRESS: 'ipc:graph-get-run-progress',
   GRAPH_APPLY_HUMAN_DECISION: 'ipc:graph-apply-human-decision',
   GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
+  INTAKE_GET_ACTIVE_SESSION: 'ipc:intake-get-active-session',
+  INTAKE_PROPAGATE_SPEC_INVALIDATION: 'ipc:intake-propagate-spec-invalidation',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -657,6 +659,61 @@ export interface GraphAPI {
   listRuns(input: ListRunsInputDto): Promise<ReadonlyArray<GraphRunSummaryDto>>;
 }
 
+// ── Intake API（GE-3/B4）─────────────────────────────────────────
+
+/** intake.getActiveIntakeSession 输入 */
+export interface GetActiveIntakeSessionInputDto {
+  readonly projectId: string;
+}
+
+/** intake.propagateSpecInvalidation 输入 */
+export interface PropagateSpecInvalidationInputDto {
+  readonly projectId: string;
+  readonly creationSpecVersionId: string;
+}
+
+/** intake.propagateSpecInvalidation 结果（每个受影响的非终态 project run 一条） */
+export interface SpecInvalidationResultDto {
+  readonly runId: string;
+  readonly invalidatedKinds: ReadonlyArray<string>;
+}
+
+/**
+ * Idea Intake API（B4/D-B4-3）：对话式访谈的最小补充通道。
+ * 会话创建是 IDEA_CAPTURE executor 的内部职责，不在 RPC 面。
+ */
+export interface IntakeAPI {
+  getActiveIntakeSession(
+    input: GetActiveIntakeSessionInputDto,
+  ): Promise<GrillSessionPublicData | null>;
+  propagateSpecInvalidation(
+    input: PropagateSpecInvalidationInputDto,
+  ): Promise<ReadonlyArray<SpecInvalidationResultDto>>;
+}
+
+/** 验证 intake.getActiveIntakeSession 输入 */
+export function isValidGetActiveIntakeSessionInput(
+  input: unknown,
+): input is GetActiveIntakeSessionInputDto {
+  if (input === null || typeof input !== 'object') return false;
+  const obj = input as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && obj.projectId.trim().length > 0;
+}
+
+/** 验证 intake.propagateSpecInvalidation 输入 */
+export function isValidPropagateSpecInvalidationInput(
+  input: unknown,
+): input is PropagateSpecInvalidationInputDto {
+  if (input === null || typeof input !== 'object') return false;
+  const obj = input as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    obj.projectId.trim().length > 0 &&
+    typeof obj.creationSpecVersionId === 'string' &&
+    obj.creationSpecVersionId.trim().length > 0
+  );
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -668,6 +725,7 @@ export interface DesktopAPI {
   grill: GrillAPI;
   contract: ContractAPI;
   graph: GraphAPI;
+  intake: IntakeAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────

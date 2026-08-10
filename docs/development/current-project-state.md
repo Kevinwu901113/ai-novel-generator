@@ -37,7 +37,8 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 | **权威 Graph 定义**                     | `packages/domain/src/idea-to-novel-graph*.ts`（PR #32 已合并）                                                                                                          | IdeaToNovelProjectGraphV1（16 节点/36 边）+ ChapterGenerationGraphV1（13 节点/23 边）+ 纯 transition / graph-aware 校验 / 失效传播 / WorkflowStage 投影；contracts DTO；175 项测试                                                        | 唯一流程权威；GE-1 在其上建运行时内核                                                |
 | **Graph Run Runtime**                   | `packages/application/src/graph-run*.ts`、`database/src/graph-run-*.ts`（migration v8）、`apps/worker/src/graph-handlers.ts`、contracts GRAPH_* 通道 + DesktopAPI.graph | GraphRunService（createRun/advanceNode/failNode/requestHumanDecision/applyHumanDecision/listRuns/recoverInFlightRuns）+ BEGIN IMMEDIATE/CAS 原子持久化 + 幂等命令 + 启动恢复 + answer receipt 原子契约                                    | GE-2 在其上跑双 Graph 全路径                                                         |
 | **Node Execution & Settlement（RW-1）** | `packages/application/src/node-runner.ts`、`node-settlement.ts`、`production-artifact-resolver.ts`、`database/src/node-execution-repositories.ts`（migration v12）      | 持久化 execution 模型 + Executor Registry + NodeRunner + NodeSettlementService（唯一非人工节点完成路径，同事务原子）+ ArtifactResolver 严格边界（生产/测试同源，TD-019）+ 按 recoveryPolicy 恢复；registry 能力缺口跳过不杀 run（TD-020） | GE-3..GE-6 全部真实节点 executor 的共同底座                                          |
-| **GE-3 Intake wiring（B3）**            | `apps/worker/src/intake-executors.ts`、`packages/application/src/idea-intake.ts`、SPEC_EXTRACT 任务执行器（migration v13）、GE-3 真实链路 E2E（PR #42）                 | IDEA_CAPTURE / SPEC_EXTRACT / ASK_QUESTION / COLLECT_ANSWER / INTAKE_ESCALATION 五节点真实接线；SPEC_EXTRACT 走 B1 网关产出 CreationSpec；resolver 补 idea/creationSpec 底层权威存储校验                                                  | B4 配套产品 UI（D8）；随行债 TD-022/024/025                                          |
+| **GE-3 Intake wiring（B3）**            | `apps/worker/src/intake-executors.ts`、`packages/application/src/idea-intake.ts`、SPEC_EXTRACT 任务执行器（migration v13）、GE-3 真实链路 E2E（PR #42）                 | IDEA_CAPTURE / SPEC_EXTRACT / ASK_QUESTION / COLLECT_ANSWER / INTAKE_ESCALATION 五节点真实接线；SPEC_EXTRACT 走 B1 网关产出 CreationSpec；resolver 补 idea/creationSpec 底层权威存储校验（TD-024 起含会话状态白名单）                     | 已完成（UI 见下行）                                                                  |
+| **GE-3 Intake 产品 UI（B4）**           | `apps/desktop/src/renderer/intake/*`、`journey/JourneyNav.tsx`、App.tsx 旅程 shell、contracts/preload/main intake.* 通道、`docs/development/b4-intake-ui-design.md`     | 四阶段旅程导航 + 对话式访谈（回答/跳过/完成/升级 Gate/失败重建）+ CreationSpec 编辑器（CAS + 显式失效级联）；旧 Grill 工作台移出默认入口（代码保留）；随行解决 TD-022/024/025-3                                                           | GE-4 起 B5/B6 逐阶段扩展旅程                                                         |
 | Project lifecycle                       | `packages/application/create-project.ts`、`open-project.ts`、`list-projects.ts`                                                                                         | 项目创建/打开/列表/启动恢复                                                                                                                                                                                                               | 保留；产品入口随 GE-3 改为 Idea Intake                                               |
 | Grill / questioning                     | `packages/domain/grill.ts`、`application/grill-session.ts`、`database/grill-repositories.ts`、`worker/grill-handlers.ts`、`renderer/grill/*`                            | 会话/问题/回答/提案全链路                                                                                                                                                                                                                 | GE-3 适配为 Idea Intake；修复 `grill.listQuestions` / `grill.markQuestionAsked` 死链 |
 | Creation Contract                       | `packages/domain/creation-contract.ts`、`application/creation-contract*.ts`、DB v4–v6、`worker/contract-handlers.ts`、`renderer/contract/*`                             | 契约提案/版本/current 指针/字段锁/CAS                                                                                                                                                                                                     | GE-3 复用快照/版本/provenance 为 CreationSpec 基座，废弃审批门禁                     |
@@ -51,7 +52,6 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 | 能力                          | 状态               | 说明                                                                                              |
 | ----------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
-| Intake 产品 UI                | MISSING            | 五节点已接线（B3）但无对话式产品界面；B4（GE-3 UI + App shell 旅程改造）                          |
 | Manuscript transport/renderer | MISSING（main 无） | PR #25 参考资产；GE-7 选择性移植                                                                  |
 | Web Research / ResearchBundle | BACKEND-ONLY       | `research-engine` 有 research.execute（fake provider）；节点未接、无 Tavily、无 UI；GE-4（B5/B6） |
 | StoryBlueprint                | BACKEND-ONLY       | blueprint.* 后端有；节点未接、accept 非原子；GE-5（B7/B8）                                        |
@@ -66,17 +66,20 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 ## 3. Current User Journey
 
-打包应用当前实际走到（`apps/desktop/src/renderer/App.tsx`）：
+打包应用当前实际走到（`apps/desktop/src/renderer/App.tsx`，B4 起）：
 
 ```text
 启动 → 健康检查 → 项目列表 → 新建项目（名称 + 初始想法）→ 打开
-→ 有项目：Grill 工作台（GrillSessionList / GrillSessionPanel / GrillQuestionPlanPanel / ContractDraftPanel）
-→ 右栏：状态面板（ProviderRegion / TaskCenter / GrillDiagnostics）
+→ 有项目：四阶段旅程（想法/调研/蓝图/成稿导航）+ 对话式创作访谈（IntakeRegion）
+   ├─ 自动创建 project run → 追问 → 回答/跳过/我说完了（answer receipt 契约）
+   ├─ SPEC_EXTRACT 整理中提示 / 升级 Gate 四选项 / 失败一键重建（TD-022）
+   └─ CreationSpec 展示与编辑（CAS + 显式失效级联）
+→ 右栏：状态面板（ProviderRegion / TaskCenter）
 ```
 
-旅程在 **Creation Contract 之后停止**：无 Idea Intake 产品流程界面、无 Web Research、无 StoryBlueprint、无章节生成、
-无稿件编辑器、无导出。注意：GE-3 五节点已在运行时真实接线（B3），但产品旅程 UI 未改——用户仍看到 Grill 工作台，
-对话式 Intake 界面与 App shell 旅程改造由 B4 交付。其余是 GE-4..GE-7 的目标。
+旅程在 **CreationSpec 之后停止**：spec 完成后 run 停在 RESEARCH_DECISION（GE-4 executor 未注册，
+TD-020 跳过保持），调研/蓝图/成稿阶段显示占位。旧 Grill 工作台已移出默认入口（代码保留）。
+其余是 GE-4..GE-7（B5..B10）的目标。
 
 ## 4. Canonical Assets（复用路线）
 
@@ -129,7 +132,7 @@ Manuscript、Export、重启恢复。
 GE-0 权威文档收束        → ✅ COMPLETE（2026-08-04，PR #33）
 GE-1 Durable Runtime     → ✅ COMPLETE（内核，2026-08-04，PR #34，migration v8）
 GE-2 Walking Skeleton    → ⚠️ PARTIAL（2026-08-04，骨架测试达成；无运行时 runner / 无 UI；直接推 main）
-GE-3 Idea Intake+Spec    → 🟡 WIRING+E2E COMPLETE（B3，2026-08-07，PR #42，migration v13；产品 UI 待 B4）
+GE-3 Idea Intake+Spec    → ✅ COMPLETE（B3 wiring+E2E，PR #42；B4 产品 UI，2026-08-10）
 GE-4 Web Research        → 🔶 REWORK（BACKEND 有：research-engine / research.execute(fake)；节点未接，无 Tavily，无 UI）
 GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
@@ -147,8 +150,13 @@ B3 验收记录：2026-08-07 对抗式复查先判 REWORK（3 blocker：ASK_QUES
 秒杀 run、假 CAS 静默覆盖用户对 CreationSpec 的修改），修复 `e73f5ab`（+3 回归 +15 parse 单测，双向红绿反转）
 后复查 ACCEPT 合并；随行登记 TD-022/023/024/025，TD-019/020 同批解决。
 
-下一步：**B4**（GE-3 UI：App shell 旅程改造 + 对话式访谈 + CreationSpec 编辑器；可顺带消化 TD-022/024）→
-**B5/B6**（GE-4 wiring + Tavily + Research UI；B5 前需负责人提供 Tavily API key，经 secret-store 录入）。
+B4 交付记录：2026-08-10，App shell 四阶段旅程 + 对话式访谈 + CreationSpec 编辑器
+（设计 `b4-intake-ui-design.md`）；随行解决 TD-022（失败一键重建）/TD-024（会话卫生三项）/
+TD-025-3（provider 配置成功后重驱动）；intake.* 通道 contracts/preload/main 三层暴露；
+旧 Grill 工作台移出默认入口（代码保留）。TD-023 由独立小修 PR #44 解决。
+
+下一步：**B5/B6**（GE-4 wiring + Tavily + Research UI；B5 前需负责人提供 Tavily API key，
+经 secret-store 录入）→ **B7/B8**（GE-5）→ **B9/B10**（GE-6）。
 批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。

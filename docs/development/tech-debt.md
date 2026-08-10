@@ -496,8 +496,8 @@ resolver 在 `packages/database/src/node-execution-integration.test.ts`（`realR
 
 ## TD-022: settle_if_result 任务 RUNNING 中断 = intake run 报废（缺产品化恢复）
 
-**状态**: OPEN
-**优先级**: 中（B4/产品层处理）
+**状态**: RESOLVED
+**优先级**: —
 **来源**: B3 对抗式复查 Note-1（2026-08-07）
 
 ### 问题
@@ -510,6 +510,13 @@ settle_if_result 策略不允许重放（防重复计费）→ run 终态 failed
 
 - 产品层给 failed intake run 一键重建（复用既有 CreationSpec/session），或允许
   settle_if_result 在 TASK_INTERRUPTED 下有界重试（需重复计费评估）。
+
+### 解决
+
+- B4（D-B4-2）：failed run 在访谈 UI 显示友好提示 +「重新开始访谈」——以代际幂等键
+  （`intake-auto:${projectId}:${run 数}`）创建新 run；IDEA_CAPTURE 重新播种会话
+  （旧会话由 TD-024 弃用），既有 CreationSpec 版本保留。回归：intake E2E 测试 8 +
+  IntakeRegion 组件测试。settle_if_result 有界重试（重复计费路线）按原策略不采用。
 
 ---
 
@@ -538,8 +545,8 @@ settle_if_result 策略不允许重放（防重复计费）→ run 终态 failed
 
 ## TD-024: intake 孤儿 ACTIVE session 清理 + resolver 不校验 session 状态
 
-**状态**: OPEN
-**优先级**: 低
+**状态**: RESOLVED
+**优先级**: —
 **来源**: B3 设计声明偏离 + 对抗式复查 Note-6（2026-08-07）
 
 ### 问题
@@ -551,6 +558,16 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
 ### 后续动作
 
 - B4 或维护批次：新建时 abandon 前一 ACTIVE 会话；resolver 增状态白名单；问题写入走用例层。
+
+### 解决
+
+- B4（D-B4-7）三项落地：
+  1. IDEA_CAPTURE 执行前弃用项目全部 ACTIVE 会话（全局至多一个 ACTIVE，
+     `getActiveIntakeSession` 歧义消除）；
+  2. resolver `idea` 校验加状态白名单（仅 ACTIVE 可结算；集成测试 16b）；
+  3. `executeSpecExtract` 追问写入前重读会话，非 ACTIVE 跳过写入（E2E 测试 9）。
+     未改走 `addGrillQuestions` 用例——其 CAS/版本推进语义嵌入任务终态事务的
+     风险大于收益，防护达到同等效果（决策记录 D-B4-7）。
 
 ---
 
@@ -566,5 +583,7 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
 2. **BLK-3 附带语义**：用户在抽取在途手工修改创作要求 → 本次抽取作废 → task 确定性 FAILED →
    run fail-closed 终态。数据完整性正确（用户版本必胜），但体验上是"编辑杀 run"；
    后续可把该冲突转为新 activation 重抽而非杀 run。
-3. **配置修复后无自动重驱动**：BLK-2 使任务在 provider/key 未配置时保持 PENDING，但配置成功后
-   需重启应用才会重调度；建议 provider 配置成功事件触发一次 driveRun。
+3. ~~**配置修复后无自动重驱动**~~：已由 B4（D-B4-8）解决——provider.create/update/
+   setDefault/saveApiKey 成功后 fire-and-forget 触发一次全项目恢复扫描（复用
+   `recoverGraphRuns`，含 PENDING task 重调度），in-flight 去重防抖。
+   第 1、2 项仍 OPEN（需先调整 skip 语义 / activation 归属，留后续批次）。

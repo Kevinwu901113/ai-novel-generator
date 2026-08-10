@@ -51,6 +51,9 @@ import {
   isValidGetRunProgressInput,
   isValidApplyHumanDecisionInput,
   isValidListRunsInput,
+  isValidGetActiveIntakeSessionInput,
+  isValidPropagateSpecInvalidationInput,
+  type SpecInvalidationResultDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -951,6 +954,38 @@ ipcMain.handle(
       command: 'graph.listRuns',
       payload: input,
     })) as ReadonlyArray<GraphRunSummaryDto>;
+  },
+);
+
+// ── Idea Intake（GE-3/B4）─────────────────────────────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.INTAKE_GET_ACTIVE_SESSION,
+  async (_event, input: unknown): Promise<GrillSessionPublicData | null> => {
+    if (!isValidGetActiveIntakeSessionInput(input)) {
+      throw Object.assign(new Error('无效的获取 intake 会话输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'intake.getActiveIntakeSession',
+      payload: input,
+    })) as GrillSessionPublicData | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.INTAKE_PROPAGATE_SPEC_INVALIDATION,
+  async (_event, input: unknown): Promise<ReadonlyArray<SpecInvalidationResultDto>> => {
+    if (!isValidPropagateSpecInvalidationInput(input)) {
+      throw Object.assign(new Error('无效的创作要求失效级联输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'intake.propagateSpecInvalidation',
+      payload: input,
+    })) as ReadonlyArray<SpecInvalidationResultDto>;
   },
 );
 

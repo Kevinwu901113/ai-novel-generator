@@ -965,6 +965,22 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
   };
 }
 
+/**
+ * TD-025-3（D-B4-8）：provider 配置成功后 fire-and-forget 重驱动一次全部非终态 run。
+ * 复用启动恢复扫描（含 PENDING Graph task 重调度）——修复"未配 key 时任务保持 PENDING、
+ * 配置成功后需重启应用才重调度"。in-flight 去重防抖；失败静默（启动恢复兜底）。
+ */
+let providerRedriveInFlight = false;
+function redriveAfterProviderConfig(): void {
+  if (providerRedriveInFlight) return;
+  providerRedriveInFlight = true;
+  void recoverGraphRuns()
+    .catch(() => {})
+    .finally(() => {
+      providerRedriveInFlight = false;
+    });
+}
+
 async function recoverGraphRuns(opts: RecoveryOptions = {}): Promise<void> {
   if (!appDb) return;
   await runProjectRecovery({
@@ -1684,18 +1700,22 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
         break;
       case 'provider.create':
         data = await handleCreateProvider(request.payload);
+        redriveAfterProviderConfig();
         break;
       case 'provider.update':
         data = await handleUpdateProvider(request.payload);
+        redriveAfterProviderConfig();
         break;
       case 'provider.delete':
         data = await handleDeleteProvider(request.payload);
         break;
       case 'provider.setDefault':
         data = await handleSetDefaultProvider(request.payload);
+        redriveAfterProviderConfig();
         break;
       case 'provider.saveApiKey':
         data = await handleSaveProviderApiKey(request.payload);
+        redriveAfterProviderConfig();
         break;
       case 'provider.deleteApiKey':
         data = await handleDeleteProviderApiKey(request.payload);

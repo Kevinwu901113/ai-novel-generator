@@ -59,6 +59,8 @@ const IPC_CHANNELS = {
   GRAPH_GET_RUN_PROGRESS: 'ipc:graph-get-run-progress',
   GRAPH_APPLY_HUMAN_DECISION: 'ipc:graph-apply-human-decision',
   GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
+  INTAKE_GET_ACTIVE_SESSION: 'ipc:intake-get-active-session',
+  INTAKE_PROPAGATE_SPEC_INVALIDATION: 'ipc:intake-propagate-spec-invalidation',
 } as const;
 
 /**
@@ -123,6 +125,9 @@ import type {
   ListRunsInputDto,
   GraphProgressProjectionDto,
   GraphRunSummaryDto,
+  GetActiveIntakeSessionInputDto,
+  PropagateSpecInvalidationInputDto,
+  SpecInvalidationResultDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -392,6 +397,20 @@ const desktopAPI: DesktopAPI = {
 
     async listRuns(input: ListRunsInputDto): Promise<ReadonlyArray<GraphRunSummaryDto>> {
       return ipcRenderer.invoke(IPC_CHANNELS.GRAPH_LIST_RUNS, input);
+    },
+  },
+
+  intake: {
+    async getActiveIntakeSession(
+      input: GetActiveIntakeSessionInputDto,
+    ): Promise<GrillSessionPublicData | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.INTAKE_GET_ACTIVE_SESSION, input);
+    },
+
+    async propagateSpecInvalidation(
+      input: PropagateSpecInvalidationInputDto,
+    ): Promise<ReadonlyArray<SpecInvalidationResultDto>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.INTAKE_PROPAGATE_SPEC_INVALIDATION, input);
     },
   },
 };

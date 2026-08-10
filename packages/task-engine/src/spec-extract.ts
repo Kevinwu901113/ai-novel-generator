@@ -556,19 +556,25 @@ export async function executeSpecExtract(
         );
       }
 
-      // 追问问题（ask_more 时；由 ASK_QUESTION 同步 executor 逐个 markAsked）
-      let sequence = deps.questionRepo.getMaxSequence(payload.sessionId);
-      for (const q of parsedResult.nextQuestions) {
-        sequence += 1;
-        deps.questionRepo.create({
-          id: idGenerator.generate(),
-          sessionId: payload.sessionId,
-          sequence,
-          topic: q.topic,
-          text: q.text,
-          rationale: q.rationale,
-          dependsOnQuestionIds: [],
-        });
+      // 追问问题（ask_more 时；由 ASK_QUESTION 同步 executor 逐个 markAsked）。
+      // TD-024（D-B4-7）：写入前重读会话——modify_idea 回环 / 重建已弃用该会话时，
+      // 本结果注定 STALE（inputHash 含 activationNo），不再向非 ACTIVE 会话注入问题；
+      // 结算语义不变，envelope 照常落库。
+      const sessionAtFinalize = deps.sessionRepo.getById(payload.sessionId);
+      if (sessionAtFinalize?.status === 'ACTIVE') {
+        let sequence = deps.questionRepo.getMaxSequence(payload.sessionId);
+        for (const q of parsedResult.nextQuestions) {
+          sequence += 1;
+          deps.questionRepo.create({
+            id: idGenerator.generate(),
+            sessionId: payload.sessionId,
+            sequence,
+            topic: q.topic,
+            text: q.text,
+            rationale: q.rationale,
+            dependsOnQuestionIds: [],
+          });
+        }
       }
 
       // execution-bound durable envelope：task 成功前必达（RW-1 不变量）

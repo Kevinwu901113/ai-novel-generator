@@ -26,7 +26,9 @@ import type {
   NodeTaskSpec,
 } from '@ai-novel/application';
 import {
+  abandonGrillSession,
   createGrillSession,
+  listGrillSessions,
   markQuestionAsked,
   startGrillSession,
   type ExecutorRegistry,
@@ -99,6 +101,21 @@ function ideaCaptureExecute(
     idGenerator: ctx.idGenerator,
     clock: ctx.clock,
   });
+  // TD-024：新建前弃用该项目全部 ACTIVE 会话——modify_idea 回环 / 重试 / 重建（TD-022）
+  // 留下的旧会话一律作废，保证全局至多一个 ACTIVE（getActiveIntakeSession 歧义消除，
+  // 且 ABANDONED 会话被 resolver 白名单拒绝结算）。CAS 冲突时重读一次再弃用；
+  // 仍失败则抛错 fail-closed（replayable，重放安全）。
+  for (const stale of listGrillSessions(grillDeps, { projectId: ectx.projectId })) {
+    if (stale.status !== 'ACTIVE') continue;
+    try {
+      abandonGrillSession(grillDeps, { sessionId: stale.id, expectedVersion: stale.version });
+    } catch {
+      const current = grillDeps.sessionRepo.getById(stale.id);
+      if (current && current.status === 'ACTIVE') {
+        abandonGrillSession(grillDeps, { sessionId: current.id, expectedVersion: current.version });
+      }
+    }
+  }
   const session = createGrillSession(grillDeps, {
     projectId: ectx.projectId,
     goal: initialIdea,

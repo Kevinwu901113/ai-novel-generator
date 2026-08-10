@@ -539,4 +539,60 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
       db.close();
     }
   });
+
+  it('8. TD-022/TD-024 回归：重建 run（新幂等键）→ 新会话 ACTIVE、旧会话被弃用', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
+
+      // 第一代 run：IDEA_CAPTURE 播种会话 S1
+      const gen1 = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-8-a' });
+      await driveRun(env.deps, 'p1', gen1.run.workflowRunId);
+      const s1 = projectState(env.deps, gen1.run.workflowRunId).artifacts.idea?.artifactId;
+      expect(grillDeps.sessionRepo.getById(s1!)?.status).toBe('ACTIVE');
+
+      // 产品层重建（D-B4-2）：新幂等键 → 新 run；IDEA_CAPTURE 弃用旧 ACTIVE 会话（TD-024）
+      const gen2 = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-8-b' });
+      expect(gen2.run.workflowRunId).not.toBe(gen1.run.workflowRunId);
+      await driveRun(env.deps, 'p1', gen2.run.workflowRunId);
+
+      const s2 = projectState(env.deps, gen2.run.workflowRunId).artifacts.idea?.artifactId;
+      expect(s2).toBeTruthy();
+      expect(s2).not.toBe(s1);
+      // 全局至多一个 ACTIVE：S1 被弃用，S2 是唯一 ACTIVE
+      expect(grillDeps.sessionRepo.getById(s1!)?.status).toBe('ABANDONED');
+      expect(grillDeps.sessionRepo.getById(s2!)?.status).toBe('ACTIVE');
+      const active = grillDeps.sessionRepo.listByProject('p1').filter((s) => s.status === 'ACTIVE');
+      expect(active).toHaveLength(1);
+      // 新代际照常推进：SPEC_EXTRACT 任务已调度
+      expect(uniq(env.scheduled).length).toBeGreaterThanOrEqual(2);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('9. TD-024 回归：会话被弃用后 SPEC_EXTRACT 不再向其写入追问问题', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
+      const specDeps = buildSpecDeps(db, [askMoreJson()]);
+
+      const { run } = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-9' });
+      await driveRun(env.deps, 'p1', run.workflowRunId);
+      const sessionId = projectState(env.deps, run.workflowRunId).artifacts.idea?.artifactId;
+      const taskId = uniq(env.scheduled)[0];
+
+      // 任务在途时会话被弃用（modify_idea 回环 / 重建的旧会话）
+      const sess = grillDeps.sessionRepo.getById(sessionId!)!;
+      grillDeps.sessionRepo.transitionStatus(sessionId!, sess.version, 'ABANDONED');
+
+      await executeSpecExtract(specDeps, taskId);
+      // ask_more 的追问不再写入非 ACTIVE 会话（写入防护）；会话保持零问题
+      expect(grillDeps.questionRepo.listBySession(sessionId!)).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
 });

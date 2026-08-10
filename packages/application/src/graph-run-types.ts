@@ -82,7 +82,9 @@ export interface IdeaIntakeAnswerPort {
 
 /** idea artifact 底层权威存储读端口（B3/D-B3-2：idea = 播种后的 intake session 行） */
 export interface IntakeSessionReadPort {
-  getById(id: string): { readonly id: string; readonly projectId: string } | null;
+  getById(
+    id: string,
+  ): { readonly id: string; readonly projectId: string; readonly status: string } | null;
 }
 
 /** creationSpec artifact 底层权威存储读端口（B3/D-B3-2：creation_contract_versions 行） */

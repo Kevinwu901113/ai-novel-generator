@@ -320,7 +320,7 @@ gate 决策、终态）。
 | GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —               |
 | GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —               |
 | GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成 |
-| GE-3 Idea Intake + CreationSpec     | 🟡 WIRING+E2E 达成  | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ❌（B4）   | ✅ 真实链路 E2E |
+| GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E |
 | GE-4 Web Research + ResearchBundle  | 🔶 REWORK           | ✅         | ✅（research.execute, fake provider） | ❌ 节点未接                                    | ❌         | ❌              |
 | GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌              |
 | GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌              |
@@ -339,9 +339,11 @@ gate 决策、终态）。
   - **B1** ✅：Model Gateway 多 provider 最小形态（D6；PR #41 + 鉴权头补丁 `9f98278`，2026-08-07）；
   - **B3** ✅：GE-3 wiring：五节点真实 executor + SPEC_EXTRACT 任务执行器（v13）+ 真实链路 E2E
     （PR #42，2026-08-07；对抗式复查 REWORK 3 blocker → 修复 `e73f5ab` → ACCEPT；
-    TD-019/020 同批解决，随行登记 TD-022..025）。
+    TD-019/020 同批解决，随行登记 TD-022..025）；
+  - **B4** ✅：GE-3 UI：App shell 四阶段旅程 + 对话式访谈 + CreationSpec 编辑器
+    （2026-08-10；设计 `b4-intake-ui-design.md`；随行解决 TD-022/024/025-3，
+    intake 通道三层暴露，旧 Grill 工作台移出默认入口）。
 - **下一步（依依赖顺序）**：
-  - **B4**：GE-3 UI：App shell 旅程改造 + 对话式访谈 + CreationSpec 编辑器（D8；可顺带消化 TD-022/024）；
   - **B5/B6**：补完 GE-4：Tavily provider（D7，需负责人提供 API key）+ Research 节点闭环 + Research UI；
   - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
