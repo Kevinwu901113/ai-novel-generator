@@ -9,7 +9,10 @@ import type {
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
 import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
-import { GrillWorkbench } from './grill/GrillWorkbench';
+// B4：旧 Grill 工作台从默认入口移除（代码保留，见 grill/GrillWorkbench.tsx）
+import { IntakeRegion } from './intake/IntakeRegion';
+import { JourneyNav } from './journey/JourneyNav';
+import { JOURNEY_STAGES, type JourneyStage } from './intake/intake-logic';
 import { TaskCenter } from './task-center/TaskCenter';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
@@ -38,6 +41,9 @@ export function App() {
 
   // 模型服务列表
   const [providers, setProviders] = useState<ReadonlyArray<ProviderPublicState>>([]);
+
+  // 旅程阶段（D-B4-1：由 IntakeRegion 从 Graph 进度投影回报，仅展示用）
+  const [journeyStage, setJourneyStage] = useState<JourneyStage>('idea');
 
   // Grill 工作区焦点管理
   const grillSectionRef = useRef<HTMLElement | null>(null);
@@ -326,16 +332,21 @@ export function App() {
           </aside>
         )}
 
-        {/* 中栏：新建项目 / Grill 工作台 */}
+        {/* 中栏：新建项目 / 创作旅程（B4：对话式访谈替换 Grill 工作台默认入口） */}
         {currentProject ? (
           <section
             ref={grillSectionRef}
             className="panel panel-center"
             style={{ padding: 0 }}
-            aria-label="Grill 工作台"
+            aria-label="创作旅程"
           >
-            <RendererErrorBoundary label="Grill 工作台">
-              <GrillWorkbench projectId={currentProject.id} />
+            <RendererErrorBoundary label="创作旅程">
+              <JourneyNav current={journeyStage} />
+              <IntakeRegion
+                key={currentProject.id}
+                projectId={currentProject.id}
+                onStageChange={setJourneyStage}
+              />
             </RendererErrorBoundary>
           </section>
         ) : (
@@ -389,7 +400,11 @@ export function App() {
               </section>
               <section className="status-section" aria-labelledby="status-stage-heading">
                 <h3 id="status-stage-heading">当前阶段</h3>
-                <p>{currentProject ? 'Grill-me 需求澄清' : '—'}</p>
+                <p>
+                  {currentProject
+                    ? (JOURNEY_STAGES.find((s) => s.id === journeyStage)?.label ?? '—')
+                    : '—'}
+                </p>
               </section>
               <RendererErrorBoundary label="项目状态">
                 <ProjectStatusRegion currentProject={currentProject} />

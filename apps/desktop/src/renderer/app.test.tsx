@@ -86,6 +86,25 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
         errorMessage: null,
       }),
     },
+    // B4：创作旅程（IntakeRegion 打开项目时轮询这些通道）
+    graph: {
+      listRuns: vi.fn().mockResolvedValue([]),
+      createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      createChapterRun: vi.fn(),
+      getRunProgress: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+    },
+    intake: {
+      getActiveIntakeSession: vi.fn().mockResolvedValue(null),
+      propagateSpecInvalidation: vi.fn().mockResolvedValue([]),
+    },
+    grill: {
+      listQuestions: vi.fn().mockResolvedValue([]),
+      getCurrentAnswers: vi.fn().mockResolvedValue([]),
+    },
+    contract: {
+      getCurrent: vi.fn().mockResolvedValue(null),
+    },
     ...overrides,
   } as unknown as DesktopAPI;
 }
@@ -608,8 +627,8 @@ describe('App 级别测试', () => {
     );
   });
 
-  // 13. 创建项目成功后 Grill 标题获得焦点
-  it('创建项目成功后 Grill 标题获得焦点', async () => {
+  // 13. 创建项目成功后创作旅程标题获得焦点（B4：中栏默认入口为对话式访谈）
+  it('创建项目成功后创作旅程标题获得焦点', async () => {
     setupDesktop();
 
     await act(async () => {
@@ -641,9 +660,9 @@ describe('App 级别测试', () => {
 
     await waitFor(
       () => {
-        const grillWorkbench = screen.getByLabelText('Grill 工作台');
-        const grillHeading = within(grillWorkbench).getByRole('heading', { level: 2 });
-        expect(grillHeading).toHaveFocus();
+        const journey = screen.getByLabelText('创作旅程');
+        const heading = within(journey).getByRole('heading', { level: 2 });
+        expect(heading).toHaveFocus();
       },
       { timeout: 5000 },
     );

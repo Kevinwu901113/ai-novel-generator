@@ -298,8 +298,8 @@ export function createFakeGraphRunRepos() {
     },
   };
 
-  // idea / creationSpec 底层权威存储 fake（B3/D-B3-2）
-  const fakeIntakeSessions = new Map<string, { id: string; projectId: string }>();
+  // idea / creationSpec 底层权威存储 fake（B3/D-B3-2；TD-024 起含 status）
+  const fakeIntakeSessions = new Map<string, { id: string; projectId: string; status: string }>();
   const intakeSessionReadRepo: import('./graph-run-types.js').IntakeSessionReadPort = {
     getById: (id) => fakeIntakeSessions.get(id) ?? null,
   };

@@ -78,6 +78,10 @@ export const productionArtifactResolver: ArtifactResolverPort = {
         const sess = repos.intakeSessionReadRepo.getById(input.proposed.artifactId);
         if (!sess) throw new Error('idea 对应的 intake session 不存在');
         if (sess.projectId !== input.projectId) throw new Error('idea session project 不匹配');
+        // TD-024（D-B4-7）：结算时点会话必为刚播种的 ACTIVE；被弃用/已完结的会话不可结算
+        if (sess.status !== 'ACTIVE') {
+          throw new Error(`idea session 状态 ${sess.status} 不可结算（仅 ACTIVE）`);
+        }
         break;
       }
       case 'creationSpec': {
