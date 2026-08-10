@@ -167,7 +167,7 @@ export const ESCALATION_OPTIONS: ReadonlyArray<{
   {
     outcome: 'continue_later',
     label: '稍后再说',
-    description: '暂停在这里，下次回来继续',
+    description: '先停在这里；之后回来需重新开始访谈（已整理的创作要求会保留）',
   },
   {
     outcome: 'cancel',

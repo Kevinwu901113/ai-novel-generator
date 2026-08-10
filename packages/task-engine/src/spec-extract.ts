@@ -557,9 +557,11 @@ export async function executeSpecExtract(
       }
 
       // 追问问题（ask_more 时；由 ASK_QUESTION 同步 executor 逐个 markAsked）。
-      // TD-024（D-B4-7）：写入前重读会话——modify_idea 回环 / 重建已弃用该会话时，
-      // 本结果注定 STALE（inputHash 含 activationNo），不再向非 ACTIVE 会话注入问题；
-      // 结算语义不变，envelope 照常落库。
+      // TD-024（D-B4-7）：写入前重读会话，非 ACTIVE 不再注入问题；结算语义不变，
+      // envelope 照常落库。注意（B4 复查修正）：唯一可达的非 ACTIVE 时序是"另一
+      // 非终态 run 的 IDEA_CAPTURE 弃用了本会话"（跨 run），此时本 run 的 settlement
+      // 仍会推进、ASK_QUESTION 因无问题而 fail-closed——被替换的旧 run 走向终态，
+      // 恰好收敛"双活 run"歧义；产品 UI 不会主动制造该并发（见 D-B4-2）。
       const sessionAtFinalize = deps.sessionRepo.getById(payload.sessionId);
       if (sessionAtFinalize?.status === 'ACTIVE') {
         let sequence = deps.questionRepo.getMaxSequence(payload.sessionId);

@@ -587,3 +587,21 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
    setDefault/saveApiKey 成功后 fire-and-forget 触发一次全项目恢复扫描（复用
    `recoverGraphRuns`，含 PENDING task 重调度），in-flight 去重防抖。
    第 1、2 项仍 OPEN（需先调整 skip 语义 / activation 归属，留后续批次）。
+
+---
+
+## TD-026: B4 对抗式复查随行三项（复查 ACCEPT 附带 notes，2026-08-10）
+
+**状态**: OPEN
+**优先级**: 低
+**来源**: B4 独立对抗式复查（ACCEPT）notes
+
+1. **createProjectRun 缺"单非终态 run"守卫**：产品 UI 已按 D-B4-2 避免并发创建，但 RPC 面
+   仍允许同项目多个非终态 project run 并存；跨 run 弃用会话会使被替换 run 的 ASK_QUESTION
+   fail-closed（收敛性可接受，见 spec-extract.ts 注释）。建议 application 层
+   createProjectRun 增守卫：存在非终态 project run 时拒绝或返回既有 run。
+2. **provider 重驱动防抖无尾随重扫**：redriveAfterProviderConfig 在扫描在途时吞掉第二次
+   触发；极端时序（首扫已过该项目、配置恰在其后补齐）下任务可能滞留 PENDING 至下次
+   provider 操作或重启。建议改为"在途时置 pending 标志、结束后补扫一次"。
+3. **intake E2E 测试 9 断言偏弱**：只断言追问未写入被弃用会话，未覆盖后续 settlement 走向
+   （旧 run fail-closed 终态化）。补断言可固化该收敛语义。
