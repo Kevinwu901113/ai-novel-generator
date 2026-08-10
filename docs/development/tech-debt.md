@@ -515,8 +515,8 @@ settle_if_result 策略不允许重放（防重复计费）→ run 终态 failed
 
 ## TD-023: graph-handlers buildDeps 的 ProjectDatabase 连接泄漏（main 既有）
 
-**状态**: OPEN
-**优先级**: 中
+**状态**: RESOLVED
+**优先级**: —
 **来源**: B3 对抗式复查 Note-2（2026-08-07）
 
 ### 问题
@@ -527,6 +527,12 @@ settle_if_result 策略不允许重放（防重复计费）→ run 终态 failed
 ### 后续动作
 
 - 对齐 grill handlers 模式：graph.* 五条命令 finally close；或引入连接池/共享句柄。
+
+### 解决
+
+- 2026-08-10 独立小修：`withGraphDeps` 包装五条 graph.* 命令，结束（含抛错）finally close；
+  `driveAfter` 移到连接关闭后触发（其自开自关，B3 已修）。回归测试覆盖成功与抛错路径的
+  连接关闭断言，双向红绿反转验证。
 
 ---
 

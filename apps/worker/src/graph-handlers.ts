@@ -60,8 +60,7 @@ function graphOf(deps: GraphRunDeps, graphId: string): AnyIdeaToNovelGraphV1 {
   throw new AppError('GRAPH_RUN_VALIDATION_ERROR', `未知 graphId: ${graphId}`);
 }
 
-function buildDeps(ctx: GraphHandlerContext, projectId: string): GraphRunDeps {
-  const projDb = ctx.getProjectDb(projectId);
+function buildDeps(ctx: GraphHandlerContext, projDb: ProjectDatabase): GraphRunDeps {
   return {
     idGenerator: ctx.idGenerator,
     clock: ctx.clock,
@@ -70,6 +69,23 @@ function buildDeps(ctx: GraphHandlerContext, projectId: string): GraphRunDeps {
     projectGraph: IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
     chapterGraph: CHAPTER_GENERATION_GRAPH_V1,
   };
+}
+
+/**
+ * TD-023：与 grill handlers 相同的连接纪律——每条命令打开 ProjectDatabase，
+ * 结束（含抛错）在 finally 关闭；连接不逃逸出本次分发（driveAfter 自开自关）。
+ */
+function withGraphDeps<T>(
+  ctx: GraphHandlerContext,
+  projectId: string,
+  fn: (deps: GraphRunDeps) => T,
+): T {
+  const projDb = ctx.getProjectDb(projectId);
+  try {
+    return fn(buildDeps(ctx, projDb));
+  } finally {
+    projDb.close();
+  }
 }
 
 /** 构建 run 进度投影（Renderer 不自己推导下一节点；WorkflowStage 只是派生标签） */
@@ -121,40 +137,44 @@ export function dispatchGraphCommand(
       if (!isValidCreateProjectRunInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.createProjectRun 输入');
       }
-      const deps = buildDeps(ctx, payload.projectId);
-      const result = createProjectRunService(deps, {
-        projectId: payload.projectId,
-        idempotencyKey: payload.idempotencyKey,
+      const { runId, progress } = withGraphDeps(ctx, payload.projectId, (deps) => {
+        const result = createProjectRunService(deps, {
+          projectId: payload.projectId,
+          idempotencyKey: payload.idempotencyKey,
+        });
+        return { runId: result.run.workflowRunId, progress: toProgressDto(deps, result.run) };
       });
       // D-B3-1：创建后立即驱动（IDEA_CAPTURE 起步）；进度经 getRunProgress 轮询可见
-      ctx.driveAfter?.(payload.projectId, result.run.workflowRunId);
-      return toProgressDto(deps, result.run);
+      ctx.driveAfter?.(payload.projectId, runId);
+      return progress;
     }
     case 'graph.createChapterRun': {
       if (!isValidCreateChapterRunInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.createChapterRun 输入');
       }
-      const deps = buildDeps(ctx, payload.projectId);
-      const result = createChapterRunService(deps, {
-        projectId: payload.projectId,
-        creationSpecVersionId: payload.creationSpecVersionId,
-        researchBundleId: payload.researchBundleId,
-        storyBlueprintId: payload.storyBlueprintId,
-        blueprintChapterId: payload.blueprintChapterId,
-        idempotencyKey: payload.idempotencyKey,
+      return withGraphDeps(ctx, payload.projectId, (deps) => {
+        const result = createChapterRunService(deps, {
+          projectId: payload.projectId,
+          creationSpecVersionId: payload.creationSpecVersionId,
+          researchBundleId: payload.researchBundleId,
+          storyBlueprintId: payload.storyBlueprintId,
+          blueprintChapterId: payload.blueprintChapterId,
+          idempotencyKey: payload.idempotencyKey,
+        });
+        return toProgressDto(deps, result.run);
       });
-      return toProgressDto(deps, result.run);
     }
     case 'graph.getRunProgress': {
       if (!isValidGetRunProgressInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.getRunProgress 输入');
       }
-      const deps = buildDeps(ctx, payload.projectId);
-      const state = getRunProgressService(deps, {
-        projectId: payload.projectId,
-        runId: payload.runId,
+      return withGraphDeps(ctx, payload.projectId, (deps) => {
+        const state = getRunProgressService(deps, {
+          projectId: payload.projectId,
+          runId: payload.runId,
+        });
+        return toProgressDto(deps, state);
       });
-      return toProgressDto(deps, state);
     }
     // RW-1 公共安全边界：advanceNode / failNode / requestHumanDecision 已从 RPC 面移除。
     // 非人工节点推进只能是 Worker 内部 NodeRunner + NodeSettlementService 的可信能力。
@@ -162,24 +182,27 @@ export function dispatchGraphCommand(
       if (!isValidApplyHumanDecisionInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.applyHumanDecision 输入');
       }
-      const deps = buildDeps(ctx, payload.projectId);
-      const dto = payload as ApplyHumanDecisionInputDto;
-      const { projectId: _projectId, ...rest } = dto;
-      const result = applyHumanDecisionService(
-        deps,
-        rest as Parameters<typeof applyHumanDecisionService>[1],
-      );
+      const { runId, progress } = withGraphDeps(ctx, payload.projectId, (deps) => {
+        const dto = payload as ApplyHumanDecisionInputDto;
+        const { projectId: _projectId, ...rest } = dto;
+        const result = applyHumanDecisionService(
+          deps,
+          rest as Parameters<typeof applyHumanDecisionService>[1],
+        );
+        return { runId: result.run.workflowRunId, progress: toProgressDto(deps, result.run) };
+      });
       // D-B3-1：人工决策落地后立即驱动后续节点（answer→SPEC_EXTRACT 回环等）
-      ctx.driveAfter?.(payload.projectId, result.run.workflowRunId);
-      return toProgressDto(deps, result.run);
+      ctx.driveAfter?.(payload.projectId, runId);
+      return progress;
     }
     case 'graph.listRuns': {
       if (!isValidListRunsInput(payload)) {
         throw new AppError('VALIDATION_ERROR', '非法 graph.listRuns 输入');
       }
-      const deps = buildDeps(ctx, payload.projectId);
-      const runs = listRunsService(deps, { projectId: payload.projectId });
-      return runs.map((r) => toSummaryDto(r.kind, r.state));
+      return withGraphDeps(ctx, payload.projectId, (deps) => {
+        const runs = listRunsService(deps, { projectId: payload.projectId });
+        return runs.map((r) => toSummaryDto(r.kind, r.state));
+      });
     }
     default:
       throw new AppError('VALIDATION_ERROR', `未知命令: ${command}`);
