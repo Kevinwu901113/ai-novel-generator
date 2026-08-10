@@ -877,6 +877,13 @@ export interface ResearchStateDto {
   readonly researchDecision: ResearchDepthDto | null;
   readonly researchValid: ResearchValidDto | null;
   readonly bundleRef: string | null;
+  /**
+   * bundleRef 指向的资料包是否已失效（创作要求变更 → researchBundle 进
+   * invalidatedArtifacts）。失效时 artifacts.researchBundle 仍保留旧 ref
+   * （applyArtifactChange 只追加失效列表、不清空槽位），故必须单独标记，
+   * 否则 UI 会把作废的资料包当现行内容展示。
+   */
+  readonly bundleInvalidated: boolean;
   readonly escalationActive: boolean;
   readonly researchRetryUsed: number;
 }
@@ -888,6 +895,7 @@ export function isValidResearchStateDto(value: unknown): value is ResearchStateD
       'researchDecision',
       'researchValid',
       'bundleRef',
+      'bundleInvalidated',
       'escalationActive',
       'researchRetryUsed',
     ])
@@ -900,6 +908,7 @@ export function isValidResearchStateDto(value: unknown): value is ResearchStateD
     (obj.researchDecision === null || isValidResearchDepthDto(obj.researchDecision)) &&
     (obj.researchValid === null || isValidResearchValidDto(obj.researchValid)) &&
     (obj.bundleRef === null || typeof obj.bundleRef === 'string') &&
+    typeof obj.bundleInvalidated === 'boolean' &&
     typeof obj.escalationActive === 'boolean' &&
     typeof obj.researchRetryUsed === 'number'
   );

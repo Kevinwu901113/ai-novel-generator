@@ -121,6 +121,7 @@ const EMPTY_RESEARCH_STATE: ResearchStateDto = {
   researchDecision: null,
   researchValid: null,
   bundleRef: null,
+  bundleInvalidated: false,
   escalationActive: false,
   researchRetryUsed: 0,
 };
@@ -158,6 +159,9 @@ function computeResearchState(projDb: ProjectDatabase, projectId: string): Resea
       decisionOutcome?.condition === 'research_decision' ? decisionOutcome.value : null,
     researchValid: validOutcome?.condition === 'research_valid' ? validOutcome.value : null,
     bundleRef: bundleArtifact?.kind === 'researchBundle' ? bundleArtifact.artifactId : null,
+    // 失效不清空 artifacts 槽位（applyArtifactChange 只追加 invalidatedArtifacts），
+    // 因此旧 ref 仍在——必须单独告知 UI，否则作废资料包会被当作现行展示
+    bundleInvalidated: latest.invalidatedArtifacts.some((ref) => ref.kind === 'researchBundle'),
     escalationActive: latest.nodeStatuses[RESEARCH_ESCALATION] === 'waiting_for_human',
     researchRetryUsed: latest.attemptBudget.researchRetry ?? 0,
   };

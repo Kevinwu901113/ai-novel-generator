@@ -97,6 +97,7 @@ describe('ResearchStateDto', () => {
     researchDecision: null,
     researchValid: null,
     bundleRef: null,
+    bundleInvalidated: false,
     escalationActive: false,
     researchRetryUsed: 0,
   };
@@ -112,7 +113,8 @@ describe('ResearchStateDto', () => {
         researchDecision: 'deep',
         researchValid: 'invalid',
         bundleRef: 'rb1',
-        escalationActive: true,
+        bundleInvalidated: false,
+    escalationActive: true,
         researchRetryUsed: 3,
       }),
     ).toBe(true);

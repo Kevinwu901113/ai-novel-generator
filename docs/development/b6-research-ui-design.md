@@ -25,10 +25,18 @@ Tavily search key 录入界面，挂进 B4 四阶段旅程 shell 的 research �
   `research.listSourceExclusions({projectId})`。
 - **D-B6-3 调研态读取 = 新独立读通道**：`research.getResearchState({projectId})`——
   worker 读最新 project run state，返回 {runId, researchDecision: none/light/deep/null,
-  researchValid: valid/invalid/null, bundleRef: string|null, escalationActive: boolean,
-  researchRetryUsed:number}。不扩 GraphProgressProjectionDto（exact-keys 校验器破坏面大，
-  且 outcome/artifact 属 research 专用视图）。另开 `research.getBundle({projectId,bundleId})`
-  与 `research.listBundles({projectId})`（repo 现成）。
+  researchValid: valid/invalid/null, bundleRef: string|null, bundleInvalidated: boolean,
+  escalationActive: boolean, researchRetryUsed:number}。不扩 GraphProgressProjectionDto
+  （exact-keys 校验器破坏面大，且 outcome/artifact 属 research 专用视图）。另开
+  `research.getBundle({projectId,bundleId})` 与 `research.listBundles({projectId})`（repo 现成）。
+- **D-B6-9 失效资料包必须单独标记（后端复查补充）**：`applyArtifactChange`
+  （domain/idea-to-novel-graph-invalidation.ts:49-73）把下游 artifact 加入
+  `invalidatedArtifacts` 时**不清空 `artifacts` 槽位**，旧 ref 仍在。因此创作要求变更
+  （CreationSpecPanel 保存 → propagateSpecInvalidation → researchBundle 失效）之后，
+  `bundleRef` 依然指向已作废的资料包。若不单独标记，UI 会把作废内容当现行展示
+  （B4 踩过的 STALE 类问题）。故 `ResearchStateDto` 增 `bundleInvalidated`，
+  UI 侧 `deriveResearchPhase` 增 `stale` 相位并优先于 `ready`，作废内容做降级呈现。
+  回归测试以真实 `applyArtifactChange` 制造失效状态（非手搓 state），并已验证证伪力。
 - **D-B6-4 depth=none 的 UI 表达**：靠 D-B6-3 的 researchDecision 区分"本项目无需调研
   （none，直达蓝图）"与"尚未调研（null）"。none 时 ResearchRegion 显示说明卡而非空态。
 - **D-B6-5 Tavily key 面板位置 = 右栏全局配置区**：SearchKeyPanel 与"模型服务"

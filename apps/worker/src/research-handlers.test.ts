@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { ProjectDatabase } from '@ai-novel/database';
 import type { ResearchBundle } from '@ai-novel/research-engine';
 import {
+  applyArtifactChange,
   artifactRef,
   createProjectId,
   createProjectInitialRunState,
@@ -25,6 +26,7 @@ import {
   RESEARCH_VALIDATE,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
+import type { ResearchStateDto } from '@ai-novel/contracts';
 import {
   createFakeResearchProvider,
   dispatchResearchCommand,
@@ -72,6 +74,8 @@ interface RunOverrides {
   readonly artifacts?: Partial<IdeaToNovelProjectRunState['artifacts']>;
   readonly attemptBudget?: IdeaToNovelProjectRunState['attemptBudget'];
   readonly pendingHumanDecision?: IdeaToNovelProjectRunState['pendingHumanDecision'];
+  /** 落库前对状态做一次变换（用于以真实 domain 函数制造失效等场景） */
+  readonly transform?: (state: IdeaToNovelProjectRunState) => IdeaToNovelProjectRunState;
 }
 
 /**
@@ -105,8 +109,9 @@ function insertProjectRun(
     attemptBudget: overrides.attemptBudget ?? base.attemptBudget,
     pendingHumanDecision: overrides.pendingHumanDecision ?? base.pendingHumanDecision,
   };
+  const finalState = overrides.transform ? overrides.transform(state) : state;
   db.getGraphRunTransaction().runInTransaction((repos) => {
-    repos.graphRunRepo.create(state, createdAt);
+    repos.graphRunRepo.create(finalState, createdAt);
   });
 }
 
@@ -189,6 +194,7 @@ describe('research.getResearchState（D-B6-3，四态）', () => {
       researchDecision: null,
       researchValid: null,
       bundleRef: null,
+      bundleInvalidated: false,
       escalationActive: false,
       researchRetryUsed: 0,
     });
@@ -215,6 +221,7 @@ describe('research.getResearchState（D-B6-3，四态）', () => {
       researchDecision: 'none',
       researchValid: null,
       bundleRef: null,
+      bundleInvalidated: false,
       escalationActive: false,
       researchRetryUsed: 0,
     });
@@ -250,6 +257,7 @@ describe('research.getResearchState（D-B6-3，四态）', () => {
       researchDecision: 'deep',
       researchValid: 'valid',
       bundleRef: 'rb-1',
+      bundleInvalidated: false,
       escalationActive: false,
       researchRetryUsed: 0,
     });
@@ -291,9 +299,48 @@ describe('research.getResearchState（D-B6-3，四态）', () => {
       researchDecision: 'deep',
       researchValid: 'invalid',
       bundleRef: null,
+      bundleInvalidated: false,
       escalationActive: true,
       researchRetryUsed: 2,
     });
+  });
+
+  it('创作要求变更后：bundleRef 仍在但标记为已失效（不得当作现行展示）', async () => {
+    const db = freshDb();
+    try {
+      insertProjectRun(db, 'run-stale', NOW, {
+        nodeStatuses: {
+          [RESEARCH_DECISION]: 'succeeded',
+          [RESEARCH_VALIDATE]: 'succeeded',
+        },
+        nodeOutcomes: {
+          [RESEARCH_DECISION]: { condition: 'research_decision', value: 'deep' },
+          [RESEARCH_VALIDATE]: { condition: 'research_valid', value: 'valid' },
+        },
+        artifacts: {
+          researchBundle: artifactRef('researchBundle', 'rb-1'),
+        },
+        // 用真实 domain 函数制造失效：创作要求更新 → 下游 researchBundle 进 invalidatedArtifacts。
+        // 注意 applyArtifactChange 只追加失效列表、不清空 artifacts 槽位，旧 ref 仍在。
+        transform: (state) =>
+          applyArtifactChange(
+            state,
+            artifactRef('creationSpec', 'cs-2'),
+            IDEA_TO_NOVEL_PROJECT_GRAPH_V1.artifactDownstreamOrder,
+          ),
+      });
+    } finally {
+      db.close();
+    }
+
+    const state = (await dispatchResearchCommand(
+      'research.getResearchState',
+      { projectId: 'p1' },
+      readCtx(),
+    )) as ResearchStateDto;
+
+    expect(state.bundleRef).toBe('rb-1'); // 槽位未被清空
+    expect(state.bundleInvalidated).toBe(true); // 但必须标记失效
   });
 
   it('多个 project run：取最新（按 createdAt）', async () => {
