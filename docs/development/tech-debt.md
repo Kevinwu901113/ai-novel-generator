@@ -406,9 +406,9 @@ PlotPilot 是外部项目。商业分发前需要单独审查其许可证条款�
 
 ## TD-019: 测试 `realResolver` 与生产 artifact resolver 各写一份，已发生漂移
 
-**状态**: OPEN
-**优先级**: B3 前置（开工前解决）
-**最后核验基线**: ec1e8e7
+**状态**: RESOLVED
+**优先级**: —
+**最后核验基线**: b80f0d2
 
 ### 问题
 
@@ -427,13 +427,19 @@ resolver 在 `packages/database/src/node-execution-integration.test.ts`（`realR
 - 把 resolver 提取为单一实现（application 层，接受注入的 repository 端口），生产与测试共用
 - 测试只允许注入宽松 resolver 作为显式替身，不得另写一份"仿生产"实现
 
+### 解决
+
+- B3 内 commit `03e241c`（PR #42）：worker 内联实现移至
+  `packages/application/src/production-artifact-resolver.ts` 并导出；
+  database 集成测试删除手写 `realResolver`，4 处调用点改用同一实现，断言未放松
+
 ---
 
 ## TD-020: 空 registry 下启动恢复会把一切在途 run 判为终态 failed
 
-**状态**: OPEN
-**优先级**: B3 开工第一任务（GE-3 wiring 之前）
-**最后核验基线**: ec1e8e7
+**状态**: RESOLVED
+**优先级**: —
+**最后核验基线**: b80f0d2
 
 ### 问题
 
@@ -451,6 +457,14 @@ resolver 在 `packages/database/src/node-execution-integration.test.ts`（`realR
 
 - registry 缺少该节点 executor 时，启动恢复跳过该节点、保持原状，不 fail-closed（见 decision-log 2026-08-05 同名决策）
 - 补测试：空 registry 恢复后 run 仍为非终态、节点仍 active
+
+### 解决
+
+- B3 内 commit `52d8dcc`（PR #42）：三条路径统一为「能力缺口 ≠ 节点失败，跳过保持原状」——
+  claimAndDispatch descriptor 缺失/runner 未注入 → 跳过；reDispatchPending 保持等待；
+  settleNodeExecution registry 缺失 → `NODE_EXECUTOR_UNAVAILABLE`（保留 durable 结果等有能力 worker）
+- registry 把可执行节点登记成 human 的配置损坏仍 fail-closed（与能力缺口分离）；
+  新增 `NodeRunnerDeps.onExecutorMissing` 观测回调
 
 ---
 
