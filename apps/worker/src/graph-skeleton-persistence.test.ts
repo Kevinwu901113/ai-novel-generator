@@ -93,6 +93,13 @@ describe('Graph walking skeleton (real SQLite)', () => {
       const atGate = runFakeUntilHumanOrTerminal(deps, 'p1', run.workflowRunId, {});
       expect(atGate.state.pendingHumanDecision?.nodeId).toBe(BLUEPRINT_USER_GATE);
 
+      // B7（D-B7-1）：accept 现在同事务写 storyBlueprintRepo.markAccepted，要求
+      // artifactId 对应的蓝图真实存在。fakeProducerForNode 只走 domain transition
+      // （不落库），artifactId 恒为 `art-${nodeId}`；这里手工补一行权威记录。
+      db.getStoryBlueprintRepository().save(
+        { id: 'art-BLUEPRINT_GENERATE', projectId: 'p1', version: 1, createdAt: NOW } as never,
+        false,
+      );
       applyHumanDecision(deps, {
         kind: 'gate',
         runId: run.workflowRunId,

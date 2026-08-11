@@ -17,11 +17,15 @@ import type {
   AnyIdeaToNovelRunState,
   ArtifactRef,
   ChapterGenerationGraphV1,
+  GraphNodeId,
   GraphNodeOutcome,
   HumanDecisionInput,
   IdeaToNovelProjectGraphV1,
+  IdeaToNovelProjectRunState,
 } from '@ai-novel/domain';
 import {
+  BLUEPRINT_ESCALATION,
+  BLUEPRINT_USER_GATE,
   CHAPTER_GENERATION_GRAPH_ID,
   IDEA_TO_NOVEL_PROJECT_GRAPH_ID,
   applyArtifactChange as applyArtifactChangeTransition,
@@ -237,6 +241,24 @@ export function parkHumanNodes(
     current = requestHumanDecisionTransition(graph, current, node.id, node.humanDecisionType);
   }
   return current;
+}
+
+/**
+ * D-B7-1/2（复查随行修复 note 3）：判定一次 gate/escalation 决策是否为"接受当前
+ * 蓝图 → 形成 PROJECT_READY"的入边，即是否需要触发 D-B7-1 的同事务 accept 副作用
+ * （`storyBlueprintRepo.markAccepted`）。
+ *
+ * 抽成独立导出函数，而不是内联在 `applyHumanDecision` 里，是为了让"PROJECT_READY
+ * 的每一条入边都被 accept 副作用覆盖"这条不变量可以脱离完整事务/DB 独立单测——
+ * 测试从 `IDEA_TO_NOVEL_PROJECT_GRAPH_V1` 动态枚举 PROJECT_READY 的入边，逐条调用
+ * 本函数断言为 true。任何人将来给 PROJECT_READY 加一条新入边却忘了在此处登记，
+ * 该结构性守卫测试会立即变红——不会重演本批次修复的"run 已终态但 accepted=0"故障。
+ */
+export function isBlueprintAcceptDecision(nodeId: GraphNodeId, outcome: string): boolean {
+  return (
+    (nodeId === BLUEPRINT_USER_GATE && outcome === 'accept') ||
+    (nodeId === BLUEPRINT_ESCALATION && outcome === 'accept_current')
+  );
 }
 
 // ── 共享 transition 执行器（内核与 NodeSettlementService 共用）──
@@ -642,6 +664,41 @@ export function applyHumanDecision(
       ) {
         throw new GraphRunStateConflictError(`节点 ${input.nodeId} 不是门禁/升级节点`);
       }
+
+      // D-B7-1/2/8：blueprint 接受与 Graph gate 原子化（本批次核心）。
+      // BLUEPRINT_USER_GATE 的 accept、BLUEPRINT_ESCALATION 的 accept_current 都是
+      // "接受当前蓝图 → 形成 PROJECT_READY"的入边；镜像本函数 intake_answer 分支的
+      // 现成先例——先写权威存储（storyBlueprintRepo.markAccepted），再走 transition，
+      // 任一步抛错整事务回滚（fail-closed），杜绝"run 已终态但 accepted=0"的不可修复态。
+      const isBlueprintAccept = isBlueprintAcceptDecision(node.id, input.outcome);
+      if (isBlueprintAccept) {
+        // D-B7-8：失效蓝图不得被接受。CreationSpec 变更后 storyBlueprint 进
+        // invalidatedArtifacts（applyArtifactChange 只追加、不清空 artifacts 槽位），
+        // 不在此拒绝的话用户可绕过"必须重新生成"直达 PROJECT_READY。
+        const invalidated = record.state.invalidatedArtifacts.some(
+          (ref) => ref.kind === 'storyBlueprint',
+        );
+        if (invalidated) {
+          throw new GraphRunStateConflictError(
+            '当前蓝图已因创作要求变更而失效，无法接受；请先请求重新生成',
+          );
+        }
+        // blueprintId 只能取自 Graph 权威状态，不接受调用方传入——杜绝对任意历史
+        // blueprintId 置 accepted 的伪造（gate DTO 亦是 exact-keys 校验，不加字段）。
+        const projectState = record.state as IdeaToNovelProjectRunState;
+        const blueprintArtifact = projectState.artifacts.storyBlueprint;
+        if (blueprintArtifact === null) {
+          throw new GraphRunStateConflictError('当前 run 尚无蓝图产物，无法接受');
+        }
+        const marked = repos.storyBlueprintRepo.markAccepted(
+          record.state.projectId,
+          blueprintArtifact.artifactId,
+        );
+        if (!marked) {
+          throw new GraphRunStateConflictError('蓝图接受失败：权威存储未找到对应蓝图');
+        }
+      }
+
       decision = {
         nodeId: createGraphNodeId(input.nodeId),
         decisionType,

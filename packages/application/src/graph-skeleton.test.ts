@@ -45,6 +45,22 @@ import type { IdeaToNovelProjectRunState, ChapterGenerationRunState } from '@ai-
 
 type Deps = ReturnType<typeof createTestDeps>['deps'];
 
+/**
+ * B7（D-B7-1）：BLUEPRINT_USER_GATE/BLUEPRINT_ESCALATION 的 accept 现在同事务写
+ * storyBlueprintRepo.markAccepted，要求 artifactId 对应的蓝图真实存在于权威存储。
+ * fakeProducerForNode 只走 domain transition（不落库），artifactId 恒为
+ * `art-${nodeId}` = `art-BLUEPRINT_GENERATE`；accept 前需手工补一行权威记录
+ * （这里的 walking skeleton 本就是纯内存 fake，不代表真实 executor 落库）。
+ */
+function seedAcceptableBlueprint(deps: Deps, projectId: string): void {
+  deps.tx.runInTransaction((repos) => {
+    repos.storyBlueprintRepo.save(
+      { id: 'art-BLUEPRINT_GENERATE', projectId, version: 1 } as never,
+      false,
+    );
+  });
+}
+
 function skipPendingIntake(deps: Deps, runId: string, i: number): void {
   applyHumanDecision(deps, {
     kind: 'intake_skip',
@@ -68,6 +84,7 @@ describe('Project Graph walking skeleton', () => {
     expect(atGate.kind).toBe('human');
     expect(atGate.state.pendingHumanDecision?.nodeId).toBe(BLUEPRINT_USER_GATE);
 
+    seedAcceptableBlueprint(deps, 'p1');
     applyHumanDecision(deps, {
       kind: 'gate',
       runId: run.workflowRunId,
@@ -109,6 +126,7 @@ describe('Project Graph walking skeleton', () => {
     });
     const atBlueprint = runFakeUntilHumanOrTerminal(deps, 'p1', run.workflowRunId, {});
     expect(atBlueprint.state.pendingHumanDecision?.nodeId).toBe(BLUEPRINT_USER_GATE);
+    seedAcceptableBlueprint(deps, 'p1');
     applyHumanDecision(deps, {
       kind: 'gate',
       runId: run.workflowRunId,
@@ -192,6 +210,7 @@ describe('Project Graph walking skeleton', () => {
     const stop2 = runFakeUntilHumanOrTerminal(deps, 'p1', run.workflowRunId, {});
     expect(stop2.state.pendingHumanDecision?.nodeId).toBe(BLUEPRINT_USER_GATE);
     expect(stop2.state.nodeStatuses[BLUEPRINT_GENERATE]).toBe('succeeded');
+    seedAcceptableBlueprint(deps, 'p1');
     applyHumanDecision(deps, {
       kind: 'gate',
       runId: run.workflowRunId,

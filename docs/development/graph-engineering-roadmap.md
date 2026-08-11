@@ -322,7 +322,7 @@ gate 决策、终态）。
 | GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成              |
 | GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
 | GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
-| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌                           |
+| GE-5 StoryBlueprint + PROJECT_READY | 🟡 WIRING+E2E 达成  | ✅         | ✅（blueprint.getState）              | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ❌（B8）   | ✅ 三终态真实 E2E            |
 | GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌                           |
 | RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
 
@@ -362,8 +362,17 @@ gate 决策、终态）。
     点击回看 + App 级集成测试锁定该链路）后复查 ACCEPT；随行修复六项（强度徽标
     未跟随版本链、来源排除轮询回滚闪烁、escalation 选项断言改对齐 domain 枚举、
     取消排除不应受 URL 安全校验、新增 unsettled 兜底相位等）。
+  - **B7** ✅：GE-5 wiring：BLUEPRINT_GENERATE task-backed executor（新任务类型，v16）+
+    **accept 与 Graph gate 原子闭环**（D-B7-1：并入 applyHumanDecision 同事务，治住"run 已
+    completed 终态但 accepted=0"的不可修复态）+ accept_current 补写 accept（D-B7-2，该入边
+    原本从无 accept 写入路径）+ 失效蓝图 fail-closed 拒绝接受（D-B7-8）+ 蓝图 prompt 消费
+    来源排除（D-B7-13，兑现 B6 的承诺）+ skip_research 真正生效（D-B7-14，图 input 契约追加
+    RESEARCH_ESCALATION outcome）+ 三终态真实 E2E；随行补齐 TERMINAL 节点 executor
+    （自图诞生起从未注册，此前批次均止步于人工 Gate 故未被触发）
+    （2026-08-11；设计 `b7-blueprint-wiring-design.md`；独立对抗复查两路：原子性/图语义
+    ACCEPT，任务引擎路 REWORK 两 blocker 已修）。
 - **下一步（依依赖顺序）**：
-  - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
+  - **B8**：GE-5 UI：蓝图查看 + accept/request_rewrite 确认 + 升级四选项 + 项目就绪终态；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
   - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
 

@@ -296,6 +296,12 @@ export function createFakeGraphRunRepos() {
       }
       return found;
     },
+    getMaxVersion(projectId: string): number {
+      const versions = [...storyBlueprints.values()]
+        .filter((r) => r.blueprint.projectId === projectId)
+        .map((r) => r.blueprint.version);
+      return versions.length === 0 ? 0 : Math.max(...versions);
+    },
   };
 
   // idea / creationSpec 底层权威存储 fake（B3/D-B3-2；TD-024 起含 status）

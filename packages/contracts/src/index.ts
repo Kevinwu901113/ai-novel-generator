@@ -340,6 +340,7 @@ export const IPC_CHANNELS = {
   RESEARCH_LIST_BUNDLES: 'ipc:research-list-bundles',
   RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
+  BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -998,6 +999,68 @@ export interface ResearchAPI {
   listSourceExclusions(input: ListSourceExclusionsInputDto): Promise<ReadonlyArray<string>>;
 }
 
+/**
+ * 蓝图态读取投影（GE-5/B7，D-B7-10）：最新 project run 的蓝图相关节点结果，镜像
+ * B6 的 ResearchStateDto。预埋读通道——B8 的蓝图 UI 与 GE-6 的 createChapterRun
+ * （需要"当前已接受蓝图 + 章节"）都依赖它。无 project run 时全 null / false / 0。
+ */
+export interface BlueprintStateDto {
+  readonly runId: string | null;
+  readonly blueprintRef: string | null;
+  /** blueprintRef 指向的蓝图是否已被用户显式接受（story_blueprints.accepted） */
+  readonly accepted: boolean;
+  /**
+   * blueprintRef 指向的蓝图是否已失效（创作要求变更 → storyBlueprint 进
+   * invalidatedArtifacts）。失效时 artifacts.storyBlueprint 仍保留旧 ref
+   * （applyArtifactChange 只追加失效列表、不清空槽位），故必须单独标记。
+   */
+  readonly blueprintInvalidated: boolean;
+  readonly gateActive: boolean;
+  readonly escalationActive: boolean;
+  readonly rewriteUsed: number;
+}
+
+export function isValidBlueprintStateDto(value: unknown): value is BlueprintStateDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'runId',
+      'blueprintRef',
+      'accepted',
+      'blueprintInvalidated',
+      'gateActive',
+      'escalationActive',
+      'rewriteUsed',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    (obj.runId === null || typeof obj.runId === 'string') &&
+    (obj.blueprintRef === null || typeof obj.blueprintRef === 'string') &&
+    typeof obj.accepted === 'boolean' &&
+    typeof obj.blueprintInvalidated === 'boolean' &&
+    typeof obj.gateActive === 'boolean' &&
+    typeof obj.escalationActive === 'boolean' &&
+    typeof obj.rewriteUsed === 'number'
+  );
+}
+
+/** blueprint.getState 输入 */
+export interface GetBlueprintStateInputDto {
+  readonly projectId: string;
+}
+
+export function isValidGetBlueprintStateInput(value: unknown): value is GetBlueprintStateInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7，预埋读通道 D-B7-10） */
+export interface BlueprintAPI {
+  getState(input: GetBlueprintStateInputDto): Promise<BlueprintStateDto>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -1012,6 +1075,7 @@ export interface DesktopAPI {
   intake: IntakeAPI;
   search: SearchKeyAPI;
   research: ResearchAPI;
+  blueprint: BlueprintAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────

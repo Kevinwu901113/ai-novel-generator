@@ -56,7 +56,8 @@ export type TaskType =
   | 'CREATION_CONTRACT_DRAFT'
   | 'CHAPTER_DRAFT'
   | 'SPEC_EXTRACT'
-  | 'RESEARCH_RUN';
+  | 'RESEARCH_RUN'
+  | 'BLUEPRINT_GENERATE';
 
 /** 模型调用状态 */
 export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

@@ -59,10 +59,12 @@ import {
   isValidListResearchBundlesInput,
   isValidSetSourceExclusionInput,
   isValidListSourceExclusionsInput,
+  isValidGetBlueprintStateInput,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
   type ResearchStateDto,
   type ResearchBundleDto,
+  type BlueprintStateDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1111,6 +1113,23 @@ ipcMain.handle(
       command: 'research.listSourceExclusions',
       payload: input,
     })) as ReadonlyArray<string>;
+  },
+);
+
+// ── Blueprint（GE-5/B7：预埋只读蓝图态通道，D-B7-10）────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.BLUEPRINT_GET_STATE,
+  async (_event, input: unknown): Promise<BlueprintStateDto> => {
+    if (!isValidGetBlueprintStateInput(input)) {
+      throw Object.assign(new Error('无效的蓝图态查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'blueprint.getState',
+      payload: input,
+    })) as BlueprintStateDto;
   },
 );
 

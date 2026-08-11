@@ -770,9 +770,15 @@ const PROJECT_NODES: ReadonlyArray<IdeaToNovelGraphNodeDefinition> = [
     kind: 'GENERATE',
     label: '蓝图生成',
     promptId: p('prompt:blueprint-generate-v1'),
+    // D-B7-14：追加 RESEARCH_ESCALATION 到 requiresOutcomes（架构师明确授权的图契约
+    // 追加声明，不改任何既有节点/边/预算定义）——BLUEPRINT_GENERATE 需要读取
+    // research escalation 的具体决策（skip_research / use_current_research），才能
+    // 让用户"跳过调研"的决定真正影响 prompt。`research_decision=none`、以及
+    // research_valid=valid 直达蓝图的路径都不经过 RESEARCH_ESCALATION，该 outcome
+    // 允许缺失（computeNodeInputSnapshot 对未产出的 requiresOutcomes 读 null）。
     input: inp(
       ['idea', 'creationSpec', 'researchBundle'],
-      [RESEARCH_DECISION],
+      [RESEARCH_DECISION, RESEARCH_ESCALATION],
       ['blueprintRewrite'],
     ),
     output: out(null, 'storyBlueprint'),
