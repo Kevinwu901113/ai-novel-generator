@@ -88,8 +88,10 @@ export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
   '（更换叙事角度、结构安排或核心冲突的处理方式），不得只做措辞层面的微调。',
   '若调研信息标注 conducted=false，说明本项目未做事实调研，蓝图不得依赖具体的事实性',
   '细节（真实地名、机构、技术数据等），应基于创作要求自由设定自洽的虚构世界观。',
-  'conducted=true 且 availableAfterExclusion=false 时，说明本项目做过调研，但用户已将',
-  '全部可用来源排除，处理方式与 conducted=false 相同——不得依赖具体事实性细节。',
+  'conducted=true 且 availableAfterExclusion=false 时，处理方式与 conducted=false 相同——',
+  '不得依赖具体事实性细节；reason 字段说明具体原因（不影响写作策略，仅供你理解上下文）：',
+  'reason=no_sources_gathered 表示调研已执行但未获得任何可用来源（抓取失败等，与任何人',
+  '的排除操作无关）；reason=all_sources_excluded 表示原本获得了来源，但用户已将其全部排除。',
   'conducted=true 且 availableAfterExclusion=true 时应参考给出的调研结论与事实笔记，',
   '保持设定与事实一致；factNotes/questions 中出现的来源已是用户排除后的剩余集合，',
   '某个 question 的 sources 为空数组时说明该问题当前没有可用来源（可能被排除），仅供',
@@ -128,12 +130,20 @@ export interface BlueprintResearchContext {
  * project 级、跨版本生效，见 research.ts 里 ResearchSourceExclusionRepositoryPort
  * 的注释）。
  *
- * 规则：
- * - factNotes：`sourceUrls` 全部被排除的笔记整条剔除；部分被排除的笔记保留，
- *   `sourceUrls` 只留未被排除的；
- * - questions[].sources：剔除被排除的来源记录；过滤后变空的问题本身仍保留（问题
- *   文本仍是有效的调研意图），prompt 里以空数组体现"当前无可用来源"（系统提示词已
- *   说明该语义，见 BLUEPRINT_GENERATE_SYSTEM_PROMPT）。
+ * 规则（BLK-1 复查修复，整条剔除语义）：
+ * - factNotes：**只要笔记引用的来源中有任意一个被排除，整条笔记（含 text）一起剔除**；
+ *   完全未涉及排除来源的笔记原样保留。
+ *   —— 原因：`factNote.text` 是 research-engine orchestrator 按问题把该问题下**全部**
+ *   抓取文档正文拼接而成的聚合体（见 orchestrator.ts 的 `noteText`），并非逐来源可
+ *   分割的内容；light/deep 抓取本就是多来源常态。若只按 URL 裁剪 `sourceUrls` 而
+ *   `text` 原样透传，被排除来源的正文仍会整段留在 prompt 里，且被错误地重新归属给
+ *   幸存来源——排除动作从"看得见"变成"看不见"，用户的排除决定没有真正生效。
+ *   因此"任一来源被排除即整条剔除"是与"text 不可拆分"这一数据模型自洽的唯一正确
+ *   语义；代价是幸存来源的内容也会随之消失，但这是保守但正确的选择；
+ * - questions[].sources：与 factNotes 不同，每条 source 只是独立的 `{url, title}`
+ *   记录、彼此不聚合正文，因此仍按来源逐条过滤（不适用整条剔除规则）；过滤后变空的
+ *   问题本身仍保留（问题文本仍是有效的调研意图），prompt 里以空数组体现"当前无可用
+ *   来源"（系统提示词已说明该语义，见 BLUEPRINT_GENERATE_SYSTEM_PROMPT）。
  *
  * 措辞选择：被排除的来源**直接不出现**在 prompt 里，而不是列出来源后加"已排除、
  * 不得作为依据"这类说明——理由：一旦把排除来源的 URL/标题送进模型上下文，就不再是
@@ -148,11 +158,8 @@ export function filterResearchForPrompt(
   excludedUrls: ReadonlySet<string>,
 ): BlueprintResearchContext | null {
   const factNotes: BlueprintFactNoteContext[] = bundle.factNotes
-    .map((note) => ({
-      text: note.text,
-      sourceUrls: note.sourceUrls.filter((url) => !excludedUrls.has(url)),
-    }))
-    .filter((note) => note.sourceUrls.length > 0);
+    .filter((note) => note.sourceUrls.every((url) => !excludedUrls.has(url)))
+    .map((note) => ({ text: note.text, sourceUrls: note.sourceUrls }));
 
   if (factNotes.length === 0) return null;
 
@@ -166,9 +173,45 @@ export function filterResearchForPrompt(
   return { conclusion: bundle.conclusion, factNotes, questions };
 }
 
-/** 蓝图 prompt 的调研输入态：未做调研 / 做过但被排空 / 有可用内容（三态，见 D-B7-7/D-B7-13） */
+/**
+ * 把（可能为 null 的）bundle + 排除集合归类为四态之一（见 `BlueprintResearchInput`）。
+ * 抽成独立纯函数是为了让"零 factNotes（no_sources_gathered）"与"过滤后清空
+ * （all_excluded）"这两种此前会被误判为同一句话的情形可以脱离完整 executor / DB
+ * 独立单测（BLK-2 附带修复）。
+ */
+export function classifyResearchInput(
+  bundle: Pick<ResearchBundle, 'conclusion' | 'factNotes' | 'questions'> | null,
+  excludedUrls: ReadonlySet<string>,
+): BlueprintResearchInput {
+  if (bundle === null) return { status: 'not_conducted' };
+  const filtered = filterResearchForPrompt(bundle, excludedUrls);
+  if (filtered !== null) return { status: 'available', context: filtered };
+  if (bundle.factNotes.length === 0) {
+    // bundle 本身一条事实笔记都没有（典型成因是抓取全失败），与任何排除操作无关——
+    // 不得说成"用户已将全部可用来源排除"（对模型说假话）。
+    return { status: 'no_sources_gathered' };
+  }
+  // bundle 原本有事实笔记，是过滤（排除）把它们清空的，才是真正的"全部被排除"。
+  return { status: 'all_excluded' };
+}
+
+/**
+ * 蓝图 prompt 的调研输入态（BLK-2 附带修复：把"无可用事实笔记"拆成两种互不相同的
+ * 原因,不能都说成同一句话）：
+ * - `not_conducted`：根本没做调研（`research_decision=none`）；
+ * - `no_sources_gathered`：做过调研，但 bundle 本身一条事实笔记都没获得
+ *   （抓取全失败——这正是走到 RESEARCH_ESCALATION 的典型成因），与任何人的排除操作
+ *   无关；此前的实现会把这种情况也标成"用户已将全部可用来源排除"，对模型说了假话
+ *   （bundle.factNotes 为 0 时压根没有"来源"可供排除）；
+ * - `all_excluded`：做过调研且原本有事实笔记，但用户通过来源排除 UI 把它们全部排除；
+ * - `available`：过滤后仍有可用事实笔记。
+ *
+ * 三种"无可用内容"态对模型的写作策略要求相同（不得依赖具体事实性细节），但措辞各自
+ * 如实，不相互冒充。
+ */
 export type BlueprintResearchInput =
   | { readonly status: 'not_conducted' }
+  | { readonly status: 'no_sources_gathered' }
   | { readonly status: 'all_excluded' }
   | { readonly status: 'available'; readonly context: BlueprintResearchContext };
 
@@ -182,8 +225,18 @@ export function buildBlueprintGeneratePrompt(context: {
   let researchPayload: unknown;
   if (context.research.status === 'not_conducted') {
     researchPayload = { conducted: false as const };
+  } else if (context.research.status === 'no_sources_gathered') {
+    researchPayload = {
+      conducted: true as const,
+      availableAfterExclusion: false as const,
+      reason: 'no_sources_gathered' as const,
+    };
   } else if (context.research.status === 'all_excluded') {
-    researchPayload = { conducted: true as const, availableAfterExclusion: false as const };
+    researchPayload = {
+      conducted: true as const,
+      availableAfterExclusion: false as const,
+      reason: 'all_sources_excluded' as const,
+    };
   } else {
     researchPayload = {
       conducted: true as const,
@@ -438,6 +491,57 @@ export function parseBlueprintGenerateV1(text: string): ParsedBlueprintGenerate 
   };
 }
 
+/**
+ * D-B7-6 第二道域校验（复查随行修复 note 2：错误码归属一致性）。
+ *
+ * `createStoryBlueprint` 校验的是模型输出内容（premise/world/chapters 等）的最小
+ * 不变量，与 `parseBlueprintGenerateV1` 同属"模型输出不合格"范畴，理应共享
+ * `MODEL_RESPONSE_INVALID`。此前该校验被塞进最终成功事务内，失败后统一走
+ * `compensateFinalization` 补偿，被无差别记成通用 `TASK_EXECUTION_FAILED`
+ * ——与 parse 失败的错误码不一致，误导运维排查方向（parse 失败与域校验失败
+ * 明明是同一类问题）。
+ *
+ * 用占位 id/version/chapter-id 在事务外预跑一遍（纯函数、不接触 DB，可重复调用）：
+ * 真正落库时仍在最终事务内用真实 id/version 重新构造（D-B7-5 要求版本号必须在同一
+ * 事务内取 MAX+1，不能挪到事务外，否则并发下会产生重复版本）。这两次调用的输入
+ * （premise/world/chapters 等内容字段）完全相同，因此结果一致；事务内那次唯一剩余
+ * 的失败面是 id 判空——那只可能是 idGenerator 基础设施故障而非模型问题，届时仍走
+ * `compensateFinalization` 记 `TASK_EXECUTION_FAILED` 是恰当的（不应该也记成
+ * MODEL_RESPONSE_INVALID，那会误导成"模型的错"）。
+ *
+ * 注：`parseBlueprintGenerateV1` 对内容字段的边界（非空、长度上限）已经等于或严于
+ * `createStoryBlueprint` 的对应检查，因此在真实的解析产物上，本函数在生产路径里
+ * 不会再失败——保留它是防御性收口 + 错误码一致性，而不是期望它在生产中被触发。
+ */
+export function assertBlueprintDomainInvariants(
+  parsed: ParsedBlueprintGenerate,
+  createdAt: string,
+): void {
+  try {
+    createStoryBlueprint({
+      id: 'precheck',
+      projectId: 'precheck',
+      version: 1,
+      premise: parsed.premise,
+      characters: parsed.characters,
+      relationships: parsed.relationships,
+      world: parsed.world,
+      conflict: parsed.conflict,
+      ending: parsed.ending,
+      plotlines: parsed.plotlines,
+      chapters: parsed.chapters.map((c, i) => ({
+        id: `precheck-${i}`,
+        title: c.title,
+        goal: c.goal,
+      })),
+      createdAt,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : '蓝图域校验失败';
+    throw new TaskExecutionError('MODEL_RESPONSE_INVALID', message);
+  }
+}
+
 // ── 执行 ──────────────────────────────────────────────────────────
 
 function requireCas(updated: boolean, message: string): void {
@@ -556,8 +660,10 @@ export async function executeBlueprintGenerate(
     return failedResult(deps, taskId, null);
   }
 
-  // D-B7-7：researchBundleId 为 null 时（none / skip_research）显式声明"未做调研"，
-  // 不得把缺失伪装成空调研；有 bundle 时若找不到底层行视为上下文缺失（确定性失败）。
+  // D-B7-7：researchBundleId 为 null 时（none / skip_research，见 BLK-2 报告——skip_research
+  // 与 use_current_research 在图层不可区分，此处只能按"是否有 bundle 引用"分支，无法
+  // 单独识别 skip_research；已按保底方案记 TD-029-3）显式声明"未做调研"，不得把缺失
+  // 伪装成空调研；有 bundle 时若找不到底层行视为上下文缺失（确定性失败）。
   // D-B7-13：有 bundle 时按项目排除集合过滤 prompt 可见内容（不改 bundle 行）。
   let research: BlueprintResearchInput = { status: 'not_conducted' };
   if (payload.researchBundleId !== null) {
@@ -572,9 +678,7 @@ export async function executeBlueprintGenerate(
       return failedResult(deps, taskId, null);
     }
     const excludedUrls = new Set(deps.sourceExclusionRepo.listByProject(task.projectId));
-    const filtered = filterResearchForPrompt(bundle, excludedUrls);
-    research =
-      filtered === null ? { status: 'all_excluded' } : { status: 'available', context: filtered };
+    research = classifyResearchInput(bundle, excludedUrls);
   }
 
   const prompt = buildBlueprintGeneratePrompt({
@@ -682,8 +786,35 @@ export async function executeBlueprintGenerate(
     return failedResult(deps, taskId, invocationId);
   }
 
-  // ── 最终事务：版本号取 MAX+1（D-B7-5）+ 域校验 + 落库 + envelope + invocation/task 终态 ──
   const now = deps.clock.now();
+
+  // 域校验前置到最终事务外（复查随行修复 note 2）：与 parse 失败共享同一套错误码
+  // 归属（invocation=MODEL_RESPONSE_INVALID / task=TASK_EXECUTION_FAILED），不再
+  // 被最终事务失败后的通用 compensateFinalization 统一冲成 TASK_EXECUTION_FAILED。
+  try {
+    assertBlueprintDomainInvariants(parsedResult, now);
+  } catch (err) {
+    const message = err instanceof TaskExecutionError ? err.message : '蓝图域校验失败';
+    transaction(() => {
+      requireCas(
+        invocationRepo.markFailed(
+          invocationId,
+          ['RUNNING'],
+          'MODEL_RESPONSE_INVALID',
+          message,
+          result.latencyMs,
+        ),
+        '无法标记调用失败',
+      );
+      requireCas(
+        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
+        '无法标记任务失败',
+      );
+    });
+    return failedResult(deps, taskId, invocationId);
+  }
+
+  // ── 最终事务：版本号取 MAX+1（D-B7-5）+ 落库 + envelope + invocation/task 终态 ──
   // 定值断言：赋值发生在下方 transaction() 回调内（同步执行），TS 跨闭包分析看不到这点。
   let blueprint!: StoryBlueprint;
   try {
@@ -695,25 +826,25 @@ export async function executeBlueprintGenerate(
         title: c.title,
         goal: c.goal,
       }));
-      try {
-        blueprint = createStoryBlueprint({
-          id: blueprintId,
-          projectId: task.projectId,
-          version,
-          premise: parsedResult.premise,
-          characters: parsedResult.characters,
-          relationships: parsedResult.relationships,
-          world: parsedResult.world,
-          conflict: parsedResult.conflict,
-          ending: parsedResult.ending,
-          plotlines: parsedResult.plotlines,
-          chapters,
-          createdAt: now,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : '蓝图域校验失败';
-        throw new TaskExecutionError('MODEL_RESPONSE_INVALID', message);
-      }
+      // 内容字段已由上面的 assertBlueprintDomainInvariants 预校验（同一批输入，结果
+      // 一致）；这里若仍然抛错，只可能是 blueprintId/chapter id 判空——即 idGenerator
+      // 基础设施故障，不再包一层转 MODEL_RESPONSE_INVALID，让它按原样落入下面的
+      // catch → compensateFinalization（记 TASK_EXECUTION_FAILED，如实反映"不是模型
+      // 的错"）。
+      blueprint = createStoryBlueprint({
+        id: blueprintId,
+        projectId: task.projectId,
+        version,
+        premise: parsedResult.premise,
+        characters: parsedResult.characters,
+        relationships: parsedResult.relationships,
+        world: parsedResult.world,
+        conflict: parsedResult.conflict,
+        ending: parsedResult.ending,
+        plotlines: parsedResult.plotlines,
+        chapters,
+        createdAt: now,
+      });
 
       deps.blueprintRepo.save(blueprint, false);
 
