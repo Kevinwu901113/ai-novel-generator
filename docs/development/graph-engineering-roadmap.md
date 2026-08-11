@@ -322,7 +322,7 @@ gate 决策、终态）。
 | GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成              |
 | GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
 | GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
-| GE-5 StoryBlueprint + PROJECT_READY | 🟡 WIRING+E2E 达成  | ✅         | ✅（blueprint.getState）              | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ❌（B8）   | ✅ 三终态真实 E2E            |
+| GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）   | ✅ 三终态真实 E2E            |
 | GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌                           |
 | RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
 
@@ -371,8 +371,19 @@ gate 决策、终态）。
     （自图诞生起从未注册，此前批次均止步于人工 Gate 故未被触发）
     （2026-08-11；设计 `b7-blueprint-wiring-design.md`；独立对抗复查两路：原子性/图语义
     ACCEPT，任务引擎路 REWORK 两 blocker 已修）。
+  - **B8** ✅：GE-5 UI：蓝图查看（BlueprintView 分节 + 结局默认折叠 D-B8-8）+ accept/
+    request_rewrite 确认 + 升级四选项 + 项目就绪/三终态展示 + **阶段派生上提到 App**
+    （D-B8-2：useJourney 探针独立轮询，Region 不再回报阶段，结构性消除"没有 Region
+    该被挂载时阶段无人回报"缺陷族）+ 终态按 artifact 推导阶段（D-B8-3，先红后绿）+
+    contracts `blueprint.getBlueprint` 四层贯通 + preload IPC_CHANNELS parity 守卫。
+    **独立对抗复查（四路：竞态/状态机枚举/手抄面/可达性）判 REWORK 后修复再核验
+    ACCEPT**：2 BLOCKER（预算耗尽后 escalation 结构性不可达；决策 busy 早释+错误横幅
+    残留）+ 6 MAJOR（stale 压过 terminal/generating、错误码跨 IPC 必然丢失——Electron
+    丢 `.code`，改 message 编码传输、userSelectedStage 锁死决策后视图、useResearch
+    刷新被互斥锁吞掉、escalation 可对不可见内容拍板、两处文案空承诺）全部修复并有
+    测试锁定；遗留登记 TD-030-1..5
+    （2026-08-11；设计 `b8-blueprint-ui-design.md` §6）。
 - **下一步（依依赖顺序）**：
-  - **B8**：GE-5 UI：蓝图查看 + accept/request_rewrite 确认 + 升级四选项 + 项目就绪终态；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
   - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
 

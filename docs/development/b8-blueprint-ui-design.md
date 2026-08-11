@@ -116,3 +116,61 @@ B6 扩展的旅程 shell，使蓝图成为 viewStage 的第三个已实现阶段
   `idea`）后，App 级测试"run 已 completed + 已接受的冷启动下，蓝图仍可达且不显示
   重新开始访谈"确认变红（超时 5s 找不到 `blueprint-view`），改回后转绿。D-B8-3
   不是空断言。
+
+## 6. 独立对抗复查与修复批次（2026-08-11，合并前）
+
+自查式复查（98823f2）之后，按前七批同规格补做了独立对抗复查：四个互不通气的复查员
+分别打竞态、状态机组合枚举、四层贯通手抄面、可达性与空承诺。结论 REWORK——自查
+兜不住的又一批"内容存在却不可达"与其镜像"承诺存在却不成立"。坐实清单与修复：
+
+- **[BLOCKER] 预算耗尽后 escalation 四选项结构性不可达**：UI 在 remaining=0 时禁用
+  request_rewrite，而 gate→escalation 是全图唯一入边、要求"耗尽后再提交一次
+  request_rewrite"才路由。gate 成死端；叠加失效时零可用操作。修复：按钮耗尽时不禁用，
+  文案如实改为"不用这版，进入后续决策"（`gateRewriteOptionCopy`）；a11y 测试反转
+  （旧测试把错误行为锁进了断言）；已做先红后绿验证。
+- **[BLOCKER] 决策 busy 早释 + 错误横幅在就绪界面永久残留**：`applyDecision` 在探针
+  新态落地前释放 busy，双击必撞后端拒绝，且决策错误渲染在所有相位之上、无清除路径。
+  修复：`useJourney.refresh` 返回"新状态落地后才 resolve"的排队 promise（撞在途 poll
+  时等补跑那轮），busy await 它；决策错误从正文错误中拆出（decisionError），只随
+  决策面板渲染。
+- **[MAJOR] stale 压过 terminal / generating**（两名复查员独立坐实）：失效 run 死掉后
+  显示"需要重新生成后才能确认"是无限期空等承诺。修复：`deriveBlueprintPhase` 重排为
+  terminal → generating → 非 gate 态 stale；先红后绿验证。
+- **[MAJOR] 错误码跨 IPC 必然丢失**：Electron `ipcMain.handle` 只回传 error.toString()，
+  `.code` 在 preload 侧已丢——B8 新增的四个 GRAPH_RUN_* 标签（连同存量 catch 路径标签）
+  在生产必然不触发（复查员用 Electron 43.2.0 最小 harness 实测复现）。修复：code 经
+  message 编码传输（contracts `encodeErrorCode`/`decodeErrorCode`/`stripErrorCode`
+  单一事实源），main 编码、renderer 解码，展示文案剥离编码段、敏感检查跑在剥离后文本。
+- **[MAJOR] userSelectedStage 锁死决策后视图**：用户点过导航"蓝图"后选"修改创作要求"，
+  视图仍锁在无按钮无说明的旧蓝图上。修复：App 在人工决策落地后清锁并立即刷新
+  （`handleBlueprintDecisionSettled`）。research 侧同病为 B6 存量，登记 TD-030-4。
+- **[MAJOR] useResearch 决策后刷新被互斥锁吞掉**：本批次在 useJourney 定义了
+  pendingRefresh 范式却未同步到同 PR 修改的 useResearch。修复：镜像排队 promise 实现。
+- **[MAJOR] escalation 可对不可见内容拍板**：正文拉取失败/未取到时 accept_current
+  仍可点（98823f2 只修了 happy path）。修复：contentUnavailable 禁用 accept_current
+  （其余三项不依赖看到内容，保持可用）+ 正文拉取失败给"重试"入口（此前一次性拉取
+  失败后 gate 确认在当前屏永久不可达）。
+- **[MAJOR] 两处文案空承诺**：modify_requirements 许诺"会重新生成"（spec 调整额度
+  耗尽时实际路由"已搁置"终态）；continue_later 许诺"之后回来需重新决定"+ blocked
+  标签"可以继续"（终态无原地恢复界面）。修复：文案如实 + 终态卡补继续指引（回"想法"
+  阶段重新开始）。
+- **[MINOR] 终态节点 active 窗口污染 frontier**：决策提交后、异步驱动写入终态前，
+  stage='done' 节点被投影成 'manuscript' 并被 maxFrontierStage 单调锁死。修复：
+  `deriveFrontierStage` 过滤 'done' 节点，窗口内按 artifact 推导或保留上一阶段。
+- **[MINOR] 假注释两处**：worker 投影注释宣称的"preload 层校验"不存在（全仓零生产
+  调用点）——改为如实描述测试期守卫；gate 面板"第二道防线"注释描述的 escalation
+  自动进入机制不存在——随 BLOCKER 修复重写。
+- **补齐 App 级可达性测试**：escalation 相位与"终态但已生成蓝图"只读回看此前仅有
+  组件级手喂 state 测试（本项目最高发缺陷族恰在这里），补两条真分流 App 级回归。
+
+**不阻塞合并的坐实项**登记 TD-030-1..5（切换闪帧+跨项目读 / 撕裂快照 / 无守卫手抄面 /
+research 侧锁死 / 探针可观测性），见 tech-debt.md。
+
+### 验证基线（复查修复后）
+
+- `pnpm check` 全绿：148 文件 / 3346 测试通过（另 2 文件 7 测试 skip）。
+- **先红后绿**：① 相位优先级临时改回旧序 → "终态×失效→terminal"与"失效×在途生成
+  →generating"两用例变红；② gate 面板临时恢复耗尽禁用 → "耗尽时保持可用"与
+  "失效+耗尽不得零操作死锁"两用例变红。均恢复后转绿。
+- 错误码传输：contracts 新增 11 用例（含 Electron 包裹格式解码、UUID message 不落
+  通用兜底、展示文案不含编码段）。

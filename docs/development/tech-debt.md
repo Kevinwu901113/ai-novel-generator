@@ -706,3 +706,38 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    没有对应的 executor 注册。GE-6（`createChapterRun` 接线）批次落地 chapter run 入口
    时需要一并处理，否则章节生成 run 到达终止节点会因 `onExecutorMissing` 静默跳过而
    卡住，不会真正终态化。
+
+## TD-030: B8 独立对抗复查随行遗留（四路复查坐实、不阻塞合并，2026-08-11）
+
+**状态**: OPEN
+
+**背景**: B8（GE-5 蓝图产品 UI）合并前由四个独立复查员对抗复查（竞态 / 状态机枚举 /
+四层手抄面 / 可达性与空承诺），坐实 2 BLOCKER + 6 MAJOR 已随批次修复；以下为坐实但
+影响有界、登记后合并的遗留项。
+
+1. **TD-030-1：项目切换的一帧内旧 frontier 挂错 Region + 跨项目正文读**：
+   `handleOpenProject` 里 `setCurrentProject` 与 journey 状态清零分属 commit 与
+   passive effect 两个时机——切换后的首个绘制帧内，旧项目的 frontierStage 仍会把
+   中栏挂成旧阶段 Region（如 BlueprintRegion 闪现"正在加载蓝图…"），并真实发出一次
+   `getBlueprint({projectId: 新, blueprintId: 旧})` 的跨项目 IPC（worker 查不到返回
+   null，响应被 generation 守卫丢弃）。无数据错挂，纯闪帧 + 冗余请求。结构性修法是
+   journey 状态与 projectId 同步派生（keyed state 或 reducer），改动面大于收益，登记。
+2. **TD-030-2：journey 单轮刷新的 getState/getRunProgress 撕裂快照**：两条独立
+   worker RPC 之间图可提交（如"GENERATE 成功 + gate 激活"落在两次读取中间），拼出
+   state 旧 / progress 新的自相矛盾快照——蓝图刚生成完的 ≤1 个轮询周期内，导航已标
+   "蓝图"而正文显示"蓝图还没有生成"。下一轮自纠正。反方向偏斜已被 P9 gate 兜底
+   吸收。修法：worker 侧提供单命令原子快照（getJourneySnapshot），待有同类需求时一并做。
+3. **TD-030-3：仍无守卫的跨层手抄面（当前已逐一比对一致）**：renderer 硬编码节点 ID
+   （`useBlueprint.ts` 的 BLUEPRINT_USER_GATE/BLUEPRINT_ESCALATION、`blueprint-logic.ts`
+   的 BLUEPRINT_GENERATE）、`BLUEPRINT_REWRITE_LIMIT = 3`（domain loop maxIterations
+   调整后 UI"剩余 N 次"会静默错）、preload 两个不在 IPC_CHANNELS 的裸通道
+   （data-service-status/retry，存量）。contracts 未导出 NODE_IDS，renderer 结构上
+   引用不到真源；补导出或做源码比对 parity 测试（范式已有：ipc-channel-parity）。
+   注：gate/escalation outcome 字符串已有闭合枚举双向守卫测试，不在此列。
+4. **TD-030-4：research 侧 escalation 的 userSelectedStage 锁死（B6 存量同病）**：
+   蓝图侧已修（App 在人工决策落地后清锁）；research 的 modify_requirements 回访谈
+   路径上，若用户点过 JourneyNav"调研"，视图仍会锁在 ResearchRegion。修法同蓝图侧
+   （useResearch 决策收尾走 App 回调），顺 GE-6 批次带上。
+5. **TD-030-5：探针可观测性小项**：单条 IPC 挂住时探针静默冻结最长 30s（worker-client
+   超时后自恢复，期间无提示）；`loading` 每轮 poll 翻转两次导致 App 每 1.7s 两次无谓
+   重渲（仅 `state===null` 时被消费）。均有界。
