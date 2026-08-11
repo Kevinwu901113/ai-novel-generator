@@ -35,6 +35,7 @@ import {
 } from '@ai-novel/application';
 import { ASK_QUESTION, IDEA_CAPTURE, SPEC_EXTRACT } from '@ai-novel/domain';
 import { buildGrillSessionDeps } from './grill-handlers.js';
+import { withProjectDb } from './with-project-db.js';
 
 export interface IntakeExecutorContext {
   getProjectDb(projectId: string): ProjectDatabase;
@@ -90,48 +91,52 @@ function ideaCaptureExecute(
   ctx: IntakeExecutorContext,
   ectx: NodeExecutionInputContext,
 ): NodeOutput {
-  const projDb = ctx.getProjectDb(ectx.projectId);
-  const meta = projDb.getProjectMetadataRepository().get();
-  const initialIdea = meta?.initialIdea?.trim();
-  if (!initialIdea) {
-    throw new Error('项目缺少初始想法（project_metadata.initial_idea）');
-  }
-  const grillDeps = buildGrillSessionDeps(projDb, {
-    getProjectDb: ctx.getProjectDb,
-    idGenerator: ctx.idGenerator,
-    clock: ctx.clock,
-  });
-  // TD-024：新建前弃用该项目全部 ACTIVE 会话——modify_idea 回环 / 重试 / 重建（TD-022）
-  // 留下的旧会话一律作废，保证全局至多一个 ACTIVE（getActiveIntakeSession 歧义消除，
-  // 且 ABANDONED 会话被 resolver 白名单拒绝结算）。CAS 冲突时重读一次再弃用；
-  // 仍失败则抛错 fail-closed（replayable，重放安全）。
-  for (const stale of listGrillSessions(grillDeps, { projectId: ectx.projectId })) {
-    if (stale.status !== 'ACTIVE') continue;
-    try {
-      abandonGrillSession(grillDeps, { sessionId: stale.id, expectedVersion: stale.version });
-    } catch {
-      const current = grillDeps.sessionRepo.getById(stale.id);
-      if (current && current.status === 'ACTIVE') {
-        abandonGrillSession(grillDeps, { sessionId: current.id, expectedVersion: current.version });
+  return withProjectDb(ctx.getProjectDb, ectx.projectId, (projDb) => {
+    const meta = projDb.getProjectMetadataRepository().get();
+    const initialIdea = meta?.initialIdea?.trim();
+    if (!initialIdea) {
+      throw new Error('项目缺少初始想法（project_metadata.initial_idea）');
+    }
+    const grillDeps = buildGrillSessionDeps(projDb, {
+      getProjectDb: ctx.getProjectDb,
+      idGenerator: ctx.idGenerator,
+      clock: ctx.clock,
+    });
+    // TD-024：新建前弃用该项目全部 ACTIVE 会话——modify_idea 回环 / 重试 / 重建（TD-022）
+    // 留下的旧会话一律作废，保证全局至多一个 ACTIVE（getActiveIntakeSession 歧义消除，
+    // 且 ABANDONED 会话被 resolver 白名单拒绝结算）。CAS 冲突时重读一次再弃用；
+    // 仍失败则抛错 fail-closed（replayable，重放安全）。
+    for (const stale of listGrillSessions(grillDeps, { projectId: ectx.projectId })) {
+      if (stale.status !== 'ACTIVE') continue;
+      try {
+        abandonGrillSession(grillDeps, { sessionId: stale.id, expectedVersion: stale.version });
+      } catch {
+        const current = grillDeps.sessionRepo.getById(stale.id);
+        if (current && current.status === 'ACTIVE') {
+          abandonGrillSession(grillDeps, {
+            sessionId: current.id,
+            expectedVersion: current.version,
+          });
+        }
       }
     }
-  }
-  const session = createGrillSession(grillDeps, {
-    projectId: ectx.projectId,
-    goal: initialIdea,
+    const session = createGrillSession(grillDeps, {
+      projectId: ectx.projectId,
+      goal: initialIdea,
+    });
+    const started = startGrillSession(grillDeps, {
+      sessionId: session.id,
+      expectedVersion: session.version,
+    });
+    return {
+      artifact: {
+        kind: 'idea',
+        artifactId: started.id,
+        producerNodeId: ectx.nodeId as never,
+        version: 1,
+      },
+    };
   });
-  const started = startGrillSession(grillDeps, {
-    sessionId: session.id,
-    expectedVersion: session.version,
-  });
-  return {
-    artifact: {
-      kind: 'idea',
-      artifactId: started.id,
-      producerNodeId: ectx.nodeId as never,
-      version: 1,
-    },
-  };
 }
 
 function askQuestionExecute(
@@ -139,45 +144,46 @@ function askQuestionExecute(
   ectx: NodeExecutionInputContext,
 ): NodeOutput {
   const sessionId = ideaSessionIdFromSnapshot(ectx.inputSnapshot);
-  const projDb = ctx.getProjectDb(ectx.projectId);
-  const grillDeps = buildGrillSessionDeps(projDb, {
-    getProjectDb: ctx.getProjectDb,
-    idGenerator: ctx.idGenerator,
-    clock: ctx.clock,
-  });
-  const session = grillDeps.sessionRepo.getById(sessionId);
-  if (!session || session.projectId !== ectx.projectId) {
-    throw new Error('intake session 不存在或不属于本项目');
-  }
-  const questions = grillDeps.questionRepo.listBySession(sessionId);
-  const pending = questions
-    .filter((q) => q.status === 'PLANNED')
-    .sort((a, b) => a.sequence - b.sequence);
-  if (pending.length === 0) {
-    // 幂等重放（B3 复查 BLK-1）：markAsked 提交与 settlement 之间崩溃 / lease 过期后，
-    // replayable 策略会重放本节点——此时问题已是 ASKED。存在"已问出且尚无当前答案"的
-    // 问题即视为本 activation 职责已完成，返回空输出而非抛错（抛错会 fail-closed 杀 run）。
-    const answered = new Set(
-      grillDeps.answerRepo.listCurrentBySession(sessionId).map((a) => a.questionId),
-    );
-    const askedOpen = questions.some((q) => q.status === 'ASKED' && !answered.has(q.id));
-    if (askedOpen) return {};
-    // 既无 PLANNED 也无待回答的 ASKED：数据不变量破坏，fail-fast
-    throw new Error('没有待提出的追问问题');
-  }
-  try {
-    markQuestionAsked(grillDeps, {
-      sessionId,
-      expectedVersion: session.version,
-      questionId: pending[0].id,
+  return withProjectDb(ctx.getProjectDb, ectx.projectId, (projDb) => {
+    const grillDeps = buildGrillSessionDeps(projDb, {
+      getProjectDb: ctx.getProjectDb,
+      idGenerator: ctx.idGenerator,
+      clock: ctx.clock,
     });
-  } catch (err) {
-    // 并发/重放下 CAS 失败：若问题实际已被标记 ASKED，同样视为职责完成（幂等）
-    const q = grillDeps.questionRepo.getById(pending[0].id);
-    if (q?.status !== 'ASKED') throw err;
-  }
-  // 图契约 noOut：不产 outcome、不产 artifact
-  return {};
+    const session = grillDeps.sessionRepo.getById(sessionId);
+    if (!session || session.projectId !== ectx.projectId) {
+      throw new Error('intake session 不存在或不属于本项目');
+    }
+    const questions = grillDeps.questionRepo.listBySession(sessionId);
+    const pending = questions
+      .filter((q) => q.status === 'PLANNED')
+      .sort((a, b) => a.sequence - b.sequence);
+    if (pending.length === 0) {
+      // 幂等重放（B3 复查 BLK-1）：markAsked 提交与 settlement 之间崩溃 / lease 过期后，
+      // replayable 策略会重放本节点——此时问题已是 ASKED。存在"已问出且尚无当前答案"的
+      // 问题即视为本 activation 职责已完成，返回空输出而非抛错（抛错会 fail-closed 杀 run）。
+      const answered = new Set(
+        grillDeps.answerRepo.listCurrentBySession(sessionId).map((a) => a.questionId),
+      );
+      const askedOpen = questions.some((q) => q.status === 'ASKED' && !answered.has(q.id));
+      if (askedOpen) return {};
+      // 既无 PLANNED 也无待回答的 ASKED：数据不变量破坏，fail-fast
+      throw new Error('没有待提出的追问问题');
+    }
+    try {
+      markQuestionAsked(grillDeps, {
+        sessionId,
+        expectedVersion: session.version,
+        questionId: pending[0].id,
+      });
+    } catch (err) {
+      // 并发/重放下 CAS 失败：若问题实际已被标记 ASKED，同样视为职责完成（幂等）
+      const q = grillDeps.questionRepo.getById(pending[0].id);
+      if (q?.status !== 'ASKED') throw err;
+    }
+    // 图契约 noOut：不产 outcome、不产 artifact
+    return {};
+  });
 }
 
 function specExtractPrepareTask(ectx: NodeExecutionInputContext): NodeTaskSpec {
