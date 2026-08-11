@@ -20,8 +20,11 @@ import type {
   GraphNodeOutcome,
   HumanDecisionInput,
   IdeaToNovelProjectGraphV1,
+  IdeaToNovelProjectRunState,
 } from '@ai-novel/domain';
 import {
+  BLUEPRINT_ESCALATION,
+  BLUEPRINT_USER_GATE,
   CHAPTER_GENERATION_GRAPH_ID,
   IDEA_TO_NOVEL_PROJECT_GRAPH_ID,
   applyArtifactChange as applyArtifactChangeTransition,
@@ -642,6 +645,43 @@ export function applyHumanDecision(
       ) {
         throw new GraphRunStateConflictError(`节点 ${input.nodeId} 不是门禁/升级节点`);
       }
+
+      // D-B7-1/2/8：blueprint 接受与 Graph gate 原子化（本批次核心）。
+      // BLUEPRINT_USER_GATE 的 accept、BLUEPRINT_ESCALATION 的 accept_current 都是
+      // "接受当前蓝图 → 形成 PROJECT_READY"的入边；镜像本函数 intake_answer 分支的
+      // 现成先例——先写权威存储（storyBlueprintRepo.markAccepted），再走 transition，
+      // 任一步抛错整事务回滚（fail-closed），杜绝"run 已终态但 accepted=0"的不可修复态。
+      const isBlueprintAccept =
+        (node.id === BLUEPRINT_USER_GATE && input.outcome === 'accept') ||
+        (node.id === BLUEPRINT_ESCALATION && input.outcome === 'accept_current');
+      if (isBlueprintAccept) {
+        // D-B7-8：失效蓝图不得被接受。CreationSpec 变更后 storyBlueprint 进
+        // invalidatedArtifacts（applyArtifactChange 只追加、不清空 artifacts 槽位），
+        // 不在此拒绝的话用户可绕过"必须重新生成"直达 PROJECT_READY。
+        const invalidated = record.state.invalidatedArtifacts.some(
+          (ref) => ref.kind === 'storyBlueprint',
+        );
+        if (invalidated) {
+          throw new GraphRunStateConflictError(
+            '当前蓝图已因创作要求变更而失效，无法接受；请先请求重新生成',
+          );
+        }
+        // blueprintId 只能取自 Graph 权威状态，不接受调用方传入——杜绝对任意历史
+        // blueprintId 置 accepted 的伪造（gate DTO 亦是 exact-keys 校验，不加字段）。
+        const projectState = record.state as IdeaToNovelProjectRunState;
+        const blueprintArtifact = projectState.artifacts.storyBlueprint;
+        if (blueprintArtifact === null) {
+          throw new GraphRunStateConflictError('当前 run 尚无蓝图产物，无法接受');
+        }
+        const marked = repos.storyBlueprintRepo.markAccepted(
+          record.state.projectId,
+          blueprintArtifact.artifactId,
+        );
+        if (!marked) {
+          throw new GraphRunStateConflictError('蓝图接受失败：权威存储未找到对应蓝图');
+        }
+      }
+
       decision = {
         nodeId: createGraphNodeId(input.nodeId),
         decisionType,
