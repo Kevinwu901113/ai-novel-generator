@@ -114,7 +114,7 @@ describe('ResearchStateDto', () => {
         researchValid: 'invalid',
         bundleRef: 'rb1',
         bundleInvalidated: false,
-    escalationActive: true,
+        escalationActive: true,
         researchRetryUsed: 3,
       }),
     ).toBe(true);

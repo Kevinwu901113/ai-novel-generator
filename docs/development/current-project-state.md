@@ -2,7 +2,7 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：4（2026-08-10）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：5（2026-08-11）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
@@ -40,6 +40,7 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 | **GE-3 Intake wiring（B3）**            | `apps/worker/src/intake-executors.ts`、`packages/application/src/idea-intake.ts`、SPEC_EXTRACT 任务执行器（migration v13）、GE-3 真实链路 E2E（PR #42）                                                                         | IDEA_CAPTURE / SPEC_EXTRACT / ASK_QUESTION / COLLECT_ANSWER / INTAKE_ESCALATION 五节点真实接线；SPEC_EXTRACT 走 B1 网关产出 CreationSpec；resolver 补 idea/creationSpec 底层权威存储校验（TD-024 起含会话状态白名单）                                 | 已完成（UI 见下行）                                                                  |
 | **GE-3 Intake 产品 UI（B4）**           | `apps/desktop/src/renderer/intake/*`、`journey/JourneyNav.tsx`、App.tsx 旅程 shell、contracts/preload/main intake.* 通道、`docs/development/b4-intake-ui-design.md`                                                             | 四阶段旅程导航 + 对话式访谈（回答/跳过/完成/升级 Gate/失败重建）+ CreationSpec 编辑器（CAS + 显式失效级联）；旧 Grill 工作台移出默认入口（代码保留）；随行解决 TD-022/024/025-3                                                                       | GE-4 起 B5/B6 逐阶段扩展旅程                                                         |
 | **GE-4 Research wiring（B5）**          | `apps/worker/src/research-executors.ts`、`packages/task-engine/src/research-run.ts`（RESEARCH_RUN，migration v14）、`research-engine` Tavily + SafeWebFetch、search.* 三层通道、`docs/development/b5-research-wiring-design.md` | DECISION/PLAN/VALIDATE sync + EXECUTE task-backed 四节点真实接线；Tavily provider（D7）+ V1 安全边界运行时补全（DNS 解析后校验/重定向重校验/content-type 白名单/字节上限/超时）；invalid 回环（researchRetry ≤2）→ 人工升级；key 缺失任务保持 PENDING | B6 配套产品 UI；真实使用需负责人录入 Tavily key                                      |
+| **GE-4 Research 产品 UI（B6）**         | `apps/desktop/src/renderer/research/*`、App.tsx 阶段互斥分流、contracts/preload/main research.* 五通道、`research_source_exclusions`（migration v15）、`docs/development/b6-research-ui-design.md`                              | 九态相位（"无需调研 none" vs "尚未调研 null" 可区分）+ 资料包查看（问题/来源/长笔记折叠/结论/版本链）+ 来源排除（project 级 URL 表）+ Tavily key 录入（录入后自动重驱动）+ 五选项人工升级 Gate；D-B6-9 失效资料包 stale 标记优先于 ready              | B7/B8 蓝图阶段沿用同一 Region 分流范式                                               |
 | Project lifecycle                       | `packages/application/create-project.ts`、`open-project.ts`、`list-projects.ts`                                                                                                                                                 | 项目创建/打开/列表/启动恢复                                                                                                                                                                                                                           | 保留；产品入口随 GE-3 改为 Idea Intake                                               |
 | Grill / questioning                     | `packages/domain/grill.ts`、`application/grill-session.ts`、`database/grill-repositories.ts`、`worker/grill-handlers.ts`、`renderer/grill/*`                                                                                    | 会话/问题/回答/提案全链路                                                                                                                                                                                                                             | GE-3 适配为 Idea Intake；修复 `grill.listQuestions` / `grill.markQuestionAsked` 死链 |
 | Creation Contract                       | `packages/domain/creation-contract.ts`、`application/creation-contract*.ts`、DB v4–v6、`worker/contract-handlers.ts`、`renderer/contract/*`                                                                                     | 契约提案/版本/current 指针/字段锁/CAS                                                                                                                                                                                                                 | GE-3 复用快照/版本/provenance 为 CreationSpec 基座，废弃审批门禁                     |
@@ -51,14 +52,14 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 ### PARTIAL / STUB
 
-| 能力                          | 状态               | 说明                                                                     |
-| ----------------------------- | ------------------ | ------------------------------------------------------------------------ |
-| Manuscript transport/renderer | MISSING（main 无） | PR #25 参考资产；GE-7 选择性移植                                         |
-| Web Research 产品 UI          | MISSING            | 四节点已接线（B5）但无调研查看/来源排除界面与 key 录入 UI；B6（GE-4 UI） |
-| StoryBlueprint                | BACKEND-ONLY       | blueprint.* 后端有；节点未接、accept 非原子；GE-5（B7/B8）               |
-| Chapter Generation            | FOUNDATION-ONLY    | CHAPTER_DRAFT 任务引擎有；无 executor / settlement 接线；GE-6（B9/B10）  |
-| Export                        | MISSING            | `packages/import-export` 为 stub；GE-7                                   |
-| PlotPilot                     | PARTIAL            | 可选 adapter foundation；不进入关键路径                                  |
+| 能力                          | 状态               | 说明                                                                    |
+| ----------------------------- | ------------------ | ----------------------------------------------------------------------- |
+| Manuscript transport/renderer | MISSING（main 无） | PR #25 参考资产；GE-7 选择性移植                                        |
+| Web Research 产品 UI          | DONE（B6）         | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate  |
+| StoryBlueprint                | BACKEND-ONLY       | blueprint.* 后端有；节点未接、accept 非原子；GE-5（B7/B8）              |
+| Chapter Generation            | FOUNDATION-ONLY    | CHAPTER_DRAFT 任务引擎有；无 executor / settlement 接线；GE-6（B9/B10） |
+| Export                        | MISSING            | `packages/import-export` 为 stub；GE-7                                  |
+| PlotPilot                     | PARTIAL            | 可选 adapter foundation；不进入关键路径                                 |
 
 ### 已知死链
 
@@ -78,9 +79,10 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 → 右栏：状态面板（ProviderRegion / TaskCenter）
 ```
 
-旅程在 **CreationSpec 之后停止**：spec 完成后 run 停在 RESEARCH_DECISION（GE-4 executor 未注册，
-TD-020 跳过保持），调研/蓝图/成稿阶段显示占位。旧 Grill 工作台已移出默认入口（代码保留）。
-其余是 GE-4..GE-7（B5..B10）的目标。
+旅程在 **调研之后停止**：B5 接线四节点、B6 补齐调研阶段 UI，spec 完成后可走完
+DECISION/PLAN/EXECUTE/VALIDATE 并在界面查看资料包、排除来源、处理人工升级；
+蓝图/成稿阶段仍显示占位。旧 Grill 工作台已移出默认入口（代码保留）。
+其余是 GE-5..GE-7（B7..B10）的目标。
 
 ## 4. Canonical Assets（复用路线）
 
@@ -134,7 +136,7 @@ GE-0 权威文档收束        → ✅ COMPLETE（2026-08-04，PR #33）
 GE-1 Durable Runtime     → ✅ COMPLETE（内核，2026-08-04，PR #34，migration v8）
 GE-2 Walking Skeleton    → ⚠️ PARTIAL（2026-08-04，骨架测试达成；无运行时 runner / 无 UI；直接推 main）
 GE-3 Idea Intake+Spec    → ✅ COMPLETE（B3 wiring+E2E，PR #42；B4 产品 UI，2026-08-10）
-GE-4 Web Research        → 🟡 WIRING+E2E COMPLETE（B5，2026-08-10，migration v14；产品 UI 待 B6）
+GE-4 Web Research        → ✅ COMPLETE（B5 wiring v14 + B6 产品 UI v15，2026-08-11）
 GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
@@ -165,7 +167,22 @@ migration v14）；Tavily provider（D7）+ SafeWebFetch（V1 安全边界运行
 Tavily live 测试 TAVILY_LIVE 门控。**真实使用需负责人录入 Tavily API key**
 （B6 提供界面；当前可经 search.saveApiKey 通道）。
 
-下一步：**B6**（GE-4 UI）→ **B7/B8**（GE-5：Blueprint executor + PROJECT_READY 原子闭环 + 蓝图 UI）→
+B6 交付记录：2026-08-11，GE-4 产品 UI（设计 `b6-research-ui-design.md`，D-B6-1..9）：
+ResearchRegion 九态相位（区分"本项目无需调研 none"与"尚未调研 null"）+ 资料包查看
+（问题/来源/长事实笔记折叠/结论/basedOnBundleId 版本链）+ 来源排除（project 级 URL
+排除表，migration v15）+ SearchKeyPanel（Tavily key 录入，录入后 worker 自动重驱动）+
+RESEARCH_ESCALATION 五选项人工 Gate；App 中栏按阶段互斥挂载（单轮询循环，D-B6-7）。
+随行：**D-B6-9**——applyArtifactChange 只追加 invalidatedArtifacts 不清空 artifacts 槽位，
+故改创作要求后 bundleRef 仍指作废资料包，新增 ResearchStateDto.bundleInvalidated 与
+stale 相位（优先于 ready），避免作废内容被当现行展示；TD-026-2 销账（重驱动改
+leading+trailing 防抖）；任务/错误码标签补齐；TD-028 登记（真实链路实测发现）。
+
+**Tavily 真实链路已实测**（2026-08-11，负责人提供 key，瞬时使用未持久化）：3 查询 x 5 结果
+共 15 次真实抓取，成功 10；**安全边界零误杀**（仅 1 条 PDF 被 content-type 白名单拒），
+其余为远端 403/404/500；403 与 User-Agent 缺失无关（已实证，不做浏览器伪装）。
+详见 TD-028。**应用内真实使用仍需负责人在 SearchKeyPanel 录入 key**。
+
+下一步：**B7/B8**（GE-5：Blueprint executor + PROJECT_READY 原子闭环 + 蓝图 UI）→
 **B9/B10**（GE-6）。批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。
