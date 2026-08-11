@@ -62,8 +62,13 @@ let idCounter = 0;
 const clock = { now: () => NOW };
 const idGenerator = { generate: () => `id-${++idCounter}` };
 
+/** db 实例 → 文件路径（供 openExecutorDb 复开同一 project.sqlite） */
+const dbPaths = new WeakMap<ProjectDatabase, string>();
+
 function makeDb(): ProjectDatabase {
-  const db = new ProjectDatabase(join(tempDir, `project-${++idCounter}.sqlite`));
+  const dbPath = join(tempDir, `project-${++idCounter}.sqlite`);
+  const db = new ProjectDatabase(dbPath);
+  dbPaths.set(db, dbPath);
   db.getProjectMetadataRepository().create({
     id: 'p1',
     name: '测试项目',
@@ -73,6 +78,15 @@ function makeDb(): ProjectDatabase {
     updatedAt: NOW,
   });
   return db;
+}
+
+/**
+ * TD-023：sync executor 会在 execute 结束时 close() 它拿到的连接，
+ * 所以 ctx.getProjectDb 必须像生产 index.ts getProjectDb 一样每次新开，
+ * 不能把测试断言用的共享连接交出去（会被 executor 关掉）。
+ */
+function openExecutorDb(db: ProjectDatabase): ProjectDatabase {
+  return new ProjectDatabase(dbPaths.get(db)!);
 }
 
 const SECTIONS = {
@@ -110,7 +124,7 @@ function buildRunnerEnv(db: ProjectDatabase) {
   const registry = new ExecutorRegistry();
   const runners = new Map<string, NodeExecutorRunner>();
   registerIntakeExecutors(registry, runners, {
-    getProjectDb: () => db,
+    getProjectDb: () => openExecutorDb(db),
     idGenerator,
     clock,
   });
@@ -405,7 +419,11 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
       // 模拟崩溃窗口重放：直接再次调用 ask-question executor（问题已是 ASKED、无答案）
       const registry = new ExecutorRegistry();
       const runners = new Map<string, NodeExecutorRunner>();
-      registerIntakeExecutors(registry, runners, { getProjectDb: () => db, idGenerator, clock });
+      registerIntakeExecutors(registry, runners, {
+        getProjectDb: () => openExecutorDb(db),
+        idGenerator,
+        clock,
+      });
       const runner = runners.get('ask-question-v1')!;
       const output = (
         runner as unknown as {
@@ -431,6 +449,7 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
   it('6. BLK-2 回归：provider 未配置时任务保持 PENDING，run 不被打成终态', async () => {
     const dbPath = join(tempDir, `project-blk2-${++idCounter}.sqlite`);
     const db = new ProjectDatabase(dbPath);
+    dbPaths.set(db, dbPath);
     db.getProjectMetadataRepository().create({
       id: 'p1',
       name: '测试项目',
@@ -591,6 +610,66 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
       await executeSpecExtract(specDeps, taskId);
       // ask_more 的追问不再写入非 ACTIVE 会话（写入防护）；会话保持零问题
       expect(grillDeps.questionRepo.listBySession(sessionId!)).toHaveLength(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('10. TD-023 回归：intake sync executor 每次执行自开自关连接（含抛错路径）', async () => {
+    const db = makeDb();
+    try {
+      // 追踪 getProjectDb 交出的每条连接是否被 close（泄漏回归：修复前 executor 从不关）
+      const opened: Array<{ closed: boolean }> = [];
+      const registry = new ExecutorRegistry();
+      const runners = new Map<string, NodeExecutorRunner>();
+      registerIntakeExecutors(registry, runners, {
+        getProjectDb: () => {
+          const projDb = openExecutorDb(db);
+          const entry = { closed: false };
+          opened.push(entry);
+          const originalClose = projDb.close.bind(projDb);
+          projDb.close = () => {
+            entry.closed = true;
+            originalClose();
+          };
+          return projDb;
+        },
+        idGenerator,
+        clock,
+      });
+      const baseCtx = {
+        projectId: 'p1',
+        graphRunId: 'run-close',
+        executionId: 'exec-close',
+        activationNo: 1,
+        attemptNo: 1,
+        inputHash: 'close-hash',
+      };
+      const ideaRunner = runners.get('idea-capture-v1') as unknown as {
+        execute: (ctx: unknown) => { artifact?: { artifactId: string } };
+      };
+      const output = ideaRunner.execute({
+        ...baseCtx,
+        nodeId: IDEA_CAPTURE,
+        inputSnapshot: null,
+      });
+      expect(output.artifact?.artifactId).toBeTruthy();
+      expect(opened).toHaveLength(1);
+      expect(opened[0].closed).toBe(true);
+
+      // 抛错路径同样必须关闭：不存在的 session → ask-question 抛错
+      const askRunner = runners.get('ask-question-v1') as unknown as {
+        execute: (ctx: unknown) => unknown;
+      };
+      expect(() =>
+        askRunner.execute({
+          ...baseCtx,
+          nodeId: ASK_QUESTION,
+          inputSnapshot: { artifacts: { idea: { artifactId: 'no-such-session' } } },
+        }),
+      ).toThrow('intake session 不存在');
+      expect(opened).toHaveLength(2);
+      expect(opened[1].closed).toBe(true);
     } finally {
       db.close();
     }

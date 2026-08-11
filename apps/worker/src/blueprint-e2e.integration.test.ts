@@ -78,8 +78,13 @@ let idCounter = 0;
 const clock = { now: () => NOW };
 const idGenerator = { generate: () => `id-${++idCounter}` };
 
+/** db 实例 → 文件路径（供 openExecutorDb 复开同一 project.sqlite） */
+const dbPaths = new WeakMap<ProjectDatabase, string>();
+
 function makeDb(initialIdea: string): ProjectDatabase {
-  const db = new ProjectDatabase(join(tempDir, `project-${++idCounter}.sqlite`));
+  const dbPath = join(tempDir, `project-${++idCounter}.sqlite`);
+  const db = new ProjectDatabase(dbPath);
+  dbPaths.set(db, dbPath);
   db.getProjectMetadataRepository().create({
     id: 'p1',
     name: '测试项目',
@@ -89,6 +94,15 @@ function makeDb(initialIdea: string): ProjectDatabase {
     updatedAt: NOW,
   });
   return db;
+}
+
+/**
+ * TD-023：sync executor 会在 execute 结束时 close() 它拿到的连接，
+ * 所以 ctx.getProjectDb 必须像生产 index.ts getProjectDb 一样每次新开，
+ * 不能把测试断言用的共享连接交出去（会被 executor 关掉）。
+ */
+function openExecutorDb(db: ProjectDatabase): ProjectDatabase {
+  return new ProjectDatabase(dbPaths.get(db)!);
 }
 
 const SECTIONS = {
@@ -143,7 +157,7 @@ function blueprintJson(overrides: Record<string, unknown> = {}): string {
 function buildRunnerEnv(db: ProjectDatabase) {
   const registry = new ExecutorRegistry();
   const runners = new Map<string, NodeExecutorRunner>();
-  const ctx = { getProjectDb: () => db, idGenerator, clock };
+  const ctx = { getProjectDb: () => openExecutorDb(db), idGenerator, clock };
   registerIntakeExecutors(registry, runners, ctx);
   registerResearchExecutors(registry, runners, ctx);
   registerBlueprintExecutors(registry, runners, ctx);

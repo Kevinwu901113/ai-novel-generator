@@ -32,6 +32,7 @@ import {
   RESEARCH_PLAN,
   RESEARCH_VALIDATE,
 } from '@ai-novel/domain';
+import { withProjectDb } from './with-project-db.js';
 
 export interface ResearchExecutorContext {
   getProjectDb(projectId: string): ProjectDatabase;
@@ -133,20 +134,22 @@ function researchDecisionExecute(
 ): NodeOutput {
   const sessionId = artifactIdFromSnapshot(ectx.inputSnapshot, 'idea', true)!;
   const specVersionId = artifactIdFromSnapshot(ectx.inputSnapshot, 'creationSpec', true)!;
-  const projDb = ctx.getProjectDb(ectx.projectId);
-  const session = projDb.getGrillSessionRepository().getById(sessionId);
-  if (!session || session.projectId !== ectx.projectId) {
-    throw new Error('idea session 不存在或不属于本项目');
-  }
-  const specVersion = projDb
-    .getCreationContractVersionRepository()
-    .getById(ectx.projectId, specVersionId);
-  if (!specVersion) throw new Error('creationSpec 版本不存在');
+  const { goal, sectionsJson } = withProjectDb(ctx.getProjectDb, ectx.projectId, (projDb) => {
+    const session = projDb.getGrillSessionRepository().getById(sessionId);
+    if (!session || session.projectId !== ectx.projectId) {
+      throw new Error('idea session 不存在或不属于本项目');
+    }
+    const specVersion = projDb
+      .getCreationContractVersionRepository()
+      .getById(ectx.projectId, specVersionId);
+    if (!specVersion) throw new Error('creationSpec 版本不存在');
+    return { goal: session.goal, sectionsJson: specVersion.sectionsJson };
+  });
 
   const depth = determineResearchDepth({
     projectId: ectx.projectId,
-    idea: session.goal,
-    creationSpecSummary: specSummaryFromSections(specVersion.sectionsJson),
+    idea: goal,
+    creationSpecSummary: specSummaryFromSections(sectionsJson),
     requiresFactuality: false,
     questions: [],
   });
@@ -196,9 +199,11 @@ function researchValidateExecute(
   ectx: NodeExecutionInputContext,
 ): NodeOutput {
   const bundleId = artifactIdFromSnapshot(ectx.inputSnapshot, 'researchBundle', true)!;
-  const projDb = ctx.getProjectDb(ectx.projectId);
-  const bundle = projDb.getResearchBundleRepository().getById(ectx.projectId, bundleId);
-  if (!bundle) throw new Error('researchBundle 不存在');
+  const bundle = withProjectDb(ctx.getProjectDb, ectx.projectId, (projDb) => {
+    const found = projDb.getResearchBundleRepository().getById(ectx.projectId, bundleId);
+    if (!found) throw new Error('researchBundle 不存在');
+    return found;
+  });
   const valid = validateBundleDeterministic(bundle as ResearchBundle);
   return { outcome: { condition: 'research_valid', value: valid ? 'valid' : 'invalid' } };
 }
