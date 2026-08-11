@@ -655,3 +655,54 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    0 来源 → bundle 判 invalid → 回环重试 → 预算耗尽进人工升级 Gate。fake provider 永远
    测不到这条路径（fake 恒成功）。方向：提高 maxResults 冗余，或把校验改为"问题级尽力"
    语义（整包有效即可，不强求每问题都有来源）。
+
+---
+
+## TD-029: B7 对抗式复查随行四项（两路复查——原子性/图语义 ACCEPT + 任务引擎 REWORK，2026-08-11）
+
+**状态**: OPEN
+**优先级**: 中
+**来源**: B7（GE-5 StoryBlueprint 接线）两路独立对抗式复查修复随行
+
+1. **TD-029-1：改写循环无 feedback 承载（D-B7-4 记录偏离）**：`BLUEPRINT_GENERATE.input`
+   未声明 `requiresArtifacts` 含 `storyBlueprint`（拿不到上一版 ref），`blueprint_gate`
+   决策 DTO 也无 feedback 字段。本批次取最小方案，只用 `budget.blueprintRewrite` 计数
+   告知模型"这是第 N 次改写"，改写只能靠计数变异，用户点"请求改写"时无法说明原因。
+   产品上是缺口，由 B8（蓝图 UI）批次连同 feedback 承载一并设计。
+2. **TD-029-2：失效后不自动重置节点，且 escalation 分支的出路受限**：`applyArtifactChange`
+   只追加 `invalidatedArtifacts`、不清空 `artifacts` 槽位，本批次未做失效后自动把
+   `BLUEPRINT_GENERATE` 重置为 pending（属 transition 层改动，超出本批次）。复查发现
+   衍生问题：若蓝图在停留于 `BLUEPRINT_ESCALATION`（改写预算已耗尽）期间失效，
+   `accept_current` 会被 fail-closed 拒绝，而该节点**没有** `request_rewrite` 出口——
+   四个出口只有 `accept_current`（现在拒绝）/ `modify_requirements`（回环到
+   `SPEC_EXTRACT`，代价远高于直接改写）/ `cancel` / `continue_later`，用户此时无法
+   "直接改写重新生成蓝图"，只能走成本更高的 `modify_requirements` 或放弃。
+3. **TD-029-3：`skip_research` 与 `use_current_research` 在图层不可区分（BLK-2，未按首选方案实现）**：
+   `RESEARCH_ESCALATION` 与 `BLUEPRINT_USER_GATE`/`BLUEPRINT_ESCALATION` 一样是两条语义
+   不同的入边（`use_current_research` / `skip_research`），但
+   `BLUEPRINT_GENERATE.input.requiresOutcomes` 只声明了 `[RESEARCH_DECISION]`，未纳入
+   `RESEARCH_ESCALATION` 的 outcome；`prepareTask`（`apps/worker/src/blueprint-executors.ts`）
+   只按 input snapshot 里 `artifacts.researchBundle` 是否存在决定 `researchBundleId`，
+   不读 escalation 的具体决策值。而走到 `RESEARCH_ESCALATION` 时必然已有至少一次成功的
+   `RESEARCH_EXECUTE`，`artifacts.researchBundle` 恒非空——所以用户点"跳过调研"
+   （`skip_research`）后，executor 依旧会把那个校验不通过的 bundle 当正常调研喂进
+   prompt，标成 `conducted:true`，与"沿用当前调研"（`use_current_research`）完全不可
+   区分，用户的"跳过"决定零影响。**已评估的首选修法**：把 `RESEARCH_ESCALATION` 的
+   outcome 纳入 `BLUEPRINT_GENERATE.input.requiresOutcomes`（`computeNodeInputSnapshot`
+   已天然支持"声明了但该轮未产出"读为 `null` 的情形，validator 也只检查节点存在/非
+   自依赖/非重复/产出非 noOut，不要求"必定在所有路径上产出"，结构上可行），但该项
+   属于修改 `packages/domain/src/idea-to-novel-graph.ts` 的节点 input 契约定义，超出
+   本次执行边界（执行者被明确禁止改动该文件的节点/边/预算定义），故未实现，改走
+   保底方案：如实登记本条债务，D-B7-7 设计文档已同步修正措辞。
+   **附带已修复的相邻问题**（不属于本条债务，记录以防混淆）：bundle 存在但
+   `factNotes` 为 0（抓取全失败，escalation 的典型成因）时，过滤器此前会返回
+   "用户已将全部可用来源排除"——没有任何人排除过任何来源，是对模型说假话；已在
+   `blueprint-generate.ts` 的 `classifyResearchInput` 里拆出独立的 `no_sources_gathered`
+   态与 `all_excluded` 区分开，随 B7 本轮修复一并提交（见
+   `packages/task-engine/src/blueprint-generate.test.ts` 对应用例）。
+4. **TD-029-4：Chapter Graph 终止节点同样缺 executor**：`PROJECT_READY` 一类的 project
+   图终止节点已有 `registerProjectTerminalExecutors`（`project-terminal-executors.ts`）
+   兜底；但 Chapter Generation Graph（`CHAPTER_GENERATION_GRAPH_V1`）的终止节点目前
+   没有对应的 executor 注册。GE-6（`createChapterRun` 接线）批次落地 chapter run 入口
+   时需要一并处理，否则章节生成 run 到达终止节点会因 `onExecutorMissing` 静默跳过而
+   卡住，不会真正终态化。
