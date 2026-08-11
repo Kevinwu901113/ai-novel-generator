@@ -90,8 +90,15 @@ function computeBlueprintState(projDb: ProjectDatabase, projectId: string): Blue
 /**
  * StoryBlueprint → 公开 DTO 投影（D-B8-1，镜像 B6 的 toResearchBundleDto）。
  *
- * 逐字段显式构造（不 spread domain 对象）：DTO 用 exact-keys 校验，任何 domain
- * 侧新增字段若被 spread 带出，preload 层校验会整包判否而不是安全忽略。
+ * 逐字段显式构造（不 spread domain 对象）。exact-keys 校验器
+ * （isValidStoryBlueprintDto）是**测试期守卫**——contracts 侧
+ * blueprint-command.test.ts 与本文件的 blueprint-handlers.test.ts 用它锁定本函数
+ * 的投影形状，生产代码零调用点。运行时四层（本函数 → IPC → preload.getBlueprint →
+ * renderer）都不做该校验：preload 对 getBlueprint 是直接透传
+ * （apps/desktop/src/preload/index.ts），没有拦截层。因此 domain 侧若给
+ * StoryBlueprint 新增字段，一旦这里改回 spread，多余字段会原样泄漏到 renderer，
+ * 不会有任何运行时防线兜底判否——逐字段显式构造这条纪律本身就是唯一防线，不得
+ * 改回 spread。
  * accepted 不进本 DTO——它属状态、由 BlueprintStateDto 承载，避免第二事实源。
  */
 export function toStoryBlueprintDto(blueprint: StoryBlueprint): StoryBlueprintDto {

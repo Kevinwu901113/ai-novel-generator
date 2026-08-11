@@ -1847,17 +1847,39 @@ describe('九、Research 无障碍（B6）', () => {
     screen.getAllByRole('button').forEach((btn) => expect(btn).toBeDisabled());
   });
 
-  it('BlueprintGatePanel：改写次数耗尽时禁用改写（第二道防线）', () => {
+  it('BlueprintGatePanel：改写次数耗尽时 request_rewrite 保持可用且文案如实（进入升级决策的唯一入口）', () => {
+    // 独立复查坐实的 blocker：gate→escalation 边要求"耗尽后再提交一次
+    // request_rewrite"才路由进四选项——禁用它 gate 就成死端。
+    const onChoose = vi.fn();
     render(
-      <BlueprintGatePanel busy={false} invalidated={false} rewriteUsed={3} onChoose={vi.fn()} />,
+      <BlueprintGatePanel busy={false} invalidated={false} rewriteUsed={3} onChoose={onChoose} />,
     );
-    expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeDisabled();
+    const escalate = screen.getByRole('button', { name: /不用这版，进入后续决策/ });
+    expect(escalate).toBeEnabled();
+    expect(screen.getByText('重新生成次数已用完')).toBeInTheDocument();
+    fireEvent.click(escalate);
+    expect(onChoose).toHaveBeenCalledWith('request_rewrite');
+  });
+
+  it('BlueprintGatePanel：失效+耗尽叠加时仍有可用出路（不得零操作死锁）', () => {
+    render(
+      <BlueprintGatePanel busy={false} invalidated={true} rewriteUsed={3} onChoose={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /不用这版，进入后续决策/ })).toBeEnabled();
   });
 
   // 52. BlueprintEscalationPanel：四选项；失效时 accept_current 禁用
   it('BlueprintEscalationPanel：四个选项都是原生 button', () => {
     const onChoose = vi.fn();
-    render(<BlueprintEscalationPanel busy={false} invalidated={false} onChoose={onChoose} />);
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={false}
+        contentUnavailable={false}
+        onChoose={onChoose}
+      />,
+    );
     const buttons = screen.getAllByRole('button');
     expect(buttons).toHaveLength(4);
     buttons.forEach((btn) => expect(btn.tagName).toBe('BUTTON'));
@@ -1866,9 +1888,33 @@ describe('九、Research 无障碍（B6）', () => {
   });
 
   it('BlueprintEscalationPanel：失效时 accept_current 禁用且有可读说明', () => {
-    render(<BlueprintEscalationPanel busy={false} invalidated={true} onChoose={vi.fn()} />);
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={true}
+        contentUnavailable={false}
+        onChoose={vi.fn()}
+      />,
+    );
     expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();
     expect(screen.getByText(/创作要求已变更/)).toBeInTheDocument();
+  });
+
+  it('BlueprintEscalationPanel：正文不可见时 accept_current 禁用且有可读说明，其余三项可用', () => {
+    // 独立复查：不能让用户接受一版从未看到的蓝图；其余选项不依赖看到内容
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={false}
+        contentUnavailable={true}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();
+    expect(screen.getByText(/蓝图内容当前无法显示/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修改创作要求/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /稍后再说/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /取消/ })).toBeEnabled();
   });
 
   // 53. BlueprintView：折叠控件用 aria-expanded；结局默认折叠（D-B8-8）

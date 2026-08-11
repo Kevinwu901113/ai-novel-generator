@@ -22,6 +22,17 @@
  * listSourceExclusions 前记下当时的序号，Promise.all 落地后若序号已变
  * （说明期间有写入介入），则丢弃本轮 poll 取到的（可能过期的）列表，交给下一轮
  * poll 自然拿到写入后的正确列表，不产生"先对再错回再对"的闪烁。
+ *
+ * 决策后刷新被互斥锁吞掉修复（复查随行，镜像 journey/useJourney.ts 的
+ * pendingRefreshRef 范式）：chooseEscalation 是 `await applyHumanDecision(...);
+ * await refresh();`——若此刻 1.7s 轮询的某轮恰在途，旧实现里 refresh() 撞上
+ * inFlightGenerationRef 互斥锁会直接 return，什么都不做；随后落地的在途 poll
+ * 带回的是写入前的旧态，escalation 面板原样重现、按钮可点，用户以为没点上再点
+ * 一次导致后端拒绝。修复：撞锁时不再直接放弃，而是把 resolve 函数存进
+ * pendingRefreshWaitersRef 排队；在途请求收尾（finally）时若队列非空，立即补跑
+ * 一轮并在补跑完成后才 resolve 队列里所有等待者。useJourney 同期也已改为
+ * 同款排队 Promise（useBlueprint 的决策 busy 护航依赖其"落地后才 resolve"
+ * 语义），两处实现保持镜像。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -71,14 +82,24 @@ export function useResearch(projectId: string): UseResearchReturn {
   // 竞态防护：projectId 切换时递增（同 useTaskCenter）
   const generationRef = useRef(0);
   const inFlightGenerationRef = useRef<number | null>(null);
+  // 决策后刷新被互斥锁吞掉修复：撞上在途 poll 的 refresh() 调用方在此排队，
+  // 在途请求收尾时补跑一轮，补跑完成后才 resolve 队列里的所有等待者
+  // （而不是撞锁那一刻就放行——见文件头注释）。
+  const pendingRefreshWaitersRef = useRef<Array<() => void>>([]);
 
   // 来源排除写入序号：每次 setSourceExclusion 调用自增，供 refresh() 判断
   // "本轮 poll 取到的 listSourceExclusions 响应是否可能已经过期"（回滚闪烁修复）。
   const exclusionWriteSeqRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
     const currentGen = generationRef.current;
-    if (inFlightGenerationRef.current === currentGen) return;
+    if (inFlightGenerationRef.current === currentGen) {
+      // 在途请求是撞锁之前发出的，其响应必然反映不了本次调用之前刚发生的写入。
+      // 排队等待——在途请求 finally 收尾时会补跑一轮，只有补跑落地后才 resolve。
+      return new Promise<void>((resolve) => {
+        pendingRefreshWaitersRef.current.push(resolve);
+      });
+    }
     inFlightGenerationRef.current = currentGen;
 
     try {
@@ -144,9 +165,24 @@ export function useResearch(projectId: string): UseResearchReturn {
       if (generationRef.current === currentGen) {
         setLoading(false);
         inFlightGenerationRef.current = null;
+        if (pendingRefreshWaitersRef.current.length > 0) {
+          const waiters = pendingRefreshWaitersRef.current;
+          pendingRefreshWaitersRef.current = [];
+          // 补跑一轮；用 ref 转一手避免 refresh 在自身定义体内自引用（同
+          // useJourney 的 refreshRef 写法）。补跑落地（含它自身可能触发的再次
+          // 补跑，因为补跑本身也会先设置好互斥锁再执行）后才 resolve 队列。
+          void refreshRef.current().finally(() => {
+            waiters.forEach((resolve) => resolve());
+          });
+        }
       }
     }
   }, [projectId]);
+
+  // refresh 需要在自身 finally 里再次调用自己（补跑被合并掉的那些请求），用 ref
+  // 转一手避免 useCallback 自引用（镜像 useJourney.ts）。
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
 
   // projectId 切换：清空旧数据、递增 generation 使旧 in-flight 响应失效。
   // 必须先于下方轮询 effect 声明——React 按声明顺序提交 effect，本 effect 的
@@ -157,6 +193,14 @@ export function useResearch(projectId: string): UseResearchReturn {
     inFlightGenerationRef.current = null;
     runRef.current = null;
     exclusionWriteSeqRef.current = 0;
+    // projectId 切出：旧 generation 的在途请求已判过期（finally 里的 generation
+    // 检查会跳过补跑分支），排队等待补跑的调用方不会再被自然唤醒——在此兜底
+    // resolve，避免 chooseEscalation 等调用方的 await refresh() 悬挂不返回。
+    if (pendingRefreshWaitersRef.current.length > 0) {
+      const waiters = pendingRefreshWaitersRef.current;
+      pendingRefreshWaitersRef.current = [];
+      waiters.forEach((resolve) => resolve());
+    }
     setPhase({ kind: 'no-run' });
     setState(null);
     setBundle(null);
@@ -168,6 +212,10 @@ export function useResearch(projectId: string): UseResearchReturn {
 
     return () => {
       generationRef.current += 1;
+      // 卸载同理：排队的 promise 不唤醒会永远挂起（镜像 useJourney）。
+      const unmountWaiters = pendingRefreshWaitersRef.current;
+      pendingRefreshWaitersRef.current = [];
+      unmountWaiters.forEach((resolve) => resolve());
     };
   }, [projectId]);
 

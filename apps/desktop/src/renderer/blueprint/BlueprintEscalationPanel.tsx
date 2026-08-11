@@ -14,12 +14,19 @@ export interface BlueprintEscalationPanelProps {
   readonly busy: boolean;
   /** 蓝图已失效：禁用 accept_current（D-B8-4） */
   readonly invalidated: boolean;
+  /**
+   * 待决策的蓝图正文当前不可见（拉取失败/尚未取到/无 ref）：同样禁用 accept_current
+   * （B8 独立复查坐实）——"就用现在这版蓝图"是对内容的终局决定，内容不可见时放行
+   * 就是让用户接受一版他从未看到的蓝图；其余三个选项不依赖看到内容，保持可用。
+   */
+  readonly contentUnavailable: boolean;
   readonly onChoose: (outcome: string) => void | Promise<void>;
 }
 
 export function BlueprintEscalationPanel({
   busy,
   invalidated,
+  contentUnavailable,
   onChoose,
 }: BlueprintEscalationPanelProps) {
   return (
@@ -30,9 +37,15 @@ export function BlueprintEscalationPanel({
           创作要求已变更，现有这版蓝图不能再被接受。
         </p>
       )}
+      {!invalidated && contentUnavailable && (
+        <p className="blueprint-escalation-notice" role="status">
+          蓝图内容当前无法显示，暂不能直接接受这一版；可先重试加载，或选择其他选项。
+        </p>
+      )}
       <div className="blueprint-escalation-options">
         {BLUEPRINT_ESCALATION_OPTIONS.map((opt) => {
-          const disabled = busy || (invalidated && opt.outcome === 'accept_current');
+          const disabled =
+            busy || ((invalidated || contentUnavailable) && opt.outcome === 'accept_current');
           return (
             <button
               key={opt.outcome}

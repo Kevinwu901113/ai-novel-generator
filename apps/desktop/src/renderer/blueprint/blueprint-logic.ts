@@ -70,11 +70,18 @@ export type BlueprintPhase =
  * 4. gateActive → gate
  * 5. accepted 且有 blueprintRef → ready（项目就绪；即便 run 已 completed 也走这里，
  *    冷启动可直接看到已接受的蓝图，这是 D-B8-3 的验收点）
- * 6. 蓝图已失效且有 ref → stale（非 gate 态下的失效，如等待重新生成）
- * 7. run 已终态 → terminal（blocked/cancelled：蓝图未被接受就结束；带上 blueprintRef
- *    以便只读展示已生成的那一版）
- * 8. 有在途 BLUEPRINT_GENERATE 任务 → generating
+ * 6. run 已终态 → terminal（blocked/cancelled/failed：蓝图未被接受就结束；带上
+ *    blueprintRef 以便只读展示已生成的那一版）。**终态必须先于非 gate 态的失效**
+ *    （B8 独立复查坐实）：失效 run 一旦死掉（后续任务硬失败、二轮流程被取消等），
+ *    "重新生成后才能确认"永远不会发生——那时 stale 横幅是对用户的无限期空等承诺，
+ *    终态说明才是真相；
+ * 7. 有在途 BLUEPRINT_GENERATE 任务 → generating。**先于非 gate 态的失效**：失效后
+ *    的重新生成正在进行时，如实显示"正在生成"，而不是"需要重新生成后才能确认"
+ *    （文案与事实矛盾，且压掉了进行中反馈）；
+ * 8. 蓝图已失效且有 ref → stale（非 gate 态下的失效：等待新要求落盘、重新生成
+ *    尚未排上——run 还活着，重新生成真的会来）
  * 9. 有 blueprintRef（已产出、未接受、gate 尚未激活的瞬时态）→ gate 兜底展示内容
+ *    （决策按钮由 gateActive 单独把关，不随相位出现）
  * 10. 兜底 → not-started
  */
 export function deriveBlueprintPhase(
@@ -95,13 +102,13 @@ export function deriveBlueprintPhase(
   if (state.accepted && state.blueprintRef !== null) {
     return { kind: 'ready', blueprintRef: state.blueprintRef };
   }
-  if (state.blueprintInvalidated && state.blueprintRef !== null) {
-    return { kind: 'stale', blueprintRef: state.blueprintRef };
-  }
   if (terminalStatus !== null) {
     return { kind: 'terminal', status: terminalStatus, blueprintRef: state.blueprintRef };
   }
   if (pendingBlueprintTask) return { kind: 'generating' };
+  if (state.blueprintInvalidated && state.blueprintRef !== null) {
+    return { kind: 'stale', blueprintRef: state.blueprintRef };
+  }
   if (state.blueprintRef !== null) return { kind: 'gate', blueprintRef: state.blueprintRef };
   return { kind: 'not-started' };
 }
@@ -147,6 +154,29 @@ export const BLUEPRINT_GATE_OPTIONS: ReadonlyArray<{
   },
 ];
 
+/**
+ * gate 的 request_rewrite 按钮文案，随剩余次数变化（B8 独立复查坐实的 blocker）：
+ *
+ * Graph 的 gate→escalation 边要求"提交 request_rewrite 且预算已耗尽"才路由进
+ * BLUEPRINT_ESCALATION——**耗尽后再提交一次 request_rewrite 是进入升级四选项的
+ * 唯一入口**（domain transitions 测试自证，且 BLUEPRINT_ESCALATION 无其他入边）。
+ * 故按钮在次数用尽时**绝不能禁用**（禁用会让 gate 变成死端：不满意又不想接受的
+ * 用户没有任何出路；叠加失效时更是零可用操作），而是如实改写文案说明提交后走向。
+ */
+export function gateRewriteOptionCopy(remaining: number): {
+  readonly label: string;
+  readonly description: string;
+} {
+  if (remaining > 0) {
+    const base = BLUEPRINT_GATE_OPTIONS.find((o) => o.outcome === 'request_rewrite');
+    return { label: base?.label ?? '重新生成一版', description: base?.description ?? '' };
+  }
+  return {
+    label: '不用这版，进入后续决策',
+    description: '重新生成次数已用完；提交后由你决定：就用这版、修改创作要求、稍后再说或取消',
+  };
+}
+
 /** BLUEPRINT_ESCALATION 的用户可选项（domain 闭合枚举 EscalationDecision 的投影） */
 export const BLUEPRINT_ESCALATION_OPTIONS: ReadonlyArray<{
   readonly outcome: string;
@@ -161,12 +191,17 @@ export const BLUEPRINT_ESCALATION_OPTIONS: ReadonlyArray<{
   {
     outcome: 'modify_requirements',
     label: '修改创作要求',
-    description: '回到创作要求重新调整；调整后蓝图会按新要求重新生成',
+    // 文案如实（B8 独立复查）：spec 调整额度也有上限（domain spec_revision 预算），
+    // 耗尽时该选项直接把项目路由到"已搁置"终态，且 UI 拿不到该计数无从预警——
+    // 不能许诺"会重新生成"。
+    description: '回到创作要求重新调整；若还有调整额度，蓝图会按新要求重新生成，否则项目将转为搁置',
   },
   {
     outcome: 'continue_later',
     label: '稍后再说',
-    description: '先停在这里；之后回来需重新决定',
+    // 文案如实（B8 独立复查）：continue_later 进 PROJECT_BLOCKED 终态，没有
+    // "回来重新决定"的界面——继续的唯一出路是回"想法"阶段重新开始流程。
+    description: '先停在这里，项目会转为已搁置；之后如需继续，要从"想法"阶段重新开始',
   },
   {
     outcome: 'cancel',
@@ -181,7 +216,9 @@ export function terminalStatusLabel(status: RunTerminalStatusDto): string {
     case 'completed':
       return '项目已就绪';
     case 'blocked':
-      return '项目已搁置，可以继续';
+      // 不写"可以继续"——blocked 是终态，没有原地恢复的界面；如实的继续指引
+      // （回"想法"阶段重新开始）由 BlueprintRegion 的终态卡片给出。
+      return '项目已搁置';
     case 'cancelled':
       return '项目流程已取消';
     case 'failed':

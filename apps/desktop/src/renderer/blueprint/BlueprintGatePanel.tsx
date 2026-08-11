@@ -11,7 +11,7 @@
  * 不含 storyBlueprint，后端无处消费意见，加了就是空承诺。按钮文案如实说明"重新生成一版"。
  */
 
-import { BLUEPRINT_GATE_OPTIONS, rewriteRemaining } from './blueprint-logic';
+import { BLUEPRINT_GATE_OPTIONS, gateRewriteOptionCopy, rewriteRemaining } from './blueprint-logic';
 
 export interface BlueprintGatePanelProps {
   readonly busy: boolean;
@@ -33,16 +33,21 @@ export function BlueprintGatePanel({
     <div className="blueprint-gate">
       <p className="blueprint-gate-prompt">
         {invalidated
-          ? '创作要求已变更，这份蓝图不能再被接受，请重新生成一版。'
+          ? remaining > 0
+            ? '创作要求已变更，这份蓝图不能再被接受，请重新生成一版。'
+            : '创作要求已变更，这份蓝图不能再被接受；重新生成次数已用完，请提交进入后续决策。'
           : '这份蓝图看下来可以吗？确认后项目就进入就绪状态。'}
       </p>
       <div className="blueprint-gate-options">
         {BLUEPRINT_GATE_OPTIONS.map((opt) => {
           const isAccept = opt.outcome === 'accept';
           const isRewrite = opt.outcome === 'request_rewrite';
-          // 失效时禁用接受；改写次数耗尽时禁用改写（此时应已进入 escalation，
-          // 这里是竞态窗口下的第二道防线）
-          const disabled = busy || (isAccept && invalidated) || (isRewrite && remaining === 0);
+          // 失效时禁用接受。改写次数耗尽时 request_rewrite **不禁用**：Graph 的
+          // gate→escalation 边要求"提交 request_rewrite 且预算已耗尽"才路由进
+          // 升级四选项——这次提交是进入 escalation 的唯一入口，禁用它 gate 就成
+          // 死端（B8 独立复查坐实的 blocker）。按钮文案随之如实变化。
+          const disabled = busy || (isAccept && invalidated);
+          const copy = isRewrite ? gateRewriteOptionCopy(remaining) : opt;
           return (
             <button
               key={opt.outcome}
@@ -52,10 +57,12 @@ export function BlueprintGatePanel({
               disabled={disabled}
               aria-disabled={disabled}
             >
-              <strong>{opt.label}</strong>
-              <span>{opt.description}</span>
+              <strong>{copy.label}</strong>
+              <span>{copy.description}</span>
               {isRewrite && (
-                <span className="blueprint-gate-budget">还可以重新生成 {remaining} 次</span>
+                <span className="blueprint-gate-budget">
+                  {remaining > 0 ? `还可以重新生成 ${remaining} 次` : '重新生成次数已用完'}
+                </span>
               )}
             </button>
           );

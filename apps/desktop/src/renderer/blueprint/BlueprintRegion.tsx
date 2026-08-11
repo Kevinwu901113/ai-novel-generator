@@ -40,8 +40,12 @@ export interface BlueprintRegionProps {
   readonly generating: boolean;
   /** 探针首轮尚未返回 */
   readonly stateLoading: boolean;
-  /** 人工决策落地后立即刷新探针（不等下一轮 poll） */
-  readonly onRefresh: () => void;
+  /**
+   * 人工决策落地后的收尾（App 侧：解除用户视图锁定 + 立即刷新探针）。
+   * 返回的 promise 须在探针新状态落地后才 resolve——useBlueprint 用它护航 busy，
+   * 防止按钮以旧态提前重新可点（B8 独立复查）。
+   */
+  readonly onRefresh: () => void | Promise<void>;
 }
 
 export function BlueprintRegion({
@@ -67,7 +71,18 @@ export function BlueprintRegion({
 
       {blueprint.error && (
         <div className="blueprint-error" role="alert">
-          {blueprint.error}
+          <span>{blueprint.error}</span>
+          {/* 正文只在 blueprintRef 变化时拉一次，瞬时故障后必须有重试入口——
+              否则 gate 确认按钮（藏在内容真值分支内）在当前屏永远不可达
+              （B8 独立复查）。 */}
+          <button
+            type="button"
+            className="btn-retry-inline"
+            onClick={blueprint.actions.retryFetch}
+            disabled={blueprint.loading}
+          >
+            重试
+          </button>
         </div>
       )}
 
@@ -109,6 +124,11 @@ export function BlueprintRegion({
                   ? '这次流程结束时蓝图还没有被确认，以下是当时生成的那一版。'
                   : '这次流程结束时蓝图还没有生成。'}
               </p>
+              {phase.status !== 'completed' && (
+                /* 如实的继续指引（B8 独立复查）：blocked/cancelled 是终态，没有
+                   原地恢复的界面——继续的唯一出路是回"想法"阶段重新开始流程。 */
+                <p>如需继续这个项目，请回到"想法"阶段重新开始创作流程。</p>
+              )}
             </div>
           )}
 
@@ -119,11 +139,19 @@ export function BlueprintRegion({
           )}
 
           {phase.kind === 'escalation' && (
-            <BlueprintEscalationPanel
-              busy={blueprint.busy}
-              invalidated={state?.blueprintInvalidated ?? false}
-              onChoose={blueprint.actions.chooseEscalation}
-            />
+            <>
+              {blueprint.decisionError && (
+                <div className="blueprint-error" role="alert">
+                  {blueprint.decisionError}
+                </div>
+              )}
+              <BlueprintEscalationPanel
+                busy={blueprint.busy}
+                invalidated={state?.blueprintInvalidated ?? false}
+                contentUnavailable={blueprint.blueprint === null}
+                onChoose={blueprint.actions.chooseEscalation}
+              />
+            </>
           )}
 
           {showsBlueprintContent(phase) &&
@@ -135,13 +163,29 @@ export function BlueprintRegion({
                 <BlueprintView blueprint={blueprint.blueprint} stale={stale} />
                 {/* 只有 gate 真的在等人工时才给决策按钮——stale 也可能出现在
                     非 gate 态（如等待重新生成），那时提交 gate 决策必然被后端拒。 */}
-                {state?.gateActive === true && (
-                  <BlueprintGatePanel
-                    busy={blueprint.busy}
-                    invalidated={state?.blueprintInvalidated ?? false}
-                    rewriteUsed={state?.rewriteUsed ?? 0}
-                    onChoose={blueprint.actions.chooseGate}
-                  />
+                {state?.gateActive === true ? (
+                  <>
+                    {blueprint.decisionError && (
+                      <div className="blueprint-error" role="alert">
+                        {blueprint.decisionError}
+                      </div>
+                    )}
+                    <BlueprintGatePanel
+                      busy={blueprint.busy}
+                      invalidated={state?.blueprintInvalidated ?? false}
+                      rewriteUsed={state?.rewriteUsed ?? 0}
+                      onChoose={blueprint.actions.chooseGate}
+                    />
+                  </>
+                ) : (
+                  phase.kind === 'gate' && (
+                    /* P9 兜底展示窗口（如 escalation 决策刚提交、后端在推进）：
+                       没有决策按钮是正确的，但要说明现状，否则像死机
+                       （B8 独立复查）。 */
+                    <div className="blueprint-status" role="status" aria-live="polite">
+                      蓝图流程正在推进，稍候会自动更新。
+                    </div>
+                  )
                 )}
               </>
             ) : (

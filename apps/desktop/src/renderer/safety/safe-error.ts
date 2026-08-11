@@ -8,6 +8,7 @@
  * - 不在 production console 输出原始错误
  */
 
+import { decodeErrorCode, stripErrorCode } from '@ai-novel/contracts';
 import { ERROR_CODE_LABELS } from './error-code-labels';
 
 export interface SafeUserError {
@@ -56,14 +57,28 @@ function truncateMessage(msg: string): string | null {
 
 /**
  * 从错误对象中提取 code。
+ *
+ * 优先读取 `.code` 属性（同进程内直接构造的错误、测试用例）。
+ * Electron 的 ipcMain.handle 跨 IPC 边界只回传 error.toString()，`.code`
+ * 属性在 preload 侧就已丢失——这种情况下从 message 里解码 `[CODE:...]`
+ * 段兜底（main 侧 forwardToWorker 用 encodeErrorCode 编码，见 main/index.ts）。
  */
 function extractCode(err: unknown): string | null {
   if (err && typeof err === 'object' && 'code' in err) {
     const code = (err as { code?: unknown }).code;
-    if (typeof code === 'string') {
+    if (typeof code === 'string' && code.length > 0) {
       return code;
     }
   }
+
+  const message = extractMessage(err);
+  if (message) {
+    const decoded = decodeErrorCode(message);
+    if (decoded) {
+      return decoded;
+    }
+  }
+
   return null;
 }
 
@@ -108,9 +123,15 @@ export function toSafeUserError(error: unknown, fallback: string): SafeUserError
     return { code, message: ERROR_CODE_LABELS[code] };
   }
 
-  // 检查消息是否安全
+  // 检查消息是否安全（先剥离 [CODE:...] 编码段——它绝不能出现在展示文案里，
+  // 敏感信息检查也必须按剥离后的文本跑，而不是原始 message）
   if (rawMessage && rawMessage.trim().length > 0) {
-    const trimmed = rawMessage.trim();
+    const trimmed = stripErrorCode(rawMessage);
+
+    // 剥离编码段后无剩余文本 → 使用 fallback
+    if (trimmed.length === 0) {
+      return { code, message: fallback };
+    }
 
     // 包含敏感信息 → 使用 fallback
     if (containsSensitiveInfo(trimmed)) {

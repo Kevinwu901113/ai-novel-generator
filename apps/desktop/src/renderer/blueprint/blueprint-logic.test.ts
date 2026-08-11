@@ -25,6 +25,7 @@ import {
   rewriteRemaining,
   showsBlueprintContent,
   terminalStatusLabel,
+  gateRewriteOptionCopy,
 } from './blueprint-logic';
 
 function state(overrides: Partial<BlueprintStateDto> = {}): BlueprintStateDto {
@@ -203,7 +204,7 @@ describe('闭合枚举投影', () => {
 describe('terminalStatusLabel / rewriteRemaining', () => {
   it('三终态各自文案（D-B8-3）', () => {
     expect(terminalStatusLabel('completed')).toBe('项目已就绪');
-    expect(terminalStatusLabel('blocked')).toBe('项目已搁置，可以继续');
+    expect(terminalStatusLabel('blocked')).toBe('项目已搁置');
     expect(terminalStatusLabel('cancelled')).toBe('项目流程已取消');
     expect(terminalStatusLabel('failed')).toBe('项目流程失败');
   });
@@ -213,5 +214,57 @@ describe('terminalStatusLabel / rewriteRemaining', () => {
     expect(rewriteRemaining(0)).toBe(3);
     expect(rewriteRemaining(3)).toBe(0);
     expect(rewriteRemaining(5)).toBe(0);
+  });
+});
+
+describe('B8 独立复查回归：相位优先级', () => {
+  const base = {
+    runId: 'run-1',
+    blueprintRef: 'bp-1',
+    accepted: false,
+    blueprintInvalidated: true,
+    gateActive: false,
+    escalationActive: false,
+    rewriteUsed: 1,
+  };
+
+  it('终态 × 失效叠加 → terminal（终态优先，死 run 不得显示"等待重新生成"）', () => {
+    // 复查 B/D 独立坐实：失效 run 死掉后（后续任务硬失败、二轮流程被取消等），
+    // stale 横幅"需要重新生成后才能确认"是无限期空等承诺；旧序 stale 压过
+    // terminal，此用例在旧实现下为红。
+    for (const status of ['failed', 'cancelled', 'blocked'] as const) {
+      const phase = deriveBlueprintPhase(base, status, false);
+      expect(phase.kind).toBe('terminal');
+      expect(phase.kind === 'terminal' && phase.blueprintRef).toBe('bp-1');
+    }
+  });
+
+  it('失效 × 重新生成在途 → generating（进行中反馈优先，不显示"需要重新生成"的矛盾文案）', () => {
+    expect(deriveBlueprintPhase(base, null, true).kind).toBe('generating');
+  });
+
+  it('失效 × 非终态 × 无在途生成 → stale（run 活着，重新生成真的会来）', () => {
+    expect(deriveBlueprintPhase(base, null, false).kind).toBe('stale');
+  });
+
+  it('gate 激活 × 失效 → stale 且不受终态影响（gate 等人工时 run 不可能是终态）', () => {
+    expect(deriveBlueprintPhase({ ...base, gateActive: true }, null, false).kind).toBe('stale');
+  });
+});
+
+describe('gateRewriteOptionCopy（耗尽后的升级入口，B8 独立复查 blocker 回归）', () => {
+  it('还有次数 → 与 BLUEPRINT_GATE_OPTIONS 基础文案一致', () => {
+    const base = BLUEPRINT_GATE_OPTIONS.find((o) => o.outcome === 'request_rewrite');
+    expect(gateRewriteOptionCopy(3)).toEqual({
+      label: base?.label,
+      description: base?.description,
+    });
+  });
+
+  it('次数用尽 → 文案如实说明提交后进入升级决策（不禁用、不再叫"重新生成"）', () => {
+    const copy = gateRewriteOptionCopy(0);
+    expect(copy.label).not.toContain('重新生成一版');
+    expect(copy.description).toContain('重新生成次数已用完');
+    expect(copy.description).toContain('由你决定');
   });
 });

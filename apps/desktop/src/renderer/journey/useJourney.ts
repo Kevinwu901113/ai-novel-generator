@@ -48,7 +48,12 @@ export interface UseJourneyReturn {
   readonly frontierStage: JourneyStage;
   readonly loading: boolean;
   readonly error: string | null;
-  readonly refresh: () => void;
+  /**
+   * 立即刷新。返回的 promise 在**本次刷新的状态真正落地后**才 resolve——若撞上
+   * 在途 poll（其结果必然是写入前的旧态），会排队等补跑那轮完成。调用方
+   * （useBlueprint 的决策 busy 护航）依赖这一语义，不得提前 resolve。
+   */
+  readonly refresh: () => Promise<void>;
 }
 
 export function useJourney(projectId: string | null): UseJourneyReturn {
@@ -64,15 +69,17 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
   const inFlightGenerationRef = useRef<number | null>(null);
   // 写入后的刷新请求若撞上在途 poll，会被互斥锁直接丢掉——而那条在途请求是在
   // 写入之前发出的，拿回来的必然是旧态，用户点完按钮要等满一个轮询周期才看到
-  // 变化。故记一个"补一次"标记，在途请求收尾时立即再跑一轮。
-  const pendingRefreshRef = useRef(false);
+  // 变化。故排队等待：在途请求收尾时立即补跑一轮，排队的 promise 在**补跑那轮
+  // 落地后**才 resolve（useBlueprint 的决策 busy 护航依赖该语义）。
+  const pendingWaitersRef = useRef<Array<() => void>>([]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<void> => {
     if (projectId === null) return;
     const currentGen = generationRef.current;
     if (inFlightGenerationRef.current === currentGen) {
-      pendingRefreshRef.current = true;
-      return;
+      return new Promise<void>((resolve) => {
+        pendingWaitersRef.current.push(resolve);
+      });
     }
     inFlightGenerationRef.current = currentGen;
 
@@ -119,9 +126,15 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
       if (generationRef.current === currentGen) {
         setLoading(false);
         inFlightGenerationRef.current = null;
-        if (pendingRefreshRef.current) {
-          pendingRefreshRef.current = false;
-          void refreshRef.current();
+        if (pendingWaitersRef.current.length > 0) {
+          // 排队者要的是"写入后的新态"，本轮（写入前发出）满足不了——补跑一轮，
+          // 落地后（无论成败）唤醒当时已在排队的这批；补跑期间新加入的排队者
+          // 会在补跑那轮的 finally 里再触发下一轮。
+          const waiters = pendingWaitersRef.current;
+          pendingWaitersRef.current = [];
+          void refreshRef.current().finally(() => {
+            for (const wake of waiters) wake();
+          });
         }
       }
     }
@@ -137,7 +150,12 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
   useEffect(() => {
     generationRef.current += 1;
     inFlightGenerationRef.current = null;
-    pendingRefreshRef.current = false;
+    // 项目切换/卸载时旧 generation 的 finally 不会再执行补跑，排队者若不在这里
+    // 唤醒会永远挂起（await 它的决策 busy 就永远收不了尾）。直接唤醒：调用方的
+    // generation 守卫会自行丢弃过期结果。
+    const staleWaiters = pendingWaitersRef.current;
+    pendingWaitersRef.current = [];
+    for (const wake of staleWaiters) wake();
     setRun(null);
     setProgress(null);
     setBlueprintState(null);
@@ -146,6 +164,10 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
     setLoading(false);
     return () => {
       generationRef.current += 1;
+      // 卸载同理：不唤醒的话排队的 promise 会永远挂起。
+      const unmountWaiters = pendingWaitersRef.current;
+      pendingWaitersRef.current = [];
+      for (const wake of unmountWaiters) wake();
     };
   }, [projectId]);
 
@@ -177,9 +199,7 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
     };
   }, [projectId, isDocumentVisible, refresh]);
 
-  const manualRefresh = useCallback(() => {
-    void refresh();
-  }, [refresh]);
+  const manualRefresh = useCallback(() => refresh(), [refresh]);
 
   return { run, progress, blueprintState, frontierStage, loading, error, refresh: manualRefresh };
 }

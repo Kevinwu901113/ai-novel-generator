@@ -164,8 +164,10 @@ describe('BlueprintRegion 相位渲染', () => {
   it('run 终态且从未生成蓝图 → 只有终态文案', async () => {
     setupDesktop();
     await renderRegion({ state: state({ blueprintRef: null }), terminalStatus: 'blocked' });
-    expect(screen.getByText('项目已搁置，可以继续')).toBeInTheDocument();
+    expect(screen.getByText('项目已搁置')).toBeInTheDocument();
     expect(screen.getByText('这次流程结束时蓝图还没有生成。')).toBeInTheDocument();
+    // 如实的继续指引（独立复查 D4）：blocked/cancelled 没有原地恢复界面
+    expect(screen.getByText(/回到"想法"阶段重新开始/)).toBeInTheDocument();
   });
 
   it('run 终态但已生成过蓝图 → 终态文案 + 只读展示那一版，不给决策按钮', async () => {
@@ -295,5 +297,126 @@ describe('BlueprintRegion 正文拉取（D-B8-5）', () => {
     await waitFor(() => {
       expect(screen.getByText('蓝图内容暂时不可用。')).toBeInTheDocument();
     });
+  });
+});
+
+describe('B8 独立复查回归：busy 护航 / 决策错误不残留 / 正文重试 / 兜底窗口说明', () => {
+  it('决策 busy 须护到 onRefresh 的 promise 落地——期间按钮保持禁用，不得以旧态提前重新可点', async () => {
+    setupDesktop();
+    let releaseRefresh: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const onRefresh = vi.fn(() => gate);
+    await act(async () => {
+      render(
+        <BlueprintRegion
+          projectId={PROJECT_ID}
+          state={state({ gateActive: true })}
+          terminalStatus={null}
+          generating={false}
+          stateLoading={false}
+          onRefresh={onRefresh}
+        />,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeEnabled();
+    });
+
+    // 点击后 applyHumanDecision 已成功，但探针刷新（onRefresh promise）未落地：
+    // 旧态仍在渲染，若 busy 提前放开，双击第二下必然撞后端拒绝（复查 A1 blocker）
+    await act(async () => {
+      screen.getByRole('button', { name: /接受这份蓝图/ }).click();
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    // 决策按钮全部保持禁用（正文里的章节展开等内容交互不受 busy 约束）
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeDisabled();
+
+    await act(async () => {
+      releaseRefresh();
+      await gate;
+    });
+    // promise 落地后 busy 才释放（此时真实场景里新态已随探针落地）
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeEnabled();
+  });
+
+  it('决策错误只随决策面板存在——相位切走（决策其实已成功）后不得残留在新界面上', async () => {
+    const api = setupDesktop();
+    (api.graph.applyHumanDecision as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('提交失败'),
+    );
+    const props = {
+      projectId: PROJECT_ID,
+      terminalStatus: null,
+      generating: false,
+      stateLoading: false,
+      onRefresh: vi.fn(),
+    };
+    let rerender: (ui: React.ReactElement) => void = () => {};
+    await act(async () => {
+      const result = render(<BlueprintRegion {...props} state={state({ gateActive: true })} />);
+      rerender = result.rerender;
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeEnabled();
+    });
+    await act(async () => {
+      screen.getByRole('button', { name: /接受这份蓝图/ }).click();
+    });
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+
+    // 探针随后带回新态：决策其实已成功，相位进 ready——错误横幅必须随面板消失
+    // （复查 A1：修复前"项目就绪"上永远顶着"请刷新后重新确认"）
+    await act(async () => {
+      rerender(<BlueprintRegion {...props} state={state({ gateActive: false, accepted: true })} />);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('✓ 蓝图已确认，项目就绪')).toBeInTheDocument();
+  });
+
+  it('正文拉取失败 → 错误提示带"重试"，点击后重新拉取并恢复（gate 确认不再永久不可达）', async () => {
+    const api = setupDesktop();
+    (api.blueprint.getBlueprint as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('worker 忙'))
+      .mockResolvedValueOnce(blueprintDto());
+    await renderRegion({ state: state({ gateActive: true }) });
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toBeInTheDocument();
+    // 拉取失败时 gate 按钮不可达（fail-closed 正确），重试是唯一恢复入口（复查 D6）
+    expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('button', { name: '重试' }).click();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+    });
+    expect(api.blueprint.getBlueprint).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeEnabled();
+  });
+
+  it('escalation × 正文拉取失败 → accept_current 禁用，其余选项可用（不得拍板看不见的内容）', async () => {
+    const api = setupDesktop();
+    (api.blueprint.getBlueprint as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('worker 忙'),
+    );
+    await renderRegion({ state: state({ escalationActive: true }) });
+    await screen.findByRole('alert');
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /修改创作要求/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /取消/ })).toBeEnabled();
+  });
+
+  it('P9 兜底展示窗口（有 ref、gate 未激活、非失效非终态）→ 给"正在推进"说明，不像死机', async () => {
+    setupDesktop();
+    await renderRegion({ state: state({ gateActive: false }) });
+    await waitFor(() => {
+      expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+    });
+    expect(screen.getByText(/蓝图流程正在推进/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
   });
 });

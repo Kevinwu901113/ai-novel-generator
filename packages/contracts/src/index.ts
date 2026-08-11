@@ -101,6 +101,41 @@ export interface AppError {
   readonly message: string;
 }
 
+// ── IPC 错误码传输编码 ────────────────────────────────────────────
+//
+// Electron 的 ipcMain.handle 只把 handler 抛出错误的 `error.toString()`
+// 回传给调用方（preload → renderer）：抛出的 Error 上挂的自定义 `.code`
+// 属性在这一跳就已丢失，renderer 侧拿到的是重建的纯 Error，message 形如：
+//   Error invoking remote method '<channel>': Error: <原 message>
+// （Electron 43.2.0 实测确认。）因此 main 侧改为把 code 编进 message 文本
+// 传输，renderer 侧用固定格式的正则解码。编码/解码格式集中定义于此，
+// main 与 renderer 共用同一份运行时实现，避免两处字面量各自维护而漂移。
+
+/** 编码段格式：`[CODE:XXX_YYY]`，仅允许大写字母、数字、下划线。 */
+const ERROR_CODE_PATTERN = /\[CODE:([A-Z0-9_]+)\]/;
+
+/** 把错误码编入 message，供跨 IPC 边界传输（Electron 会丢失 Error 的自定义属性）。 */
+export function encodeErrorCode(code: string, message: string): string {
+  return `[CODE:${code}] ${message}`;
+}
+
+/**
+ * 从（可能被 Electron 包裹过的）message 中解码出错误码。
+ * 未命中编码段，或编码段格式非法（含小写字母等），返回 null。
+ */
+export function decodeErrorCode(message: string): string | null {
+  const match = ERROR_CODE_PATTERN.exec(message);
+  return match ? match[1] : null;
+}
+
+/**
+ * 从 message 中剥离 `[CODE:...]` 编码段，返回剩余展示文案（首尾空白已清理）。
+ * 未命中编码段时原样返回（仅 trim），不改变既有展示行为。
+ */
+export function stripErrorCode(message: string): string {
+  return message.replace(ERROR_CODE_PATTERN, '').trim();
+}
+
 // ── 健康检查 ──────────────────────────────────────────────────────
 
 /** 健康检查响应 */

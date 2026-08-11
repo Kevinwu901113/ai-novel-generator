@@ -253,4 +253,32 @@ describe('deriveFrontierStage（D-B8-2/D-B8-3：阶段派生上提到 App）', (
       }),
     ).toBe('idea');
   });
+
+  // B8 独立复查坐实：人工决策提交后、异步驱动写入 terminalStatus 之前，存在
+  // "终态节点（stage 'done'）active 而 run 仍非终态"的真实窗口。'done' 不是用户
+  // 阶段，直接投影会得到 'manuscript' 并被 maxFrontierStage 单调锁死到会话结束
+  // （右栏"当前阶段：成稿"+ JourneyNav 成稿项永久点亮）。
+  it("终态节点在途窗口（stage 'done' active、run 非终态）+ 蓝图 artifact → blueprint，绝不投影 manuscript", () => {
+    for (const nodeId of ['PROJECT_READY', 'PROJECT_CANCELLED', 'PROJECT_BLOCKED']) {
+      expect(
+        deriveFrontierStage({
+          run: RUN,
+          progress: progress([{ nodeId, stage: 'done', status: 'active' }]),
+          hasBlueprintArtifact: true,
+          hasResearchArtifact: true,
+        }),
+      ).toBe('blueprint');
+    }
+  });
+
+  it('终态节点在途窗口 + 无蓝图 artifact → null（保留上一阶段，等 terminalStatus 落地定论）', () => {
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: progress([{ nodeId: 'PROJECT_CANCELLED', stage: 'done', status: 'active' }]),
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: true,
+      }),
+    ).toBe(null);
+  });
 });

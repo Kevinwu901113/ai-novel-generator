@@ -105,7 +105,12 @@ export function deriveViewStage(input: ViewStageInput): JourneyStage {
  *    有 storyBlueprint → 'blueprint'；否则有 researchBundle → 'research'；否则 'idea'。
  *    activeNodes 在终态恒空，不能作为依据；
  * 3. 无 progress（尚未取到）→ null，调用方保留上一次已知阶段，避免瞬时闪烁；
- * 4. 否则取 waiting_for_human 节点（没有则第一个 active 节点）的 stage 投影；
+ * 4. 否则取 waiting_for_human 节点（没有则第一个 active 节点）的 stage 投影——
+ *    **终态节点（stage 'done'：PROJECT_READY/BLOCKED/CANCELLED）除外**：人工决策
+ *    提交后、异步驱动把 terminalStatus 写入前，存在一个"终态节点 active 而
+ *    run 还没有 terminalStatus"的真实窗口（B8 独立复查坐实）。'done' 不是用户
+ *    阶段，直接投影会得到 'manuscript' 并被 maxFrontierStage 单调锁死到会话结束；
+ *    该窗口按规则 2 的 artifact 推导处理；
  * 5. 无任何 active 节点（节点间过渡瞬时态）→ null，同样保留上一次已知阶段。
  */
 export interface FrontierStageInput {
@@ -126,8 +131,19 @@ export function deriveFrontierStage(input: FrontierStageInput): JourneyStage | n
     return 'idea';
   }
   if (!progress) return null;
-  const waiting = progress.activeNodes.find((n) => n.status === 'waiting_for_human');
-  const frontier = waiting ?? progress.activeNodes[0];
-  if (!frontier) return null;
+  const journeyNodes = progress.activeNodes.filter((n) => n.stage !== 'done');
+  const waiting = journeyNodes.find((n) => n.status === 'waiting_for_human');
+  const frontier = waiting ?? journeyNodes[0];
+  if (!frontier) {
+    if (progress.activeNodes.length > 0 && hasBlueprintArtifact) {
+      // 只剩终态节点在途（terminalStatus 尚未写入的窗口）且蓝图已产出：
+      // 按 artifact 推导，与终态分支同规则。
+      return 'blueprint';
+    }
+    // 其余情况（纯节点间过渡，或终态窗口但无蓝图 artifact——此时探针尚未拉
+    // 调研态，无从区分 research/idea）→ 保留上一阶段，等 terminalStatus 落地
+    // 后由规则 2 定论，避免一次假回退闪烁。
+    return null;
+  }
   return journeyStageOf(frontier.stage);
 }

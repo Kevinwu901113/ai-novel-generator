@@ -92,6 +92,19 @@ export function App() {
     setUserSelectedStage(stage);
   }, []);
 
+  // 蓝图人工决策落地后的收尾（B8 独立复查坐实的 blocker 修复）：
+  // 1. 解除用户视图锁定——决策可能把 frontier 带去别处（modify_requirements 回
+  //    访谈重出澄清问题），若 userSelectedStage 仍锁在 'blueprint'，中栏会继续
+  //    挂着一份无按钮无说明的旧蓝图，用户点完"修改创作要求"像什么都没发生，
+  //    而新的澄清问题在没被挂载的 Region 里干等；
+  // 2. 立即刷新探针，且把"新状态落地后才 resolve"的 promise 交回 useBlueprint，
+  //    供决策 busy 护航（防止按钮以旧态提前重新可点）。
+  const journeyRefresh = journey.refresh;
+  const handleBlueprintDecisionSettled = useCallback(async () => {
+    setUserSelectedStage(null);
+    await journeyRefresh();
+  }, [journeyRefresh]);
+
   // 展示阶段（决定中栏挂载哪个 Region）+ 已到达阶段集合（JourneyNav 可点击范围）。
   const reachedStages = reachedStagesUpTo(maxFrontierStage);
   const viewStage = deriveViewStage({ frontierStage, userSelectedStage, reachedStages });
@@ -425,7 +438,7 @@ export function App() {
                   terminalStatus={journey.run?.terminalStatus ?? null}
                   generating={hasActiveBlueprintGenerate(journey.progress)}
                   stateLoading={journey.loading}
-                  onRefresh={journey.refresh}
+                  onRefresh={handleBlueprintDecisionSettled}
                 />
               ) : viewStage === 'research' ? (
                 <ResearchRegion

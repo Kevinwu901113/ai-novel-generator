@@ -516,6 +516,78 @@ describe('App：蓝图 UI 可达性（B8，D-B8-2/D-B8-3）', () => {
     });
     expect(screen.getByText('信最终没有送达')).toBeInTheDocument();
   });
+
+  // B8 独立复查补齐（D5）：escalation 相位此前只有组件级手喂 state 测试，
+  // 而"分层测试全绿掩盖功能不可达"正是本项目最高发缺陷族——补 App 级真分流。
+  it('frontier 停在 BLUEPRINT_ESCALATION 时，四选项与待决策正文经 App 真实分流可达', async () => {
+    const api = createMockDesktopAPI({
+      graph: {
+        listRuns: vi.fn().mockResolvedValue([BLUEPRINT_RUN]),
+        createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+        createChapterRun: vi.fn(),
+        getRunProgress: vi.fn().mockResolvedValue({
+          activeNodes: [
+            { nodeId: 'BLUEPRINT_ESCALATION', stage: 'blueprint', status: 'waiting_for_human' },
+          ],
+          possibleNextNodes: [],
+        }),
+        applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      },
+      blueprint: {
+        getState: vi
+          .fn()
+          .mockResolvedValue(blueprintStateDto({ escalationActive: true, rewriteUsed: 3 })),
+        getBlueprint: vi.fn().mockResolvedValue(blueprintDto()),
+      },
+    });
+    await createProjectAndWaitForJourney(api);
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    // 四选项 + 同屏正文（用户拍板前必须看得到他要拍板的那个东西）
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /修改创作要求/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /稍后再说/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /取消/ })).toBeEnabled();
+  });
+
+  // B8 独立复查补齐（D5）：67a2e71 修的"终态 run 的已生成蓝图不可达"此前只有
+  // 组件级测试兜底——补 App 级冷启动回归。
+  it('run 已 cancelled 但生成过蓝图的冷启动下，终态说明 + 只读正文可达', async () => {
+    const api = createMockDesktopAPI({
+      graph: {
+        listRuns: vi.fn().mockResolvedValue([{ ...BLUEPRINT_RUN, terminalStatus: 'cancelled' }]),
+        createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+        createChapterRun: vi.fn(),
+        getRunProgress: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+        applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      },
+      blueprint: {
+        getState: vi.fn().mockResolvedValue(blueprintStateDto()),
+        getBlueprint: vi.fn().mockResolvedValue(blueprintDto()),
+      },
+    });
+    await createProjectAndWaitForJourney(api);
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    expect(screen.getByText('项目流程已取消')).toBeInTheDocument();
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    // 只读回看：不得出现任何决策按钮
+    expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /就用现在这版蓝图/ })).not.toBeInTheDocument();
+  });
 });
 
 // ── 测试 ─────────────────────────────────────────────────────────
