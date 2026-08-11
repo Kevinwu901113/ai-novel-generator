@@ -97,10 +97,22 @@ describe('deriveBlueprintPhase', () => {
     expect(deriveBlueprintPhase(state(), 'blocked', false)).toEqual({
       kind: 'terminal',
       status: 'blocked',
+      blueprintRef: null,
     });
     expect(deriveBlueprintPhase(state(), 'cancelled', false)).toEqual({
       kind: 'terminal',
       status: 'cancelled',
+      blueprintRef: null,
+    });
+  });
+
+  // 自查发现的同族缺口：蓝图已生成、只是没确认就被搁置，若终态只给一句横幅，
+  // 那一版内容就又"存在却不可达"。terminal 带上 ref，只读展示。
+  it('终态但已生成过蓝图 → terminal 带 blueprintRef（只读回看）', () => {
+    expect(deriveBlueprintPhase(state({ blueprintRef: 'bp-1' }), 'blocked', false)).toEqual({
+      kind: 'terminal',
+      status: 'blocked',
+      blueprintRef: 'bp-1',
     });
   });
 
@@ -129,7 +141,13 @@ describe('showsBlueprintContent', () => {
     expect(showsBlueprintContent({ kind: 'generating' })).toBe(false);
     expect(showsBlueprintContent({ kind: 'no-run' })).toBe(false);
     expect(showsBlueprintContent({ kind: 'not-started' })).toBe(false);
-    expect(showsBlueprintContent({ kind: 'terminal', status: 'blocked' })).toBe(false);
+    expect(showsBlueprintContent({ kind: 'terminal', status: 'blocked', blueprintRef: null })).toBe(
+      false,
+    );
+    // 终态但有已生成的蓝图 → 只读展示
+    expect(
+      showsBlueprintContent({ kind: 'terminal', status: 'blocked', blueprintRef: 'bp-1' }),
+    ).toBe(true);
   });
 });
 

@@ -9,7 +9,8 @@
  * - gate：BlueprintView + BlueprintGatePanel（accept / request_rewrite）；
  * - escalation：BlueprintEscalationPanel 四选项；
  * - ready：BlueprintView + ProjectReadyPanel（项目就绪）；
- * - terminal：run 已终态但蓝图未被接受（blocked/cancelled）。
+ * - terminal：run 已终态但蓝图未被接受（blocked/cancelled）——若当时已生成过一版，
+ *   终态说明之外仍只读展示那一版内容。
  *
  * D-B8-2：本 Region **不回报阶段**——蓝图态与 run 位置由 App 的旅程探针
  * （useJourney）统一读取并以 props 下发，Region 只渲染与拉自己的正文
@@ -102,7 +103,11 @@ export function BlueprintRegion({
           {phase.kind === 'terminal' && (
             <div className="blueprint-info-card" role="status">
               <p>{terminalStatusLabel(phase.status)}</p>
-              <p>这次流程结束时蓝图还没有被确认。</p>
+              <p>
+                {phase.blueprintRef !== null
+                  ? '这次流程结束时蓝图还没有被确认，以下是当时生成的那一版。'
+                  : '这次流程结束时蓝图还没有生成。'}
+              </p>
             </div>
           )}
 

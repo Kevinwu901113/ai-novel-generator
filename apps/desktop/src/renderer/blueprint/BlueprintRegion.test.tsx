@@ -148,10 +148,22 @@ describe('BlueprintRegion 相位渲染', () => {
     expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
   });
 
-  it('run 终态但蓝图未接受 → terminal 文案', async () => {
+  it('run 终态且从未生成蓝图 → 只有终态文案', async () => {
     setupDesktop();
     await renderRegion({ state: state({ blueprintRef: null }), terminalStatus: 'blocked' });
     expect(screen.getByText('项目已搁置，可以继续')).toBeInTheDocument();
+    expect(screen.getByText('这次流程结束时蓝图还没有生成。')).toBeInTheDocument();
+  });
+
+  it('run 终态但已生成过蓝图 → 终态文案 + 只读展示那一版，不给决策按钮', async () => {
+    setupDesktop();
+    await renderRegion({ terminalStatus: 'cancelled' });
+    await waitFor(() => {
+      expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+    });
+    expect(screen.getByText('项目流程已取消')).toBeInTheDocument();
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
   });
 
   it('gate 未激活时不给决策按钮（提交必被后端拒）', async () => {

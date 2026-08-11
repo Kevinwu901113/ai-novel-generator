@@ -36,7 +36,10 @@ export function hasActiveBlueprintGenerate(progress: GraphProgressProjectionDto 
  * - gate：BLUEPRINT_USER_GATE 等待人工确认（accept / request_rewrite）；
  * - escalation：改写预算耗尽，BLUEPRINT_ESCALATION 等待人工决策（四选项）；
  * - ready：蓝图已被接受，项目就绪（run 通常已 completed）；
- * - terminal：run 已终态但蓝图未被接受（blocked/cancelled，或 completed 的兜底）；
+ * - terminal：run 已终态但蓝图未被接受（blocked/cancelled，或 completed 的兜底）。
+ *   **仍带 blueprintRef**：这一版蓝图已经生成出来了，只是没被确认就结束——不给看
+ *   就又是一次"内容存在却不可达"（D-B6-10/D-B8-3 同族）。终态说明 + 只读展示，
+ *   不给决策按钮（gate 没在等人工，提交必被后端拒）；
  * - not-started：run 存在但蓝图尚未产出（上游阶段仍在进行）。
  */
 export type BlueprintPhase =
@@ -47,7 +50,12 @@ export type BlueprintPhase =
   | { readonly kind: 'gate'; readonly blueprintRef: string }
   | { readonly kind: 'escalation' }
   | { readonly kind: 'ready'; readonly blueprintRef: string }
-  | { readonly kind: 'terminal'; readonly status: RunTerminalStatusDto };
+  | {
+      readonly kind: 'terminal';
+      readonly status: RunTerminalStatusDto;
+      /** 终态时若已产出蓝图则非空——只读展示用 */
+      readonly blueprintRef: string | null;
+    };
 
 /**
  * 派生蓝图相位。优先级（自上而下，命中即返回）：
@@ -60,7 +68,8 @@ export type BlueprintPhase =
  * 5. accepted 且有 blueprintRef → ready（项目就绪；即便 run 已 completed 也走这里，
  *    冷启动可直接看到已接受的蓝图，这是 D-B8-3 的验收点）
  * 6. 蓝图已失效且有 ref → stale（非 gate 态下的失效，如等待重新生成）
- * 7. run 已终态 → terminal（blocked/cancelled：蓝图未被接受就结束）
+ * 7. run 已终态 → terminal（blocked/cancelled：蓝图未被接受就结束；带上 blueprintRef
+ *    以便只读展示已生成的那一版）
  * 8. 有在途 BLUEPRINT_GENERATE 任务 → generating
  * 9. 有 blueprintRef（已产出、未接受、gate 尚未激活的瞬时态）→ gate 兜底展示内容
  * 10. 兜底 → not-started
@@ -84,14 +93,22 @@ export function deriveBlueprintPhase(
   if (state.blueprintInvalidated && state.blueprintRef !== null) {
     return { kind: 'stale', blueprintRef: state.blueprintRef };
   }
-  if (terminalStatus !== null) return { kind: 'terminal', status: terminalStatus };
+  if (terminalStatus !== null) {
+    return { kind: 'terminal', status: terminalStatus, blueprintRef: state.blueprintRef };
+  }
   if (pendingBlueprintTask) return { kind: 'generating' };
   if (state.blueprintRef !== null) return { kind: 'gate', blueprintRef: state.blueprintRef };
   return { kind: 'not-started' };
 }
 
-/** 相位是否应展示蓝图正文（含失效降级展示） */
+/**
+ * 相位是否应展示蓝图正文。
+ *
+ * 含两类降级展示：失效（stale，用户要看到旧内容才能判断要不要重新生成）与终态
+ * （terminal 且已产出蓝图，只读回看）。两者都不给决策按钮。
+ */
 export function showsBlueprintContent(phase: BlueprintPhase): boolean {
+  if (phase.kind === 'terminal') return phase.blueprintRef !== null;
   return phase.kind === 'stale' || phase.kind === 'gate' || phase.kind === 'ready';
 }
 
