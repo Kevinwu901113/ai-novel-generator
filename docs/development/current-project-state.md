@@ -9,13 +9,13 @@
 
 ## 0. Snapshot Metadata
 
-| 项              | 值                                                                                                                |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 4                                                                                                                 |
-| 更新日期        | 2026-08-10                                                                                                        |
-| 基线 main SHA   | `b80f0d26fa809410b3609c22e40481368ba0e93d`（PR #42 合并后，含 B1 多 provider 网关 + B3 GE-3 intake wiring）       |
-| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v14、CI |
-| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，main 合并 commit CI 绿 |
+| 项              | 值                                                                                                                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 5                                                                                                                                         |
+| 更新日期        | 2026-08-11                                                                                                                                |
+| 基线 main SHA   | `d70eca6bb2461f99128ba37641229514b9237084`（PR #47 合并后，含 B4 GE-3 intake UI + B5 GE-4 research wiring + B6 GE-4 research UI/D-B6-10） |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v15、CI                         |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，PR #43–#47 合并 commit CI 全绿                 |
 
 ## 1. 权威层级
 
@@ -239,10 +239,10 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 
 | 项                  | 命令                                                          | 结果                                                                            |
 | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-10 于 `b80f0d2` 实测）                                    |
-| `git diff --check`  | —                                                             | PASS                                                                            |
-| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁                                                           |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 125 passed / 1 skipped（126）；Tests 3026 passed / 6 skipped（3032） |
-| GitHub Actions      | main 分支 CI                                                  | PR #42 合并 commit success（08-05~08-07 停摆期已恢复并补验）                    |
+| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-11 于 `d70eca6` 实测）                                    |
+| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-11 于 `d70eca6` 实测）                                    |
+| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁（未本地实测）                                             |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 139 passed / 2 skipped（141）；Tests 3184 passed / 7 skipped（3191） |
+| GitHub Actions      | main 分支 CI                                                  | PR #47 合并 commit `d70eca6` success（08-05~08-07 停摆期已恢复并补验）          |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。
