@@ -4273,3 +4273,22 @@ body {
 .blueprint-ready p:last-child {
   margin-bottom: 0;
 }
+
+/* 旅程探针失败提示（B8 复查随行）：非阻塞，探针恢复即自动消失 */
+.journey-probe-error {
+  margin: 8px 16px 0;
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .journey-probe-error {
+    background-color: #3f2d0a;
+    border-color: #78350f;
+    color: #fde68a;
+  }
+}

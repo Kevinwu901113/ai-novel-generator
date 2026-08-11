@@ -34,7 +34,9 @@ export function hasActiveBlueprintGenerate(progress: GraphProgressProjectionDto 
  *   （D-B8-4：后端 D-B7-8 会 fail-closed 抛 GRAPH_RUN_STATE_CONFLICT，UI 不靠报错），
  *   但仍降级展示旧内容，否则用户无从判断要不要重新生成；
  * - gate：BLUEPRINT_USER_GATE 等待人工确认（accept / request_rewrite）；
- * - escalation：改写预算耗尽，BLUEPRINT_ESCALATION 等待人工决策（四选项）；
+ * - escalation：改写预算耗尽，BLUEPRINT_ESCALATION 等待人工决策（四选项）。
+ *   **必须带 blueprintRef 并展示正文**——四选项里第一条就是"就用现在这版蓝图"，
+ *   让用户拍板一份他看不见的东西是不可接受的（与终态、失效同族的可达性缺口）；
  * - ready：蓝图已被接受，项目就绪（run 通常已 completed）；
  * - terminal：run 已终态但蓝图未被接受（blocked/cancelled，或 completed 的兜底）。
  *   **仍带 blueprintRef**：这一版蓝图已经生成出来了，只是没被确认就结束——不给看
@@ -48,7 +50,7 @@ export type BlueprintPhase =
   | { readonly kind: 'generating' }
   | { readonly kind: 'stale'; readonly blueprintRef: string }
   | { readonly kind: 'gate'; readonly blueprintRef: string }
-  | { readonly kind: 'escalation' }
+  | { readonly kind: 'escalation'; readonly blueprintRef: string | null }
   | { readonly kind: 'ready'; readonly blueprintRef: string }
   | {
       readonly kind: 'terminal';
@@ -61,7 +63,8 @@ export type BlueprintPhase =
  * 派生蓝图相位。优先级（自上而下，命中即返回）：
  *
  * 1. 无 run / runId 为空 → no-run
- * 2. escalationActive → escalation（预算耗尽，需要用户立即行动）
+ * 2. escalationActive → escalation（预算耗尽，需要用户立即行动；带上 blueprintRef
+ *    以便同屏展示待决策的那一版）
  * 3. gateActive 且蓝图已失效 → stale（失效优先于 gate：此时 accept 会被后端
  *    fail-closed 拒绝，UI 必须先禁用而不是让用户撞一次错误）
  * 4. gateActive → gate
@@ -80,7 +83,9 @@ export function deriveBlueprintPhase(
   pendingBlueprintTask: boolean,
 ): BlueprintPhase {
   if (!state || state.runId === null) return { kind: 'no-run' };
-  if (state.escalationActive) return { kind: 'escalation' };
+  if (state.escalationActive) {
+    return { kind: 'escalation', blueprintRef: state.blueprintRef };
+  }
   if (state.gateActive && state.blueprintInvalidated && state.blueprintRef !== null) {
     return { kind: 'stale', blueprintRef: state.blueprintRef };
   }
@@ -104,11 +109,17 @@ export function deriveBlueprintPhase(
 /**
  * 相位是否应展示蓝图正文。
  *
- * 含两类降级展示：失效（stale，用户要看到旧内容才能判断要不要重新生成）与终态
- * （terminal 且已产出蓝图，只读回看）。两者都不给决策按钮。
+ * 除 gate/ready 的常规展示外，还有三类"必须看得到"的场景，它们同属一个原则——
+ * **不能让用户对着看不见的内容做决定或失去回看**：
+ * - stale：要看到旧内容才能判断要不要重新生成；
+ * - escalation：四选项第一条就是"就用现在这版蓝图"；
+ * - terminal：那一版已经生成出来了，只是没被确认就结束。
+ * 后三者都不给 gate 决策按钮（gate 并没有在等人工）。
  */
 export function showsBlueprintContent(phase: BlueprintPhase): boolean {
-  if (phase.kind === 'terminal') return phase.blueprintRef !== null;
+  if (phase.kind === 'terminal' || phase.kind === 'escalation') {
+    return phase.blueprintRef !== null;
+  }
   return phase.kind === 'stale' || phase.kind === 'gate' || phase.kind === 'ready';
 }
 

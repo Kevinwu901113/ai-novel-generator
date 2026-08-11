@@ -401,6 +401,15 @@ export function App() {
                 reachedStages={reachedStages}
                 onSelectStage={handleSelectJourneyStage}
               />
+              {/* 探针失败必须可见（B8 复查随行）：D-B8-2 之后阶段派生只由这条
+                  循环驱动，它一旦静默失败，界面会冻在"想法"阶段而用户毫无察觉——
+                  正是"没有 Region 该被挂载时无人回报"那类问题换了个面目。这里给
+                  非阻塞提示（探针下一轮成功即自动消失），不打断当前 Region。 */}
+              {journey.error && (
+                <div className="journey-probe-error" role="status" aria-live="polite">
+                  {journey.error}（正在自动重试）
+                </div>
+              )}
               {/* D-B6-10：中栏按展示阶段（viewStage）互斥挂载，与推进阶段
                   （frontierStage）分离——挂载哪个 Region 不再单纯 follow frontier。
                   B8 起三分流：blueprint → BlueprintRegion（阶段与蓝图态由

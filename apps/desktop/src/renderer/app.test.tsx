@@ -417,6 +417,27 @@ function createProjectReadyDesktopAPI() {
   });
 }
 
+describe('App：旅程探针失败可见性（B8 复查随行）', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+  });
+
+  // D-B8-2 之后阶段派生只由探针这一条循环驱动。它静默失败的话，界面会冻在
+  // "想法"阶段而用户毫无察觉——必须有可见反馈，且不能是打断式的。
+  it('探针读取失败时给出可见提示，且不泄露原始错误细节', async () => {
+    const api = createMockDesktopAPI();
+    (api.blueprint.getState as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('/Users/foo/secret.sqlite 打不开'),
+    );
+    await createProjectAndWaitForJourney(api);
+
+    const notice = await screen.findByText(/正在自动重试/, undefined, { timeout: 5000 });
+    expect(notice).toBeInTheDocument();
+    expect(notice.textContent).not.toContain('/Users/');
+  });
+});
+
 describe('App：蓝图 UI 可达性（B8，D-B8-2/D-B8-3）', () => {
   afterEach(() => {
     cleanup();

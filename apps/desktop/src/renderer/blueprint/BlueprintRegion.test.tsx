@@ -128,7 +128,20 @@ describe('BlueprintRegion 相位渲染', () => {
     expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeEnabled();
   });
 
-  it('escalation → 四选项；失效时 accept_current 一并禁用', async () => {
+  // 复查发现的可达性缺口：让用户选"就用现在这版蓝图"却不给他看那一版。
+  it('escalation → 四选项 + 同屏展示待决策的那一版正文', async () => {
+    setupDesktop();
+    await renderRegion({ state: state({ escalationActive: true }) });
+    await waitFor(() => {
+      expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+    });
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeEnabled();
+    // 但不给 gate 决策按钮——gate 并没有在等人工
+    expect(screen.queryByRole('button', { name: /接受这份蓝图/ })).not.toBeInTheDocument();
+  });
+
+  it('escalation：失效时 accept_current 一并禁用', async () => {
     setupDesktop();
     await renderRegion({ state: state({ escalationActive: true, blueprintInvalidated: true }) });
     expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();

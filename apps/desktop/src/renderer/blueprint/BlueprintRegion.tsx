@@ -7,7 +7,8 @@
  * - stale：现行蓝图已因创作要求变更失效——失效横幅 + 降级展示旧内容 +
  *   **禁用接受**（D-B8-4）；
  * - gate：BlueprintView + BlueprintGatePanel（accept / request_rewrite）；
- * - escalation：BlueprintEscalationPanel 四选项；
+ * - escalation：BlueprintEscalationPanel 四选项 + 同屏展示待决策的那一版正文
+ *   （第一条选项就是"就用现在这版蓝图"）；
  * - ready：BlueprintView + ProjectReadyPanel（项目就绪）；
  * - terminal：run 已终态但蓝图未被接受（blocked/cancelled）——若当时已生成过一版，
  *   终态说明之外仍只读展示那一版内容。

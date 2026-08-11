@@ -58,7 +58,7 @@ describe('deriveBlueprintPhase', () => {
       'completed',
       true,
     );
-    expect(phase).toEqual({ kind: 'escalation' });
+    expect(phase).toEqual({ kind: 'escalation', blueprintRef: 'bp-1' });
   });
 
   it('D-B8-4：gate 期间蓝图已失效 → stale 优先于 gate（accept 必须先被禁用）', () => {
@@ -137,7 +137,9 @@ describe('showsBlueprintContent', () => {
     expect(showsBlueprintContent({ kind: 'stale', blueprintRef: 'b' })).toBe(true);
     expect(showsBlueprintContent({ kind: 'gate', blueprintRef: 'b' })).toBe(true);
     expect(showsBlueprintContent({ kind: 'ready', blueprintRef: 'b' })).toBe(true);
-    expect(showsBlueprintContent({ kind: 'escalation' })).toBe(false);
+    // escalation 第一条选项是"就用现在这版蓝图"——必须让用户看得到才能拍板
+    expect(showsBlueprintContent({ kind: 'escalation', blueprintRef: 'bp-1' })).toBe(true);
+    expect(showsBlueprintContent({ kind: 'escalation', blueprintRef: null })).toBe(false);
     expect(showsBlueprintContent({ kind: 'generating' })).toBe(false);
     expect(showsBlueprintContent({ kind: 'no-run' })).toBe(false);
     expect(showsBlueprintContent({ kind: 'not-started' })).toBe(false);
