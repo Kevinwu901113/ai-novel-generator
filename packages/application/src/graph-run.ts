@@ -17,6 +17,7 @@ import type {
   AnyIdeaToNovelRunState,
   ArtifactRef,
   ChapterGenerationGraphV1,
+  GraphNodeId,
   GraphNodeOutcome,
   HumanDecisionInput,
   IdeaToNovelProjectGraphV1,
@@ -240,6 +241,24 @@ export function parkHumanNodes(
     current = requestHumanDecisionTransition(graph, current, node.id, node.humanDecisionType);
   }
   return current;
+}
+
+/**
+ * D-B7-1/2（复查随行修复 note 3）：判定一次 gate/escalation 决策是否为"接受当前
+ * 蓝图 → 形成 PROJECT_READY"的入边，即是否需要触发 D-B7-1 的同事务 accept 副作用
+ * （`storyBlueprintRepo.markAccepted`）。
+ *
+ * 抽成独立导出函数，而不是内联在 `applyHumanDecision` 里，是为了让"PROJECT_READY
+ * 的每一条入边都被 accept 副作用覆盖"这条不变量可以脱离完整事务/DB 独立单测——
+ * 测试从 `IDEA_TO_NOVEL_PROJECT_GRAPH_V1` 动态枚举 PROJECT_READY 的入边，逐条调用
+ * 本函数断言为 true。任何人将来给 PROJECT_READY 加一条新入边却忘了在此处登记，
+ * 该结构性守卫测试会立即变红——不会重演本批次修复的"run 已终态但 accepted=0"故障。
+ */
+export function isBlueprintAcceptDecision(nodeId: GraphNodeId, outcome: string): boolean {
+  return (
+    (nodeId === BLUEPRINT_USER_GATE && outcome === 'accept') ||
+    (nodeId === BLUEPRINT_ESCALATION && outcome === 'accept_current')
+  );
 }
 
 // ── 共享 transition 执行器（内核与 NodeSettlementService 共用）──
@@ -651,9 +670,7 @@ export function applyHumanDecision(
       // "接受当前蓝图 → 形成 PROJECT_READY"的入边；镜像本函数 intake_answer 分支的
       // 现成先例——先写权威存储（storyBlueprintRepo.markAccepted），再走 transition，
       // 任一步抛错整事务回滚（fail-closed），杜绝"run 已终态但 accepted=0"的不可修复态。
-      const isBlueprintAccept =
-        (node.id === BLUEPRINT_USER_GATE && input.outcome === 'accept') ||
-        (node.id === BLUEPRINT_ESCALATION && input.outcome === 'accept_current');
+      const isBlueprintAccept = isBlueprintAcceptDecision(node.id, input.outcome);
       if (isBlueprintAccept) {
         // D-B7-8：失效蓝图不得被接受。CreationSpec 变更后 storyBlueprint 进
         // invalidatedArtifacts（applyArtifactChange 只追加、不清空 artifacts 槽位），
