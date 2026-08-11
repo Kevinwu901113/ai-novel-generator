@@ -335,6 +335,11 @@ export const IPC_CHANNELS = {
   SEARCH_SAVE_API_KEY: 'ipc:search-save-api-key',
   SEARCH_DELETE_API_KEY: 'ipc:search-delete-api-key',
   SEARCH_HAS_API_KEY: 'ipc:search-has-api-key',
+  RESEARCH_GET_RESEARCH_STATE: 'ipc:research-get-research-state',
+  RESEARCH_GET_BUNDLE: 'ipc:research-get-bundle',
+  RESEARCH_LIST_BUNDLES: 'ipc:research-list-bundles',
+  RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
+  RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -745,6 +750,254 @@ export interface SearchKeyAPI {
   hasApiKey(): Promise<SearchKeyStateDto>;
 }
 
+// ── Research API（GE-4/B6：只读调研态 + ResearchBundle 查看 + 来源排除）──
+
+/** 调研强度三档（镜像 research-engine 的 ResearchDepth） */
+export type ResearchDepthDto = 'none' | 'light' | 'deep';
+
+export function isValidResearchDepthDto(value: unknown): value is ResearchDepthDto {
+  return value === 'none' || value === 'light' || value === 'deep';
+}
+
+/** 调研校验结论（RESEARCH_VALIDATE 的 research_valid outcome） */
+export type ResearchValidDto = 'valid' | 'invalid';
+
+export function isValidResearchValidDto(value: unknown): value is ResearchValidDto {
+  return value === 'valid' || value === 'invalid';
+}
+
+/** 来源记录（绑定问题/事实） */
+export interface ResearchSourceRecordDto {
+  readonly url: string;
+  readonly title: string;
+  readonly fetchedAt: string;
+  readonly excerpt: string;
+}
+
+export function isValidResearchSourceRecordDto(value: unknown): value is ResearchSourceRecordDto {
+  if (!hasRequiredExactKeys(value, ['url', 'title', 'fetchedAt', 'excerpt'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.url === 'string' &&
+    typeof obj.title === 'string' &&
+    typeof obj.fetchedAt === 'string' &&
+    typeof obj.excerpt === 'string'
+  );
+}
+
+/** 调研问题（含来源绑定） */
+export interface ResearchQuestionDto {
+  readonly id: string;
+  readonly text: string;
+  readonly sources: ReadonlyArray<ResearchSourceRecordDto>;
+}
+
+export function isValidResearchQuestionDto(value: unknown): value is ResearchQuestionDto {
+  if (!hasRequiredExactKeys(value, ['id', 'text', 'sources'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.text === 'string' &&
+    Array.isArray(obj.sources) &&
+    obj.sources.every((s) => isValidResearchSourceRecordDto(s))
+  );
+}
+
+/** 事实笔记（绑定来源 URL） */
+export interface FactNoteDto {
+  readonly id: string;
+  readonly text: string;
+  readonly sourceUrls: ReadonlyArray<string>;
+}
+
+export function isValidFactNoteDto(value: unknown): value is FactNoteDto {
+  if (!hasRequiredExactKeys(value, ['id', 'text', 'sourceUrls'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.text === 'string' &&
+    Array.isArray(obj.sourceUrls) &&
+    obj.sourceUrls.every((u) => typeof u === 'string')
+  );
+}
+
+/** 权威 ResearchBundle 公开投影（版本化；版本链以行链表达，D-B5-2） */
+export interface ResearchBundleDto {
+  readonly id: string;
+  readonly projectId: string;
+  readonly version: number;
+  readonly depth: ResearchDepthDto;
+  readonly questions: ReadonlyArray<ResearchQuestionDto>;
+  readonly factNotes: ReadonlyArray<FactNoteDto>;
+  readonly conclusion: string;
+  readonly createdAt: string;
+  /** 重试路径上游 bundle（B5：validate→execute 回环时记链；首轮为 null） */
+  readonly basedOnBundleId: string | null;
+}
+
+export function isValidResearchBundleDto(value: unknown): value is ResearchBundleDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'id',
+      'projectId',
+      'version',
+      'depth',
+      'questions',
+      'factNotes',
+      'conclusion',
+      'createdAt',
+      'basedOnBundleId',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.version === 'number' &&
+    isValidResearchDepthDto(obj.depth) &&
+    Array.isArray(obj.questions) &&
+    obj.questions.every((q) => isValidResearchQuestionDto(q)) &&
+    Array.isArray(obj.factNotes) &&
+    obj.factNotes.every((n) => isValidFactNoteDto(n)) &&
+    typeof obj.conclusion === 'string' &&
+    typeof obj.createdAt === 'string' &&
+    (obj.basedOnBundleId === null || typeof obj.basedOnBundleId === 'string')
+  );
+}
+
+/**
+ * 调研态读取投影（D-B6-3）：最新 project run 的调研相关节点结果，独立于
+ * GraphProgressProjectionDto（exact-keys 校验器破坏面大，且 outcome/artifact 属
+ * research 专用视图）。无 project run 时全 null / false / 0。
+ */
+export interface ResearchStateDto {
+  readonly runId: string | null;
+  readonly researchDecision: ResearchDepthDto | null;
+  readonly researchValid: ResearchValidDto | null;
+  readonly bundleRef: string | null;
+  /**
+   * bundleRef 指向的资料包是否已失效（创作要求变更 → researchBundle 进
+   * invalidatedArtifacts）。失效时 artifacts.researchBundle 仍保留旧 ref
+   * （applyArtifactChange 只追加失效列表、不清空槽位），故必须单独标记，
+   * 否则 UI 会把作废的资料包当现行内容展示。
+   */
+  readonly bundleInvalidated: boolean;
+  readonly escalationActive: boolean;
+  readonly researchRetryUsed: number;
+}
+
+export function isValidResearchStateDto(value: unknown): value is ResearchStateDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'runId',
+      'researchDecision',
+      'researchValid',
+      'bundleRef',
+      'bundleInvalidated',
+      'escalationActive',
+      'researchRetryUsed',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    (obj.runId === null || typeof obj.runId === 'string') &&
+    (obj.researchDecision === null || isValidResearchDepthDto(obj.researchDecision)) &&
+    (obj.researchValid === null || isValidResearchValidDto(obj.researchValid)) &&
+    (obj.bundleRef === null || typeof obj.bundleRef === 'string') &&
+    typeof obj.bundleInvalidated === 'boolean' &&
+    typeof obj.escalationActive === 'boolean' &&
+    typeof obj.researchRetryUsed === 'number'
+  );
+}
+
+/** research.getResearchState 输入 */
+export interface GetResearchStateInputDto {
+  readonly projectId: string;
+}
+
+export function isValidGetResearchStateInput(value: unknown): value is GetResearchStateInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+/** research.getBundle 输入 */
+export interface GetResearchBundleInputDto {
+  readonly projectId: string;
+  readonly bundleId: string;
+}
+
+export function isValidGetResearchBundleInput(value: unknown): value is GetResearchBundleInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'bundleId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.bundleId);
+}
+
+/** research.listBundles 输入 */
+export interface ListResearchBundlesInputDto {
+  readonly projectId: string;
+}
+
+export function isValidListResearchBundlesInput(
+  value: unknown,
+): value is ListResearchBundlesInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+/** 公共 URL 长度上限（防御性上界；来源/排除 URL 均适用） */
+const MAX_PUBLIC_URL_LENGTH = 2048;
+
+function isBoundedUrl(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.trim().length > 0 &&
+    value === value.trim() &&
+    value.length <= MAX_PUBLIC_URL_LENGTH
+  );
+}
+
+/** research.setSourceExclusion 输入（D-B6-2：project 级 URL 排除） */
+export interface SetSourceExclusionInputDto {
+  readonly projectId: string;
+  readonly url: string;
+  readonly excluded: boolean;
+}
+
+export function isValidSetSourceExclusionInput(
+  value: unknown,
+): value is SetSourceExclusionInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'url', 'excluded'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    isBoundedTrimmedId(obj.projectId) && isBoundedUrl(obj.url) && typeof obj.excluded === 'boolean'
+  );
+}
+
+/** research.listSourceExclusions 输入 */
+export interface ListSourceExclusionsInputDto {
+  readonly projectId: string;
+}
+
+export function isValidListSourceExclusionsInput(
+  value: unknown,
+): value is ListSourceExclusionsInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+/** Research API —— 通过 contextBridge 暴露给 Renderer（GE-4/B6） */
+export interface ResearchAPI {
+  getResearchState(input: GetResearchStateInputDto): Promise<ResearchStateDto>;
+  getBundle(input: GetResearchBundleInputDto): Promise<ResearchBundleDto | null>;
+  listBundles(input: ListResearchBundlesInputDto): Promise<ReadonlyArray<ResearchBundleDto>>;
+  setSourceExclusion(input: SetSourceExclusionInputDto): Promise<ReadonlyArray<string>>;
+  listSourceExclusions(input: ListSourceExclusionsInputDto): Promise<ReadonlyArray<string>>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -758,6 +1011,7 @@ export interface DesktopAPI {
   graph: GraphAPI;
   intake: IntakeAPI;
   search: SearchKeyAPI;
+  research: ResearchAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────

@@ -600,11 +600,14 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
    仍允许同项目多个非终态 project run 并存；跨 run 弃用会话会使被替换 run 的 ASK_QUESTION
    fail-closed（收敛性可接受，见 spec-extract.ts 注释）。建议 application 层
    createProjectRun 增守卫：存在非终态 project run 时拒绝或返回既有 run。
-2. **provider 重驱动防抖无尾随重扫**：redriveAfterProviderConfig 在扫描在途时吞掉第二次
-   触发；极端时序（首扫已过该项目、配置恰在其后补齐）下任务可能滞留 PENDING 至下次
-   provider 操作或重启。建议改为"在途时置 pending 标志、结束后补扫一次"。
+2. ~~**provider 重驱动防抖无尾随重扫**~~：已由 B6（D-B6-8，TD-026-2）解决——
+   redriveAfterProviderConfig 改为 leading+trailing 防抖（`leading-trailing-debounce.ts`）：
+   扫描在途时的后续触发不再被丢弃，记为尾随请求，当前扫描结束后立即补跑一次；
+   多次触发合并为至多一次尾随执行。回归测试见 `leading-trailing-debounce.test.ts`
+   （先红：旧简单 in-flight 布尔丢弃模式下尾随触发被吞掉；后绿：新实现补跑）。
 3. **intake E2E 测试 9 断言偏弱**：只断言追问未写入被弃用会话，未覆盖后续 settlement 走向
    （旧 run fail-closed 终态化）。补断言可固化该收敛语义。
+   第 1、3 项仍 OPEN（留后续批次）。
 
 ---
 
@@ -627,3 +630,28 @@ ACTIVE 会话；resolver 的 idea 校验不看 session 状态（ABANDONED 亦可
    任务标 TASK_INTERRUPTED 不重试（与 SPEC_EXTRACT 同则的有意保守，防重复计费/重复搜索）。
    与 SPEC_EXTRACT 不同，RESEARCH_RUN 的搜索/抓取可幂等重放，可议改 replayable；
    记录待议，暂维持保守策略。
+
+---
+
+## TD-028: 真实调研链路验证发现两项（Tavily key 到位后实测，2026-08-11）
+
+**状态**: OPEN
+**优先级**: 中
+**来源**: 负责人提供 Tavily key 后，架构师用真实 key 做的一次性链路验证
+（3 个中文历史类查询 x 每查询 5 条结果 = 15 次真实 SafeWebFetch 抓取，成功 10 / 失败 5）。
+key 仅以环境变量瞬时使用，未落文件、未存 Keychain、未提交。
+
+**正向结论（不是债，是已验证的事实）**：安全边界在真实网页上零误杀——15 条中仅 1 条被
+我方规则拒（PDF），私网判定 / 512KiB 截断 / 三跳重定向限制均未产生假阳性；其余 4 条
+失败为远端自身的 403/404/500。另已实证 403 与 User-Agent 缺失无关（补一个如实标识的
+UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测），此路已证伪不必再试。
+
+1. **PDF 来源被静默丢弃**：content-type 白名单直接拒收 application/pdf，而本应用主场景
+   （历史 / 资料类创作调研）中学术 PDF 占比可观（本次样本 15 条里 2 条是 PDF，约 13%）。
+   且用户在 B6 资料包界面看不到"某来源因格式被跳过"，只会觉得调研结果偏薄。
+   方向：(a) 增加 PDF 文本抽取；(b) 至少把被跳过的来源与原因回传，供 UI 展示。
+2. **真实抓取成功率约 67% 可能推高 invalid 回环 churn**：D-B5-4 校验要求每问题 >=1 来源、
+   每条 factNote 的 sourceUrls 非空。若某问题的 top 结果恰好全是 PDF / 403，该问题将得到
+   0 来源 → bundle 判 invalid → 回环重试 → 预算耗尽进人工升级 Gate。fake provider 永远
+   测不到这条路径（fake 恒成功）。方向：提高 maxResults 冗余，或把校验改为"问题级尽力"
+   语义（整包有效即可，不强求每问题都有来源）。

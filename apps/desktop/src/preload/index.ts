@@ -64,6 +64,11 @@ const IPC_CHANNELS = {
   SEARCH_SAVE_API_KEY: 'ipc:search-save-api-key',
   SEARCH_DELETE_API_KEY: 'ipc:search-delete-api-key',
   SEARCH_HAS_API_KEY: 'ipc:search-has-api-key',
+  RESEARCH_GET_RESEARCH_STATE: 'ipc:research-get-research-state',
+  RESEARCH_GET_BUNDLE: 'ipc:research-get-bundle',
+  RESEARCH_LIST_BUNDLES: 'ipc:research-list-bundles',
+  RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
+  RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
 } as const;
 
 /**
@@ -133,6 +138,13 @@ import type {
   SpecInvalidationResultDto,
   SaveSearchApiKeyInputDto,
   SearchKeyStateDto,
+  GetResearchStateInputDto,
+  GetResearchBundleInputDto,
+  ListResearchBundlesInputDto,
+  SetSourceExclusionInputDto,
+  ListSourceExclusionsInputDto,
+  ResearchStateDto,
+  ResearchBundleDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -430,6 +442,32 @@ const desktopAPI: DesktopAPI = {
 
     async hasApiKey(): Promise<SearchKeyStateDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.SEARCH_HAS_API_KEY);
+    },
+  },
+
+  research: {
+    async getResearchState(input: GetResearchStateInputDto): Promise<ResearchStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.RESEARCH_GET_RESEARCH_STATE, input);
+    },
+
+    async getBundle(input: GetResearchBundleInputDto): Promise<ResearchBundleDto | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.RESEARCH_GET_BUNDLE, input);
+    },
+
+    async listBundles(
+      input: ListResearchBundlesInputDto,
+    ): Promise<ReadonlyArray<ResearchBundleDto>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.RESEARCH_LIST_BUNDLES, input);
+    },
+
+    async setSourceExclusion(input: SetSourceExclusionInputDto): Promise<ReadonlyArray<string>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.RESEARCH_SET_SOURCE_EXCLUSION, input);
+    },
+
+    async listSourceExclusions(
+      input: ListSourceExclusionsInputDto,
+    ): Promise<ReadonlyArray<string>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.RESEARCH_LIST_SOURCE_EXCLUSIONS, input);
     },
   },
 };

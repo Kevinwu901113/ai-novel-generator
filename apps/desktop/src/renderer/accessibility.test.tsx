@@ -23,6 +23,7 @@ import type {
   TaskPublicData,
   TaskStatsPublicData,
   ProviderPublicState,
+  ResearchBundleDto,
   DesktopAPI,
 } from '@ai-novel/contracts';
 
@@ -36,6 +37,9 @@ import { TaskList } from './task-center/TaskList';
 import { TaskStats } from './task-center/TaskStats';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { LiveRegion } from './accessibility/LiveRegion';
+import { SearchKeyPanel } from './research/SearchKeyPanel';
+import { ResearchEscalationPanel } from './research/ResearchEscalationPanel';
+import { ResearchBundleView } from './research/ResearchBundleView';
 
 // ── Mock 数据 ────────────────────────────────────────────────────────
 
@@ -1618,5 +1622,190 @@ describe('八、App-level 债务测试', () => {
     );
 
     expect(screen.getByText('已配置')).toBeInTheDocument();
+  });
+});
+
+describe('九、Research 无障碍（B6）', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+  });
+
+  function researchBundle(overrides: Partial<ResearchBundleDto> = {}): ResearchBundleDto {
+    return {
+      id: 'rb-1',
+      projectId: mockProjectId,
+      version: 1,
+      depth: 'deep',
+      questions: [],
+      factNotes: [],
+      conclusion: '结论文本',
+      createdAt: '2026-08-10T00:00:00.000Z',
+      basedOnBundleId: null,
+      ...overrides,
+    };
+  }
+
+  // 45. SearchKeyPanel：API Key input 有 label
+  it('SearchKeyPanel：API Key input 有 label', async () => {
+    setupDesktop({
+      ...createMockDesktopAPI(),
+      search: {
+        hasApiKey: vi.fn().mockResolvedValue({ hasApiKey: false }),
+        saveApiKey: vi.fn(),
+        deleteApiKey: vi.fn(),
+      },
+    } as unknown as DesktopAPI);
+
+    await renderAsync(<SearchKeyPanel dataServiceStatus="ready" />);
+
+    await waitFor(() => {
+      const input = screen.getByLabelText('搜索服务 API Key');
+      expect(input).toBeInTheDocument();
+      expect(input).toHaveAttribute('type', 'password');
+    });
+  });
+
+  // 46. SearchKeyPanel：删除确认获得焦点，Escape 取消后焦点恢复到删除按钮
+  it('SearchKeyPanel：删除确认获得焦点，Escape 取消后焦点恢复到删除按钮', async () => {
+    setupDesktop({
+      ...createMockDesktopAPI(),
+      search: {
+        hasApiKey: vi.fn().mockResolvedValue({ hasApiKey: true }),
+        saveApiKey: vi.fn(),
+        deleteApiKey: vi.fn().mockResolvedValue({ hasApiKey: false }),
+      },
+    } as unknown as DesktopAPI);
+
+    await renderAsync(<SearchKeyPanel dataServiceStatus="ready" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '删除搜索服务 API Key' })).toBeInTheDocument();
+    });
+
+    act(() => {
+      screen.getByRole('button', { name: '删除搜索服务 API Key' }).click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '确认删除搜索服务 API Key' })).toHaveFocus();
+    });
+
+    const confirmGroup = screen.getByRole('group', { name: '确认删除搜索服务 API Key' });
+    fireEvent.keyDown(confirmGroup, { key: 'Escape', code: 'Escape' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '删除搜索服务 API Key' })).toHaveFocus();
+    });
+  });
+
+  // 47. ResearchEscalationPanel：五个选项都是原生 button，busy 时禁用
+  it('ResearchEscalationPanel：五个选项都是原生 button，busy 时禁用', () => {
+    const onChoose = vi.fn();
+    render(<ResearchEscalationPanel busy={false} onChoose={onChoose} />);
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(5);
+    buttons.forEach((btn) => expect(btn.tagName).toBe('BUTTON'));
+
+    fireEvent.click(buttons[0]);
+    expect(onChoose).toHaveBeenCalledWith('use_current_research');
+  });
+
+  it('ResearchEscalationPanel：busy=true 时全部禁用（避免重复提交）', () => {
+    render(<ResearchEscalationPanel busy={true} onChoose={vi.fn()} />);
+    screen.getAllByRole('button').forEach((btn) => expect(btn).toBeDisabled());
+  });
+
+  // 48. ResearchBundleView：来源排除按钮用 aria-pressed 反映状态，且不仅靠颜色表达
+  it('ResearchBundleView：来源排除用 aria-pressed 反映状态，排除标记不仅靠颜色（附文字徽标）', async () => {
+    const bundle = researchBundle({
+      questions: [
+        {
+          id: 'q1',
+          text: '问题一',
+          sources: [
+            {
+              url: 'https://example.com/a',
+              title: '来源A',
+              fetchedAt: '2026-08-10T00:00:00.000Z',
+              excerpt: '摘录',
+            },
+          ],
+        },
+      ],
+    });
+
+    render(
+      <ResearchBundleView
+        bundle={bundle}
+        bundles={[bundle]}
+        stale={false}
+        exclusions={['https://example.com/a']}
+        busy={false}
+        onToggleExclusion={async () => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('展开来源（1）'));
+
+    const excludeBtn = screen.getByRole('button', { name: '取消排除' });
+    expect(excludeBtn).toHaveAttribute('aria-pressed', 'true');
+    // 不仅靠颜色：附带文字徽标
+    expect(screen.getByText('已排除')).toBeInTheDocument();
+  });
+
+  // 49. ResearchBundleView：事实笔记折叠按钮有 aria-expanded，随状态切换
+  it('ResearchBundleView：事实笔记折叠按钮 aria-expanded 随状态切换', () => {
+    const longText = 'B'.repeat(300);
+    const bundle = researchBundle({
+      factNotes: [{ id: 'fn1', text: longText, sourceUrls: [] }],
+    });
+
+    render(
+      <ResearchBundleView
+        bundle={bundle}
+        bundles={[bundle]}
+        stale={false}
+        exclusions={[]}
+        busy={false}
+        onToggleExclusion={async () => {}}
+      />,
+    );
+
+    const toggle = screen.getByRole('button', { name: '展开全文' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(toggle);
+
+    const collapsed = screen.getByRole('button', { name: '收起' });
+    expect(collapsed).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  // 50. ResearchBundleView：版本链当前版本用 aria-current 标记
+  it('ResearchBundleView：版本链当前版本用 aria-current 标记', () => {
+    const v1 = researchBundle({ id: 'v1', version: 1, basedOnBundleId: null });
+    const v2 = researchBundle({
+      id: 'v2',
+      version: 2,
+      basedOnBundleId: 'v1',
+      createdAt: '2026-08-11T00:00:00.000Z',
+    });
+
+    render(
+      <ResearchBundleView
+        bundle={v2}
+        bundles={[v1, v2]}
+        stale={false}
+        exclusions={[]}
+        busy={false}
+        onToggleExclusion={async () => {}}
+      />,
+    );
+
+    const current = screen.getByRole('button', { name: 'v2' });
+    expect(current).toHaveAttribute('aria-current', 'true');
+    const other = screen.getByRole('button', { name: 'v1' });
+    expect(other).not.toHaveAttribute('aria-current');
   });
 });

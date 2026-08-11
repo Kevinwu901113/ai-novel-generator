@@ -31,7 +31,10 @@ import {
   IdeaIntakeAnswerPortImpl,
 } from './graph-run-repositories.js';
 import { GraphRunTransactionPortImpl } from './graph-run-transaction.js';
-import { ResearchBundleRepositoryImpl } from './research-repositories.js';
+import {
+  ResearchBundleRepositoryImpl,
+  ResearchSourceExclusionRepositoryImpl,
+} from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import {
   NodeExecutionRepositoryImpl,
@@ -1087,6 +1090,24 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 15,
+    sql: `
+      -- ── 来源排除（GE-4 / B6）────────────────────────────────────
+      -- project 级 URL 排除表（D-B6-2）：不改 research_bundles（artifact 不可变）、
+      -- 不触图 transition。排除按 URL 作用于整个项目：重新调研产生新 bundle 后仍生效。
+      CREATE TABLE IF NOT EXISTS research_source_exclusions (
+        project_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, url),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_research_source_exclusions_project_created
+        ON research_source_exclusions(project_id, created_at);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1567,6 +1588,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly graphRunCommandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly graphRunTransaction: GraphRunTransactionPortImpl;
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
+  private readonly researchSourceExclusionRepo: ResearchSourceExclusionRepositoryImpl;
   private readonly blueprintRepo: StoryBlueprintRepositoryImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
@@ -1602,6 +1624,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.graphRunCommandLogRepo = new GraphRunCommandLogRepositoryImpl(this.db);
     this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
+    this.researchSourceExclusionRepo = new ResearchSourceExclusionRepositoryImpl(this.db);
     this.blueprintRepo = new StoryBlueprintRepositoryImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
@@ -1689,6 +1712,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getResearchBundleRepository(): ResearchBundleRepositoryImpl {
     return this.researchBundleRepo;
+  }
+
+  getResearchSourceExclusionRepository(): ResearchSourceExclusionRepositoryImpl {
+    return this.researchSourceExclusionRepo;
   }
 
   getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {

@@ -54,8 +54,15 @@ import {
   isValidGetActiveIntakeSessionInput,
   isValidPropagateSpecInvalidationInput,
   isValidSaveSearchApiKeyInput,
+  isValidGetResearchStateInput,
+  isValidGetResearchBundleInput,
+  isValidListResearchBundlesInput,
+  isValidSetSourceExclusionInput,
+  isValidListSourceExclusionsInput,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
+  type ResearchStateDto,
+  type ResearchBundleDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1025,6 +1032,87 @@ ipcMain.handle(IPC_CHANNELS.SEARCH_HAS_API_KEY, async (): Promise<SearchKeyState
     payload: {},
   })) as SearchKeyStateDto;
 });
+
+// ── Research（GE-4/B6：只读调研态 + ResearchBundle 查看 + 来源排除）────
+
+ipcMain.handle(
+  IPC_CHANNELS.RESEARCH_GET_RESEARCH_STATE,
+  async (_event, input: unknown): Promise<ResearchStateDto> => {
+    if (!isValidGetResearchStateInput(input)) {
+      throw Object.assign(new Error('无效的调研态查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'research.getResearchState',
+      payload: input,
+    })) as ResearchStateDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.RESEARCH_GET_BUNDLE,
+  async (_event, input: unknown): Promise<ResearchBundleDto | null> => {
+    if (!isValidGetResearchBundleInput(input)) {
+      throw Object.assign(new Error('无效的 ResearchBundle 查询输入'), {
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'research.getBundle',
+      payload: input,
+    })) as ResearchBundleDto | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.RESEARCH_LIST_BUNDLES,
+  async (_event, input: unknown): Promise<ReadonlyArray<ResearchBundleDto>> => {
+    if (!isValidListResearchBundlesInput(input)) {
+      throw Object.assign(new Error('无效的 ResearchBundle 列表查询输入'), {
+        code: 'VALIDATION_ERROR',
+      });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'research.listBundles',
+      payload: input,
+    })) as ReadonlyArray<ResearchBundleDto>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.RESEARCH_SET_SOURCE_EXCLUSION,
+  async (_event, input: unknown): Promise<ReadonlyArray<string>> => {
+    if (!isValidSetSourceExclusionInput(input)) {
+      throw Object.assign(new Error('无效的来源排除输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'research.setSourceExclusion',
+      payload: input,
+    })) as ReadonlyArray<string>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.RESEARCH_LIST_SOURCE_EXCLUSIONS,
+  async (_event, input: unknown): Promise<ReadonlyArray<string>> => {
+    if (!isValidListSourceExclusionsInput(input)) {
+      throw Object.assign(new Error('无效的来源排除列表查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'research.listSourceExclusions',
+      payload: input,
+    })) as ReadonlyArray<string>;
+  },
+);
 
 // ── Smoke test ────────────────────────────────────────────────────
 

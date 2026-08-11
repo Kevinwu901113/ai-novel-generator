@@ -315,16 +315,16 @@ gate 决策、终态）。
 > **更新（2026-08-07，B3/PR #42）**：GE-3 原退出条件（Intake→CreationSpec 真实路径端到端绿）已达成；
 > 产品 UI 按 D8 拆分为独立批次 B4。GE-4/5/6 判定不变。
 
-| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI | E2E             |
-| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ---------- | --------------- |
-| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —               |
-| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —               |
-| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成 |
-| GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E |
-| GE-4 Web Research + ResearchBundle  | 🟡 WIRING+E2E 达成  | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ❌（B6）   | ✅ 确定性 E2E   |
-| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌              |
-| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌              |
-| RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite  |
+| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI | E2E                          |
+| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ---------- | ---------------------------- |
+| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —                            |
+| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —                            |
+| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成              |
+| GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
+| GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
+| GE-5 StoryBlueprint + PROJECT_READY | 🔶 REWORK           | ✅         | ✅（blueprint.*）                     | ❌ 节点未接；accept 与 Graph gate 非原子       | ❌         | ❌                           |
+| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌                           |
+| RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
 - **RW-1（跨阶段门禁，GE-3..GE-6 共同依赖）— MERGED ON MAIN**：Durable Node Execution & Settlement
@@ -348,8 +348,21 @@ gate 决策、终态）。
     确定性 E2E（none/deep 全链/invalid 回环升级/key 缺失 PENDING）
     （2026-08-10；设计 `b5-research-wiring-design.md`；Tavily live 测试以
     TAVILY_LIVE 门控，真实使用需负责人经 search.saveApiKey 录入 key）。
+  - **B6** ✅：GE-4 UI：调研态展示（区分"无需调研"与"尚未调研"）+ 资料包查看（问题/来源/
+    事实笔记折叠/结论/版本链）+ 来源排除（project 级 URL 排除表 v15）+ Tavily key 录入 +
+    人工升级 Gate；随行 D-B6-9（失效资料包单独标记，避免作废内容当现行展示）与
+    TD-026-2 销账（重驱动改 leading+trailing 防抖）
+    （2026-08-11；设计 `b6-research-ui-design.md`）；
+    **独立对抗式复查先判 REWORK**（1 blocker：D-B6-7"中栏按 journeyStage 互斥挂载"
+    未区分 Graph 推进阶段与中栏展示阶段，调研有结果的那一刻 frontier 常已同快照
+    推进到 blueprint，ResearchRegion 被立即卸载换回 IntakeRegion 占位文案，本批
+    交付的核心内容——资料包查看/来源排除/作废横幅——事实上永不可达；测试盲区：
+    此前无任何测试覆盖"真实 progress → 阶段派生 → App 挂载哪个 Region"），修复
+    D-B6-10（展示阶段 viewStage 与推进阶段 frontierStage 分离 + JourneyNav 可
+    点击回看 + App 级集成测试锁定该链路）后复查 ACCEPT；随行修复六项（强度徽标
+    未跟随版本链、来源排除轮询回滚闪烁、escalation 选项断言改对齐 domain 枚举、
+    取消排除不应受 URL 安全校验、新增 unsettled 兜底相位等）。
 - **下一步（依依赖顺序）**：
-  - **B6**：GE-4 UI：调研强度展示、问题计划与资料包查看、来源排除、search key 录入界面；
   - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
   - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。

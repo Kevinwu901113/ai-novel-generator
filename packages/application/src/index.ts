@@ -414,6 +414,7 @@ export {
 
 export type {
   ResearchBundleRepositoryPort,
+  ResearchSourceExclusionRepositoryPort,
   ExecuteResearchDeps,
   ExecuteResearchInput,
 } from './research.js';
