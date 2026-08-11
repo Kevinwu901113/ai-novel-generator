@@ -13,6 +13,10 @@
  *   保持同事务一致（resolver 会校验两者相等）；
  * - D-B7-7：`researchBundleId` 为 null 时（`research_decision=none` 或
  *   `skip_research` 升级路径）prompt 显式声明"本项目未做调研"，不得把缺失伪装成空调研；
+ * - D-B7-13：B6 交付的来源排除（`research_source_exclusions`）在此闭合——此前没有任何
+ *   消费方，用户排除来源后蓝图照样把它当依据（用户可见的空承诺）。装配 prompt 时读取
+ *   该项目的排除集合，过滤 bundle 内容；**不改 bundle 行本身**（artifact 不可变，
+ *   D-B5-2 行链语义），只影响本次 prompt 的可见内容。见 `filterResearchForPrompt`；
  * - D-B7-4：改写循环无 feedback 承载（TD-029-1），仅用 `rewriteAttempt`
  *   （snapshot 里 `budget.blueprintRewrite` 计数）告知模型"这是第 N 次改写，需产出
  *   实质不同的蓝图"。
@@ -24,6 +28,7 @@ import type {
   ModelInvocationData,
   NodeExecutionRepositoryPort,
   ResearchBundleRepositoryPort,
+  ResearchSourceExclusionRepositoryPort,
   StoryBlueprintRepositoryPort,
   TaskData,
 } from '@ai-novel/application';
@@ -37,6 +42,7 @@ import {
   type BlueprintPlotline,
   type StoryBlueprint,
 } from '@ai-novel/domain';
+import type { ResearchBundle } from '@ai-novel/research-engine';
 import { sha256Hex, TaskExecutionError, type TaskEngineDeps } from './index.js';
 import { compensateFinalization } from './chapter-generation.js';
 
@@ -48,6 +54,8 @@ export interface BlueprintGenerateExecutionDeps extends TaskEngineDeps {
   readonly specVersionRepo: CreationContractVersionRepositoryPort;
   readonly researchRepo: ResearchBundleRepositoryPort;
   readonly blueprintRepo: StoryBlueprintRepositoryPort;
+  /** D-B7-13：project 级来源排除读端口（B6 交付；此前无消费方） */
+  readonly sourceExclusionRepo: ResearchSourceExclusionRepositoryPort;
 }
 
 export interface BlueprintGenerateExecutionResult {
@@ -79,8 +87,13 @@ export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
   '若 rewriteAttempt 大于 0，说明用户对上一版蓝图请求了改写，本次必须产出实质不同的蓝图',
   '（更换叙事角度、结构安排或核心冲突的处理方式），不得只做措辞层面的微调。',
   '若调研信息标注 conducted=false，说明本项目未做事实调研，蓝图不得依赖具体的事实性',
-  '细节（真实地名、机构、技术数据等），应基于创作要求自由设定自洽的虚构世界观；',
-  'conducted=true 时应参考给出的调研结论与事实笔记，保持设定与事实一致。',
+  '细节（真实地名、机构、技术数据等），应基于创作要求自由设定自洽的虚构世界观。',
+  'conducted=true 且 availableAfterExclusion=false 时，说明本项目做过调研，但用户已将',
+  '全部可用来源排除，处理方式与 conducted=false 相同——不得依赖具体事实性细节。',
+  'conducted=true 且 availableAfterExclusion=true 时应参考给出的调研结论与事实笔记，',
+  '保持设定与事实一致；factNotes/questions 中出现的来源已是用户排除后的剩余集合，',
+  '某个 question 的 sources 为空数组时说明该问题当前没有可用来源（可能被排除），仅供',
+  '了解调研意图，不得为其杜撰事实性来源。',
   '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
   '{"schemaVersion":1,"premise":"...","characters":[{"name":"...","role":"...","description":"..."}],' +
     '"relationships":["..."],"world":"...","conflict":"...","ending":"...",' +
@@ -93,26 +106,93 @@ export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
 
 // ── prompt 构造 ───────────────────────────────────────────────────
 
+export interface BlueprintFactNoteContext {
+  readonly text: string;
+  readonly sourceUrls: ReadonlyArray<string>;
+}
+
+export interface BlueprintQuestionContext {
+  readonly text: string;
+  readonly sources: ReadonlyArray<{ readonly url: string; readonly title: string }>;
+}
+
 export interface BlueprintResearchContext {
   readonly conclusion: string;
-  readonly factNotes: ReadonlyArray<string>;
+  readonly factNotes: ReadonlyArray<BlueprintFactNoteContext>;
+  readonly questions: ReadonlyArray<BlueprintQuestionContext>;
 }
+
+/**
+ * D-B7-13：来源排除消费点——按项目排除集合过滤 bundle 内容，**只影响本次 prompt 的
+ * 可见内容，不修改 bundle 行**（bundle 是不可变 artifact，D-B5-2 行链语义；排除是
+ * project 级、跨版本生效，见 research.ts 里 ResearchSourceExclusionRepositoryPort
+ * 的注释）。
+ *
+ * 规则：
+ * - factNotes：`sourceUrls` 全部被排除的笔记整条剔除；部分被排除的笔记保留，
+ *   `sourceUrls` 只留未被排除的；
+ * - questions[].sources：剔除被排除的来源记录；过滤后变空的问题本身仍保留（问题
+ *   文本仍是有效的调研意图），prompt 里以空数组体现"当前无可用来源"（系统提示词已
+ *   说明该语义，见 BLUEPRINT_GENERATE_SYSTEM_PROMPT）。
+ *
+ * 措辞选择：被排除的来源**直接不出现**在 prompt 里，而不是列出来源后加"已排除、
+ * 不得作为依据"这类说明——理由：一旦把排除来源的 URL/标题送进模型上下文，就不再是
+ * "模型没见过"而是"模型见过但被告知不要用"，对指令遵循能力较弱的模型这道防线更脆弱
+ * （更容易被后续改写/越狱式追问带出来）；直接不出现是更强的边界，且实现更简单。
+ *
+ * 返回 null 表示过滤后已无任何可用事实笔记——即"做过调研但被排空"，与 D-B7-7 的
+ * "根本没做调研"是两种不同语义，调用方需要分别措辞（不能都说成 conducted=false）。
+ */
+export function filterResearchForPrompt(
+  bundle: Pick<ResearchBundle, 'conclusion' | 'factNotes' | 'questions'>,
+  excludedUrls: ReadonlySet<string>,
+): BlueprintResearchContext | null {
+  const factNotes: BlueprintFactNoteContext[] = bundle.factNotes
+    .map((note) => ({
+      text: note.text,
+      sourceUrls: note.sourceUrls.filter((url) => !excludedUrls.has(url)),
+    }))
+    .filter((note) => note.sourceUrls.length > 0);
+
+  if (factNotes.length === 0) return null;
+
+  const questions: BlueprintQuestionContext[] = bundle.questions.map((question) => ({
+    text: question.text,
+    sources: question.sources
+      .filter((source) => !excludedUrls.has(source.url))
+      .map((source) => ({ url: source.url, title: source.title })),
+  }));
+
+  return { conclusion: bundle.conclusion, factNotes, questions };
+}
+
+/** 蓝图 prompt 的调研输入态：未做调研 / 做过但被排空 / 有可用内容（三态，见 D-B7-7/D-B7-13） */
+export type BlueprintResearchInput =
+  | { readonly status: 'not_conducted' }
+  | { readonly status: 'all_excluded' }
+  | { readonly status: 'available'; readonly context: BlueprintResearchContext };
 
 /** 用户消息（确定性序列化）。D-B7-7：无调研时显式标注 conducted=false，不伪装成空调研。 */
 export function buildBlueprintGeneratePrompt(context: {
   readonly idea: string;
   readonly creationSpecSummary: unknown;
-  readonly research: BlueprintResearchContext | null;
+  readonly research: BlueprintResearchInput;
   readonly rewriteAttempt: number;
 }): string {
-  const researchPayload =
-    context.research === null
-      ? { conducted: false as const }
-      : {
-          conducted: true as const,
-          conclusion: context.research.conclusion,
-          factNotes: context.research.factNotes,
-        };
+  let researchPayload: unknown;
+  if (context.research.status === 'not_conducted') {
+    researchPayload = { conducted: false as const };
+  } else if (context.research.status === 'all_excluded') {
+    researchPayload = { conducted: true as const, availableAfterExclusion: false as const };
+  } else {
+    researchPayload = {
+      conducted: true as const,
+      availableAfterExclusion: true as const,
+      conclusion: context.research.context.conclusion,
+      factNotes: context.research.context.factNotes,
+      questions: context.research.context.questions,
+    };
+  }
   return [
     '以下是创作想法、创作要求与调研信息（JSON）：',
     JSON.stringify({
@@ -478,7 +558,8 @@ export async function executeBlueprintGenerate(
 
   // D-B7-7：researchBundleId 为 null 时（none / skip_research）显式声明"未做调研"，
   // 不得把缺失伪装成空调研；有 bundle 时若找不到底层行视为上下文缺失（确定性失败）。
-  let research: BlueprintResearchContext | null = null;
+  // D-B7-13：有 bundle 时按项目排除集合过滤 prompt 可见内容（不改 bundle 行）。
+  let research: BlueprintResearchInput = { status: 'not_conducted' };
   if (payload.researchBundleId !== null) {
     const bundle = deps.researchRepo.getById(task.projectId, payload.researchBundleId);
     if (!bundle) {
@@ -490,10 +571,10 @@ export async function executeBlueprintGenerate(
       });
       return failedResult(deps, taskId, null);
     }
-    research = {
-      conclusion: bundle.conclusion,
-      factNotes: bundle.factNotes.map((n) => n.text),
-    };
+    const excludedUrls = new Set(deps.sourceExclusionRepo.listByProject(task.projectId));
+    const filtered = filterResearchForPrompt(bundle, excludedUrls);
+    research =
+      filtered === null ? { status: 'all_excluded' } : { status: 'available', context: filtered };
   }
 
   const prompt = buildBlueprintGeneratePrompt({
@@ -517,7 +598,7 @@ export async function executeBlueprintGenerate(
     requestMetadataJson: JSON.stringify({
       promptLength: prompt.length,
       rewriteAttempt: payload.rewriteAttempt,
-      hasResearch: research !== null,
+      researchStatus: research.status,
     }),
   });
   transaction(() => {

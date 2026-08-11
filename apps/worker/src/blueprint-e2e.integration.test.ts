@@ -204,22 +204,26 @@ const fakeSecretStore: SecretStore = {
   deleteSecret: async () => {},
 };
 
-function fakeInvokeModel(script: string[]) {
-  return async () => ({
-    text: script.shift() ?? '',
-    providerRequestId: 'req-1',
-    finishReason: 'stop',
-    usage: {
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheReadTokens: null,
-      cacheWriteTokens: null,
-      totalTokens: 30,
-    },
-    latencyMs: 5,
-    errorCode: null,
-    errorMessage: null,
-  });
+/** capturedPrompts：可选——收集每次调用实际发给模型的 prompt（D-B7-13 断言用） */
+function fakeInvokeModel(script: string[], capturedPrompts?: string[]) {
+  return async (input: { readonly prompt: string }) => {
+    capturedPrompts?.push(input.prompt);
+    return {
+      text: script.shift() ?? '',
+      providerRequestId: 'req-1',
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 10,
+        outputTokens: 20,
+        cacheReadTokens: null,
+        cacheWriteTokens: null,
+        totalTokens: 30,
+      },
+      latencyMs: 5,
+      errorCode: null,
+      errorMessage: null,
+    };
+  };
 }
 
 /** SPEC_EXTRACT 任务 deps（沿用 intake-e2e/research-e2e 模式） */
@@ -282,8 +286,16 @@ function buildResearchDeps(db: ProjectDatabase): ResearchRunExecutionDeps {
   };
 }
 
-/** BLUEPRINT_GENERATE 任务 deps（D-B7-5 版本号取 MAX+1 依赖 blueprintRepo） */
-function buildBlueprintDeps(db: ProjectDatabase, script: string[]): BlueprintGenerateExecutionDeps {
+/**
+ * BLUEPRINT_GENERATE 任务 deps（D-B7-5 版本号取 MAX+1 依赖 blueprintRepo；D-B7-13
+ * 来源排除依赖 sourceExclusionRepo）。`capturedPrompts` 可选，D-B7-13 用例借此断言
+ * 实际发给模型的 prompt 不含被排除 URL。
+ */
+function buildBlueprintDeps(
+  db: ProjectDatabase,
+  script: string[],
+  capturedPrompts?: string[],
+): BlueprintGenerateExecutionDeps {
   const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
   return {
     taskRepo: new TaskRepositoryAdapter(db),
@@ -292,7 +304,7 @@ function buildBlueprintDeps(db: ProjectDatabase, script: string[]): BlueprintGen
     providerRepo: fakeProviderRepo,
     idGenerator,
     clock,
-    invokeModel: fakeInvokeModel(script),
+    invokeModel: fakeInvokeModel(script, capturedPrompts),
     transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
     nodeExecutionResultStore: db.getNodeExecutionResultStore(),
     nodeExecutionRepo: db.getNodeExecutionRepository(),
@@ -300,6 +312,7 @@ function buildBlueprintDeps(db: ProjectDatabase, script: string[]): BlueprintGen
     specVersionRepo: db.getCreationContractVersionRepository(),
     researchRepo: db.getResearchBundleRepository(),
     blueprintRepo: db.getStoryBlueprintRepository(),
+    sourceExclusionRepo: db.getResearchSourceExclusionRepository(),
   };
 }
 
@@ -333,10 +346,14 @@ async function executeBlueprintAndDriveToGate(
   env: ReturnType<typeof buildRunnerEnv>,
   runId: string,
   script: string[] = [blueprintJson()],
+  capturedPrompts?: string[],
 ): Promise<void> {
   const taskIds = uniq(env.scheduled);
   const blueprintTaskId = taskIds[taskIds.length - 1];
-  const result = await executeBlueprintGenerate(buildBlueprintDeps(db, script), blueprintTaskId);
+  const result = await executeBlueprintGenerate(
+    buildBlueprintDeps(db, script, capturedPrompts),
+    blueprintTaskId,
+  );
   expect(result.blueprintId).toBeTruthy();
   await driveRun(env.deps, 'p1', runId);
 }
@@ -713,6 +730,46 @@ describe('GE-5 Blueprint E2E（真实 SQLite + 真实 executor + 生产 resolver
       state = projectState(env.deps, runId);
       expect(state.terminalStatus).toBe('completed');
       expect(db.getStoryBlueprintRepository().getById('p1', blueprintId!)?.accepted).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('9. D-B7-13：deep 调研全链 + 排除一条来源 → 蓝图任务收到的 prompt 不含被排除 URL', async () => {
+    const db = makeDb('一个晚清历史背景的侦探故事，注重史实细节');
+    try {
+      const env = buildRunnerEnv(db);
+      const { run } = createProjectRun(env.deps, {
+        projectId: 'p1',
+        idempotencyKey: `blueprint-e2e-exclusion-${idCounter}`,
+      });
+      const runId = run.workflowRunId;
+      await driveRun(env.deps, 'p1', runId);
+      await executeSpecExtract(buildSpecDeps(db), uniq(env.scheduled)[0]);
+      await driveRun(env.deps, 'p1', runId);
+
+      const researchTaskId = uniq(env.scheduled)[1];
+      const researchResult = await executeResearchRun(buildResearchDeps(db), researchTaskId);
+      await driveRun(env.deps, 'p1', runId);
+
+      // 从真实落库的 bundle 里取一条来源 URL 排除（模拟用户在 B6 来源排除 UI 里操作）——
+      // 不猜测/硬编码 fake 抓取会产生的确切 URL，直接读真实数据。
+      const bundle = db.getResearchBundleRepository().getById('p1', researchResult.bundleId!)!;
+      const excludedUrl =
+        bundle.factNotes[0]?.sourceUrls[0] ?? bundle.questions[0]?.sources[0]?.url;
+      expect(excludedUrl).toBeTruthy();
+      db.getResearchSourceExclusionRepository().setExclusion('p1', excludedUrl!, true);
+
+      const capturedPrompts: string[] = [];
+      await executeBlueprintAndDriveToGate(db, env, runId, [blueprintJson()], capturedPrompts);
+
+      expect(capturedPrompts).toHaveLength(1);
+      const prompt = capturedPrompts[0];
+      // 核心断言：模型实际收到的 prompt 里完全不出现被排除的 URL（D-B7-13 消费点生效）
+      expect(prompt).not.toContain(excludedUrl);
+      // bundle 行本身未被改写（artifact 不可变，D-B5-2）——排除只影响 prompt 可见内容
+      const bundleAfter = db.getResearchBundleRepository().getById('p1', researchResult.bundleId!)!;
+      expect(bundleAfter).toEqual(bundle);
     } finally {
       db.close();
     }

@@ -989,6 +989,8 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         webFetch: createSafeWebFetch(),
         // BLUEPRINT_GENERATE（B7）：蓝图版本化持久化端口（D-B7-5 版本号取 MAX+1）
         blueprintRepo: projDb.getStoryBlueprintRepository(),
+        // D-B7-13：来源排除读端口（B6 交付，B7 是首个消费方）
+        sourceExclusionRepo: projDb.getResearchSourceExclusionRepository(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),

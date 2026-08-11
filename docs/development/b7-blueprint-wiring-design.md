@@ -74,6 +74,24 @@ blueprintInvalidated / gateActive / escalationActive / rewriteUsed`。B8 的蓝�
 - **D-B7-12 顺带销账**：`blueprint-repositories.ts` 的 `save(…, updatedAt)` 实际写入
   `created_at` 列（参数名与列语义错位）；`getById` 的 `ORDER BY version DESC LIMIT 1` 在
   PK `(project_id,id)` 下恒单行、无意义。一并修正。
+- **D-B7-13 蓝图 prompt 消费来源排除（复查追加）**：B6 交付了 `research_source_exclusions`
+  （project 级 URL 排除表）与配套 UI，但截至 B7 首版没有任何消费方——`research.ts` 里
+  `ResearchSourceExclusionRepositoryPort` 的注释早已写明"消费方（B7 BLUEPRINT_GENERATE）
+  读 bundle 时过滤"，可 `executeBlueprintGenerate` 实际只读 `researchRepo`，从未碰过排除表。
+  后果与 B6 那条 blocker 同质：用户在 UI 里排除了一条来源，蓝图生成时依旧会把它当依据，
+  是一句没有兑现的产品承诺。**决策**：`executeBlueprintGenerate` 在装配 prompt 阶段
+  （与读 bundle 同处，最终事务之外）读取该项目的 `sourceExclusionRepo.listByProject`，
+  经纯函数 `filterResearchForPrompt` 过滤后再喂给 `buildBlueprintGeneratePrompt`——
+  **只影响本次 prompt 可见内容，不改写 bundle 行**（bundle 是不可变 artifact，
+  D-B5-2 行链语义；排除表本身是 project 级、独立于 bundle 版本）。过滤规则：
+  `factNotes` 里 `sourceUrls` 全部被排除的笔记整条剔除，部分被排除的笔记保留但
+  `sourceUrls` 只留未排除的；`questions[].sources` 剔除被排除来源，过滤后变空的问题
+  本身仍保留（question 文本仍是有效调研意图），prompt 里以空 `sources: []` 体现"当前
+  无可用来源"。被排除的来源**直接不出现**在 prompt 里（不采用"以下来源已排除、不得
+  作为依据"式的显式列出）——一旦把排除来源的 URL/标题送进模型上下文，就从"模型没见过"
+  变成"模型见过但被告知别用"，对指令遵循较弱的模型这道防线更脆弱，直接不出现是更强的
+  边界。过滤后若已无任何可用事实笔记，`research` 走 `all_excluded` 态（与 D-B7-7 的
+  `not_conducted` 态措辞区分：一个是"没做过"，一个是"做过但被排空"，不能混为一谈）。
 
 ## 3. 改动点清单（按依赖序）
 
