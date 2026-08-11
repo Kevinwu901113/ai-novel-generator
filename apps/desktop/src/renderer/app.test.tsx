@@ -105,6 +105,29 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
     contract: {
       getCurrent: vi.fn().mockResolvedValue(null),
     },
+    // B6：SearchKeyPanel（右栏，与项目无关）挂载即读取，App 级测试必须提供
+    search: {
+      hasApiKey: vi.fn().mockResolvedValue({ hasApiKey: false }),
+      saveApiKey: vi.fn().mockResolvedValue({ hasApiKey: true }),
+      deleteApiKey: vi.fn().mockResolvedValue({ hasApiKey: false }),
+    },
+    // B6：journeyStage 在这些测试里始终停留在 idea，不会挂载 ResearchRegion，
+    // 但补全以贴近真实 DesktopAPI 形状、减少 `as unknown as` 掩盖的缺口
+    research: {
+      getResearchState: vi.fn().mockResolvedValue({
+        runId: null,
+        researchDecision: null,
+        researchValid: null,
+        bundleRef: null,
+        bundleInvalidated: false,
+        escalationActive: false,
+        researchRetryUsed: 0,
+      }),
+      getBundle: vi.fn().mockResolvedValue(null),
+      listBundles: vi.fn().mockResolvedValue([]),
+      setSourceExclusion: vi.fn().mockResolvedValue([]),
+      listSourceExclusions: vi.fn().mockResolvedValue([]),
+    },
     ...overrides,
   } as unknown as DesktopAPI;
 }

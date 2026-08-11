@@ -14,6 +14,8 @@ import { IntakeRegion } from './intake/IntakeRegion';
 import { JourneyNav } from './journey/JourneyNav';
 import { JOURNEY_STAGES, type JourneyStage } from './intake/intake-logic';
 import { TaskCenter } from './task-center/TaskCenter';
+import { ResearchRegion } from './research/ResearchRegion';
+import { SearchKeyPanel } from './research/SearchKeyPanel';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
 import {
@@ -146,6 +148,9 @@ export function App() {
         await loadProjects();
         const project = await window.desktop.projects.open(result.id);
         setCurrentProject(project);
+        // 新项目从旅程起点开始（B6：避免沿用上一个项目遗留的 journeyStage
+        // 导致中栏短暂挂错 Region，即便自纠正也会闪烁）
+        setJourneyStage('idea');
         // 创建成功后焦点进入 Grill 工作区
         setShouldFocusGrill(true);
         return true;
@@ -168,6 +173,8 @@ export function App() {
       try {
         const project = await window.desktop.projects.open(projectId);
         setCurrentProject(project);
+        // 打开项目从旅程起点开始（B6：同上，各 Region 会据 Graph 进度自纠正）
+        setJourneyStage('idea');
         await loadProjects();
       } catch (err) {
         const safe = toSafeUserError(err, '打开项目失败');
@@ -342,11 +349,23 @@ export function App() {
           >
             <RendererErrorBoundary label="创作旅程">
               <JourneyNav current={journeyStage} />
-              <IntakeRegion
-                key={currentProject.id}
-                projectId={currentProject.id}
-                onStageChange={setJourneyStage}
-              />
+              {/* D-B6-7：中栏按 journeyStage 互斥挂载——任一时刻只有一条轮询循环。
+                  idea/clarify → IntakeRegion；research → ResearchRegion。
+                  blueprint/manuscript 尚未建区域，沿用 IntakeRegion 的通用
+                  "beyond-intake" 占位（其自身相位机器会给出正确文案）。 */}
+              {journeyStage === 'research' ? (
+                <ResearchRegion
+                  key={currentProject.id}
+                  projectId={currentProject.id}
+                  onStageChange={setJourneyStage}
+                />
+              ) : (
+                <IntakeRegion
+                  key={currentProject.id}
+                  projectId={currentProject.id}
+                  onStageChange={setJourneyStage}
+                />
+              )}
             </RendererErrorBoundary>
           </section>
         ) : (
@@ -438,6 +457,17 @@ export function App() {
                     onDeleteApiKey={handleDeleteApiKey}
                     onTestConnection={handleTestConnection}
                   />
+                </RendererErrorBoundary>
+              </section>
+
+              {/* 搜索服务（Tavily，B6：D-B6-5 全局单槽位，与模型服务并列） */}
+              <section
+                className="status-section search-key-section"
+                aria-labelledby="search-key-heading"
+              >
+                <h3 id="search-key-heading">搜索服务</h3>
+                <RendererErrorBoundary label="搜索服务">
+                  <SearchKeyPanel dataServiceStatus={dataServiceStatus} />
                 </RendererErrorBoundary>
               </section>
             </div>

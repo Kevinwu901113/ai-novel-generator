@@ -4,9 +4,15 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { ResearchBundleDto, ResearchStateDto } from '@ai-novel/contracts';
+import type {
+  GraphProgressProjectionDto,
+  GraphRunSummaryDto,
+  ResearchBundleDto,
+  ResearchStateDto,
+} from '@ai-novel/contracts';
 import {
   RESEARCH_ESCALATION_OPTIONS,
+  deriveResearchJourneyStage,
   deriveResearchPhase,
   depthLabel,
   orderBundleChain,
@@ -218,5 +224,82 @@ describe('orderBundleChain', () => {
     });
     const result = orderBundleChain([chain1v2, chain2v1, chain1v1]);
     expect(result.map((x) => x.id)).toEqual(['1a', '1b', '2a']);
+  });
+});
+
+describe('deriveResearchJourneyStage（D-B6-7：阶段回退检测）', () => {
+  const RUN: GraphRunSummaryDto = {
+    runId: 'run-1',
+    graphId: 'idea-to-novel-project-v1',
+    graphVersion: '1',
+    kind: 'project',
+    terminalStatus: null,
+    createdAt: '2026-08-10T00:00:00.000Z',
+  };
+
+  function progress(
+    nodes: ReadonlyArray<{ nodeId: string; stage: string; status: string }>,
+  ): GraphProgressProjectionDto {
+    return { activeNodes: nodes as never, possibleNextNodes: [] };
+  }
+
+  it('run 为 null → idea（交还 IntakeRegion）', () => {
+    expect(deriveResearchJourneyStage(null, null)).toBe('idea');
+  });
+
+  it('run 已到终态（如 cancelled）→ idea，即使 progress 仍是 research 节点', () => {
+    const terminalRun = { ...RUN, terminalStatus: 'cancelled' as const };
+    expect(
+      deriveResearchJourneyStage(
+        terminalRun,
+        progress([{ nodeId: 'RESEARCH_ESCALATION', stage: 'research', status: 'succeeded' }]),
+      ),
+    ).toBe('idea');
+  });
+
+  it('run 存在但 progress 为 null → null（瞬时态，不强行回退）', () => {
+    expect(deriveResearchJourneyStage(RUN, null)).toBe(null);
+  });
+
+  it('progress 无 activeNodes → null（瞬时态）', () => {
+    expect(deriveResearchJourneyStage(RUN, progress([]))).toBe(null);
+  });
+
+  it('waiting_for_human 节点存在（如 RESEARCH_ESCALATION）→ 其 stage 投影', () => {
+    expect(
+      deriveResearchJourneyStage(
+        RUN,
+        progress([
+          { nodeId: 'RESEARCH_ESCALATION', stage: 'research', status: 'waiting_for_human' },
+        ]),
+      ),
+    ).toBe('research');
+  });
+
+  it('modify_requirements 回环后 frontier 落在 COLLECT_ANSWER（clarify）→ idea', () => {
+    expect(
+      deriveResearchJourneyStage(
+        RUN,
+        progress([{ nodeId: 'COLLECT_ANSWER', stage: 'clarify', status: 'waiting_for_human' }]),
+      ),
+    ).toBe('idea');
+  });
+
+  it('use_current_research/skip_research 前进到 BLUEPRINT_GENERATE（blueprint）→ blueprint', () => {
+    expect(
+      deriveResearchJourneyStage(
+        RUN,
+        progress([{ nodeId: 'BLUEPRINT_GENERATE', stage: 'blueprint', status: 'active' }]),
+      ),
+    ).toBe('blueprint');
+  });
+
+  it('无 waiting_for_human 节点时取第一个 active 节点的 stage', () => {
+    expect(
+      deriveResearchJourneyStage(
+        RUN,
+        progress([{ nodeId: 'RESEARCH_DECISION', stage: 'research', status: 'active' }]),
+      ),
+    ).toBe('research');
   });
 });
