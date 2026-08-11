@@ -60,11 +60,14 @@ import {
   isValidSetSourceExclusionInput,
   isValidListSourceExclusionsInput,
   isValidGetBlueprintStateInput,
+  isValidGetBlueprintInput,
+  encodeErrorCode,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
   type ResearchStateDto,
   type ResearchBundleDto,
   type BlueprintStateDto,
+  type StoryBlueprintDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -104,7 +107,16 @@ const log = (...args: unknown[]) => console.log('[main]', ...args);
 
 // ── IPC 处理器（不等待 Worker，立即注册）──────────────────────────
 
-/** 包装 sendToWorker 调用，确保错误码传递给 Renderer */
+/**
+ * 包装 sendToWorker 调用，确保错误码传递给 Renderer。
+ *
+ * 注意：Electron 的 ipcMain.handle 只把抛出错误的 `error.toString()` 回传
+ * 给 preload/renderer——挂在 Error 上的自定义 `.code` 属性在这一跳就已丢失
+ * （Electron 43.2.0 实测确认）。因此这里不再依赖 `.code` 属性本身跨边界
+ * 存活，而是把 code 编进 message 文本（`encodeErrorCode`，contracts 单一
+ * 事实源），renderer 侧用 `decodeErrorCode` 从（可能被 Electron 包裹过的）
+ * message 中解码回来。仍保留 `.code` 属性用于同进程内的调用方/测试。
+ */
 async function forwardToWorker(request: {
   requestId: string;
   command: string;
@@ -115,7 +127,7 @@ async function forwardToWorker(request: {
   } catch (err) {
     const code = (err as Error & { code?: string }).code || 'PROJECT_CREATE_FAILED';
     const message = err instanceof Error ? err.message : '操作失败';
-    const forwarded = new Error(message) as Error & { code?: string };
+    const forwarded = new Error(encodeErrorCode(code, message)) as Error & { code?: string };
     forwarded.code = code;
     throw forwarded;
   }
@@ -1130,6 +1142,22 @@ ipcMain.handle(
       command: 'blueprint.getState',
       payload: input,
     })) as BlueprintStateDto;
+  },
+);
+
+// 蓝图正文读取（B8/D-B8-1）：UI 展示前提/人物/世界/章节结构所需，getState 只有标量投影。
+ipcMain.handle(
+  IPC_CHANNELS.BLUEPRINT_GET_BLUEPRINT,
+  async (_event, input: unknown): Promise<StoryBlueprintDto | null> => {
+    if (!isValidGetBlueprintInput(input)) {
+      throw Object.assign(new Error('无效的蓝图查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'blueprint.getBlueprint',
+      payload: input,
+    })) as StoryBlueprintDto | null;
   },
 );
 

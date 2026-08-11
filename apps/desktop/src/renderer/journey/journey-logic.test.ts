@@ -6,8 +6,10 @@
 
 import { describe, it, expect } from 'vitest';
 import type { JourneyStage } from '../intake/intake-logic';
+import type { GraphProgressProjectionDto, GraphRunSummaryDto } from '@ai-novel/contracts';
 import {
   advanceMaxFrontierStage,
+  deriveFrontierStage,
   deriveViewStage,
   isImplementedStage,
   reachedStagesUpTo,
@@ -24,10 +26,10 @@ describe('stageIndex', () => {
 });
 
 describe('isImplementedStage', () => {
-  it('idea/research 已建 Region；blueprint/manuscript 尚未建（B7/B8 起补齐）', () => {
+  it('idea/research/blueprint 已建 Region；manuscript 尚未建（GE-7 补齐）', () => {
     expect(isImplementedStage('idea')).toBe(true);
     expect(isImplementedStage('research')).toBe(true);
-    expect(isImplementedStage('blueprint')).toBe(false);
+    expect(isImplementedStage('blueprint')).toBe(true);
     expect(isImplementedStage('manuscript')).toBe(false);
   });
 });
@@ -111,24 +113,24 @@ describe('deriveViewStage', () => {
     ).toBe('research');
   });
 
-  it('规则 3：frontierStage=blueprint 且无显式选择 → 回落 research（核心 blocker 回归：调研内容仍可展示）', () => {
+  it('规则 2（B8）：frontierStage=blueprint 已是已实现阶段 → 直接展示 blueprint', () => {
     expect(
       deriveViewStage({
         frontierStage: 'blueprint',
         userSelectedStage: null,
         reachedStages: reachedStagesUpTo('blueprint'),
       }),
-    ).toBe('research');
+    ).toBe('blueprint');
   });
 
-  it('规则 3：frontierStage=manuscript 且无显式选择 → 同样回落 research', () => {
+  it('规则 3：frontierStage=manuscript（尚未建 Region）→ 回落到不超过它的最近已实现阶段 blueprint', () => {
     expect(
       deriveViewStage({
         frontierStage: 'manuscript',
         userSelectedStage: null,
         reachedStages: reachedStagesUpTo('manuscript'),
       }),
-    ).toBe('research');
+    ).toBe('blueprint');
   });
 
   it('用户选择被新项目重置（userSelectedStage=null）后，viewStage 重新跟随 frontierStage', () => {
@@ -141,5 +143,142 @@ describe('deriveViewStage', () => {
         reachedStages: reachedStagesUpTo('idea'),
       }),
     ).toBe('idea');
+  });
+});
+
+describe('deriveFrontierStage（D-B8-2/D-B8-3：阶段派生上提到 App）', () => {
+  const RUN: GraphRunSummaryDto = {
+    runId: 'run-1',
+    graphId: 'idea-to-novel-project-v1',
+    graphVersion: '1',
+    kind: 'project',
+    terminalStatus: null,
+    createdAt: '2026-08-11T00:00:00.000Z',
+  };
+
+  function progress(
+    activeNodes: GraphProgressProjectionDto['activeNodes'],
+  ): GraphProgressProjectionDto {
+    return { activeNodes, possibleNextNodes: [] };
+  }
+
+  it('无 run → idea', () => {
+    expect(
+      deriveFrontierStage({
+        run: null,
+        progress: null,
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: false,
+      }),
+    ).toBe('idea');
+  });
+
+  // D-B8-3 的核心：终态 activeNodes 恒空，只能按已产出 artifact 回推，
+  // 否则已就绪项目冷启动后阶段回落 idea、蓝图永远回不去。
+  it('终态 + 有蓝图 artifact → blueprint（三终态皆然）', () => {
+    for (const status of ['completed', 'blocked', 'cancelled'] as const) {
+      expect(
+        deriveFrontierStage({
+          run: { ...RUN, terminalStatus: status },
+          progress: progress([]),
+          hasBlueprintArtifact: true,
+          hasResearchArtifact: true,
+        }),
+      ).toBe('blueprint');
+    }
+  });
+
+  it('终态 + 无蓝图但有调研 artifact → research', () => {
+    expect(
+      deriveFrontierStage({
+        run: { ...RUN, terminalStatus: 'cancelled' },
+        progress: progress([]),
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: true,
+      }),
+    ).toBe('research');
+  });
+
+  it('终态 + 无任何 artifact → idea', () => {
+    expect(
+      deriveFrontierStage({
+        run: { ...RUN, terminalStatus: 'blocked' },
+        progress: progress([]),
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: false,
+      }),
+    ).toBe('idea');
+  });
+
+  it('非终态：waiting_for_human 节点优先于其他 active 节点', () => {
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: progress([
+          { nodeId: 'RESEARCH_EXECUTE', stage: 'research', status: 'active' },
+          { nodeId: 'BLUEPRINT_USER_GATE', stage: 'blueprint', status: 'waiting_for_human' },
+        ]),
+        hasBlueprintArtifact: true,
+        hasResearchArtifact: true,
+      }),
+    ).toBe('blueprint');
+  });
+
+  it('非终态：无 progress / 无 active 节点 → null（保留上一次已知阶段，不回退闪烁）', () => {
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: null,
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: false,
+      }),
+    ).toBe(null);
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: progress([]),
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: false,
+      }),
+    ).toBe(null);
+  });
+
+  it('非终态：artifact 标记不影响活跃节点的判定', () => {
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: progress([{ nodeId: 'COLLECT_ANSWER', stage: 'clarify', status: 'active' }]),
+        hasBlueprintArtifact: true,
+        hasResearchArtifact: true,
+      }),
+    ).toBe('idea');
+  });
+
+  // B8 独立复查坐实：人工决策提交后、异步驱动写入 terminalStatus 之前，存在
+  // "终态节点（stage 'done'）active 而 run 仍非终态"的真实窗口。'done' 不是用户
+  // 阶段，直接投影会得到 'manuscript' 并被 maxFrontierStage 单调锁死到会话结束
+  // （右栏"当前阶段：成稿"+ JourneyNav 成稿项永久点亮）。
+  it("终态节点在途窗口（stage 'done' active、run 非终态）+ 蓝图 artifact → blueprint，绝不投影 manuscript", () => {
+    for (const nodeId of ['PROJECT_READY', 'PROJECT_CANCELLED', 'PROJECT_BLOCKED']) {
+      expect(
+        deriveFrontierStage({
+          run: RUN,
+          progress: progress([{ nodeId, stage: 'done', status: 'active' }]),
+          hasBlueprintArtifact: true,
+          hasResearchArtifact: true,
+        }),
+      ).toBe('blueprint');
+    }
+  });
+
+  it('终态节点在途窗口 + 无蓝图 artifact → null（保留上一阶段，等 terminalStatus 落地定论）', () => {
+    expect(
+      deriveFrontierStage({
+        run: RUN,
+        progress: progress([{ nodeId: 'PROJECT_CANCELLED', stage: 'done', status: 'active' }]),
+        hasBlueprintArtifact: false,
+        hasResearchArtifact: true,
+      }),
+    ).toBe(null);
   });
 });

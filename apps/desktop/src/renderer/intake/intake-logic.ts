@@ -81,11 +81,6 @@ export function deriveIntakePhase(
   return { kind: 'working' };
 }
 
-/** 旅程当前阶段（导航高亮）：terminal / 无 run 时停留 Idea */
-export function journeyStageFromPhase(phase: IntakePhase): JourneyStage {
-  return phase.kind === 'beyond-intake' ? phase.journeyStage : 'idea';
-}
-
 /**
  * 自动创建 run 幂等键（D-B4-2）：以既有 project run 数为代际号——
  * 同代际重复点击/竞态天然去重（payloadHash 只含 projectId，同键即同 run），

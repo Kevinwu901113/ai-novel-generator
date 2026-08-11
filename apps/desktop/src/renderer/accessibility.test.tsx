@@ -40,6 +40,9 @@ import { LiveRegion } from './accessibility/LiveRegion';
 import { SearchKeyPanel } from './research/SearchKeyPanel';
 import { ResearchEscalationPanel } from './research/ResearchEscalationPanel';
 import { ResearchBundleView } from './research/ResearchBundleView';
+import { BlueprintView } from './blueprint/BlueprintView';
+import { BlueprintGatePanel } from './blueprint/BlueprintGatePanel';
+import { BlueprintEscalationPanel } from './blueprint/BlueprintEscalationPanel';
 
 // ── Mock 数据 ────────────────────────────────────────────────────────
 
@@ -1808,4 +1811,166 @@ describe('九、Research 无障碍（B6）', () => {
     const other = screen.getByRole('button', { name: 'v1' });
     expect(other).not.toHaveAttribute('aria-current');
   });
+
+  // ── B8：蓝图 UI 无障碍 ───────────────────────────────────────────
+
+  // 51. BlueprintGatePanel：两个选项都是原生 button；失效时"接受"禁用（D-B8-4）
+  it('BlueprintGatePanel：两选项为原生 button，未失效时均可用', () => {
+    const onChoose = vi.fn();
+    render(
+      <BlueprintGatePanel busy={false} invalidated={false} rewriteUsed={0} onChoose={onChoose} />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(2);
+    buttons.forEach((btn) => {
+      expect(btn.tagName).toBe('BUTTON');
+      expect(btn).toBeEnabled();
+    });
+    fireEvent.click(buttons[0]);
+    expect(onChoose).toHaveBeenCalledWith('accept');
+  });
+
+  it('BlueprintGatePanel：失效时"接受"同时带 disabled 与 aria-disabled（不仅靠视觉）', () => {
+    render(
+      <BlueprintGatePanel busy={false} invalidated={true} rewriteUsed={0} onChoose={vi.fn()} />,
+    );
+    const accept = screen.getByRole('button', { name: /接受这份蓝图/ });
+    expect(accept).toBeDisabled();
+    expect(accept).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeEnabled();
+  });
+
+  it('BlueprintGatePanel：busy=true 时全部禁用（避免重复提交）', () => {
+    render(
+      <BlueprintGatePanel busy={true} invalidated={false} rewriteUsed={0} onChoose={vi.fn()} />,
+    );
+    screen.getAllByRole('button').forEach((btn) => expect(btn).toBeDisabled());
+  });
+
+  it('BlueprintGatePanel：改写次数耗尽时 request_rewrite 保持可用且文案如实（进入升级决策的唯一入口）', () => {
+    // 独立复查坐实的 blocker：gate→escalation 边要求"耗尽后再提交一次
+    // request_rewrite"才路由进四选项——禁用它 gate 就成死端。
+    const onChoose = vi.fn();
+    render(
+      <BlueprintGatePanel busy={false} invalidated={false} rewriteUsed={3} onChoose={onChoose} />,
+    );
+    const escalate = screen.getByRole('button', { name: /不用这版，进入后续决策/ });
+    expect(escalate).toBeEnabled();
+    expect(screen.getByText('重新生成次数已用完')).toBeInTheDocument();
+    fireEvent.click(escalate);
+    expect(onChoose).toHaveBeenCalledWith('request_rewrite');
+  });
+
+  it('BlueprintGatePanel：失效+耗尽叠加时仍有可用出路（不得零操作死锁）', () => {
+    render(
+      <BlueprintGatePanel busy={false} invalidated={true} rewriteUsed={3} onChoose={vi.fn()} />,
+    );
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /不用这版，进入后续决策/ })).toBeEnabled();
+  });
+
+  // 52. BlueprintEscalationPanel：四选项；失效时 accept_current 禁用
+  it('BlueprintEscalationPanel：四个选项都是原生 button', () => {
+    const onChoose = vi.fn();
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={false}
+        contentUnavailable={false}
+        onChoose={onChoose}
+      />,
+    );
+    const buttons = screen.getAllByRole('button');
+    expect(buttons).toHaveLength(4);
+    buttons.forEach((btn) => expect(btn.tagName).toBe('BUTTON'));
+    fireEvent.click(buttons[0]);
+    expect(onChoose).toHaveBeenCalledWith('accept_current');
+  });
+
+  it('BlueprintEscalationPanel：失效时 accept_current 禁用且有可读说明', () => {
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={true}
+        contentUnavailable={false}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();
+    expect(screen.getByText(/创作要求已变更/)).toBeInTheDocument();
+  });
+
+  it('BlueprintEscalationPanel：正文不可见时 accept_current 禁用且有可读说明，其余三项可用', () => {
+    // 独立复查：不能让用户接受一版从未看到的蓝图；其余选项不依赖看到内容
+    render(
+      <BlueprintEscalationPanel
+        busy={false}
+        invalidated={false}
+        contentUnavailable={true}
+        onChoose={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /就用现在这版蓝图/ })).toBeDisabled();
+    expect(screen.getByText(/蓝图内容当前无法显示/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /修改创作要求/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /稍后再说/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /取消/ })).toBeEnabled();
+  });
+
+  // 53. BlueprintView：折叠控件用 aria-expanded；结局默认折叠（D-B8-8）
+  it('BlueprintView：结局方向默认折叠，控件用 aria-expanded 表达状态', () => {
+    render(<BlueprintView blueprint={blueprintForA11y()} stale={false} />);
+    const endingBtn = screen.getByRole('button', { name: '查看结局方向' });
+    expect(endingBtn).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('结局文本')).not.toBeInTheDocument();
+
+    fireEvent.click(endingBtn);
+    expect(screen.getByText('结局文本')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '收起结局方向' })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    );
+  });
+
+  it('BlueprintView：章节展开控件用 aria-expanded，展开后可读到章节目标', () => {
+    render(<BlueprintView blueprint={blueprintForA11y()} stale={false} />);
+    const chapterBtn = screen.getByRole('button', { name: /第一章/ });
+    expect(chapterBtn).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(chapterBtn);
+    expect(chapterBtn).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('引出案件')).toBeInTheDocument();
+  });
+
+  it('BlueprintView：每个分节都有标题，且与 section 经 aria-labelledby 关联', () => {
+    render(<BlueprintView blueprint={blueprintForA11y()} stale={false} />);
+    for (const name of [
+      '故事前提',
+      /人物（\d+）/,
+      '人物关系',
+      '世界设定',
+      '核心冲突',
+      /情节线（\d+）/,
+      /章节结构/,
+      '结局方向',
+    ]) {
+      expect(screen.getByRole('heading', { name })).toBeInTheDocument();
+    }
+  });
 });
+
+function blueprintForA11y() {
+  return {
+    id: 'bp-1',
+    projectId: 'p1',
+    version: 1,
+    premise: '前提文本',
+    characters: [{ name: '甲', role: '主角', description: '描述' }],
+    relationships: ['甲与乙'],
+    world: '世界文本',
+    conflict: '冲突文本',
+    ending: '结局文本',
+    plotlines: [{ name: '主线', summary: '摘要' }],
+    chapters: [{ id: 'ch-1', title: '第一章', goal: '引出案件' }],
+    createdAt: '2026-08-11T00:00:00.000Z',
+  };
+}

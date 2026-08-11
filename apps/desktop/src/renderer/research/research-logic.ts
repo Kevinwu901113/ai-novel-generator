@@ -10,14 +10,7 @@
  * - 调研问题计划只读（D-B6-1）；不做重新调研按钮（D-B6-6）。
  */
 
-import type {
-  GraphProgressProjectionDto,
-  GraphRunSummaryDto,
-  ResearchBundleDto,
-  ResearchDepthDto,
-  ResearchStateDto,
-} from '@ai-novel/contracts';
-import { journeyStageOf, type JourneyStage } from '../intake/intake-logic';
+import type { ResearchBundleDto, ResearchDepthDto, ResearchStateDto } from '@ai-novel/contracts';
 
 /**
  * 调研相位（判别联合；驱动 ResearchRegion 渲染）。
@@ -200,32 +193,4 @@ export function orderBundleChain(bundles: ReadonlyArray<ResearchBundleDto>): Res
   }
 
   return result;
-}
-
-/**
- * 由当前 project run 的 Graph 进度投影推导旅程阶段（D-B6-7：阶段回退检测）。
- *
- * RESEARCH_ESCALATION 并非只能停在 research 阶段——modify_requirements 回环到
- * SPEC_EXTRACT/COLLECT_ANSWER（stage 'clarify'）、use_current_research/skip_research
- * 前进到 BLUEPRINT_GENERATE（stage 'blueprint'）、cancel/continue_later/预算耗尽
- * 都落到终态 run。ResearchRegion 轮询本函数的结果并回报 App：一旦 frontier 不再是
- * 'research'，App 换回 IntakeRegion（其自身的 deriveIntakePhase 会据此再渲染出
- * 正确的相位——awaiting-answer/extracting/beyond-intake/terminal 皆已有对应处理）。
- *
- * - run 不存在，或已到终态（completed/failed/cancelled/blocked）→ 'idea'
- *   （交还 IntakeRegion：无 run 显示"还没有开始"，terminal 显示对应终态文案）；
- * - 否则取 waiting_for_human 节点（没有则取第一个 active 节点）的 stage 投影；
- * - 无任何 active 节点（节点间过渡的瞬时态）→ null，调用方应保留上一次已知阶段，
- *   不强行回退（避免瞬时态导致的阶段闪烁）。
- */
-export function deriveResearchJourneyStage(
-  run: GraphRunSummaryDto | null,
-  progress: GraphProgressProjectionDto | null,
-): JourneyStage | null {
-  if (!run || run.terminalStatus !== null) return 'idea';
-  if (!progress) return null;
-  const waiting = progress.activeNodes.find((n) => n.status === 'waiting_for_human');
-  const frontier = waiting ?? progress.activeNodes[0];
-  if (!frontier) return null;
-  return journeyStageOf(frontier.stage);
 }

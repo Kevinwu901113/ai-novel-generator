@@ -16,9 +16,12 @@ import { JOURNEY_STAGES, type JourneyStage } from './intake/intake-logic';
 import {
   advanceMaxFrontierStage,
   deriveViewStage,
-  isImplementedStage,
   reachedStagesUpTo,
+  stageIndex,
 } from './journey/journey-logic';
+import { useJourney } from './journey/useJourney';
+import { BlueprintRegion } from './blueprint/BlueprintRegion';
+import { hasActiveBlueprintGenerate } from './blueprint/blueprint-logic';
 import { TaskCenter } from './task-center/TaskCenter';
 import { ResearchRegion } from './research/ResearchRegion';
 import { SearchKeyPanel } from './research/SearchKeyPanel';
@@ -50,13 +53,18 @@ export function App() {
   // 模型服务列表
   const [providers, setProviders] = useState<ReadonlyArray<ProviderPublicState>>([]);
 
-  // 旅程阶段（D-B4-1：由挂载中的 Region 从 Graph 进度投影回报，仅展示用）。
+  // 旅程阶段。
   // B6 REWORK 复查 D-B6-10：展示阶段（viewStage，决定中栏挂载哪个 Region）与
   // 推进阶段（frontierStage，Graph 真实位置，JourneyNav 标示进度）分离——
   // 若中栏挂载单纯 follow frontierStage，调研刚有结果的那一刻，frontier 往往
   // 已经在同一状态快照内推进到 blueprint（sync 节点连推），ResearchRegion 会
   // 被立即卸载换回 IntakeRegion，调研结果永不可达（已坐实 blocker）。
-  const [frontierStage, setFrontierStage] = useState<JourneyStage>('idea');
+  // B8/D-B8-2：frontierStage 不再由挂载中的 Region 经 onStageChange 回报，改由
+  // App 自持的旅程探针（useJourney）独立计算——旧结构在"没有 Region 该被挂载"
+  // 时（未实现阶段、以及 run 终态 activeNodes 恒空）阶段无人回报，已连续产生
+  // 两条同质 blocker（D-B6-10 与 D-B8-3）。
+  const journey = useJourney(currentProject?.id ?? null);
+  const frontierStage = journey.frontierStage;
   // 历史最远 frontier（单调增长，切项目重置）：推导"已到达阶段"集合，
   // 决定 JourneyNav 上哪些阶段可点击回看。
   const [maxFrontierStage, setMaxFrontierStage] = useState<JourneyStage>('idea');
@@ -74,24 +82,36 @@ export function App() {
     setPanelState((prev) => togglePanel(prev, panel));
   }, []);
 
-  // Region 回报 frontierStage（D-B4-1 约定的 onStageChange）：更新推进阶段，
-  // 并单调推进历史最远 frontier（D-B6-10）。
-  const handleStageChange = useCallback((stage: JourneyStage) => {
-    setFrontierStage(stage);
-    setMaxFrontierStage((prev) => advanceMaxFrontierStage(prev, stage));
-  }, []);
+  // 探针推进 frontierStage 时单调推进历史最远 frontier（D-B6-10）。
+  useEffect(() => {
+    setMaxFrontierStage((prev) => advanceMaxFrontierStage(prev, frontierStage));
+  }, [frontierStage]);
 
   // JourneyNav 点击已到达阶段：锁定展示阶段（D-B6-10 规则 1，用户意图优先）。
   const handleSelectJourneyStage = useCallback((stage: JourneyStage) => {
     setUserSelectedStage(stage);
   }, []);
 
+  // 蓝图人工决策落地后的收尾（B8 独立复查坐实的 blocker 修复）：
+  // 1. 解除用户视图锁定——决策可能把 frontier 带去别处（modify_requirements 回
+  //    访谈重出澄清问题），若 userSelectedStage 仍锁在 'blueprint'，中栏会继续
+  //    挂着一份无按钮无说明的旧蓝图，用户点完"修改创作要求"像什么都没发生，
+  //    而新的澄清问题在没被挂载的 Region 里干等；
+  // 2. 立即刷新探针，且把"新状态落地后才 resolve"的 promise 交回 useBlueprint，
+  //    供决策 busy 护航（防止按钮以旧态提前重新可点）。
+  const journeyRefresh = journey.refresh;
+  const handleBlueprintDecisionSettled = useCallback(async () => {
+    setUserSelectedStage(null);
+    await journeyRefresh();
+  }, [journeyRefresh]);
+
   // 展示阶段（决定中栏挂载哪个 Region）+ 已到达阶段集合（JourneyNav 可点击范围）。
   const reachedStages = reachedStagesUpTo(maxFrontierStage);
   const viewStage = deriveViewStage({ frontierStage, userSelectedStage, reachedStages });
-  // frontier 已越过 research（当前为 blueprint/manuscript）但仍在展示调研内容——
-  // ResearchRegion 顶部需要一条明确说明，避免用户以为流程卡住（D-B6-10）。
-  const showResearchBeyondNotice = viewStage === 'research' && !isImplementedStage(frontierStage);
+  // frontier 已越过 research 但仍在展示调研内容（B8 起多为用户主动点回调研阶段
+  // 回看）——ResearchRegion 顶部给一条明确说明，避免用户以为流程卡住（D-B6-10）。
+  const showResearchBeyondNotice =
+    viewStage === 'research' && stageIndex(frontierStage) > stageIndex('research');
 
   // 健康检查（立即）
   useEffect(() => {
@@ -187,7 +207,6 @@ export function App() {
         // 新项目从旅程起点开始（B6：避免沿用上一个项目遗留的旅程状态导致中栏
         // 短暂挂错 Region，即便自纠正也会闪烁；D-B6-10 起需一并重置展示阶段
         // 三元组，否则会沿用上一个项目的 userSelectedStage/reachedStages）
-        setFrontierStage('idea');
         setMaxFrontierStage('idea');
         setUserSelectedStage(null);
         // 创建成功后焦点进入 Grill 工作区
@@ -214,7 +233,6 @@ export function App() {
         setCurrentProject(project);
         // 打开项目从旅程起点开始（B6：同上，各 Region 会据 Graph 进度自纠正；
         // D-B6-10 起一并重置展示阶段三元组）
-        setFrontierStage('idea');
         setMaxFrontierStage('idea');
         setUserSelectedStage(null);
         await loadProjects();
@@ -396,27 +414,40 @@ export function App() {
                 reachedStages={reachedStages}
                 onSelectStage={handleSelectJourneyStage}
               />
+              {/* 探针失败必须可见（B8 复查随行）：D-B8-2 之后阶段派生只由这条
+                  循环驱动，它一旦静默失败，界面会冻在"想法"阶段而用户毫无察觉——
+                  正是"没有 Region 该被挂载时无人回报"那类问题换了个面目。这里给
+                  非阻塞提示（探针下一轮成功即自动消失），不打断当前 Region。 */}
+              {journey.error && (
+                <div className="journey-probe-error" role="status" aria-live="polite">
+                  {journey.error}（正在自动重试）
+                </div>
+              )}
               {/* D-B6-10：中栏按展示阶段（viewStage）互斥挂载，与推进阶段
-                  （frontierStage）分离——任一时刻仍只有一条轮询循环（D-B6-7
-                  的约束不变），但挂载哪个 Region 不再单纯 follow frontier。
-                  viewStage='research' → ResearchRegion；否则 → IntakeRegion
-                  （blueprint/manuscript 尚未建区域时，IntakeRegion 的
-                  beyond-intake 占位兜底；deriveViewStage 默认会先回落到
-                  research，只有用户显式点选 blueprint/manuscript 才会走到
-                  这条占位分支）。 */}
-              {viewStage === 'research' ? (
+                  （frontierStage）分离——挂载哪个 Region 不再单纯 follow frontier。
+                  B8 起三分流：blueprint → BlueprintRegion（阶段与蓝图态由
+                  App 探针以 props 下发，D-B8-2）；research → ResearchRegion；
+                  否则 IntakeRegion（manuscript 尚未建区域，deriveViewStage 默认
+                  会先回落到 blueprint，只有用户显式点选 manuscript 才会走到
+                  IntakeRegion 的 beyond-intake 占位分支）。 */}
+              {viewStage === 'blueprint' ? (
+                <BlueprintRegion
+                  key={currentProject.id}
+                  projectId={currentProject.id}
+                  state={journey.blueprintState}
+                  terminalStatus={journey.run?.terminalStatus ?? null}
+                  generating={hasActiveBlueprintGenerate(journey.progress)}
+                  stateLoading={journey.loading}
+                  onRefresh={handleBlueprintDecisionSettled}
+                />
+              ) : viewStage === 'research' ? (
                 <ResearchRegion
                   key={currentProject.id}
                   projectId={currentProject.id}
-                  onStageChange={handleStageChange}
                   showBeyondResearchNotice={showResearchBeyondNotice}
                 />
               ) : (
-                <IntakeRegion
-                  key={currentProject.id}
-                  projectId={currentProject.id}
-                  onStageChange={handleStageChange}
-                />
+                <IntakeRegion key={currentProject.id} projectId={currentProject.id} />
               )}
             </RendererErrorBoundary>
           </section>

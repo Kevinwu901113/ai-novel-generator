@@ -101,6 +101,41 @@ export interface AppError {
   readonly message: string;
 }
 
+// ── IPC 错误码传输编码 ────────────────────────────────────────────
+//
+// Electron 的 ipcMain.handle 只把 handler 抛出错误的 `error.toString()`
+// 回传给调用方（preload → renderer）：抛出的 Error 上挂的自定义 `.code`
+// 属性在这一跳就已丢失，renderer 侧拿到的是重建的纯 Error，message 形如：
+//   Error invoking remote method '<channel>': Error: <原 message>
+// （Electron 43.2.0 实测确认。）因此 main 侧改为把 code 编进 message 文本
+// 传输，renderer 侧用固定格式的正则解码。编码/解码格式集中定义于此，
+// main 与 renderer 共用同一份运行时实现，避免两处字面量各自维护而漂移。
+
+/** 编码段格式：`[CODE:XXX_YYY]`，仅允许大写字母、数字、下划线。 */
+const ERROR_CODE_PATTERN = /\[CODE:([A-Z0-9_]+)\]/;
+
+/** 把错误码编入 message，供跨 IPC 边界传输（Electron 会丢失 Error 的自定义属性）。 */
+export function encodeErrorCode(code: string, message: string): string {
+  return `[CODE:${code}] ${message}`;
+}
+
+/**
+ * 从（可能被 Electron 包裹过的）message 中解码出错误码。
+ * 未命中编码段，或编码段格式非法（含小写字母等），返回 null。
+ */
+export function decodeErrorCode(message: string): string | null {
+  const match = ERROR_CODE_PATTERN.exec(message);
+  return match ? match[1] : null;
+}
+
+/**
+ * 从 message 中剥离 `[CODE:...]` 编码段，返回剩余展示文案（首尾空白已清理）。
+ * 未命中编码段时原样返回（仅 trim），不改变既有展示行为。
+ */
+export function stripErrorCode(message: string): string {
+  return message.replace(ERROR_CODE_PATTERN, '').trim();
+}
+
 // ── 健康检查 ──────────────────────────────────────────────────────
 
 /** 健康检查响应 */
@@ -341,6 +376,7 @@ export const IPC_CHANNELS = {
   RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
   BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
+  BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1056,9 +1092,129 @@ export function isValidGetBlueprintStateInput(value: unknown): value is GetBluep
   return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
 }
 
-/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7，预埋读通道 D-B7-10） */
+/** 蓝图人物（StoryBlueprint.characters 的公开投影） */
+export interface BlueprintCharacterDto {
+  readonly name: string;
+  readonly role: string;
+  readonly description: string;
+}
+
+export function isValidBlueprintCharacterDto(value: unknown): value is BlueprintCharacterDto {
+  if (!hasRequiredExactKeys(value, ['name', 'role', 'description'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.name === 'string' &&
+    typeof obj.role === 'string' &&
+    typeof obj.description === 'string'
+  );
+}
+
+/** 蓝图情节线 */
+export interface BlueprintPlotlineDto {
+  readonly name: string;
+  readonly summary: string;
+}
+
+export function isValidBlueprintPlotlineDto(value: unknown): value is BlueprintPlotlineDto {
+  if (!hasRequiredExactKeys(value, ['name', 'summary'])) return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.name === 'string' && typeof obj.summary === 'string';
+}
+
+/** 蓝图章节结构条目（GE-6 由 blueprintChapterId 绑定 ChapterGenerationRun） */
+export interface BlueprintChapterDto {
+  readonly id: string;
+  readonly title: string;
+  readonly goal: string;
+}
+
+export function isValidBlueprintChapterDto(value: unknown): value is BlueprintChapterDto {
+  if (!hasRequiredExactKeys(value, ['id', 'title', 'goal'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' && typeof obj.title === 'string' && typeof obj.goal === 'string'
+  );
+}
+
+/**
+ * 权威 StoryBlueprint 公开投影（GE-5/B8，D-B8-1）。
+ *
+ * B7 只给了状态投影（BlueprintStateDto 七个标量），渲染进程拿不到蓝图正文；
+ * 蓝图 UI 的核心交付（查看前提/人物/关系/世界/冲突/情节线/章节结构/结局）依赖本 DTO。
+ * 镜像 B6 的 ResearchBundleDto：worker 侧由 toStoryBlueprintDto 投影，不外泄
+ * domain 内部字段（accepted 属状态、由 BlueprintStateDto 承载，不重复第二事实源）。
+ */
+export interface StoryBlueprintDto {
+  readonly id: string;
+  readonly projectId: string;
+  readonly version: number;
+  readonly premise: string;
+  readonly characters: ReadonlyArray<BlueprintCharacterDto>;
+  readonly relationships: ReadonlyArray<string>;
+  readonly world: string;
+  readonly conflict: string;
+  readonly ending: string;
+  readonly plotlines: ReadonlyArray<BlueprintPlotlineDto>;
+  readonly chapters: ReadonlyArray<BlueprintChapterDto>;
+  readonly createdAt: string;
+}
+
+export function isValidStoryBlueprintDto(value: unknown): value is StoryBlueprintDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'id',
+      'projectId',
+      'version',
+      'premise',
+      'characters',
+      'relationships',
+      'world',
+      'conflict',
+      'ending',
+      'plotlines',
+      'chapters',
+      'createdAt',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.version === 'number' &&
+    typeof obj.premise === 'string' &&
+    Array.isArray(obj.characters) &&
+    obj.characters.every((c) => isValidBlueprintCharacterDto(c)) &&
+    Array.isArray(obj.relationships) &&
+    obj.relationships.every((r) => typeof r === 'string') &&
+    typeof obj.world === 'string' &&
+    typeof obj.conflict === 'string' &&
+    typeof obj.ending === 'string' &&
+    Array.isArray(obj.plotlines) &&
+    obj.plotlines.every((p) => isValidBlueprintPlotlineDto(p)) &&
+    Array.isArray(obj.chapters) &&
+    obj.chapters.every((c) => isValidBlueprintChapterDto(c)) &&
+    typeof obj.createdAt === 'string'
+  );
+}
+
+/** blueprint.getBlueprint 输入（D-B8-1） */
+export interface GetBlueprintInputDto {
+  readonly projectId: string;
+  readonly blueprintId: string;
+}
+
+export function isValidGetBlueprintInput(value: unknown): value is GetBlueprintInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'blueprintId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.blueprintId);
+}
+
+/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7 读通道 D-B7-10；B8 扩 getBlueprint） */
 export interface BlueprintAPI {
   getState(input: GetBlueprintStateInputDto): Promise<BlueprintStateDto>;
+  getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null>;
 }
 
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */

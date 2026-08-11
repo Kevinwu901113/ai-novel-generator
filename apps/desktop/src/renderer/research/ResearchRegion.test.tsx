@@ -292,6 +292,130 @@ describe('ResearchRegion', () => {
     });
   });
 
+  // 决策后刷新被互斥锁吞掉修复（复查随行）：chooseEscalation 是
+  // `await applyHumanDecision(...); await refresh();`——若这个 refresh() 撞上
+  // 1.7s 轮询在途的某一轮，旧实现里互斥锁会直接把它吞掉（什么都不做，busy
+  // 立刻变回 false），随后落地的在途 poll 带回的是写入前的旧态：escalation
+  // 面板原样重现、按钮可点。用受控 Promise 精确复现"用户点击时 poll 恰好在途"
+  // 的时序：断言点击后按钮保持禁用直到补跑那轮真正落地，且最终展示的是决策
+  // 后的新状态，而不是在途 poll 带回的旧状态。
+  it('escalation：决策提交撞上在途 poll 时，refresh 应等补跑落地才 resolve（不得被互斥锁吞掉）', async () => {
+    vi.useFakeTimers();
+    try {
+      const readyBundle = bundle({ id: 'rb-1', conclusion: '决策后的资料包' });
+
+      let listRunsCall = 0;
+      let resolveSecondListRuns: ((v: (typeof RUN)[]) => void) | null = null;
+      const secondListRunsPromise = new Promise<(typeof RUN)[]>((resolve) => {
+        resolveSecondListRuns = resolve;
+      });
+      const listRuns = vi.fn().mockImplementation(() => {
+        listRunsCall += 1;
+        if (listRunsCall === 2) return secondListRunsPromise;
+        return Promise.resolve([RUN]);
+      });
+
+      // 前两次取到的仍是决策前的旧态（escalationActive: true）；第三次起（补跑）
+      // 才是决策后的新态——精确模拟"在途 poll 是在写入之前发出的，只能带回旧数据"。
+      let getStateCall = 0;
+      const getResearchState = vi.fn().mockImplementation(() => {
+        getStateCall += 1;
+        if (getStateCall <= 2) {
+          return Promise.resolve(
+            researchState({
+              researchDecision: 'deep',
+              researchValid: 'invalid',
+              escalationActive: true,
+            }),
+          );
+        }
+        return Promise.resolve(
+          researchState({
+            researchDecision: 'deep',
+            researchValid: 'valid',
+            escalationActive: false,
+            bundleRef: 'rb-1',
+          }),
+        );
+      });
+
+      const applyHumanDecision = vi
+        .fn()
+        .mockResolvedValue({ activeNodes: [], possibleNextNodes: [] });
+
+      const api = mockApi({
+        graph: {
+          listRuns,
+          getRunProgress: vi
+            .fn()
+            .mockResolvedValue(researchProgress('RESEARCH_ESCALATION', 'waiting_for_human')),
+          applyHumanDecision,
+        },
+        research: {
+          getResearchState,
+          getBundle: vi
+            .fn()
+            .mockImplementation(({ bundleId }: { bundleId: string }) =>
+              Promise.resolve(bundleId === 'rb-1' ? readyBundle : null),
+            ),
+          listBundles: vi.fn().mockResolvedValue([readyBundle]),
+          setSourceExclusion: vi.fn().mockResolvedValue([]),
+          listSourceExclusions: vi.fn().mockResolvedValue([]),
+        },
+      });
+      window.desktop = api;
+
+      // 注意：fake timers 下不能用 waitFor/findBy*（其内部轮询依赖真实时钟，
+      // 与 fake timers 搭配会互相卡死）——全程用 act + advanceTimersByTimeAsync
+      // 显式推进并 flush microtask 队列，之后直接同步断言（镜像上面"来源排除：
+      // 轮询响应晚于写入落地"用例的 fake timers 模式）。
+      await act(async () => {
+        render(<ResearchRegion projectId="p1" />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      const optionBtn = screen.getByText('就用现在的调研结果').closest('button');
+      expect(optionBtn).not.toBeNull();
+      expect(optionBtn).not.toBeDisabled();
+
+      // 推进到第二轮 poll：其 listRuns 卡在 pending（secondListRunsPromise 未
+      // resolve）——模拟"用户点击的瞬间，poll 恰好在途"。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1700);
+      });
+
+      // 用户在第二轮 poll 卡住期间点击决策：applyHumanDecision 提交成功，但
+      // 紧随其后的 refresh() 撞上在途 poll，应排队等待补跑，不能提前放行。
+      await act(async () => {
+        optionBtn?.click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(applyHumanDecision).toHaveBeenCalledTimes(1);
+      // busy 必须仍为 true（按钮仍禁用）——若被互斥锁吞掉（旧 bug），chooseEscalation
+      // 的 await refresh() 会立即 resolve，busy 在这里就已经变回 false 了。
+      expect(optionBtn).toBeDisabled();
+      // 在途 poll 尚未落地，面板仍显示决策前的旧态。
+      expect(screen.getByText('就用现在的调研结果')).toBeInTheDocument();
+
+      // 第二轮 poll 的 listRuns 此刻才 resolve，带回写入前的旧态（第 2 次
+      // getResearchState 调用仍是 escalationActive: true）；其 finally 应立即
+      // 补跑第三轮，第三轮才取到决策后的新态。
+      await act(async () => {
+        resolveSecondListRuns?.([RUN]);
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // 断言：补跑已经落地——决策后的新状态展示出来，escalation 面板消失，
+      // chooseEscalation 的 await refresh() 等到补跑落地才 resolve、busy 收尾，
+      // 没有出现"旧态重现 + 按钮可点"的窗口，也没有误报提交失败。
+      expect(screen.queryByText('就用现在的调研结果')).not.toBeInTheDocument();
+      expect(screen.getByText('决策后的资料包')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('来源排除：点击排除按钮调用 setSourceExclusion，用返回列表更新标记', async () => {
     const readyBundle = bundle({
       questions: [{ id: 'q1', text: '问题一', sources: [source()] }],

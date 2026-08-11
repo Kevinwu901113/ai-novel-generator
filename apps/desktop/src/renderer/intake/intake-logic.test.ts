@@ -14,7 +14,6 @@ import {
   currentQuestion,
   deriveIntakePhase,
   intakeRunIdempotencyKey,
-  journeyStageFromPhase,
   journeyStageOf,
   latestProjectRun,
 } from './intake-logic';
@@ -132,7 +131,6 @@ describe('deriveIntakePhase', () => {
       progress([{ nodeId: 'RESEARCH_DECISION', stage: 'research', status: 'active' }]),
     );
     expect(beyond).toEqual({ kind: 'beyond-intake', journeyStage: 'research' });
-    expect(journeyStageFromPhase(beyond)).toBe('research');
   });
 
   it('IDEA_CAPTURE 在途 / 空 activeNodes → working', () => {
