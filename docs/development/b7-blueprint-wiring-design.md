@@ -1,0 +1,101 @@
+# B7 — GE-5 StoryBlueprint 接线 + PROJECT_READY 原子闭环设计（决策记录）
+
+> 状态：ACTIVE（B7 实现期间的工作设计，随 PR 入库）
+> 决策人：Fable（Principal Architect，项目负责人授权）
+> 日期：2026-08-11
+> 事实依据：main `d70eca6`（B6 已合并）之侦察地图；批次定义 takeover-plan §B7、roadmap §10
+
+## 1. 节点执行策略
+
+| 节点                                | 策略                                                              | 说明                                                                                                                                                                                                    |
+| ----------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BLUEPRINT_GENERATE                  | **task-backed**（新任务类型 `BLUEPRINT_GENERATE`，migration v16） | 图契约 `out(null,'storyBlueprint')`——artifact-only 无 outcome，与 RESEARCH_EXECUTE 同形。骨架照 `research-run.ts`，配置校验段照 `spec-extract.ts`（无 search key）。recoveryPolicy=`settle_if_result`。 |
+| BLUEPRINT_USER_GATE                 | **人工 Gate**（既有机制）                                         | `humanDecisionType='blueprint_gate'`，outcome `accept`/`request_rewrite`。运行时无需新代码，唯一新增是 accept 的同事务副作用（D-B7-1）。                                                                |
+| BLUEPRINT_ESCALATION                | **人工 Gate**（既有机制）                                         | `escalation_decision` 四值。`accept_current` 同样需要 accept 副作用（D-B7-2）。                                                                                                                         |
+| PROJECT_READY / BLOCKED / CANCELLED | **TERMINAL**（既有机制）                                          | `completeNode` 尾部按 `terminalStatus` 终态化，无需新代码。                                                                                                                                             |
+
+## 2. 关键机制决策
+
+- **D-B7-1 accept 与 Graph gate 原子化（本批次核心）**：现状是两条独立路径——
+  `blueprint.accept` RPC 单发 `markAccepted`（无事务/无幂等/无 CAS/不校验 Graph 语义），
+  而 PROJECT_READY 转换在 `applyHumanDecision` 的 `BEGIN IMMEDIATE` 事务里。中间失败会留下
+  **run 已 `terminalStatus='completed'` 但 `accepted=0`** 的不可修复状态（终态守卫使
+  `applyHumanDecision` 永久拒绝，只能旁路 UPDATE 手工修），直接违反 roadmap §10
+  "蓝图不接受则不得形成 PROJECT_READY"。
+  **决策**：并入 `applyHumanDecision` 的同一事务，镜像同函数内 `intake_answer` 分支的现成先例
+  （先写权威存储再走 transition，任一步抛错整事务回滚）。依赖已就位：
+  `repos.storyBlueprintRepo` 早已在 `GraphRunTransactionRepositories`（为 resolver 校验而备）。
+  **blueprintId 取自 `record.state.artifacts.storyBlueprint.artifactId`，不接受调用方传入**
+  ——杜绝对任意历史 blueprintId 置 accepted 的伪造（侦察场景 C），且 gate DTO 是 exact-keys
+  校验，加字段反而破坏面大。`artifacts.storyBlueprint === null` 或 `markAccepted` 返回 false
+  → 抛 `GraphRunStateConflictError` 回滚（fail-closed）。
+- **D-B7-2 `accept_current` 同样标记 accepted**：`blueprint-escalation--project-ready-accept`
+  是 PROJECT_READY 的第二条入边，现状**根本没有对应的 accept 写入路径**，走该路径到达终态时
+  `accepted` 恒为 0。与 D-B7-1 同事务同处理。
+- **D-B7-3 收口 blueprint 写入类 RPC**：`graph-handlers.ts` 已确立纪律——"伪造节点完成的通道
+  必须从 RPC 面移除，非人工节点推进只能是 Worker 内部可信能力"。`blueprint.accept` 是同类残余
+  （绕过 Graph 直接改业务状态），`blueprint.generate` 旁路写表、不产 provenance、污染版本号，
+  与 executor 路径冲突。**两者从 RPC 分发移除**；`blueprint.listChapters` 只读保留。
+  application 层 `acceptBlueprint`/`generateBlueprint` 若移除后无引用则一并删除，避免留下
+  语义重叠的第二写入口。
+- **D-B7-4 改写循环的上下文（记录偏离）**：`BLUEPRINT_GENERATE.input.requiresArtifacts` 不含
+  `storyBlueprint`，snapshot 拿不到上一版 ref；`blueprint_gate` DTO 也无 feedback 字段。
+  本批次取**最小方案**：只用 snapshot 里的 `budget.blueprintRewrite` 计数告知模型"这是第 N 次
+  改写，需产出实质不同的蓝图"。不改 L3 权威图（改 input 契约会牵动 validator 测试与 inputHash
+  语义），不改决策 DTO。**代价与偏离**：用户点"请求改写"时无法说明原因，改写只能靠计数变异。
+  产品上这是缺口，登记 TD-029-1，由 B8（蓝图 UI）批次连同 feedback 承载一并设计。
+- **D-B7-5 版本号策略**：现 `generateBlueprint` 用 `listByProject().length + 1`（项目级计数，
+  旁路生成与并发下可重复；UNIQUE 是三元组拦不住）。改为在 executor 的最终事务内取
+  **该项目现有 `MAX(version) + 1`**。resolver 会校验 envelope 声明的 `artifactVersion` 与行内
+  `version` 一致，故版本号必须在同一事务内确定并写入 envelope。
+- **D-B7-6 模型输出解析边界**：镜像 spec-extract 纪律——`schemaVersion === 1`、顶层 exact keys、
+  逐字段类型与长度边界、数量上限（chapters 1..200、characters ≤ 50、plotlines ≤ 20、
+  relationships ≤ 100、每章 goal ≤ 500 字），越界一律抛 `MODEL_RESPONSE_INVALID`；
+  解析通过后再用 domain 的 `createStoryBlueprint` 作第二道域校验（复用既有不变量）。
+- **D-B7-7 无调研路径的 prompt 分支**：`research_decision=none` 与 escalation 的 `skip_research`
+  路径没有 researchBundle，`prepareTask` 的该引导字段 `required=false`，prompt 需要"本项目未做
+  调研"的显式分支（不得把缺失伪装成空调研）。
+- **D-B7-8 失效蓝图不得被接受（fail-closed）**：`applyArtifactChange` 只追加
+  `invalidatedArtifacts`、不清空 `artifacts` 槽位（B6 已就 researchBundle 记录同类问题），
+  且**全仓无任何运行时门禁消费 `invalidatedArtifacts`**。因此用户改了 CreationSpec 之后，
+  停在 BLUEPRINT_USER_GATE 的 run 仍可点 accept 直达 PROJECT_READY，违反 roadmap §10
+  "必须重新生成"。**决策**：在 D-B7-1 的同一事务内，若 `state.invalidatedArtifacts` 含
+  `storyBlueprint` → 抛 `GraphRunStateConflictError` 拒绝 accept。
+  **用户出路**：改点 `request_rewrite` 回环重新生成（预算内），语义正确且无需改图。
+  自动把 BLUEPRINT_GENERATE 重置为 pending 属 transition 层改动，本批次不做，登记 TD-029-2。
+- **D-B7-9 不写 `project_metadata.status`**：该字段自建表起是死字段（默认 `'idea'`，全仓无写入方）。
+  `terminalStatus` 已是权威，roadmap §10 未要求项目级状态投影。本批次不引入第二事实源。
+- **D-B7-10 预埋蓝图读通道**：新增 `blueprint.getState`（四层贯通），返回
+  `BlueprintStateDto`（镜像 B6 的 `ResearchStateDto`）：`runId / blueprintRef / accepted /
+blueprintInvalidated / gateActive / escalationActive / rewriteUsed`。B8 的蓝图 UI 与
+  GE-6 的 `createChapterRun`（需要"当前已接受蓝图 + 章节"）都依赖它；按 B5→B6 的分工惯例，
+  通道在 wiring 批次预埋，UI 批次纯渲染。`blueprint.listChapters` 保留。
+- **D-B7-11 任务类型命名**：`BLUEPRINT_GENERATE`（与节点同名，可读性优先）。
+- **D-B7-12 顺带销账**：`blueprint-repositories.ts` 的 `save(…, updatedAt)` 实际写入
+  `created_at` 列（参数名与列语义错位）；`getById` 的 `ORDER BY version DESC LIMIT 1` 在
+  PK `(project_id,id)` 下恒单行、无意义。一并修正。
+
+## 3. 改动点清单（按依赖序）
+
+1. **migration v16**：`tasks` CHECK 重建加 `BLUEPRINT_GENERATE`（镜像 v13/v14）；
+   `DbTaskType` / `TaskType` 联合同步。
+2. **application**：`graph-run.ts` gate/escalation 分支加同事务 accept + 失效 fail-closed
+   （D-B7-1/2/8）；`blueprint.ts` 按 D-B7-3 收口、版本号改 MAX+1（D-B7-5）。
+3. **task-engine**：新建 `blueprint-generate.ts`（system prompt / buildPrompt /
+   parseBlueprintGenerateV1 / executeBlueprintGenerate），index 导出。
+4. **worker**：新建 `blueprint-executors.ts`（descriptor + prepareTask + register）；
+   `graph-task-runner.ts` 加 taskType 分派与 deps 并集；`index.ts` 注册 + deps 装配 +
+   RPC 面收口（D-B7-3）+ `blueprint.getState` 分发。
+5. **contracts / preload / main**：`BlueprintStateDto` + 校验器 + IPC 通道三层（D-B7-10）。
+6. **测试**：blueprint-generate 单测（解析边界 + 失败三分支 + 最终事务 all-or-nothing）；
+   blueprint-executors 单测（prepareTask 引导字段、researchBundle 缺失分支）；
+   **blueprint-e2e 全链**（三终态 + 原子性回归 + 失效拒绝 + rewrite 循环 + 重启恢复）；
+   更新 research-e2e 里失效的 `BLUEPRINT_GENERATE:unregistered` 断言；
+   task-labels 补 `BLUEPRINT_GENERATE`。
+7. **文档**：roadmap（GE-5 行 + 下一步）、current-project-state、tech-debt（TD-029 登记）。
+
+## 4. 非目标
+
+- 不做蓝图 UI（B8）；不改 L3 权威图定义；不引入改写 feedback 承载（D-B7-4，B8 再议）；
+- 不做失效后自动重置节点（D-B7-8，TD-029-2）；不写 `project_metadata.status`（D-B7-9）；
+- 不做 GE-6 的 chapter run 入口（仅预埋读通道）。
