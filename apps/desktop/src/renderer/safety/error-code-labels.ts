@@ -20,6 +20,10 @@ export const ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
   PROVIDER_TIMEOUT: '连接超时',
   PROVIDER_RESPONSE_INVALID: '响应格式异常',
 
+  // ── 搜索服务（调研）相关 ─────────────────────────────────────────
+  SEARCH_KEY_REQUIRED: '请先配置搜索服务 API Key',
+  SEARCH_KEY_READ_FAILED: '无法读取搜索服务 API Key',
+
   // ── 任务相关 ─────────────────────────────────────────────────────
   TASK_INTERRUPTED: '任务在上次运行中被中断',
   TASK_EXECUTION_FAILED: '任务执行失败',
