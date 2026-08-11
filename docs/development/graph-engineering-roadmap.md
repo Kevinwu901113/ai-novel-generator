@@ -352,7 +352,16 @@ gate 决策、终态）。
     事实笔记折叠/结论/版本链）+ 来源排除（project 级 URL 排除表 v15）+ Tavily key 录入 +
     人工升级 Gate；随行 D-B6-9（失效资料包单独标记，避免作废内容当现行展示）与
     TD-026-2 销账（重驱动改 leading+trailing 防抖）
-    （2026-08-11；设计 `b6-research-ui-design.md`）。
+    （2026-08-11；设计 `b6-research-ui-design.md`）；
+    **独立对抗式复查先判 REWORK**（1 blocker：D-B6-7"中栏按 journeyStage 互斥挂载"
+    未区分 Graph 推进阶段与中栏展示阶段，调研有结果的那一刻 frontier 常已同快照
+    推进到 blueprint，ResearchRegion 被立即卸载换回 IntakeRegion 占位文案，本批
+    交付的核心内容——资料包查看/来源排除/作废横幅——事实上永不可达；测试盲区：
+    此前无任何测试覆盖"真实 progress → 阶段派生 → App 挂载哪个 Region"），修复
+    D-B6-10（展示阶段 viewStage 与推进阶段 frontierStage 分离 + JourneyNav 可
+    点击回看 + App 级集成测试锁定该链路）后复查 ACCEPT；随行修复六项（强度徽标
+    未跟随版本链、来源排除轮询回滚闪烁、escalation 选项断言改对齐 domain 枚举、
+    取消排除不应受 URL 安全校验、新增 unsettled 兜底相位等）。
 - **下一步（依依赖顺序）**：
   - **B7/B8**：补完 GE-5：真实 Blueprint executor + 模糊想法→PROJECT_READY E2E + 蓝图 UI；
   - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；

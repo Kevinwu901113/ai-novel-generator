@@ -5,7 +5,9 @@
  * - research.getResearchState —— 读最新 project run 的调研态投影（D-B6-3）；
  * - research.getBundle / research.listBundles —— 读 ResearchBundle（repo 现成）；
  * - research.setSourceExclusion / research.listSourceExclusions —— project 级来源
- *   排除（D-B6-2，migration v15）；url 必须通过 isSafeSourceUrl 校验。
+ *   排除（D-B6-2，migration v15）；新增排除（excluded=true）时 url 必须通过
+ *   isSafeSourceUrl 校验，取消排除（excluded=false）不受此约束（复查随行修复：
+ *   否则日后收紧安全规则会导致历史已排除 URL 永久无法取消排除）。
  *
  * research.execute 默认使用确定性 fake provider（不联网）；真实外部搜索 provider
  * 接入为后续步骤。V1 安全边界（validateResearchTargetUrl）在 orchestrator 内强制执行。
@@ -241,7 +243,11 @@ export async function dispatchResearchCommand(
         throw new AppError('VALIDATION_ERROR', '非法 excluded 输入');
       }
       const excluded = obj.excluded;
-      if (!isSafeSourceUrl(url)) {
+      // 复查随行修复：只在新增排除（excluded=true）时校验 URL 安全性。
+      // 取消排除（excluded=false）不应受 isSafeSourceUrl 约束——否则日后收紧
+      // 校验规则会导致历史上（在旧规则下）已合法排除的 URL 再也无法取消排除，
+      // 用户会被永久卡在一条早已存在于本地 DB 的记录上。
+      if (excluded && !isSafeSourceUrl(url)) {
         throw new AppError('VALIDATION_ERROR', `非法或不安全的来源 URL: ${url}`);
       }
       const projDb = ctx.getProjectDb(projectId);

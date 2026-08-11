@@ -1,8 +1,12 @@
 # B6 — GE-4 Research UI 设计（决策记录）
 
-> 状态：ACTIVE（B6 实现期间的工作设计，随 PR 入库）
+> 状态：ACTIVE（B6 实现期间的工作设计，随 PR 入库；2026-08-11 追加 D-B6-10，见下）
 > 决策人：Fable（Principal Architect，项目负责人授权）
-> 日期：2026-08-11
+> 日期：2026-08-11（初版）；D-B6-10 补记同日——独立对抗式复查判 REWORK，
+> 一条已坐实 blocker：D-B6-7 的"中栏按 journeyStage 互斥挂载"在调研有结果的
+> 那一刻会立即把 ResearchRegion 卸载换回 IntakeRegion（Graph sync 节点连推导致
+> frontier 往往从未在某次可观测 poll 中停留在 research），本批交付的核心内容
+> （ResearchBundleView/来源排除/版本链/作废横幅）事实上永不可达。
 > 事实依据：B5 合并后 main 之侦察地图（b6 侦察报告）；批次定义 takeover-plan §B6、roadmap §15
 
 ## 1. 交付范围
@@ -54,6 +58,65 @@ Tavily search key 录入界面，挂进 B4 四阶段旅程 shell 的 research �
   轮询检测并回报，App 换回 IntakeRegion。
 - **D-B6-8 TD-026-2 随批修复**：redriveAfterProviderConfig 防抖补尾随重扫
   （录 key 后调研自动继续是 B6 用户可感知主路径，可靠性随批闭环）。
+- **D-B6-10 展示阶段与推进阶段分离（复查 REWORK 修复，2026-08-11 补记）**：
+  D-B6-7 的"中栏按 journeyStage 互斥挂载"把"Graph 真实进度"与"中栏展示什么"
+  当成同一个状态，二者实际不是一回事——`driveRun` 会在同一状态快照内连续
+  推进 sync 节点：deep 全链调研成功后，`RESEARCH_VALIDATE` 已 succeeded、
+  `BLUEPRINT_GENERATE` 已 active（TD-020 无 executor 故停在 active），从未有
+  一次可观测的 poll 快照让 frontier 停留在 research。旧实现下，调研刚有结果
+  的那一刻，App 已经把 ResearchRegion 换成 IntakeRegion 的占位文案——
+  ResearchBundleView（问题/来源/事实笔记/结论/版本链/来源排除开关）、
+  D-B6-9 的作废横幅，全部永不渲染；`escalation` 相位下用户被问"就用现在的
+  调研结果吗"却看不到结果；JourneyNav 纯展示不可点击，没有任何回到 research
+  视图的入口。修复：
+  - **frontierStage**（推进阶段）：沿用现有 `deriveResearchJourneyStage`，
+    表达 Graph 真实位置；JourneyNav 用它标示"当前进度"（`aria-current="step"`）。
+  - **viewStage**（展示阶段）：决定中栏挂载哪个 Region，纯函数
+    `journey-logic.deriveViewStage`，按优先级：
+    1. 用户在 JourneyNav 上显式点选某个**已到达过**的阶段——用户意图优先，
+       即使该阶段尚无 Region 也锁定展示（诚实反馈"该阶段尚未提供界面"，
+       不做二次回落）；
+    2. 否则默认跟随 frontierStage，前提是该阶段已建 Region；
+    3. frontierStage 指向尚未建 Region 的阶段（当前为 blueprint/manuscript）
+       且无显式用户选择——回落到 research。这里**不需要**额外读一次
+       `researchDecision` 来判断"调研是否有内容可展示"：Graph 结构保证
+       frontier 能越过 research 阶段（到达 BLUEPRINT_GENERATE 及之后）之前，
+       `RESEARCH_DECISION` 必然已产出结果（条件边要求 outcome 存在才能前进），
+       所以用 frontierStage 相对 research 的序号位置本身就是"调研已有可展示
+       内容"的结构性代理信号。这避免了 App 端一个真实的鸡生蛋问题——冷启动
+       时（重开一个已经推进到 blueprint 的项目）第一次 poll 就直接落在
+       blueprint，ResearchRegion 尚未挂载、读不到 `researchDecision`，若坚持
+       要用"实时读到的 researchDecision"做判断，就必须额外发一次一次性探测
+       请求或维持第二条轮询循环，与 D-B6-7"任一时刻只有一条轮询循环"的约束
+       冲突。frontierStage 序号仍小于 research（即 idea/clarify）时，回落到
+       idea。
+  - **JourneyNav 可点击回看**：新增"已到达阶段"集合
+    `journey-logic.reachedStagesUpTo`，由"历史最远 frontier"
+    （`advanceMaxFrontierStage`，单调增长，切项目重置）推导；已到达阶段
+    （含当前）用真实 `<button>` 渲染、可点击切 viewStage，未到达阶段
+    `disabled + aria-disabled`。无障碍：当前进度项标 `aria-current="step"`，
+    被查看项标 `aria-pressed`（未到达阶段恒为 `undefined`，不给出误导性
+    "未按下"语义）；两者都各自附一条 `sr-only` 文案（"（当前进度）"/
+    "（正在查看）"），可同时出现在同一项上（当二者恰好是同一阶段时），
+    保证屏幕阅读器能明确区分"当前进度在蓝图，正在查看调研"这类不一致场景。
+  - **blueprint/manuscript 尚无 Region**：viewStage 因规则 3 回落到 research
+    展示调研内容时，App 计算 `showBeyondResearchNotice`（`viewStage==='research'`
+    且 frontierStage 不是已实现阶段）传给 ResearchRegion，顶部渲染一条说明
+    （"调研已完成，蓝图阶段开发中"），不让用户以为流程卡住。
+  - 纯逻辑落在新文件 `apps/desktop/src/renderer/journey/journey-logic.ts`
+    （`stageIndex`/`isImplementedStage`/`advanceMaxFrontierStage`/
+    `reachedStagesUpTo`/`deriveViewStage`），node 环境单测覆盖三条优先级
+    规则与集合推导的边界情形。`JourneyNav`/`App.tsx` 相应改造；
+    `ResearchRegion`/`useResearch` 不变更挂载判定逻辑本身（仍由 App 决定是否
+    挂载），只新增 `showBeyondResearchNotice` 展示 prop。
+  - 新增 App 级集成测试（此前测试盲区：没有任何测试覆盖"真实 progress →
+    阶段派生 → App 挂载哪个 Region"这条链，`ResearchRegion.test.tsx` 直接挂载
+    组件手喂 state 绕开了 App 分流，`app.test.tsx` 的 journeyStage 此前恒为
+    idea）：mock `graph.getRunProgress` 直接返回
+    `activeNodes:[{nodeId:'BLUEPRINT_GENERATE', stage:'blueprint', ...}]`
+    模拟冷启动场景，断言 ResearchBundleView 的内容（问题/来源/排除开关）可达，
+    且 JourneyNav 的"当前进度"（蓝图）与"正在查看"（调研）在无障碍语义上
+    可区分。
 
 ## 3. 改动点清单（按依赖序）
 

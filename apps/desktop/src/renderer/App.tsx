@@ -13,6 +13,12 @@ import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from 
 import { IntakeRegion } from './intake/IntakeRegion';
 import { JourneyNav } from './journey/JourneyNav';
 import { JOURNEY_STAGES, type JourneyStage } from './intake/intake-logic';
+import {
+  advanceMaxFrontierStage,
+  deriveViewStage,
+  isImplementedStage,
+  reachedStagesUpTo,
+} from './journey/journey-logic';
 import { TaskCenter } from './task-center/TaskCenter';
 import { ResearchRegion } from './research/ResearchRegion';
 import { SearchKeyPanel } from './research/SearchKeyPanel';
@@ -44,8 +50,19 @@ export function App() {
   // 模型服务列表
   const [providers, setProviders] = useState<ReadonlyArray<ProviderPublicState>>([]);
 
-  // 旅程阶段（D-B4-1：由 IntakeRegion 从 Graph 进度投影回报，仅展示用）
-  const [journeyStage, setJourneyStage] = useState<JourneyStage>('idea');
+  // 旅程阶段（D-B4-1：由挂载中的 Region 从 Graph 进度投影回报，仅展示用）。
+  // B6 REWORK 复查 D-B6-10：展示阶段（viewStage，决定中栏挂载哪个 Region）与
+  // 推进阶段（frontierStage，Graph 真实位置，JourneyNav 标示进度）分离——
+  // 若中栏挂载单纯 follow frontierStage，调研刚有结果的那一刻，frontier 往往
+  // 已经在同一状态快照内推进到 blueprint（sync 节点连推），ResearchRegion 会
+  // 被立即卸载换回 IntakeRegion，调研结果永不可达（已坐实 blocker）。
+  const [frontierStage, setFrontierStage] = useState<JourneyStage>('idea');
+  // 历史最远 frontier（单调增长，切项目重置）：推导"已到达阶段"集合，
+  // 决定 JourneyNav 上哪些阶段可点击回看。
+  const [maxFrontierStage, setMaxFrontierStage] = useState<JourneyStage>('idea');
+  // 用户在 JourneyNav 上显式点选的阶段（用户意图优先于 frontier，见
+  // journey-logic.deriveViewStage）；未点选或切项目后重置为 null。
+  const [userSelectedStage, setUserSelectedStage] = useState<JourneyStage | null>(null);
 
   // Grill 工作区焦点管理
   const grillSectionRef = useRef<HTMLElement | null>(null);
@@ -56,6 +73,25 @@ export function App() {
   const handleTogglePanel = useCallback((panel: PanelId) => {
     setPanelState((prev) => togglePanel(prev, panel));
   }, []);
+
+  // Region 回报 frontierStage（D-B4-1 约定的 onStageChange）：更新推进阶段，
+  // 并单调推进历史最远 frontier（D-B6-10）。
+  const handleStageChange = useCallback((stage: JourneyStage) => {
+    setFrontierStage(stage);
+    setMaxFrontierStage((prev) => advanceMaxFrontierStage(prev, stage));
+  }, []);
+
+  // JourneyNav 点击已到达阶段：锁定展示阶段（D-B6-10 规则 1，用户意图优先）。
+  const handleSelectJourneyStage = useCallback((stage: JourneyStage) => {
+    setUserSelectedStage(stage);
+  }, []);
+
+  // 展示阶段（决定中栏挂载哪个 Region）+ 已到达阶段集合（JourneyNav 可点击范围）。
+  const reachedStages = reachedStagesUpTo(maxFrontierStage);
+  const viewStage = deriveViewStage({ frontierStage, userSelectedStage, reachedStages });
+  // frontier 已越过 research（当前为 blueprint/manuscript）但仍在展示调研内容——
+  // ResearchRegion 顶部需要一条明确说明，避免用户以为流程卡住（D-B6-10）。
+  const showResearchBeyondNotice = viewStage === 'research' && !isImplementedStage(frontierStage);
 
   // 健康检查（立即）
   useEffect(() => {
@@ -148,9 +184,12 @@ export function App() {
         await loadProjects();
         const project = await window.desktop.projects.open(result.id);
         setCurrentProject(project);
-        // 新项目从旅程起点开始（B6：避免沿用上一个项目遗留的 journeyStage
-        // 导致中栏短暂挂错 Region，即便自纠正也会闪烁）
-        setJourneyStage('idea');
+        // 新项目从旅程起点开始（B6：避免沿用上一个项目遗留的旅程状态导致中栏
+        // 短暂挂错 Region，即便自纠正也会闪烁；D-B6-10 起需一并重置展示阶段
+        // 三元组，否则会沿用上一个项目的 userSelectedStage/reachedStages）
+        setFrontierStage('idea');
+        setMaxFrontierStage('idea');
+        setUserSelectedStage(null);
         // 创建成功后焦点进入 Grill 工作区
         setShouldFocusGrill(true);
         return true;
@@ -173,8 +212,11 @@ export function App() {
       try {
         const project = await window.desktop.projects.open(projectId);
         setCurrentProject(project);
-        // 打开项目从旅程起点开始（B6：同上，各 Region 会据 Graph 进度自纠正）
-        setJourneyStage('idea');
+        // 打开项目从旅程起点开始（B6：同上，各 Region 会据 Graph 进度自纠正；
+        // D-B6-10 起一并重置展示阶段三元组）
+        setFrontierStage('idea');
+        setMaxFrontierStage('idea');
+        setUserSelectedStage(null);
         await loadProjects();
       } catch (err) {
         const safe = toSafeUserError(err, '打开项目失败');
@@ -348,22 +390,32 @@ export function App() {
             aria-label="创作旅程"
           >
             <RendererErrorBoundary label="创作旅程">
-              <JourneyNav current={journeyStage} />
-              {/* D-B6-7：中栏按 journeyStage 互斥挂载——任一时刻只有一条轮询循环。
-                  idea/clarify → IntakeRegion；research → ResearchRegion。
-                  blueprint/manuscript 尚未建区域，沿用 IntakeRegion 的通用
-                  "beyond-intake" 占位（其自身相位机器会给出正确文案）。 */}
-              {journeyStage === 'research' ? (
+              <JourneyNav
+                frontierStage={frontierStage}
+                viewStage={viewStage}
+                reachedStages={reachedStages}
+                onSelectStage={handleSelectJourneyStage}
+              />
+              {/* D-B6-10：中栏按展示阶段（viewStage）互斥挂载，与推进阶段
+                  （frontierStage）分离——任一时刻仍只有一条轮询循环（D-B6-7
+                  的约束不变），但挂载哪个 Region 不再单纯 follow frontier。
+                  viewStage='research' → ResearchRegion；否则 → IntakeRegion
+                  （blueprint/manuscript 尚未建区域时，IntakeRegion 的
+                  beyond-intake 占位兜底；deriveViewStage 默认会先回落到
+                  research，只有用户显式点选 blueprint/manuscript 才会走到
+                  这条占位分支）。 */}
+              {viewStage === 'research' ? (
                 <ResearchRegion
                   key={currentProject.id}
                   projectId={currentProject.id}
-                  onStageChange={setJourneyStage}
+                  onStageChange={handleStageChange}
+                  showBeyondResearchNotice={showResearchBeyondNotice}
                 />
               ) : (
                 <IntakeRegion
                   key={currentProject.id}
                   projectId={currentProject.id}
-                  onStageChange={setJourneyStage}
+                  onStageChange={handleStageChange}
                 />
               )}
             </RendererErrorBoundary>
@@ -421,7 +473,7 @@ export function App() {
                 <h3 id="status-stage-heading">当前阶段</h3>
                 <p>
                   {currentProject
-                    ? (JOURNEY_STAGES.find((s) => s.id === journeyStage)?.label ?? '—')
+                    ? (JOURNEY_STAGES.find((s) => s.id === frontierStage)?.label ?? '—')
                     : '—'}
                 </p>
               </section>

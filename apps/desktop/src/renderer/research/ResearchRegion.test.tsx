@@ -342,6 +342,145 @@ describe('ResearchRegion', () => {
     });
   });
 
+  // 复查随行修复：原用例 mock 返回值与"乐观本地取反"结果恰好一致，无法证伪
+  // "UI 是否真的用了后端返回值，而不是自己乐观翻转本地状态"。这里让 mock 返回
+  // 与乐观结果相反的列表（点击"排除"却返回空列表，即后端并未真正记录排除），
+  // 断言 UI 必须如实反映后端返回值——若实现改成本地乐观翻转，本用例会失败。
+  it('来源排除：UI 必须采用后端返回的列表，而不是本地乐观翻转（证伪：mock 返回与乐观结果相反）', async () => {
+    const readyBundle = bundle({
+      questions: [{ id: 'q1', text: '问题一', sources: [source()] }],
+    });
+    // 点击"排除"（意图 excluded=true），但后端返回空列表——与乐观假设相悖。
+    const setSourceExclusion = vi.fn().mockResolvedValue([]);
+    const api = mockApi({
+      research: {
+        getResearchState: vi
+          .fn()
+          .mockResolvedValue(
+            researchState({ researchDecision: 'deep', researchValid: 'valid', bundleRef: 'rb-1' }),
+          ),
+        getBundle: vi.fn().mockResolvedValue(readyBundle),
+        listBundles: vi.fn().mockResolvedValue([readyBundle]),
+        setSourceExclusion,
+        listSourceExclusions: vi.fn().mockResolvedValue([]),
+      },
+    });
+    window.desktop = api;
+    await act(async () => {
+      render(<ResearchRegion projectId="p1" />);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('展开来源（1）')).toBeInTheDocument();
+    });
+    await act(async () => {
+      screen.getByText('展开来源（1）').click();
+    });
+
+    const excludeBtn = await screen.findByRole('button', { name: '排除此来源' });
+    await act(async () => {
+      excludeBtn.click();
+    });
+
+    await waitFor(() => {
+      expect(setSourceExclusion).toHaveBeenCalledWith({
+        projectId: 'p1',
+        url: 'https://example.com/a',
+        excluded: true,
+      });
+    });
+
+    // 后端说"没有排除"（空列表）：UI 必须仍显示未排除，不能自行假设点击即生效。
+    await waitFor(() => {
+      expect(screen.queryByText('已排除')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: '排除此来源' })).toBeInTheDocument();
+    });
+  });
+
+  // 复查随行修复：轮询回滚闪烁——poll 的 listSourceExclusions 在写入前发出、
+  // 响应却在写入之后才落地，若不加区分地覆盖，会用写入前的旧列表把刚生效的
+  // 排除标记盖掉（自愈但可见闪烁）。用受控 Promise 精确复现"poll 请求已发出，
+  // 写入先完成"的时序，断言写入结果不被回滚。
+  it('来源排除：轮询响应晚于写入落地时，不得用旧列表覆盖刚写入的标记（回滚闪烁修复）', async () => {
+    vi.useFakeTimers();
+    try {
+      const readyBundle = bundle({
+        questions: [{ id: 'q1', text: '问题一', sources: [source()] }],
+      });
+
+      let listCall = 0;
+      let resolveSecondList: ((v: string[]) => void) | null = null;
+      const secondListPromise = new Promise<string[]>((resolve) => {
+        resolveSecondList = resolve;
+      });
+
+      const listSourceExclusions = vi.fn().mockImplementation(() => {
+        listCall += 1;
+        if (listCall === 1) return Promise.resolve([]);
+        if (listCall === 2) return secondListPromise;
+        return Promise.resolve(['https://example.com/a']);
+      });
+      const setSourceExclusion = vi.fn().mockResolvedValue(['https://example.com/a']);
+
+      const api = mockApi({
+        research: {
+          getResearchState: vi.fn().mockResolvedValue(
+            researchState({
+              researchDecision: 'deep',
+              researchValid: 'valid',
+              bundleRef: 'rb-1',
+            }),
+          ),
+          getBundle: vi.fn().mockResolvedValue(readyBundle),
+          listBundles: vi.fn().mockResolvedValue([readyBundle]),
+          setSourceExclusion,
+          listSourceExclusions,
+        },
+      });
+      window.desktop = api;
+
+      // 注意：fake timers 下不能用 waitFor/findBy*（其内部轮询依赖真实时钟，
+      // 与 fake timers 搭配会互相卡死）——全程用 act + advanceTimersByTimeAsync
+      // 显式推进并 flush microtask 队列，之后直接同步断言（镜像
+      // accessibility.test.tsx TaskCenter 用例组的 flushMicrotasks 模式）。
+      await act(async () => {
+        render(<ResearchRegion projectId="p1" />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      await act(async () => {
+        screen.getByText('展开来源（1）').click();
+      });
+      expect(screen.getByRole('button', { name: '排除此来源' })).toBeInTheDocument();
+
+      // 推进到第二轮 poll：其 listSourceExclusions 卡在 pending（secondListPromise 未 resolve）。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1700);
+      });
+
+      // 用户在第二轮 poll 卡住期间点击排除，写入先于该轮 poll 落地。
+      const excludeBtn = screen.getByRole('button', { name: '排除此来源' });
+      await act(async () => {
+        excludeBtn.click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByRole('button', { name: '取消排除' })).toBeInTheDocument();
+
+      // 第二轮 poll 的 listSourceExclusions 此刻才 resolve，返回写入前的旧列表（[]）。
+      await act(async () => {
+        resolveSecondList?.([]);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // 断言：不应被这份过期列表回滚覆盖。
+      expect(screen.getByRole('button', { name: '取消排除' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: '排除此来源' })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('事实笔记：长文默认截断，可展开看全文', async () => {
     const longText = 'A'.repeat(300);
     const readyBundle = bundle({
@@ -380,10 +519,13 @@ describe('ResearchRegion', () => {
     });
   });
 
-  it('版本链：多 bundle 时可切看历史版本', async () => {
+  it('版本链：多 bundle 时可切看历史版本，强度徽标随所查看版本切换（复查随行修复）', async () => {
+    // v1/v2 强度不同（light → deep）：徽标此前锁死在当前 bundle（deep），
+    // 切到 v1 后仍显示"深度调研"，与实际查看的版本不符——修复后应随 displayed 切换。
     const v1 = bundle({
       id: 'v1',
       version: 1,
+      depth: 'light',
       conclusion: 'v1 结论',
       basedOnBundleId: null,
       createdAt: NOW,
@@ -391,6 +533,7 @@ describe('ResearchRegion', () => {
     const v2 = bundle({
       id: 'v2',
       version: 2,
+      depth: 'deep',
       conclusion: 'v2 结论',
       basedOnBundleId: 'v1',
       createdAt: '2026-08-11T00:00:00.000Z',
@@ -416,6 +559,8 @@ describe('ResearchRegion', () => {
     await waitFor(() => {
       expect(screen.getByText('v2 结论')).toBeInTheDocument();
     });
+    expect(screen.getByText('深度调研')).toBeInTheDocument();
+    expect(screen.queryByText('轻度调研')).not.toBeInTheDocument();
 
     const chain = screen.getByRole('navigation', { name: '资料包版本历史' });
     await act(async () => {
@@ -427,6 +572,9 @@ describe('ResearchRegion', () => {
     });
     expect(screen.queryByText('v2 结论')).not.toBeInTheDocument();
     expect(screen.getByText(/正在查看历史版本 v1/)).toBeInTheDocument();
+    // 徽标必须跟随切到的历史版本（light），而不是停在当前 bundle 的 deep。
+    expect(screen.getByText('轻度调研')).toBeInTheDocument();
+    expect(screen.queryByText('深度调研')).not.toBeInTheDocument();
 
     await act(async () => {
       screen.getByText(/回到当前版本/).click();
@@ -435,5 +583,7 @@ describe('ResearchRegion', () => {
     await waitFor(() => {
       expect(screen.getByText('v2 结论')).toBeInTheDocument();
     });
+    expect(screen.getByText('深度调研')).toBeInTheDocument();
+    expect(screen.queryByText('轻度调研')).not.toBeInTheDocument();
   });
 });

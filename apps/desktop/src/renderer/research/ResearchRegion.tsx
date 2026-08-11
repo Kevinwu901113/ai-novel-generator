@@ -9,11 +9,16 @@
  * - stale：现行 bundleRef 已因创作要求变更失效，作废横幅 + 降级展示（D-B6-9）；
  * - ready：展示 ResearchBundleView；
  * - invalid-retrying：校验未通过，自动重试中；
- * - escalation：ResearchEscalationPanel 五选项人工决策。
+ * - escalation：ResearchEscalationPanel 五选项人工决策；
+ * - unsettled（复查随行修复）：RESEARCH_RUN 任务已 FAILED 但节点尚未 settle 的
+ *   瞬时窗口，兜底文案避免误报"尚未开始调研"（deriveResearchPhase 第 4 参数
+ *   hasFailedResearchTask）。
  *
- * journeyStage 经 useResearch 内部对 graph 进度的读取回报给 App（D-B6-7：
- * RESEARCH_ESCALATION 的多数出口会让 frontier 离开 research 阶段，此时
- * App 换回 IntakeRegion）。
+ * frontierStage 经 useResearch 内部对 graph 进度的读取回报给 App（D-B6-7/
+ * D-B6-10：RESEARCH_ESCALATION 的多数出口、以及调研完成后 frontier 前进到
+ * blueprint，都会让 frontier 离开 research 阶段；App 据此换回 IntakeRegion，
+ * 除非 deriveViewStage 判定应回落展示 research——此时 showBeyondResearchNotice
+ * 为 true，本 Region 继续挂载并给出说明）。
  */
 
 import { useResearch } from './useResearch';
@@ -23,13 +28,24 @@ import type { JourneyStage } from '../intake/intake-logic';
 
 export interface ResearchRegionProps {
   readonly projectId: string;
-  /** 旅程阶段回报（App shell 导航高亮 + Region 互斥挂载，D-B6-7） */
+  /** 旅程阶段回报（App shell 导航高亮 + Region 挂载决策，D-B6-7/D-B6-10） */
   readonly onStageChange?: (stage: JourneyStage) => void;
+  /**
+   * frontier 已越过 research（当前为 blueprint/manuscript）但仍在展示调研内容
+   * 时为 true——由 App 据 journey-logic.deriveViewStage 的回落规则计算
+   * （D-B6-10）。顶部给出明确说明，避免用户以为流程卡住。
+   */
+  readonly showBeyondResearchNotice?: boolean;
 }
 
-export function ResearchRegion({ projectId, onStageChange }: ResearchRegionProps) {
-  // App 只在 journeyStage 已经是 'research' 时才挂载本 Region（互斥挂载），
-  // 故不需要额外的挂载即回报——useResearch 的轮询会在首轮 poll 内确认/回退。
+export function ResearchRegion({
+  projectId,
+  onStageChange,
+  showBeyondResearchNotice = false,
+}: ResearchRegionProps) {
+  // App 按展示阶段（viewStage）挂载本 Region（D-B6-10：不再单纯 follow
+  // frontierStage），故不需要额外的挂载即回报——useResearch 的轮询会在首轮
+  // poll 内确认/回退 frontierStage。
   const research = useResearch(projectId, onStageChange);
   const { phase } = research;
 
@@ -40,6 +56,12 @@ export function ResearchRegion({ projectId, onStageChange }: ResearchRegionProps
       <div className="research-header">
         <h2 id="research-heading">资料调研</h2>
       </div>
+
+      {showBeyondResearchNotice && (
+        <div className="research-info-card" role="status">
+          <p>调研已完成，蓝图阶段开发中。以下仍是本项目当前的调研结果。</p>
+        </div>
+      )}
 
       {research.error && (
         <div className="research-error" role="alert">
@@ -65,6 +87,15 @@ export function ResearchRegion({ projectId, onStageChange }: ResearchRegionProps
           {phase.kind === 'not-started' && (
             <div className="research-status" role="status">
               尚未开始调研。
+            </div>
+          )}
+
+          {phase.kind === 'unsettled' && (
+            <div className="research-status" role="status" aria-live="polite">
+              <span className="intake-spinner" aria-hidden="true">
+                ⟳
+              </span>
+              调研状态更新中…
             </div>
           )}
 

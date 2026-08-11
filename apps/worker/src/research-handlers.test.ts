@@ -515,4 +515,40 @@ describe('research.setSourceExclusion / listSourceExclusions（D-B6-2）', () =>
       ),
     ).rejects.toThrow();
   });
+
+  // 复查随行修复：取消排除不应受 isSafeSourceUrl 约束——否则日后收紧安全规则
+  // 会导致历史上（在旧规则下）已合法排除的 URL 永久无法取消排除。
+  it('取消排除（excluded=false）不受 isSafeSourceUrl 约束：历史已排除的不安全 URL 仍可取消排除', async () => {
+    const db = freshDb();
+    const unsafeUrl = 'http://[::ffff:127.0.0.1]/';
+    // 绕过 handler 的 URL 校验，直接在 repo 层写入——模拟"在旧的/更宽松的安全
+    // 规则下曾经合法排除，如今规则收紧后该 URL 已不再通过 isSafeSourceUrl"。
+    db.getResearchSourceExclusionRepository().setExclusion('p1', unsafeUrl, true);
+    db.close();
+
+    const listBefore = await dispatchResearchCommand(
+      'research.listSourceExclusions',
+      { projectId: 'p1' },
+      readCtx(),
+    );
+    expect(listBefore).toEqual([unsafeUrl]);
+
+    // 取消排除：excluded=false，即使 URL 本身不安全，也不应抛 VALIDATION_ERROR。
+    const afterUnset = await dispatchResearchCommand(
+      'research.setSourceExclusion',
+      { projectId: 'p1', url: unsafeUrl, excluded: false },
+      readCtx(),
+    );
+    expect(afterUnset).toEqual([]);
+
+    // 再次新增排除同一 URL（excluded=true）：仍应按现行规则拒绝——本次修复
+    // 只放宽"取消"，不放宽"新增"。
+    await expect(
+      dispatchResearchCommand(
+        'research.setSourceExclusion',
+        { projectId: 'p1', url: unsafeUrl, excluded: true },
+        readCtx(),
+      ),
+    ).rejects.toThrow();
+  });
 });

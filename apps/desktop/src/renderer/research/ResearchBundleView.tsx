@@ -55,8 +55,11 @@ export function ResearchBundleView({
       data-testid="research-bundle-view"
     >
       <div className="research-bundle-header">
-        <span className="research-depth-badge" data-depth={bundle.depth}>
-          {depthLabel(bundle.depth)}
+        {/* 复查随行修复：强度徽标必须跟随正在查看的版本（displayed），而不是
+            始终锁定当前 bundle——否则切到历史版本时，版本号/问题/笔记/结论都
+            换了，唯独强度徽标原地不动，造成"这版是什么强度"的错误印象。 */}
+        <span className="research-depth-badge" data-depth={displayed.depth}>
+          {depthLabel(displayed.depth)}
         </span>
         <span className="research-bundle-version">
           版本 v{displayed.version}

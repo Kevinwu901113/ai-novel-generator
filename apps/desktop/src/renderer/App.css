@@ -3172,10 +3172,33 @@ body {
 
 .journey-step {
   display: flex;
+}
+
+.journey-step-btn {
+  display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
   color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.journey-step-btn:disabled {
+  cursor: default;
+}
+
+.journey-step-btn:not(:disabled):hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.journey-step-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .journey-step-index {
@@ -3189,7 +3212,7 @@ body {
   font-size: 12px;
 }
 
-.journey-step.current {
+.journey-step.current .journey-step-btn {
   color: var(--color-text);
   font-weight: 600;
 }
@@ -3204,6 +3227,11 @@ body {
   background-color: var(--color-status-ok);
   border-color: var(--color-status-ok);
   color: #ffffff;
+}
+
+.journey-step.viewing .journey-step-btn {
+  background-color: var(--color-bg-secondary);
+  outline: 1px solid var(--color-primary);
 }
 
 /* ── B4：对话式访谈 ───────────────────────────────────────────── */

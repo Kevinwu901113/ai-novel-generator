@@ -30,7 +30,11 @@ import { journeyStageOf, type JourneyStage } from '../intake/intake-logic';
  * - stale：现行 bundleRef 指向的资料包已因创作要求变更失效，不得当作现行内容展示；
  * - ready：调研已产出有效资料包，可查看；
  * - invalid-retrying：调研校验判定无效，重试预算未耗尽（自动重试中）；
- * - escalation：调研无效且重试预算耗尽，RESEARCH_ESCALATION 等待人工决策。
+ * - escalation：调研无效且重试预算耗尽，RESEARCH_ESCALATION 等待人工决策；
+ * - unsettled（B6 REWORK 复查随行修复）：RESEARCH_RUN 任务已 FAILED，但节点尚
+ *   未 settle（Settlement/恢复机制会自动推进重试或升级）的瞬时窗口——此时兜底
+ *   落到 not-started 会显示"尚未开始调研"，与"确实已经跑过一次但失败了"的事
+ *   实相反，故单独给一个中性相位。
  */
 export type ResearchPhase =
   | { readonly kind: 'no-run' }
@@ -41,7 +45,8 @@ export type ResearchPhase =
   | { readonly kind: 'stale'; readonly bundleRef: string }
   | { readonly kind: 'ready'; readonly bundleRef: string }
   | { readonly kind: 'invalid-retrying' }
-  | { readonly kind: 'escalation' };
+  | { readonly kind: 'escalation' }
+  | { readonly kind: 'unsettled' };
 
 /**
  * 派生调研相位。
@@ -56,12 +61,15 @@ export type ResearchPhase =
  * 7. bundleInvalidated 且有 bundleRef → stale（优先于 ready；作废资料包不得当现行展示）
  * 8. researchValid === 'valid' 且有 bundleRef → ready
  * 9. researchValid === 'invalid' → invalid-retrying
- * 10. 兜底 → not-started（如 decision 已产出但 plan/execute 尚未落地的瞬时态）
+ * 10. 兜底：hasFailedResearchTask（RESEARCH_RUN 任务已 FAILED，节点尚未
+ *     settle 的瞬时窗口）→ unsettled（中性文案，不误报"尚未开始"）；
+ *     否则 → not-started（如 decision 已产出但 plan/execute 尚未落地的瞬时态）
  */
 export function deriveResearchPhase(
   state: ResearchStateDto | null,
   hasApiKey: boolean,
   pendingResearchTask: boolean,
+  hasFailedResearchTask = false,
 ): ResearchPhase {
   if (!state || state.runId === null) return { kind: 'no-run' };
   if (state.escalationActive) return { kind: 'escalation' };
@@ -76,6 +84,7 @@ export function deriveResearchPhase(
     return { kind: 'ready', bundleRef: state.bundleRef };
   }
   if (state.researchValid === 'invalid') return { kind: 'invalid-retrying' };
+  if (hasFailedResearchTask) return { kind: 'unsettled' };
   return { kind: 'not-started' };
 }
 

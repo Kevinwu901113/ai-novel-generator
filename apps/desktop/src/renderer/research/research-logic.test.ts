@@ -10,6 +10,12 @@ import type {
   ResearchBundleDto,
   ResearchStateDto,
 } from '@ai-novel/contracts';
+// 复查随行修复：闭合五选项直接对齐 domain 权威枚举（GRAPH_CONDITION_OUTCOMES 是
+// research_escalation_decision 条件边的运行时闭合取值集合，与类型
+// ResearchEscalationDecision 同源、由同一处字面量联合定义——见
+// packages/domain/src/idea-to-novel-graph.ts）。domain 若增删选项，这里的运行时
+// 数组比对会直接变红，而不是像硬编码字符串数组那样悄悄跟丢。
+import { GRAPH_CONDITION_OUTCOMES, type ResearchEscalationDecision } from '@ai-novel/domain';
 import {
   RESEARCH_ESCALATION_OPTIONS,
   deriveResearchJourneyStage,
@@ -126,6 +132,29 @@ describe('deriveResearchPhase', () => {
       kind: 'not-started',
     });
   });
+
+  it('复查随行修复：RESEARCH_RUN 任务已 FAILED 但节点未 settle（hasFailedResearchTask=true）→ unsettled，不误报"尚未开始"', () => {
+    expect(deriveResearchPhase(state({ researchDecision: 'deep' }), true, false, true)).toEqual({
+      kind: 'unsettled',
+    });
+  });
+
+  it('hasFailedResearchTask 缺省（未传第 4 参数）时行为不变，仍是 not-started（向后兼容）', () => {
+    expect(deriveResearchPhase(state({ researchDecision: 'deep' }), true, false)).toEqual({
+      kind: 'not-started',
+    });
+  });
+
+  it('hasFailedResearchTask=true 但已有 valid 结论 → 仍是 ready（优先级不受影响，unsettled 只是兜底分支）', () => {
+    expect(
+      deriveResearchPhase(
+        state({ researchDecision: 'deep', researchValid: 'valid', bundleRef: 'rb-1' }),
+        true,
+        false,
+        true,
+      ),
+    ).toEqual({ kind: 'ready', bundleRef: 'rb-1' });
+  });
 });
 
 describe('depthLabel', () => {
@@ -137,17 +166,19 @@ describe('depthLabel', () => {
 });
 
 describe('RESEARCH_ESCALATION_OPTIONS', () => {
-  it('闭合五选项，与 domain ResearchEscalationDecision 一致', () => {
+  it('闭合五选项，与 domain 权威枚举 ResearchEscalationDecision 逐一对齐（domain 增删选项时本用例会红）', () => {
     const outcomes = RESEARCH_ESCALATION_OPTIONS.map((o) => o.outcome).sort();
-    expect(outcomes).toEqual(
-      [
-        'cancel',
-        'continue_later',
-        'modify_requirements',
-        'skip_research',
-        'use_current_research',
-      ].sort(),
-    );
+    const domainOutcomes = [...GRAPH_CONDITION_OUTCOMES.research_escalation_decision].sort();
+    expect(outcomes).toEqual(domainOutcomes);
+
+    // 编译期兜底：每个选项的 outcome 必须能赋给 ResearchEscalationDecision——
+    // 若 domain 收窄/重命名取值，这里会直接类型报错（tsc 覆盖测试文件的
+    // typecheck 项目之外，vitest 本身用 esbuild 转译不做类型检查，故以下双重
+    // 校验：runtime 数组比对（上面）+ 类型标注断言（配合 IDE/tsc 静态发现）。
+    const typedOutcomes: ReadonlyArray<ResearchEscalationDecision> =
+      RESEARCH_ESCALATION_OPTIONS.map((o) => o.outcome as ResearchEscalationDecision);
+    expect(typedOutcomes.length).toBe(RESEARCH_ESCALATION_OPTIONS.length);
+
     for (const opt of RESEARCH_ESCALATION_OPTIONS) {
       expect(opt.label.length).toBeGreaterThan(0);
       expect(opt.description.length).toBeGreaterThan(0);

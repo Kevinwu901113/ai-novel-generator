@@ -8,17 +8,25 @@
  * taskType === 'RESEARCH_RUN' 且 isTaskActive(status) 过滤，taskType 常量见
  * apps/worker/src/graph-task-runner.ts）。
  *
- * 阶段回退检测（D-B6-7）：额外读 graph.listRuns + graph.getRunProgress（与
- * useIntake 同源），用 deriveResearchJourneyStage 推导当前 frontier 的旅程阶段并经
- * onStageChange 回报——RESEARCH_ESCALATION 的 5 个出口并非都停在 research 阶段
- * （modify_requirements 回环到 clarify、use_current_research/skip_research 前进到
- * blueprint、cancel/continue_later/预算耗尽落终态)，一旦 frontier 不再是 research，
- * App 换回 IntakeRegion，由其自身相位机器接管（awaiting-answer/extracting/
- * beyond-intake/terminal 均已有对应处理，本 hook 不重复实现）。
+ * 阶段回退检测（D-B6-7/D-B6-10）：额外读 graph.listRuns + graph.getRunProgress
+ * （与 useIntake 同源），用 deriveResearchJourneyStage 推导当前 frontier 的旅程
+ * 阶段并经 onStageChange 回报——RESEARCH_ESCALATION 的 5 个出口并非都停在
+ * research 阶段（modify_requirements 回环到 clarify、use_current_research/
+ * skip_research 前进到 blueprint、cancel/continue_later/预算耗尽落终态)。
+ * App 据 journey-logic.deriveViewStage 决定是否仍挂载本 Region（D-B6-10：
+ * frontier 前进到 blueprint/manuscript 时默认继续展示调研内容，而不是像旧
+ * D-B6-7 行为那样立即换回 IntakeRegion）。
  *
  * 轮询设计镜像 useTaskCenter（generationRef 竞态防护 + inFlightGenerationRef
  * 互斥锁 + document.hidden 可见性门控）与 useIntake（自递归 setTimeout，请求批量
  * 较重时不产生 setInterval 式请求堆叠）。
+ *
+ * 来源排除轮询回滚闪烁修复（复查随行）：poll 的 listSourceExclusions 在写入
+ * 前发出、其 setExclusions 却在写入响应之后落地，会用旧列表覆盖刚更新的标记。
+ * exclusionWriteSeqRef 在每次 setSourceExclusion 调用时自增；refresh() 在发起
+ * listSourceExclusions 前记下当时的序号，Promise.all 落地后若序号已变
+ * （说明期间有写入介入），则丢弃本轮 poll 取到的（可能过期的）列表，交给下一轮
+ * poll 自然拿到写入后的正确列表，不产生"先对再错回再对"的闪烁。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -78,6 +86,10 @@ export function useResearch(
   const generationRef = useRef(0);
   const inFlightGenerationRef = useRef<number | null>(null);
 
+  // 来源排除写入序号：每次 setSourceExclusion 调用自增，供 refresh() 判断
+  // "本轮 poll 取到的 listSourceExclusions 响应是否可能已经过期"（回滚闪烁修复）。
+  const exclusionWriteSeqRef = useRef(0);
+
   const refresh = useCallback(async () => {
     const currentGen = generationRef.current;
     if (inFlightGenerationRef.current === currentGen) return;
@@ -100,6 +112,11 @@ export function useResearch(
       const frontierStage = deriveResearchJourneyStage(run, progress);
       if (frontierStage) onStageChangeRef.current?.(frontierStage);
 
+      // 回滚闪烁修复：在发起 listSourceExclusions 之前记下写入序号——如果
+      // 这次 Promise.all 等待期间发生了一次 setSourceExclusion 写入，序号会
+      // 变化，届时应丢弃本轮取到的（相对写入而言过期的）exclusionList。
+      const exclusionSeqAtStart = exclusionWriteSeqRef.current;
+
       const [researchState, allBundles, taskList, keyState, exclusionList] = await Promise.all([
         window.desktop.research.getResearchState({ projectId }),
         window.desktop.research.listBundles({ projectId }),
@@ -120,13 +137,27 @@ export function useResearch(
       const pendingResearchTask = taskList.some(
         (t) => t.taskType === 'RESEARCH_RUN' && isTaskActive(t.status),
       );
+      // 复查随行修复：任务已 FAILED 但节点尚未 settle 的瞬时窗口，兜底相位
+      // 不应误报"尚未开始调研"（见 deriveResearchPhase 的 unsettled 分支）。
+      const hasFailedResearchTask = taskList.some(
+        (t) => t.taskType === 'RESEARCH_RUN' && t.status === 'FAILED',
+      );
 
       setState(researchState);
       setBundles(allBundles);
       setBundle(currentBundle);
-      setExclusions(exclusionList);
+      if (exclusionWriteSeqRef.current === exclusionSeqAtStart) {
+        setExclusions(exclusionList);
+      }
       setHasApiKey(keyState.hasApiKey);
-      setPhase(deriveResearchPhase(researchState, keyState.hasApiKey, pendingResearchTask));
+      setPhase(
+        deriveResearchPhase(
+          researchState,
+          keyState.hasApiKey,
+          pendingResearchTask,
+          hasFailedResearchTask,
+        ),
+      );
       setError(null);
     } catch (err) {
       if (generationRef.current === currentGen) {
@@ -148,6 +179,7 @@ export function useResearch(
     generationRef.current += 1;
     inFlightGenerationRef.current = null;
     runRef.current = null;
+    exclusionWriteSeqRef.current = 0;
     setPhase({ kind: 'no-run' });
     setState(null);
     setBundle(null);
@@ -220,6 +252,9 @@ export function useResearch(
 
   const setSourceExclusion = useCallback(
     async (url: string, excluded: boolean) => {
+      // 回滚闪烁修复：先自增写入序号，让任何已在途的 poll refresh() 之后落地
+      // 时能识别出"我取到的列表可能比这次写入更旧"，从而放弃覆盖。
+      exclusionWriteSeqRef.current += 1;
       setBusy(true);
       setError(null);
       try {
