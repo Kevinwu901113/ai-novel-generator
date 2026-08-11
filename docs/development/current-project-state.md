@@ -9,13 +9,13 @@
 
 ## 0. Snapshot Metadata
 
-| 项              | 值                                                                                                                |
-| --------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 4                                                                                                                 |
-| 更新日期        | 2026-08-10                                                                                                        |
-| 基线 main SHA   | `b80f0d26fa809410b3609c22e40481368ba0e93d`（PR #42 合并后，含 B1 多 provider 网关 + B3 GE-3 intake wiring）       |
-| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v14、CI |
-| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，main 合并 commit CI 绿 |
+| 项              | 值                                                                                                                                        |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 5                                                                                                                                         |
+| 更新日期        | 2026-08-11                                                                                                                                |
+| 基线 main SHA   | `d70eca6bb2461f99128ba37641229514b9237084`（PR #47 合并后，含 B4 GE-3 intake UI + B5 GE-4 research wiring + B6 GE-4 research UI/D-B6-10） |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v15、CI                         |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，PR #43–#47 合并 commit CI 全绿                 |
 
 ## 1. 权威层级
 
@@ -56,7 +56,7 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 | ----------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Manuscript transport/renderer | MISSING（main 无）            | PR #25 参考资产；GE-7 选择性移植                                                                                                                                   |
 | Web Research 产品 UI          | DONE（B6 + D-B6-10 复查修复） | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate；B6 独立复查曾判 REWORK（frontier 常同快照推进到 blueprint 导致内容永不可达），已修复见上表 |
-| StoryBlueprint                | BACKEND-ONLY                  | blueprint.* 后端有；节点未接、accept 非原子；GE-5（B7/B8）                                                                                                         |
+| StoryBlueprint                | WIRING 完成（B7）             | 蓝图 executor + accept 原子闭环 + 三终态 E2E；产品 UI 待 B8                                                                                                        |
 | Chapter Generation            | FOUNDATION-ONLY               | CHAPTER_DRAFT 任务引擎有；无 executor / settlement 接线；GE-6（B9/B10）                                                                                            |
 | Export                        | MISSING                       | `packages/import-export` 为 stub；GE-7                                                                                                                             |
 | PlotPilot                     | PARTIAL                       | 可选 adapter foundation；不进入关键路径                                                                                                                            |
@@ -147,7 +147,7 @@ GE-1 Durable Runtime     → ✅ COMPLETE（内核，2026-08-04，PR #34，migra
 GE-2 Walking Skeleton    → ⚠️ PARTIAL（2026-08-04，骨架测试达成；无运行时 runner / 无 UI；直接推 main）
 GE-3 Idea Intake+Spec    → ✅ COMPLETE（B3 wiring+E2E，PR #42；B4 产品 UI，2026-08-10）
 GE-4 Web Research        → ✅ COMPLETE（B5 wiring v14 + B6 产品 UI v15，2026-08-11）
-GE-5 StoryBlueprint      → 🔶 REWORK（BACKEND 有：blueprint.*；节点未接，accept 非原子，无 E2E）
+GE-5 StoryBlueprint      → 🟡 WIRING+E2E COMPLETE（B7，2026-08-11，migration v16；产品 UI 待 B8）
 GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 B1 多 provider 网关      → ✅ MERGED ON MAIN（2026-08-07，PR #41 + 补丁 `9f98278`，D6 最小形态）
@@ -217,7 +217,20 @@ JourneyNav 补上对已到达阶段的点击回看（`aria-current` 标进度、
 其余为远端 403/404/500；403 与 User-Agent 缺失无关（已实证，不做浏览器伪装）。
 详见 TD-028。**应用内真实使用仍需负责人在 SearchKeyPanel 录入 key**。
 
-下一步：**B7/B8**（GE-5：Blueprint executor + PROJECT_READY 原子闭环 + 蓝图 UI）→
+B7 交付记录：2026-08-11，GE-5 wiring（设计 `b7-blueprint-wiring-design.md`，D-B7-1..14）：
+BLUEPRINT_GENERATE task-backed executor（新任务类型，migration v16）+ **accept 与 Graph gate
+原子闭环**（D-B7-1：并入 applyHumanDecision 同事务；原状态是两条独立路径，中间失败会留下
+"run 已 completed 终态但 accepted=0"且因终态守卫永久无法经正规路径修复）+ accept_current
+补写 accept（D-B7-2：该条 PROJECT_READY 入边原本从无 accept 写入路径）+ 失效蓝图 fail-closed
+拒绝接受（D-B7-8）+ 蓝图 prompt 消费来源排除（D-B7-13，兑现 B6 留下的承诺）+ skip_research
+真正生效（D-B7-14）；随行补齐三个 TERMINAL 节点 executor（自图诞生起从未注册，此前批次
+均止步于人工 Gate 故空白未被触发）。三终态真实 E2E（READY/BLOCKED/CANCELLED）+ 反向原子性
+回归（markAccepted 成功后图写入失败 → accepted 必须回滚）+ PROJECT_READY 入边结构性守卫
+（将来新增入边若未接 accept 副作用即红）。独立对抗复查两路：原子性与图语义 ACCEPT，
+任务引擎路 REWORK 两 blocker（来源排除只删 URL 不删正文 / skip_research 与
+use_current_research 等价）已修复。
+
+下一步：**B8**（GE-5 UI：蓝图查看 + 人工确认 + 项目就绪终态）→
 **B9/B10**（GE-6）。批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。
@@ -239,10 +252,10 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 
 | 项                  | 命令                                                          | 结果                                                                            |
 | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-10 于 `b80f0d2` 实测）                                    |
-| `git diff --check`  | —                                                             | PASS                                                                            |
-| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁                                                           |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 125 passed / 1 skipped（126）；Tests 3026 passed / 6 skipped（3032） |
-| GitHub Actions      | main 分支 CI                                                  | PR #42 合并 commit success（08-05~08-07 停摆期已恢复并补验）                    |
+| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-11 于 `d70eca6` 实测）                                    |
+| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-11 于 `d70eca6` 实测）                                    |
+| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁（未本地实测）                                             |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 139 passed / 2 skipped（141）；Tests 3184 passed / 7 skipped（3191） |
+| GitHub Actions      | main 分支 CI                                                  | PR #47 合并 commit `d70eca6` success（08-05~08-07 停摆期已恢复并补验）          |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。
