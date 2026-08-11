@@ -660,7 +660,7 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
 
 ## TD-029: B7 对抗式复查随行四项（两路复查——原子性/图语义 ACCEPT + 任务引擎 REWORK，2026-08-11）
 
-**状态**: OPEN
+**状态**: PARTIALLY_RESOLVED（TD-029-3 已由 D-B7-14 解决；TD-029-1/2/4 仍 OPEN）
 **优先级**: 中
 **来源**: B7（GE-5 StoryBlueprint 接线）两路独立对抗式复查修复随行
 
@@ -677,23 +677,23 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    四个出口只有 `accept_current`（现在拒绝）/ `modify_requirements`（回环到
    `SPEC_EXTRACT`，代价远高于直接改写）/ `cancel` / `continue_later`，用户此时无法
    "直接改写重新生成蓝图"，只能走成本更高的 `modify_requirements` 或放弃。
-3. **TD-029-3：`skip_research` 与 `use_current_research` 在图层不可区分（BLK-2，未按首选方案实现）**：
-   `RESEARCH_ESCALATION` 与 `BLUEPRINT_USER_GATE`/`BLUEPRINT_ESCALATION` 一样是两条语义
-   不同的入边（`use_current_research` / `skip_research`），但
-   `BLUEPRINT_GENERATE.input.requiresOutcomes` 只声明了 `[RESEARCH_DECISION]`，未纳入
-   `RESEARCH_ESCALATION` 的 outcome；`prepareTask`（`apps/worker/src/blueprint-executors.ts`）
-   只按 input snapshot 里 `artifacts.researchBundle` 是否存在决定 `researchBundleId`，
-   不读 escalation 的具体决策值。而走到 `RESEARCH_ESCALATION` 时必然已有至少一次成功的
-   `RESEARCH_EXECUTE`，`artifacts.researchBundle` 恒非空——所以用户点"跳过调研"
-   （`skip_research`）后，executor 依旧会把那个校验不通过的 bundle 当正常调研喂进
-   prompt，标成 `conducted:true`，与"沿用当前调研"（`use_current_research`）完全不可
-   区分，用户的"跳过"决定零影响。**已评估的首选修法**：把 `RESEARCH_ESCALATION` 的
-   outcome 纳入 `BLUEPRINT_GENERATE.input.requiresOutcomes`（`computeNodeInputSnapshot`
-   已天然支持"声明了但该轮未产出"读为 `null` 的情形，validator 也只检查节点存在/非
-   自依赖/非重复/产出非 noOut，不要求"必定在所有路径上产出"，结构上可行），但该项
-   属于修改 `packages/domain/src/idea-to-novel-graph.ts` 的节点 input 契约定义，超出
-   本次执行边界（执行者被明确禁止改动该文件的节点/边/预算定义），故未实现，改走
-   保底方案：如实登记本条债务，D-B7-7 设计文档已同步修正措辞。
+3. ~~**TD-029-3：`skip_research` 与 `use_current_research` 在图层不可区分（BLK-2）**~~：
+   **已解决（D-B7-14，2026-08-11 同日）**。原始问题：`RESEARCH_ESCALATION` 与
+   `BLUEPRINT_USER_GATE`/`BLUEPRINT_ESCALATION` 一样是两条语义不同的入边
+   （`use_current_research` / `skip_research`），但
+   `BLUEPRINT_GENERATE.input.requiresOutcomes` 只声明了 `[RESEARCH_DECISION]`，
+   `prepareTask` 只按 `artifacts.researchBundle` 是否存在决定 `researchBundleId`，
+   而走到 `RESEARCH_ESCALATION` 时该 artifact 恒非空——所以用户点"跳过调研"零效果，
+   与"沿用当前调研"完全不可区分。首次评估时该修法需要修改
+   `packages/domain/src/idea-to-novel-graph.ts` 的节点 input 契约定义，超出执行者
+   边界，曾走保底方案（如实记录 + 登记本债务）。**架构师复核后判断"存在但不生效的
+   按钮"在产品上不可接受，明确授权追加图契约声明**：`BLUEPRINT_GENERATE.input`
+   追加 `RESEARCH_ESCALATION` 到 `requiresOutcomes`（纯追加声明，不改既有节点/边/
+   预算定义）；`prepareTask` 按此 outcome 判断 `skip_research` 时不传
+   `researchBundleId`；executor 侧新增 `status:'skipped_by_user'` 态，与
+   `not_conducted` 区分措辞。两条对照 E2E（`14a`/`14b`，
+   `apps/worker/src/blueprint-e2e.integration.test.ts`）先红后绿验证。详见
+   `docs/development/b7-blueprint-wiring-design.md` D-B7-14。
    **附带已修复的相邻问题**（不属于本条债务，记录以防混淆）：bundle 存在但
    `factNotes` 为 0（抓取全失败，escalation 的典型成因）时，过滤器此前会返回
    "用户已将全部可用来源排除"——没有任何人排除过任何来源，是对模型说假话；已在

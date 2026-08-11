@@ -59,6 +59,7 @@ import {
   IDEA_TO_NOVEL_PROJECT_GRAPH_V1,
   PROJECT_READY,
   RESEARCH_DECISION,
+  RESEARCH_ESCALATION,
   RESEARCH_VALIDATE,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
@@ -332,6 +333,67 @@ function buildResearchDeps(db: ProjectDatabase): ResearchRunExecutionDeps {
 }
 
 /**
+ * D-B7-14：走到 RESEARCH_ESCALATION 的问题计划——两个问题里恰好一个"永远查无结果"
+ * （search 返回空数组），另一个正常有来源。这样产出的 bundle 有真实可辨识的事实
+ * 笔记内容（不是抓取全失败的空 bundle），但因为有一个问题零来源，
+ * `validateBundleDeterministic`（D-B5-4：每问题 >=1 来源）判定 invalid，走
+ * researchRetry 回环直至预算耗尽，停在 RESEARCH_ESCALATION——bundle 内容可用于
+ * D-B7-14 两条对照 E2E 断言 prompt 是否包含它。
+ */
+function escalationResearchPlanJson(): string {
+  return JSON.stringify({
+    schemaVersion: 1,
+    questions: [{ text: '晚清邮政系统如何运作' }, { text: '永远查无结果的问题' }],
+  });
+}
+
+/**
+ * RESEARCH_RUN 任务 deps，走向 D-B7-14 escalation 场景：'永远查无结果的问题' 恒无
+ * 搜索结果，另一个问题恒有 1 条可抓取来源，产出内容用可辨识标记
+ * `ESCALATION-BUNDLE-CONTENT` 便于断言。同一 fake 在初次执行与两次 researchRetry
+ * 重试（复用问题计划，不再调模型）下行为一致，确保每次都判定 invalid。
+ */
+function buildEscalationResearchDeps(db: ProjectDatabase): ResearchRunExecutionDeps {
+  const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
+  return {
+    taskRepo: new TaskRepositoryAdapter(db),
+    invocationRepo: new ModelInvocationRepositoryAdapter(db),
+    secretStore: fakeSecretStore,
+    providerRepo: fakeProviderRepo,
+    idGenerator,
+    clock,
+    invokeModel: fakeInvokeModel([escalationResearchPlanJson()]),
+    transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
+    nodeExecutionResultStore: db.getNodeExecutionResultStore(),
+    nodeExecutionRepo: db.getNodeExecutionRepository(),
+    sessionRepo: grillDeps.sessionRepo,
+    specVersionRepo: db.getCreationContractVersionRepository(),
+    researchRepo: db.getResearchBundleRepository(),
+    buildSearchPort: () => ({
+      search: async (input: { query: string; maxResults: number }): Promise<SearchResult[]> => {
+        if (input.query.includes('永远查无结果')) return [];
+        return [
+          {
+            url: 'https://facts.example/postal-system',
+            title: '资料：晚清邮政',
+            snippet: '摘要',
+            publishedAt: null,
+          },
+        ];
+      },
+    }),
+    webFetch: {
+      fetch: async (input: { url: string }): Promise<FetchedDocument> => ({
+        url: input.url,
+        title: '来源页面',
+        extractedText: 'ESCALATION-BUNDLE-CONTENT：晚清邮政系统采用驿站与新式邮局并行的制度。',
+        fetchedAt: NOW,
+      }),
+    },
+  };
+}
+
+/**
  * BLUEPRINT_GENERATE 任务 deps（D-B7-5 版本号取 MAX+1 依赖 blueprintRepo；D-B7-13
  * 来源排除依赖 sourceExclusionRepo）。`capturedPrompts` 可选，D-B7-13 用例借此断言
  * 实际发给模型的 prompt 不含被排除 URL。`overrides` 可选——失败分支用例（复查随行
@@ -387,6 +449,46 @@ async function driveToBlueprintTaskNone(
   await executeSpecExtract(buildSpecDeps(db), uniq(env.scheduled)[0]);
   await driveRun(env.deps, 'p1', runId);
   return runId;
+}
+
+/**
+ * D-B7-14：想法（deep 路径）→ spec_complete → RESEARCH_EXECUTE（问题计划里一个问题
+ * 恒无来源）→ research_valid=invalid → researchRetry 预算耗尽（maxIterations=2，
+ * 共执行 3 次）→ 停在 RESEARCH_ESCALATION。返回 runId 与最后一次产出的 bundleId
+ * （此时即 `artifacts.researchBundle` 指向的那条，escalation 决策后 BLUEPRINT_GENERATE
+ * 会以它为输入）。
+ */
+async function driveToResearchEscalationWithRealBundle(
+  db: ProjectDatabase,
+  env: ReturnType<typeof buildRunnerEnv>,
+): Promise<{ readonly runId: string; readonly bundleId: string }> {
+  const { run } = createProjectRun(env.deps, {
+    projectId: 'p1',
+    idempotencyKey: `blueprint-e2e-escalation-${idCounter}`,
+  });
+  const runId = run.workflowRunId;
+  await driveRun(env.deps, 'p1', runId);
+  await executeSpecExtract(buildSpecDeps(db), uniq(env.scheduled)[0]);
+  await driveRun(env.deps, 'p1', runId);
+
+  let bundleId = '';
+  let guard = 0;
+  let state = projectState(env.deps, runId);
+  for (;;) {
+    expect(++guard).toBeLessThan(8);
+    if (state.pendingHumanDecision?.nodeId === RESEARCH_ESCALATION) break;
+    expect(state.terminalStatus).toBeNull();
+    const taskIds = uniq(env.scheduled);
+    const latestTask = taskIds[taskIds.length - 1];
+    const result = await executeResearchRun(buildEscalationResearchDeps(db), latestTask);
+    expect(result.bundleId).toBeTruthy();
+    bundleId = result.bundleId!;
+    await driveRun(env.deps, 'p1', runId);
+    state = projectState(env.deps, runId);
+  }
+  expect(state.pendingHumanDecision?.nodeId).toBe(RESEARCH_ESCALATION);
+  expect(bundleId).toBeTruthy();
+  return { runId, bundleId };
 }
 
 /**
@@ -1096,6 +1198,87 @@ describe('GE-5 Blueprint E2E（真实 SQLite + 真实 executor + 生产 resolver
         const task = new TaskRepositoryAdapter(db).getById(blueprintTaskId)!;
         expect(task.status).toBe('FAILED');
         expect(task.errorCode).toBe('TASK_EXECUTION_FAILED');
+      } finally {
+        db.close();
+      }
+    });
+  });
+
+  // D-B7-14（架构师明确授权的图契约追加）：skip_research 与 use_current_research
+  // 此前在 BLUEPRINT_GENERATE 侧完全不可区分（BLK-2）——两条对照 E2E 证明修复后
+  // 用户"跳过调研"的决定真正影响 prompt。
+  describe('D-B7-14：research escalation 决策真正影响 prompt', () => {
+    it('14a. skip_research → 蓝图 prompt 不含该 bundle 的任何事实笔记内容，且标注用户已跳过', async () => {
+      const db = makeDb('一个晚清历史背景的侦探故事，注重史实细节');
+      try {
+        const env = buildRunnerEnv(db);
+        const { runId, bundleId } = await driveToResearchEscalationWithRealBundle(db, env);
+
+        const bundle = db.getResearchBundleRepository().getById('p1', bundleId)!;
+        expect(bundle.factNotes.length).toBeGreaterThan(0);
+        expect(bundle.factNotes[0].text).toContain('ESCALATION-BUNDLE-CONTENT');
+
+        applyHumanDecision(
+          env.deps as GraphRunDeps,
+          {
+            kind: 'escalation',
+            runId,
+            nodeId: RESEARCH_ESCALATION,
+            outcome: 'skip_research',
+            idempotencyKey: 'esc-skip-14a',
+          } as never,
+        );
+        await driveRun(env.deps, 'p1', runId);
+        expect(projectState(env.deps, runId).nodeStatuses[BLUEPRINT_GENERATE]).toBe('active');
+
+        const capturedPrompts: string[] = [];
+        await executeBlueprintAndDriveToGate(db, env, runId, [blueprintJson()], capturedPrompts);
+        expect(capturedPrompts).toHaveLength(1);
+        const prompt = capturedPrompts[0];
+
+        // 核心断言：用户跳过调研后，bundle 的事实笔记内容完全不出现在 prompt 里
+        expect(prompt).not.toContain('ESCALATION-BUNDLE-CONTENT');
+        expect(prompt).not.toContain(bundleId);
+        // 且措辞如实——标注"用户已跳过"，不是"根本没做调研"（reason 字段可区分）
+        expect(prompt).toContain('"reason":"skipped_by_user"');
+        expect(prompt).toContain('"conducted":true');
+      } finally {
+        db.close();
+      }
+    });
+
+    it('14b. use_current_research → 蓝图 prompt 含该 bundle 的事实笔记内容（对照组）', async () => {
+      const db = makeDb('一个晚清历史背景的侦探故事，注重史实细节');
+      try {
+        const env = buildRunnerEnv(db);
+        const { runId, bundleId } = await driveToResearchEscalationWithRealBundle(db, env);
+
+        const bundle = db.getResearchBundleRepository().getById('p1', bundleId)!;
+        expect(bundle.factNotes.length).toBeGreaterThan(0);
+        expect(bundle.factNotes[0].text).toContain('ESCALATION-BUNDLE-CONTENT');
+
+        applyHumanDecision(
+          env.deps as GraphRunDeps,
+          {
+            kind: 'escalation',
+            runId,
+            nodeId: RESEARCH_ESCALATION,
+            outcome: 'use_current_research',
+            idempotencyKey: 'esc-use-14b',
+          } as never,
+        );
+        await driveRun(env.deps, 'p1', runId);
+        expect(projectState(env.deps, runId).nodeStatuses[BLUEPRINT_GENERATE]).toBe('active');
+
+        const capturedPrompts: string[] = [];
+        await executeBlueprintAndDriveToGate(db, env, runId, [blueprintJson()], capturedPrompts);
+        expect(capturedPrompts).toHaveLength(1);
+        const prompt = capturedPrompts[0];
+
+        // 核心断言（对照组）：用户选择沿用当前调研时，bundle 的事实笔记内容原样进入 prompt
+        expect(prompt).toContain('ESCALATION-BUNDLE-CONTENT');
+        expect(prompt).toContain('"conducted":true');
+        expect(prompt).toContain('"availableAfterExclusion":true');
       } finally {
         db.close();
       }

@@ -88,8 +88,10 @@ export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
   '（更换叙事角度、结构安排或核心冲突的处理方式），不得只做措辞层面的微调。',
   '若调研信息标注 conducted=false，说明本项目未做事实调研，蓝图不得依赖具体的事实性',
   '细节（真实地名、机构、技术数据等），应基于创作要求自由设定自洽的虚构世界观。',
-  'conducted=true 且 availableAfterExclusion=false 时，处理方式与 conducted=false 相同——',
-  '不得依赖具体事实性细节；reason 字段说明具体原因（不影响写作策略，仅供你理解上下文）：',
+  'conducted=true 且 availableAfterExclusion=false 时，写作策略与 conducted=false 相同——',
+  '不得依赖具体事实性细节；reason 字段说明具体原因（不改变写作策略，但改变你对上下文的',
+  '理解）：reason=skipped_by_user 表示用户已审阅调研结果，主动决定不采用（这是用户的',
+  '明确决定，调研本身是做过的，不是失败也不是被排除，不得说成"未做调研"）；',
   'reason=no_sources_gathered 表示调研已执行但未获得任何可用来源（抓取失败等，与任何人',
   '的排除操作无关）；reason=all_sources_excluded 表示原本获得了来源，但用户已将其全部排除。',
   'conducted=true 且 availableAfterExclusion=true 时应参考给出的调研结论与事实笔记，',
@@ -196,9 +198,12 @@ export function classifyResearchInput(
 }
 
 /**
- * 蓝图 prompt 的调研输入态（BLK-2 附带修复：把"无可用事实笔记"拆成两种互不相同的
- * 原因,不能都说成同一句话）：
+ * 蓝图 prompt 的调研输入态（BLK-2 附带修复 + D-B7-14：把"无可用事实笔记"拆成互不
+ * 相同的原因,不能都说成同一句话）：
  * - `not_conducted`：根本没做调研（`research_decision=none`）；
+ * - `skipped_by_user`（D-B7-14）：调研做过（bundle 存在），但用户在调研升级面板
+ *   审阅后主动选择 `skip_research`——这是用户的明确决定，不是调研失败也不是来源
+ *   被排除，措辞必须与另外两种"无可用内容"态区分开，不得说成"未做调研"；
  * - `no_sources_gathered`：做过调研，但 bundle 本身一条事实笔记都没获得
  *   （抓取全失败——这正是走到 RESEARCH_ESCALATION 的典型成因），与任何人的排除操作
  *   无关；此前的实现会把这种情况也标成"用户已将全部可用来源排除"，对模型说了假话
@@ -206,11 +211,12 @@ export function classifyResearchInput(
  * - `all_excluded`：做过调研且原本有事实笔记，但用户通过来源排除 UI 把它们全部排除；
  * - `available`：过滤后仍有可用事实笔记。
  *
- * 三种"无可用内容"态对模型的写作策略要求相同（不得依赖具体事实性细节），但措辞各自
+ * 四种"无可用内容"态对模型的写作策略要求相同（不得依赖具体事实性细节），但措辞各自
  * 如实，不相互冒充。
  */
 export type BlueprintResearchInput =
   | { readonly status: 'not_conducted' }
+  | { readonly status: 'skipped_by_user' }
   | { readonly status: 'no_sources_gathered' }
   | { readonly status: 'all_excluded' }
   | { readonly status: 'available'; readonly context: BlueprintResearchContext };
@@ -225,6 +231,12 @@ export function buildBlueprintGeneratePrompt(context: {
   let researchPayload: unknown;
   if (context.research.status === 'not_conducted') {
     researchPayload = { conducted: false as const };
+  } else if (context.research.status === 'skipped_by_user') {
+    researchPayload = {
+      conducted: true as const,
+      availableAfterExclusion: false as const,
+      reason: 'skipped_by_user' as const,
+    };
   } else if (context.research.status === 'no_sources_gathered') {
     researchPayload = {
       conducted: true as const,
@@ -267,6 +279,9 @@ interface BlueprintGeneratePayload {
   readonly ideaSessionId: string;
   readonly creationSpecVersionId: string;
   readonly researchBundleId: string | null;
+  /** D-B7-14：用户在 RESEARCH_ESCALATION 显式选择 skip_research（与 researchBundleId
+   * 缺失的"根本没做调研"区分开，见 executeBlueprintGenerate 里的 research 分支）。 */
+  readonly researchSkippedByUser: boolean;
   readonly rewriteAttempt: number;
 }
 
@@ -282,7 +297,13 @@ function parsePayload(payloadJson: string): BlueprintGeneratePayload {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务 payload 无效');
   }
   const obj = parsed as Record<string, unknown>;
-  const expected = ['creationSpecVersionId', 'ideaSessionId', 'researchBundleId', 'rewriteAttempt'];
+  const expected = [
+    'creationSpecVersionId',
+    'ideaSessionId',
+    'researchBundleId',
+    'researchSkippedByUser',
+    'rewriteAttempt',
+  ];
   const keys = Object.keys(obj).sort();
   if (keys.length !== expected.length || !expected.every((k) => k in obj)) {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务 payload 无效');
@@ -302,6 +323,17 @@ function parsePayload(payloadJson: string): BlueprintGeneratePayload {
   ) {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务 payload 无效');
   }
+  if (typeof obj.researchSkippedByUser !== 'boolean') {
+    throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务 payload 无效');
+  }
+  if (obj.researchSkippedByUser === true && obj.researchBundleId !== null) {
+    // researchSkippedByUser=true 时 prepareTask 恒不传 researchBundleId（见
+    // blueprint-executors.ts）；两者同时出现说明 payload 被破坏或伪造，fail-closed。
+    throw new TaskExecutionError(
+      'TASK_EXECUTION_FAILED',
+      '任务 payload 不一致：跳过调研却携带 bundle 引用',
+    );
+  }
   if (
     typeof obj.rewriteAttempt !== 'number' ||
     !Number.isInteger(obj.rewriteAttempt) ||
@@ -313,6 +345,7 @@ function parsePayload(payloadJson: string): BlueprintGeneratePayload {
     ideaSessionId: obj.ideaSessionId,
     creationSpecVersionId: obj.creationSpecVersionId,
     researchBundleId: obj.researchBundleId as string | null,
+    researchSkippedByUser: obj.researchSkippedByUser,
     rewriteAttempt: obj.rewriteAttempt,
   };
 }
@@ -660,12 +693,15 @@ export async function executeBlueprintGenerate(
     return failedResult(deps, taskId, null);
   }
 
-  // D-B7-7：researchBundleId 为 null 时（none / skip_research，见 BLK-2 报告——skip_research
-  // 与 use_current_research 在图层不可区分，此处只能按"是否有 bundle 引用"分支，无法
-  // 单独识别 skip_research；已按保底方案记 TD-029-3）显式声明"未做调研"，不得把缺失
-  // 伪装成空调研；有 bundle 时若找不到底层行视为上下文缺失（确定性失败）。
-  // D-B7-13：有 bundle 时按项目排除集合过滤 prompt 可见内容（不改 bundle 行）。
-  let research: BlueprintResearchInput = { status: 'not_conducted' };
+  // D-B7-7/D-B7-14：researchBundleId 为 null 时分两种语义——`research_decision=none`
+  // （根本没做调研）与用户在 RESEARCH_ESCALATION 显式选择 skip_research（调研做过、
+  // 用户主动决定不用，见 payload.researchSkippedByUser，D-B7-14 图契约追加声明后
+  // prepareTask 能区分两者）。不得把两者混同措辞；有 bundle 时若找不到底层行视为
+  // 上下文缺失（确定性失败）。D-B7-13：有 bundle 时按项目排除集合过滤 prompt 可见
+  // 内容（不改 bundle 行）。
+  let research: BlueprintResearchInput = payload.researchSkippedByUser
+    ? { status: 'skipped_by_user' }
+    : { status: 'not_conducted' };
   if (payload.researchBundleId !== null) {
     const bundle = deps.researchRepo.getById(task.projectId, payload.researchBundleId);
     if (!bundle) {

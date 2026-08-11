@@ -52,20 +52,19 @@
   逐字段类型与长度边界、数量上限（chapters 1..200、characters ≤ 50、plotlines ≤ 20、
   relationships ≤ 100、每章 goal ≤ 500 字），越界一律抛 `MODEL_RESPONSE_INVALID`；
   解析通过后再用 domain 的 `createStoryBlueprint` 作第二道域校验（复用既有不变量）。
-- **D-B7-7 无调研路径的 prompt 分支（复查后如实修正，原表述有误）**：`research_decision=none`
-  路径确实没有 researchBundle，`prepareTask` 的该引导字段 `required=false`，prompt 走"本项目
-  未做调研"的显式分支（不得把缺失伪装成空调研）——这部分按原设计落地。
-  **但 escalation 的 `skip_research` 路径与原表述不符**：`BLUEPRINT_GENERATE.input.requiresOutcomes`
-  只声明了 `[RESEARCH_DECISION]`，未纳入 `RESEARCH_ESCALATION` 的 outcome；`prepareTask`
-  （`blueprint-executors.ts`）只按 input snapshot 里 `artifacts.researchBundle` 是否存在来判断
-  `researchBundleId`，不读 escalation 的具体决策值。而 `RESEARCH_ESCALATION` 只能经
-  `research_valid=invalid` + 预算耗尽到达，此时必然已有至少一次成功的 `RESEARCH_EXECUTE`，
-  `artifacts.researchBundle` 恒非空——所以 `skip_research` 路径实际上**仍然会把上一轮 bundle
-  当正常调研喂进 prompt**，与 `use_current_research` 完全不可区分，用户点"跳过调研"没有
-  任何效果。复查发现（BLK-2）后评估了把 `RESEARCH_ESCALATION` 追加进 `requiresOutcomes` 的
-  首选修法，但该项属于修改 `packages/domain/src/idea-to-novel-graph.ts` 的节点定义，超出本次
-  执行边界（执行者被明确禁止改动该文件的节点/边/预算定义），故未实现，改走保底方案：
-  如实记录现状，登记 TD-029-3。
+- **D-B7-7 无调研路径的 prompt 分支（最终按 D-B7-14 落地，取代两版有误的旧表述）**：
+  `research_decision=none` 路径没有 researchBundle，`prepareTask` 的该引导字段
+  `required=false`，prompt 走"本项目未做调研"的显式分支（`status:'not_conducted'`，
+  `{conducted:false}`，不得把缺失伪装成空调研）——这部分按原设计落地。
+  escalation 的 `skip_research` 路径最初的表述（"没有 researchBundle"）与实现不符——
+  复查（BLK-2）发现该路径实际会把上一轮 bundle 当正常调研喂进 prompt，与
+  `use_current_research` 完全不可区分；随后按 D-B7-14 补上了区分：`prepareTask` 读取
+  `BLUEPRINT_GENERATE.input.requiresOutcomes` 新增声明的 `RESEARCH_ESCALATION`
+  outcome，outcome=`skip_research` 时不传 `researchBundleId`（即使
+  `artifacts.researchBundle` 非空），executor 侧对应走 `status:'skipped_by_user'`
+  分支（`{conducted:true, availableAfterExclusion:false, reason:'skipped_by_user'}`）
+  ——与"根本没做调研"（`not_conducted`）措辞区分，如实表达"用户已审阅调研结果并
+  决定不采用"，不是"未做调研"。TD-029-3 已随 D-B7-14 解决，见 tech-debt.md。
 - **D-B7-8 失效蓝图不得被接受（fail-closed）**：`applyArtifactChange` 只追加
   `invalidatedArtifacts`、不清空 `artifacts` 槽位（B6 已就 researchBundle 记录同类问题），
   且**全仓无任何运行时门禁消费 `invalidatedArtifacts`**。因此用户改了 CreationSpec 之后，
@@ -122,6 +121,37 @@ blueprintInvalidated / gateActive / escalationActive / rewriteUsed`。B8 的蓝�
   （`all_excluded`）——首版实现把这两者都记成 `all_excluded`，对模型说了假话（没有
   任何排除操作时也声称"用户已将全部可用来源排除"）；与 D-B7-7 的 `not_conducted`
   （根本没做调研）合计四态，措辞各自如实，不相互冒充。
+- **D-B7-14 skip_research 与 use_current_research 图层区分（架构师明确授权的图契约追加，
+  销 TD-029-3）**：BLK-2 复查发现 `research-escalation--blueprint-generate-use`
+  （outcome `use_current_research`）与 `--skip`（outcome `skip_research`）是
+  `RESEARCH_ESCALATION` 到 `BLUEPRINT_GENERATE` 的两条语义不同的入边，但
+  `BLUEPRINT_GENERATE.input.requiresOutcomes` 只声明了 `[RESEARCH_DECISION]`，
+  `prepareTask` 只按 `artifacts.researchBundle` 是否存在决定 `researchBundleId`，
+  不读 escalation 的具体决策值；而走到 `RESEARCH_ESCALATION` 时必然已有至少一次成功
+  的 `RESEARCH_EXECUTE`，`artifacts.researchBundle` 恒非空——所以 `skip_research`
+  与 `use_current_research` 在 prompt 层完全不可区分，用户的"跳过"决定零影响。
+  执行者最初评估首选修法可行（`computeNodeInputSnapshot` 天然支持"声明了但该轮未
+  产出"读 null；validator 只检查节点存在/非自依赖/非重复/产出非 noOut，不要求必在
+  所有路径上产出），但因该项属于修改 `idea-to-novel-graph.ts` 的节点定义、超出执行
+  边界而停下报告；架构师复核后判断"用户点了等于没点的按钮"在产品上不可接受（B6 来源
+  排除、B7 prompt 过滤已各踩过一次"功能存在但后端不消费"），明确授权本次追加。
+  **决策**：`BLUEPRINT_GENERATE.input.requiresOutcomes` 追加声明
+  `[RESEARCH_DECISION, RESEARCH_ESCALATION]`（**追加声明，不改任何既有节点/边/预算
+  定义，不改其它节点**）；`prepareTask` 以 optional 方式读该 outcome（`none` 路径/
+  research_valid 直接 valid 路径不经过 escalation，缺失读 null，按"未跳过"处理，
+  不因缺失而失败）；outcome=`skip_research` 时 payload 里 `researchBundleId=null` +
+  `researchSkippedByUser=true`，即使 `artifacts.researchBundle` 非空。executor 侧
+  新增 `status:'skipped_by_user'` 态，与 `not_conducted`（根本没做调研）措辞区分——
+  用户跳过是主动决定，prompt 里如实表达"用户已审阅调研结果并决定不采用"（reason 字段
+  `skipped_by_user`），不说成"未做调研"。
+  **inputHash 影响确认**：`inputHash` 只在节点新 activation 创建时按当前图定义计算
+  一次并持久化（`node-runner.ts`），infra 同 activation 重试复用旧值；settlement 时
+  重算的是"当前图 + 当前 run state"的 hash，与该 execution 创建时持久化的 hash 比对
+  （`node-settlement.ts`）。本项目尚无生产数据，不存在"旧代码创建的 execution 在新
+  代码下被结算"的实际场景；逻辑上该变更只影响本次代码部署之后新建的 activation，不会
+  误判本次之前已存在的 execution（若未来有生产数据，任何变更 `requiresOutcomes` 的
+  改动都需要注意这一类滚动升级期间在途 execution 的 stale 判定窗口，属于通用注意事项，
+  不是本次改动独有）。
 
 ## 3. 改动点清单（按依赖序）
 
@@ -144,6 +174,9 @@ blueprintInvalidated / gateActive / escalationActive / rewriteUsed`。B8 的蓝�
 
 ## 4. 非目标
 
-- 不做蓝图 UI（B8）；不改 L3 权威图定义；不引入改写 feedback 承载（D-B7-4，B8 再议）；
+- 不做蓝图 UI（B8）；不引入改写 feedback 承载（D-B7-4，B8 再议）；
+  L3 权威图定义原则上不改，唯一例外是 D-B7-14——`BLUEPRINT_GENERATE.input.requiresOutcomes`
+  追加 `RESEARCH_ESCALATION`，架构师复查后明确授权的**追加声明**，不改任何既有节点/
+  边/预算定义、不改其它节点；
 - 不做失效后自动重置节点（D-B7-8，TD-029-2）；不写 `project_metadata.status`（D-B7-9）；
 - 不做 GE-6 的 chapter run 入口（仅预埋读通道）。
