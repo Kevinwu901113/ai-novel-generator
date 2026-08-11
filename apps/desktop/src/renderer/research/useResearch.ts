@@ -8,14 +8,9 @@
  * taskType === 'RESEARCH_RUN' 且 isTaskActive(status) 过滤，taskType 常量见
  * apps/worker/src/graph-task-runner.ts）。
  *
- * 阶段回退检测（D-B6-7/D-B6-10）：额外读 graph.listRuns + graph.getRunProgress
- * （与 useIntake 同源），用 deriveResearchJourneyStage 推导当前 frontier 的旅程
- * 阶段并经 onStageChange 回报——RESEARCH_ESCALATION 的 5 个出口并非都停在
- * research 阶段（modify_requirements 回环到 clarify、use_current_research/
- * skip_research 前进到 blueprint、cancel/continue_later/预算耗尽落终态)。
- * App 据 journey-logic.deriveViewStage 决定是否仍挂载本 Region（D-B6-10：
- * frontier 前进到 blueprint/manuscript 时默认继续展示调研内容，而不是像旧
- * D-B6-7 行为那样立即换回 IntakeRegion）。
+ * 阶段派生（B8/D-B8-2 起）不在本 hook：已上提到 App 的旅程探针
+ * （journey/useJourney），本 hook 不再读 graph.getRunProgress、也不再有
+ * onStageChange 回报。仍读 graph.listRuns 是因为升级决策要拿 runId。
  *
  * 轮询设计镜像 useTaskCenter（generationRef 竞态防护 + inFlightGenerationRef
  * 互斥锁 + document.hidden 可见性门控）与 useIntake（自递归 setTimeout，请求批量
@@ -31,12 +26,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { GraphRunSummaryDto, ResearchBundleDto, ResearchStateDto } from '@ai-novel/contracts';
-import {
-  deriveResearchJourneyStage,
-  deriveResearchPhase,
-  type ResearchPhase,
-} from './research-logic';
-import { latestProjectRun, type JourneyStage } from '../intake/intake-logic';
+import { deriveResearchPhase, type ResearchPhase } from './research-logic';
+import { latestProjectRun } from '../intake/intake-logic';
 import { isTaskActive } from '../task-center/task-labels';
 import { toSafeUserError } from '../safety/safe-error';
 
@@ -63,10 +54,7 @@ export interface UseResearchReturn {
   readonly actions: ResearchActions;
 }
 
-export function useResearch(
-  projectId: string,
-  onStageChange?: (stage: JourneyStage) => void,
-): UseResearchReturn {
+export function useResearch(projectId: string): UseResearchReturn {
   const [phase, setPhase] = useState<ResearchPhase>({ kind: 'no-run' });
   const [state, setState] = useState<ResearchStateDto | null>(null);
   const [bundle, setBundle] = useState<ResearchBundleDto | null>(null);
@@ -79,8 +67,6 @@ export function useResearch(
   const [isDocumentVisible, setIsDocumentVisible] = useState(() => !document.hidden);
 
   const runRef = useRef<GraphRunSummaryDto | null>(null);
-  const onStageChangeRef = useRef(onStageChange);
-  onStageChangeRef.current = onStageChange;
 
   // 竞态防护：projectId 切换时递增（同 useTaskCenter）
   const generationRef = useRef(0);
@@ -98,19 +84,10 @@ export function useResearch(
     try {
       setLoading(true);
 
-      // 阶段回退检测（D-B6-7）：与 useIntake 同源的 run + progress 读取。
+      // 升级决策需要 runId（阶段派生已上提到 App 探针，D-B8-2）。
       const runs = await window.desktop.graph.listRuns({ projectId });
       if (generationRef.current !== currentGen) return;
-      const run = latestProjectRun(runs);
-      runRef.current = run;
-
-      const progress = run
-        ? await window.desktop.graph.getRunProgress({ projectId, runId: run.runId })
-        : null;
-      if (generationRef.current !== currentGen) return;
-
-      const frontierStage = deriveResearchJourneyStage(run, progress);
-      if (frontierStage) onStageChangeRef.current?.(frontierStage);
+      runRef.current = latestProjectRun(runs);
 
       // 回滚闪烁修复：在发起 listSourceExclusions 之前记下写入序号——如果
       // 这次 Promise.all 等待期间发生了一次 setSourceExclusion 写入，序号会

@@ -85,3 +85,34 @@ B6 扩展的旅程 shell，使蓝图成为 viewStage 的第三个已实现阶段
 
 - 不做版本链（D-B8-6）、不做改写意见承载（D-B8-7，TD-029-1）、不接 listChapters 到 UI；
 - 不做 GE-6 的章节生成入口（只留布局位）；不改 L3 图定义。
+
+## 5. 实施后的偏离与修正（如实记录，随实现提交）
+
+设计是动笔前写的，实现过程中有四处与原文不符。B6 的教训是"文档不能写成没发生的事"，
+故在此逐条改口，而不是让正文继续宣称一个没做到的性质。
+
+- **D-B8-2 的"轮询总量不增"不成立，实际净增约一轮**。原文预期"Region 不再重复拉
+  run/progress，故总量不增"。实现时发现 `useIntake` 仍需 progress 派生自己的访谈相位、
+  `useResearch` 仍需 run 拿 runId 提交升级决策；把它们改成纯 props 驱动是一次跨 B4/B6
+  的大改，风险高于收益。实际结果：viewStage 为 idea/research 时净增约一轮
+  `blueprint.getState`（`useResearch` 少了一次 `getRunProgress`，抵掉一部分）；viewStage
+  为 blueprint 时反而更少——BlueprintRegion 完全不轮询。**D-B6-7"任一时刻只有一条
+  Region 轮询循环"的约束不变**，D-B8-2 的结构性目的（阶段派生不依赖谁被挂载）已达成。
+- **"生成中"信号不走 tasks.list，改用节点 active**。原设计沿用 B6 的"在途任务"判定；
+  实现时改为 `hasActiveBlueprintGenerate(progress)`——节点 active 是 Graph 权威事实，
+  任务在途只是它的实现细节。B6 之所以要读 tasks.list，是因为要区分 key-missing 导致的
+  PENDING，蓝图侧没有这个分叉。省掉一条轮询。
+- **D-B8-9 已由 B7 完成，本批次无需补登记**。设计写作时 tech-debt 最后一条确为 TD-028，
+  但 B7 合并（PR #49）时已登记 TD-029-1/2/3/4，且 TD-029-3 已由 D-B7-14 销账。本批次
+  只是让 D-B8-7 的 UI 行为与既有的 TD-029-1 记录对上，未新增条目。
+- **失效蓝图的 gate 按钮以 `gateActive` 为准，而非相位**。`stale` 相位也会出现在非 gate
+  态（如已失效、等待重新生成），此时给出 gate 决策按钮必然被后端拒绝。故正文展示由相位
+  决定，决策按钮由 `state.gateActive` 决定，两者分开。
+
+### 验证基线（本批次）
+
+- `pnpm check` 全绿：146 文件 / 3302 测试通过（另 2 文件 7 测试 skip）。
+- **先红后绿的回归证据**：把 `deriveFrontierStage` 的终态分支改回旧行为（终态回落
+  `idea`）后，App 级测试"run 已 completed + 已接受的冷启动下，蓝图仍可达且不显示
+  重新开始访谈"确认变红（超时 5s 找不到 `blueprint-view`），改回后转绿。D-B8-3
+  不是空断言。

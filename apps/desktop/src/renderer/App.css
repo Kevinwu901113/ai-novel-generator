@@ -3952,3 +3952,324 @@ body {
   font-size: 12px;
   color: var(--color-status-ok);
 }
+
+/* ── B8：故事蓝图（blueprint 阶段中栏）────────────────────────── */
+
+.blueprint-region {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.blueprint-region-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.blueprint-error {
+  padding: 8px 12px;
+  border-radius: 4px;
+  background-color: #fef2f2;
+  color: #b91c1c;
+  border: 1px solid #fecaca;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-error {
+    background-color: #3f1d1d;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+}
+
+.blueprint-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-secondary);
+  font-size: 14px;
+}
+
+.blueprint-info-card {
+  max-width: 640px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.blueprint-info-card p {
+  margin: 0 0 4px;
+}
+
+.blueprint-info-card p:last-child {
+  margin-bottom: 0;
+}
+
+/* 失效横幅：与 .research-stale-banner 同一视觉语言（附文字，不只靠颜色） */
+.blueprint-stale-banner {
+  max-width: 640px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background-color: #fff7ed;
+  border: 1px solid #fdba74;
+  color: #9a3412;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-stale-banner {
+    background-color: #3a1f0a;
+    border-color: #7c2d12;
+    color: #fdba74;
+  }
+}
+
+/* ── 蓝图正文 ─────────────────────────────────────────────────── */
+
+.blueprint-view {
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.blueprint-view-stale {
+  opacity: 0.75;
+}
+
+.blueprint-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.blueprint-version {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.blueprint-section h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.blueprint-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.blueprint-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.blueprint-toggle-btn {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.blueprint-character-list,
+.blueprint-relationship-list,
+.blueprint-plotline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.blueprint-character {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-bg-panel);
+}
+
+.blueprint-character-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.blueprint-character-role {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.blueprint-relationship-list li,
+.blueprint-plotline-list li {
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.blueprint-plotline-name {
+  margin-right: 8px;
+}
+
+.blueprint-plotline-summary {
+  color: var(--color-text-secondary);
+}
+
+/* 章节结构：默认只列序号 + 标题，点开看目标（D-B8-8） */
+.blueprint-chapter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blueprint-chapter-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.blueprint-chapter-btn:hover {
+  border-color: var(--color-border);
+  background-color: var(--color-bg-secondary);
+}
+
+.blueprint-chapter-index {
+  min-width: 24px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.blueprint-chapter-detail {
+  padding: 4px 10px 8px 42px;
+}
+
+.blueprint-chapter-goal {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.blueprint-ending-hidden {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+/* ── Gate / Escalation / 就绪 ─────────────────────────────────── */
+
+.blueprint-gate,
+.blueprint-escalation {
+  max-width: 640px;
+}
+
+.blueprint-gate-prompt {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.blueprint-gate-options,
+.blueprint-escalation-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.blueprint-gate-option,
+.blueprint-escalation-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background-color: var(--color-bg-panel);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.blueprint-gate-option:hover:not(:disabled),
+.blueprint-escalation-option:hover:not(:disabled) {
+  border-color: var(--color-primary);
+}
+
+.blueprint-gate-option:disabled,
+.blueprint-escalation-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.blueprint-gate-option.primary {
+  border-color: var(--color-primary);
+}
+
+.blueprint-gate-option span,
+.blueprint-escalation-option span {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.blueprint-gate-budget {
+  margin-top: 2px;
+}
+
+.blueprint-escalation-notice {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #9a3412;
+}
+
+@media (prefers-color-scheme: dark) {
+  .blueprint-escalation-notice {
+    color: #fdba74;
+  }
+}
+
+.blueprint-ready {
+  max-width: 640px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.blueprint-ready-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.blueprint-ready p:last-child {
+  margin-bottom: 0;
+}

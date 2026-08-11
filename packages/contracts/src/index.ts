@@ -341,6 +341,7 @@ export const IPC_CHANNELS = {
   RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
   BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
+  BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1056,9 +1057,129 @@ export function isValidGetBlueprintStateInput(value: unknown): value is GetBluep
   return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
 }
 
-/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7，预埋读通道 D-B7-10） */
+/** 蓝图人物（StoryBlueprint.characters 的公开投影） */
+export interface BlueprintCharacterDto {
+  readonly name: string;
+  readonly role: string;
+  readonly description: string;
+}
+
+export function isValidBlueprintCharacterDto(value: unknown): value is BlueprintCharacterDto {
+  if (!hasRequiredExactKeys(value, ['name', 'role', 'description'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.name === 'string' &&
+    typeof obj.role === 'string' &&
+    typeof obj.description === 'string'
+  );
+}
+
+/** 蓝图情节线 */
+export interface BlueprintPlotlineDto {
+  readonly name: string;
+  readonly summary: string;
+}
+
+export function isValidBlueprintPlotlineDto(value: unknown): value is BlueprintPlotlineDto {
+  if (!hasRequiredExactKeys(value, ['name', 'summary'])) return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.name === 'string' && typeof obj.summary === 'string';
+}
+
+/** 蓝图章节结构条目（GE-6 由 blueprintChapterId 绑定 ChapterGenerationRun） */
+export interface BlueprintChapterDto {
+  readonly id: string;
+  readonly title: string;
+  readonly goal: string;
+}
+
+export function isValidBlueprintChapterDto(value: unknown): value is BlueprintChapterDto {
+  if (!hasRequiredExactKeys(value, ['id', 'title', 'goal'])) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' && typeof obj.title === 'string' && typeof obj.goal === 'string'
+  );
+}
+
+/**
+ * 权威 StoryBlueprint 公开投影（GE-5/B8，D-B8-1）。
+ *
+ * B7 只给了状态投影（BlueprintStateDto 七个标量），渲染进程拿不到蓝图正文；
+ * 蓝图 UI 的核心交付（查看前提/人物/关系/世界/冲突/情节线/章节结构/结局）依赖本 DTO。
+ * 镜像 B6 的 ResearchBundleDto：worker 侧由 toStoryBlueprintDto 投影，不外泄
+ * domain 内部字段（accepted 属状态、由 BlueprintStateDto 承载，不重复第二事实源）。
+ */
+export interface StoryBlueprintDto {
+  readonly id: string;
+  readonly projectId: string;
+  readonly version: number;
+  readonly premise: string;
+  readonly characters: ReadonlyArray<BlueprintCharacterDto>;
+  readonly relationships: ReadonlyArray<string>;
+  readonly world: string;
+  readonly conflict: string;
+  readonly ending: string;
+  readonly plotlines: ReadonlyArray<BlueprintPlotlineDto>;
+  readonly chapters: ReadonlyArray<BlueprintChapterDto>;
+  readonly createdAt: string;
+}
+
+export function isValidStoryBlueprintDto(value: unknown): value is StoryBlueprintDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'id',
+      'projectId',
+      'version',
+      'premise',
+      'characters',
+      'relationships',
+      'world',
+      'conflict',
+      'ending',
+      'plotlines',
+      'chapters',
+      'createdAt',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  return (
+    typeof obj.id === 'string' &&
+    typeof obj.projectId === 'string' &&
+    typeof obj.version === 'number' &&
+    typeof obj.premise === 'string' &&
+    Array.isArray(obj.characters) &&
+    obj.characters.every((c) => isValidBlueprintCharacterDto(c)) &&
+    Array.isArray(obj.relationships) &&
+    obj.relationships.every((r) => typeof r === 'string') &&
+    typeof obj.world === 'string' &&
+    typeof obj.conflict === 'string' &&
+    typeof obj.ending === 'string' &&
+    Array.isArray(obj.plotlines) &&
+    obj.plotlines.every((p) => isValidBlueprintPlotlineDto(p)) &&
+    Array.isArray(obj.chapters) &&
+    obj.chapters.every((c) => isValidBlueprintChapterDto(c)) &&
+    typeof obj.createdAt === 'string'
+  );
+}
+
+/** blueprint.getBlueprint 输入（D-B8-1） */
+export interface GetBlueprintInputDto {
+  readonly projectId: string;
+  readonly blueprintId: string;
+}
+
+export function isValidGetBlueprintInput(value: unknown): value is GetBlueprintInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'blueprintId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.blueprintId);
+}
+
+/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7 读通道 D-B7-10；B8 扩 getBlueprint） */
 export interface BlueprintAPI {
   getState(input: GetBlueprintStateInputDto): Promise<BlueprintStateDto>;
+  getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null>;
 }
 
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */

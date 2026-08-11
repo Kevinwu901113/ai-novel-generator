@@ -24,12 +24,9 @@
 import { useResearch } from './useResearch';
 import { ResearchBundleView } from './ResearchBundleView';
 import { ResearchEscalationPanel } from './ResearchEscalationPanel';
-import type { JourneyStage } from '../intake/intake-logic';
 
 export interface ResearchRegionProps {
   readonly projectId: string;
-  /** 旅程阶段回报（App shell 导航高亮 + Region 挂载决策，D-B6-7/D-B6-10） */
-  readonly onStageChange?: (stage: JourneyStage) => void;
   /**
    * frontier 已越过 research（当前为 blueprint/manuscript）但仍在展示调研内容
    * 时为 true——由 App 据 journey-logic.deriveViewStage 的回落规则计算
@@ -40,13 +37,11 @@ export interface ResearchRegionProps {
 
 export function ResearchRegion({
   projectId,
-  onStageChange,
   showBeyondResearchNotice = false,
 }: ResearchRegionProps) {
-  // App 按展示阶段（viewStage）挂载本 Region（D-B6-10：不再单纯 follow
-  // frontierStage），故不需要额外的挂载即回报——useResearch 的轮询会在首轮
-  // poll 内确认/回退 frontierStage。
-  const research = useResearch(projectId, onStageChange);
+  // D-B8-2：本 Region 不再回报旅程阶段（原 onStageChange）——阶段派生已上提到
+  // App 的旅程探针（journey/useJourney）。
+  const research = useResearch(projectId);
   const { phase } = research;
 
   const initialLoading = research.loading && research.state === null;
@@ -59,7 +54,7 @@ export function ResearchRegion({
 
       {showBeyondResearchNotice && (
         <div className="research-info-card" role="status">
-          <p>调研已完成，蓝图阶段开发中。以下仍是本项目当前的调研结果。</p>
+          <p>创作旅程已进入后续阶段。以下是本项目当前的调研结果。</p>
         </div>
       )}
 

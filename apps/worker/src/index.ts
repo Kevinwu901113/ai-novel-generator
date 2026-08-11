@@ -1957,6 +1957,7 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       // D-B7-3：blueprint.generate / blueprint.accept 已从 RPC 面移除（绕过 Graph 语义
       // 的写入口收口，见 blueprint-handlers.ts 顶部说明）。
       case 'blueprint.getState':
+      case 'blueprint.getBlueprint':
       case 'blueprint.listChapters': {
         const blueprintCtx: BlueprintHandlerContext = {
           getProjectDb,

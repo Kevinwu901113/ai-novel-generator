@@ -15,11 +15,11 @@
  *   research.getResearchState），预埋给 B8 蓝图 UI 与 GE-6 的 createChapterRun。
  */
 
-import { AppError, listBlueprintChapters } from '@ai-novel/application';
+import { AppError, getBlueprint, listBlueprintChapters } from '@ai-novel/application';
 import type { ProjectDatabase } from '@ai-novel/database';
-import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
+import type { IdeaToNovelProjectRunState, StoryBlueprint } from '@ai-novel/domain';
 import { BLUEPRINT_ESCALATION, BLUEPRINT_USER_GATE } from '@ai-novel/domain';
-import type { BlueprintStateDto } from '@ai-novel/contracts';
+import type { BlueprintStateDto, StoryBlueprintDto } from '@ai-novel/contracts';
 
 export interface BlueprintHandlerContext {
   getProjectDb(projectId: string): ProjectDatabase;
@@ -87,6 +87,34 @@ function computeBlueprintState(projDb: ProjectDatabase, projectId: string): Blue
   };
 }
 
+/**
+ * StoryBlueprint → 公开 DTO 投影（D-B8-1，镜像 B6 的 toResearchBundleDto）。
+ *
+ * 逐字段显式构造（不 spread domain 对象）：DTO 用 exact-keys 校验，任何 domain
+ * 侧新增字段若被 spread 带出，preload 层校验会整包判否而不是安全忽略。
+ * accepted 不进本 DTO——它属状态、由 BlueprintStateDto 承载，避免第二事实源。
+ */
+export function toStoryBlueprintDto(blueprint: StoryBlueprint): StoryBlueprintDto {
+  return {
+    id: blueprint.id,
+    projectId: blueprint.projectId,
+    version: blueprint.version,
+    premise: blueprint.premise,
+    characters: blueprint.characters.map((c) => ({
+      name: c.name,
+      role: c.role,
+      description: c.description,
+    })),
+    relationships: blueprint.relationships.map((r) => r),
+    world: blueprint.world,
+    conflict: blueprint.conflict,
+    ending: blueprint.ending,
+    plotlines: blueprint.plotlines.map((p) => ({ name: p.name, summary: p.summary })),
+    chapters: blueprint.chapters.map((c) => ({ id: c.id, title: c.title, goal: c.goal })),
+    createdAt: blueprint.createdAt,
+  };
+}
+
 export function dispatchBlueprintCommand(
   command: string,
   payload: unknown,
@@ -103,6 +131,20 @@ export function dispatchBlueprintCommand(
       const projDb = ctx.getProjectDb(projectId);
       try {
         return computeBlueprintState(projDb, projectId);
+      } finally {
+        projDb.close();
+      }
+    }
+    case 'blueprint.getBlueprint': {
+      const projectId = assertStringField(obj, 'projectId');
+      const blueprintId = assertStringField(obj, 'blueprintId');
+      const projDb = ctx.getProjectDb(projectId);
+      try {
+        const blueprint = getBlueprint(
+          { blueprintRepo: projDb.getStoryBlueprintRepository() },
+          { projectId, blueprintId },
+        );
+        return blueprint === null ? null : toStoryBlueprintDto(blueprint);
       } finally {
         projDb.close();
       }

@@ -25,7 +25,8 @@ import {
   BLUEPRINT_USER_GATE,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState, StoryBlueprint } from '@ai-novel/domain';
-import type { BlueprintStateDto } from '@ai-novel/contracts';
+import type { BlueprintStateDto, StoryBlueprintDto } from '@ai-novel/contracts';
+import { isValidStoryBlueprintDto } from '@ai-novel/contracts';
 import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './blueprint-handlers.js';
 
 const NOW = '2026-08-04T00:00:00.000Z';
@@ -253,6 +254,64 @@ describe('dispatchBlueprintCommand', () => {
     } finally {
       db.close();
     }
+  });
+
+  // B8/D-B8-1：蓝图正文读通道。契约上必须是"投影"而非 domain 对象直传——
+  // accepted 属状态（BlueprintStateDto 承载），若混进正文 DTO 就有两个事实源，
+  // 且 exact-keys 校验会在 preload 侧整包判否。
+  it('blueprint.getBlueprint 返回正文投影，且不含 accepted 等状态字段（D-B8-1）', () => {
+    const db = freshDb();
+    try {
+      db.getStoryBlueprintRepository().save(
+        makeBlueprint('bp-5', [{ id: 'ch-1', title: '第一章', goal: '引出案件' }]),
+        true,
+      );
+
+      const dto = dispatchBlueprintCommand(
+        'blueprint.getBlueprint',
+        { projectId: 'p1', blueprintId: 'bp-5' },
+        ctx(),
+      ) as StoryBlueprintDto;
+
+      expect(isValidStoryBlueprintDto(dto)).toBe(true);
+      expect(Object.keys(dto).sort()).toEqual(
+        [
+          'chapters',
+          'characters',
+          'conflict',
+          'createdAt',
+          'ending',
+          'id',
+          'plotlines',
+          'premise',
+          'projectId',
+          'relationships',
+          'version',
+          'world',
+        ].sort(),
+      );
+      expect(dto.premise).toBe('侦探在雨夜调查悬案');
+      expect(dto.chapters).toEqual([{ id: 'ch-1', title: '第一章', goal: '引出案件' }]);
+      expect(dto.characters).toEqual([{ name: '侦探', role: '主角', description: '冷静' }]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('blueprint.getBlueprint 蓝图不存在 → null（UI 走"内容暂时不可用"分支）', () => {
+    expect(
+      dispatchBlueprintCommand(
+        'blueprint.getBlueprint',
+        { projectId: 'p1', blueprintId: 'bp-missing' },
+        ctx(),
+      ),
+    ).toBe(null);
+  });
+
+  it('blueprint.getBlueprint 缺 blueprintId → VALIDATION_ERROR', () => {
+    expect(() =>
+      dispatchBlueprintCommand('blueprint.getBlueprint', { projectId: 'p1' }, ctx()),
+    ).toThrow();
   });
 
   it('未知命令 → VALIDATION_ERROR', () => {

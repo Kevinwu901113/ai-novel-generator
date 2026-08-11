@@ -60,11 +60,13 @@ import {
   isValidSetSourceExclusionInput,
   isValidListSourceExclusionsInput,
   isValidGetBlueprintStateInput,
+  isValidGetBlueprintInput,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
   type ResearchStateDto,
   type ResearchBundleDto,
   type BlueprintStateDto,
+  type StoryBlueprintDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1130,6 +1132,22 @@ ipcMain.handle(
       command: 'blueprint.getState',
       payload: input,
     })) as BlueprintStateDto;
+  },
+);
+
+// 蓝图正文读取（B8/D-B8-1）：UI 展示前提/人物/世界/章节结构所需，getState 只有标量投影。
+ipcMain.handle(
+  IPC_CHANNELS.BLUEPRINT_GET_BLUEPRINT,
+  async (_event, input: unknown): Promise<StoryBlueprintDto | null> => {
+    if (!isValidGetBlueprintInput(input)) {
+      throw Object.assign(new Error('无效的蓝图查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'blueprint.getBlueprint',
+      payload: input,
+    })) as StoryBlueprintDto | null;
   },
 );
 

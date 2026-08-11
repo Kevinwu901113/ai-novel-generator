@@ -70,6 +70,7 @@ const IPC_CHANNELS = {
   RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
   BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
+  BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
 } as const;
 
 /**
@@ -148,6 +149,8 @@ import type {
   ResearchBundleDto,
   GetBlueprintStateInputDto,
   BlueprintStateDto,
+  GetBlueprintInputDto,
+  StoryBlueprintDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -477,6 +480,9 @@ const desktopAPI: DesktopAPI = {
   blueprint: {
     async getState(input: GetBlueprintStateInputDto): Promise<BlueprintStateDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_GET_STATE, input);
+    },
+    async getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_GET_BLUEPRINT, input);
     },
   },
 };

@@ -10,25 +10,22 @@
  * 不暴露 session / run / 节点等工程概念（roadmap 锁定约束）。
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import { ESCALATION_OPTIONS, journeyStageFromPhase, type JourneyStage } from './intake-logic';
+import { useCallback, useState } from 'react';
+import { ESCALATION_OPTIONS } from './intake-logic';
 import { useIntake } from './useIntake';
 import { CreationSpecPanel } from './CreationSpecPanel';
 
 export interface IntakeRegionProps {
   readonly projectId: string;
-  /** 旅程阶段回报（App shell 导航高亮，D-B4-1） */
-  readonly onStageChange?: (stage: JourneyStage) => void;
 }
 
-export function IntakeRegion({ projectId, onStageChange }: IntakeRegionProps) {
+/**
+ * D-B8-2：本 Region 不再回报旅程阶段（原 onStageChange）——阶段派生已上提到
+ * App 的旅程探针（journey/useJourney），Region 只负责渲染与自身内容拉取。
+ */
+export function IntakeRegion({ projectId }: IntakeRegionProps) {
   const intake = useIntake(projectId);
   const [answerText, setAnswerText] = useState('');
-
-  const stage = journeyStageFromPhase(intake.phase);
-  useEffect(() => {
-    onStageChange?.(stage);
-  }, [stage, onStageChange]);
 
   const handleSubmit = useCallback(async () => {
     const text = answerText.trim();

@@ -49,6 +49,15 @@ export const ERROR_CODE_LABELS: Readonly<Record<string, string>> = {
   CONTRACT_VALIDATION_FAILED: '创作契约输入验证失败',
   CONTRACT_DRAFT_ALREADY_RUNNING: '创作契约任务已在进行中',
 
+  // ── Graph 运行（创作旅程）相关 ───────────────────────────────────
+  // B8/D-B8-4 第二道防线：失效蓝图的 accept 被后端 fail-closed 拒绝时（D-B7-8）
+  // 抛的就是 GRAPH_RUN_STATE_CONFLICT。UI 已按 blueprintInvalidated 提前禁用按钮，
+  // 这里的映射只兜住"禁用生效之前的竞态窗口"，避免落到通用兜底文案。
+  GRAPH_RUN_NOT_FOUND: '创作旅程记录不存在',
+  GRAPH_RUN_STATE_CONFLICT: '创作旅程状态已变化，请刷新后重新确认',
+  GRAPH_RUN_VERSION_CONFLICT: '创作旅程已在其他操作中更新，数据已自动刷新',
+  GRAPH_RUN_INTERRUPTED: '创作旅程在上次运行中被中断',
+
   // ── 通用 ─────────────────────────────────────────────────────────
   NETWORK_UNAVAILABLE: '网络不可用',
   WORKER_UNAVAILABLE: '数据服务不可用',

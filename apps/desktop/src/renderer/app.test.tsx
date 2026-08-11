@@ -128,6 +128,19 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       setSourceExclusion: vi.fn().mockResolvedValue([]),
       listSourceExclusions: vi.fn().mockResolvedValue([]),
     },
+    // B8：App 的旅程探针（useJourney）每轮读 blueprint.getState，必须提供
+    blueprint: {
+      getState: vi.fn().mockResolvedValue({
+        runId: null,
+        blueprintRef: null,
+        accepted: false,
+        blueprintInvalidated: false,
+        gateActive: false,
+        escalationActive: false,
+        rewriteUsed: 0,
+      }),
+      getBlueprint: vi.fn().mockResolvedValue(null),
+    },
     ...overrides,
   } as unknown as DesktopAPI;
 }
@@ -243,18 +256,29 @@ async function createProjectAndWaitForJourney(api: DesktopAPI) {
   });
 }
 
-describe('App：展示阶段与推进阶段分离（D-B6-10，B6 REWORK blocker 回归）', () => {
+describe('App：展示阶段与推进阶段分离（D-B6-10 / D-B8-2，跨批次 blocker 回归）', () => {
   afterEach(() => {
     cleanup();
     window.desktop = undefined as unknown as DesktopAPI;
   });
 
-  // frontier 落在 blueprint（调研全链在同一快照内推进过去，未经可观测的
-  // research frontier）时，调研已产出的有效资料包必须仍然可达——问题文本、
-  // 来源、来源排除开关三者都要能查到。修复前：App 按 frontierStage 互斥挂载，
-  // journeyStage 一到 blueprint 就换回 IntakeRegion，以下内容永不渲染。
-  it('frontier 在 blueprint 时，已有调研内容仍可达（ResearchBundleView 问题/来源/排除开关）', async () => {
+  // B8 起 blueprint 已有 Region：frontier 落在 blueprint 时中栏挂 BlueprintRegion，
+  // 而 D-B6-10 的承诺（已产出的调研内容不因 frontier 越过 research 而不可达）
+  // 由 JourneyNav 的可点回看承担。两条一起断言，避免任一侧回归。
+  it('frontier 在 blueprint 时挂 BlueprintRegion；点 JourneyNav 的调研仍能回看调研内容', async () => {
     await createProjectAndWaitForJourney(createBlueprintFrontierDesktopAPI());
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { name: '故事蓝图' })).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    const nav = screen.getByRole('navigation', { name: '创作旅程阶段' });
+    await act(async () => {
+      within(nav).getByRole('button', { name: /调研/ }).click();
+    });
 
     await waitFor(
       () => {
@@ -262,7 +286,6 @@ describe('App：展示阶段与推进阶段分离（D-B6-10，B6 REWORK blocker 
       },
       { timeout: 5000 },
     );
-
     expect(screen.getByText('调研结论文本')).toBeInTheDocument();
 
     await act(async () => {
@@ -276,19 +299,27 @@ describe('App：展示阶段与推进阶段分离（D-B6-10，B6 REWORK blocker 
   });
 
   // JourneyNav 必须能同时表达"当前进度"（frontierStage=blueprint）与
-  // "正在查看"（viewStage=research 回落展示），且两者在无障碍语义上可区分——
+  // "正在查看"（viewStage=research，用户点回看）且两者在无障碍语义上可区分——
   // 不是同一个语义状态的两种叙述。
-  it('frontier=blueprint 时 JourneyNav 的"当前进度"与"正在查看"在无障碍语义上可区分', async () => {
+  it('用户点回调研后，"当前进度"仍在蓝图、"正在查看"落在调研，二者语义可区分', async () => {
     await createProjectAndWaitForJourney(createBlueprintFrontierDesktopAPI());
 
     await waitFor(
       () => {
-        expect(screen.getByText('调研结论文本')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { name: '故事蓝图' })).toBeInTheDocument();
       },
       { timeout: 5000 },
     );
 
     const nav = screen.getByRole('navigation', { name: '创作旅程阶段' });
+    await act(async () => {
+      within(nav).getByRole('button', { name: /调研/ }).click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('调研结论文本')).toBeInTheDocument();
+    });
+
     const blueprintBtn = within(nav).getByRole('button', { name: /蓝图/ });
     const researchBtn = within(nav).getByRole('button', { name: /调研/ });
 
@@ -299,6 +330,170 @@ describe('App：展示阶段与推进阶段分离（D-B6-10，B6 REWORK blocker 
     // 正在查看调研：aria-pressed=true 落在调研项，不在蓝图项
     expect(researchBtn).toHaveAttribute('aria-pressed', 'true');
     expect(blueprintBtn).not.toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+// ── B8：蓝图 UI 的 App 级可达性（D-B8-2/D-B8-3 blocker 回归）──────────
+//
+// 两条都必须先红后绿：
+// 1) frontier 停在 BLUEPRINT_USER_GATE 时，蓝图正文与确认按钮可达；
+// 2) run 已 completed + accepted 的**冷启动**下蓝图仍可达，且不显示
+//    "重新开始访谈"——这是 D-B8-3 的回归证据。修复前：run 终态 → activeNodes
+//    恒空 → 阶段派生回落 idea → 中栏挂 IntakeRegion 的 terminal 文案，且
+//    JourneyNav 的蓝图项 disabled，用户永远回不到已接受的蓝图。
+
+function blueprintDto(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'bp-1',
+    projectId: 'proj-new-0001',
+    version: 1,
+    premise: '一个关于星际邮差的故事前提',
+    characters: [{ name: '林澈', role: '主角', description: '沉默寡言的邮差' }],
+    relationships: ['林澈与调度员是旧识'],
+    world: '边缘星系的通讯网',
+    conflict: '送信人与收信人立场对立',
+    ending: '信最终没有送达',
+    plotlines: [{ name: '主线', summary: '一封信的旅程' }],
+    chapters: [
+      { id: 'ch-1', title: '第一封信', goal: '引入邮差与任务' },
+      { id: 'ch-2', title: '折返', goal: '揭示收信人身份' },
+    ],
+    createdAt: NOW_B6,
+    ...overrides,
+  };
+}
+
+function blueprintStateDto(overrides: Record<string, unknown> = {}) {
+  return {
+    runId: 'run-1',
+    blueprintRef: 'bp-1',
+    accepted: false,
+    blueprintInvalidated: false,
+    gateActive: false,
+    escalationActive: false,
+    rewriteUsed: 0,
+    ...overrides,
+  };
+}
+
+/** frontier 停在 BLUEPRINT_USER_GATE（等待人工确认）的 mock */
+function createBlueprintGateDesktopAPI(stateOverrides: Record<string, unknown> = {}) {
+  return createMockDesktopAPI({
+    graph: {
+      listRuns: vi.fn().mockResolvedValue([BLUEPRINT_RUN]),
+      createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      createChapterRun: vi.fn(),
+      getRunProgress: vi.fn().mockResolvedValue({
+        activeNodes: [
+          { nodeId: 'BLUEPRINT_USER_GATE', stage: 'blueprint', status: 'waiting_for_human' },
+        ],
+        possibleNextNodes: [],
+      }),
+      applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+    },
+    blueprint: {
+      getState: vi
+        .fn()
+        .mockResolvedValue(blueprintStateDto({ gateActive: true, ...stateOverrides })),
+      getBlueprint: vi.fn().mockResolvedValue(blueprintDto()),
+    },
+  });
+}
+
+/** run 已 completed 且蓝图已接受的冷启动 mock（activeNodes 恒空） */
+function createProjectReadyDesktopAPI() {
+  return createMockDesktopAPI({
+    graph: {
+      listRuns: vi.fn().mockResolvedValue([{ ...BLUEPRINT_RUN, terminalStatus: 'completed' }]),
+      createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      createChapterRun: vi.fn(),
+      getRunProgress: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+    },
+    blueprint: {
+      getState: vi.fn().mockResolvedValue(blueprintStateDto({ accepted: true })),
+      getBlueprint: vi.fn().mockResolvedValue(blueprintDto()),
+    },
+  });
+}
+
+describe('App：蓝图 UI 可达性（B8，D-B8-2/D-B8-3）', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+  });
+
+  it('frontier 停在 BLUEPRINT_USER_GATE 时，蓝图正文与确认按钮可达', async () => {
+    await createProjectAndWaitForJourney(createBlueprintGateDesktopAPI());
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.getByText('第一封信')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeEnabled();
+  });
+
+  it('蓝图已失效时禁用"接受"、只留重新生成（D-B8-4，不靠报错）', async () => {
+    await createProjectAndWaitForJourney(
+      createBlueprintGateDesktopAPI({ blueprintInvalidated: true }),
+    );
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    // 失效横幅 + 旧内容仍降级展示（用户要看得到才能判断）
+    expect(screen.getByText(/此蓝图已作废/)).toBeInTheDocument();
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /接受这份蓝图/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /重新生成一版/ })).toBeEnabled();
+  });
+
+  // D-B8-3 的回归证据：终态 run 的 activeNodes 恒空，阶段必须按已产出 artifact 回推。
+  it('run 已 completed + 已接受的冷启动下，蓝图仍可达且不显示"重新开始访谈"', async () => {
+    await createProjectAndWaitForJourney(createProjectReadyDesktopAPI());
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    expect(screen.getByText('✓ 蓝图已确认，项目就绪')).toBeInTheDocument();
+    expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
+    expect(screen.queryByText('重新开始访谈')).not.toBeInTheDocument();
+
+    // JourneyNav 的蓝图项必须可点（reachedStages 含 blueprint），否则用户回不去
+    const nav = screen.getByRole('navigation', { name: '创作旅程阶段' });
+    expect(within(nav).getByRole('button', { name: /蓝图/ })).toBeEnabled();
+  });
+
+  // D-B8-8：结局方向默认折叠（剧透保护）
+  it('结局方向默认折叠，点开后才显示', async () => {
+    await createProjectAndWaitForJourney(createBlueprintGateDesktopAPI());
+
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('blueprint-view')).toBeInTheDocument();
+      },
+      { timeout: 5000 },
+    );
+
+    expect(screen.queryByText('信最终没有送达')).not.toBeInTheDocument();
+    await act(async () => {
+      screen.getByRole('button', { name: '查看结局方向' }).click();
+    });
+    expect(screen.getByText('信最终没有送达')).toBeInTheDocument();
   });
 });
 
