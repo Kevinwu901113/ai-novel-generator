@@ -31,7 +31,7 @@ export function isTaskActive(status: string): boolean {
 
 // ── 类型标签 ────────────────────────────────────────────────────────
 
-// domain 的 TaskType 闭合联合共七种，此处必须全覆盖——缺项会走 fallback
+// domain 的 TaskType 闭合联合共八种，此处必须全覆盖——缺项会走 fallback
 // 显示成截断前缀（如 "RESEARCH"），用户读到的是半截英文
 const KNOWN_TASK_TYPE_LABELS: Record<string, string> = {
   PROVIDER_CONNECTION_TEST: '模型连接测试',
@@ -41,6 +41,7 @@ const KNOWN_TASK_TYPE_LABELS: Record<string, string> = {
   SPEC_EXTRACT: '创作要求整理',
   RESEARCH_RUN: '资料调研',
   CHAPTER_DRAFT: '章节初稿',
+  BLUEPRINT_GENERATE: '蓝图生成',
 };
 
 /**

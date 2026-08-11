@@ -310,3 +310,4 @@ export type {
 } from './chapter-generation.js';
 export * from './spec-extract.js';
 export * from './research-run.js';
+export * from './blueprint-generate.js';

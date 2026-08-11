@@ -12,10 +12,12 @@ import type { ProjectDatabase } from '@ai-novel/database';
 import type { NodeRunnerDeps, TaskData } from '@ai-novel/application';
 import { driveRun } from '@ai-novel/application';
 import {
+  executeBlueprintGenerate,
   executeChapterDraft,
   executeResearchRun,
   executeSpecExtract,
   TaskExecutionError,
+  type BlueprintGenerateExecutionDeps,
   type ChapterDraftExecutionDeps,
   type ResearchRunExecutionDeps,
   type SpecExtractExecutionDeps,
@@ -27,10 +29,11 @@ import {
   type SettleMessages,
 } from './runner-kernel.js';
 
-/** Graph 任务引擎 deps：CHAPTER_DRAFT / SPEC_EXTRACT / RESEARCH_RUN 的并集（B3/B5） */
+/** Graph 任务引擎 deps：CHAPTER_DRAFT / SPEC_EXTRACT / RESEARCH_RUN / BLUEPRINT_GENERATE 的并集（B3/B5/B7） */
 export type GraphEngineDeps = ChapterDraftExecutionDeps &
   SpecExtractExecutionDeps &
-  ResearchRunExecutionDeps;
+  ResearchRunExecutionDeps &
+  BlueprintGenerateExecutionDeps;
 
 /**
  * 复用 runner-kernel 依赖契约（openDb + buildEngineDeps + getTaskRepo + getInvocationRepo）。
@@ -121,7 +124,8 @@ export function scheduleGraphTask(
     if (
       task.taskType !== 'CHAPTER_DRAFT' &&
       task.taskType !== 'SPEC_EXTRACT' &&
-      task.taskType !== 'RESEARCH_RUN'
+      task.taskType !== 'RESEARCH_RUN' &&
+      task.taskType !== 'BLUEPRINT_GENERATE'
     ) {
       closeDb();
       return { scheduled: false, reason: 'UNSUPPORTED' };
@@ -134,6 +138,8 @@ export function scheduleGraphTask(
           await executeChapterDraft(engineDeps, taskId, prompt);
         } else if (taskType === 'RESEARCH_RUN') {
           await executeResearchRun(engineDeps, taskId);
+        } else if (taskType === 'BLUEPRINT_GENERATE') {
+          await executeBlueprintGenerate(engineDeps, taskId);
         } else {
           await executeSpecExtract(engineDeps, taskId);
         }

@@ -145,6 +145,8 @@ import { runProjectRecovery } from './recovery-bootstrap.js';
 import { driveRun } from '@ai-novel/application';
 import { registerIntakeExecutors } from './intake-executors.js';
 import { registerResearchExecutors } from './research-executors.js';
+import { registerBlueprintExecutors } from './blueprint-executors.js';
+import { registerProjectTerminalExecutors } from './project-terminal-executors.js';
 import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
@@ -885,6 +887,19 @@ registerResearchExecutors(productionRegistry, productionRunners, {
   clock: createClock(),
 });
 
+// GE-5（B7）：注册 BLUEPRINT_GENERATE（task-backed）。BLUEPRINT_USER_GATE /
+// BLUEPRINT_ESCALATION 是人工 Gate，无 executor；accept 副作用见 graph-run.ts（D-B7-1/2）。
+registerBlueprintExecutors(productionRegistry, productionRunners, {
+  getProjectDb: (projectId: string) => getProjectDb(projectId),
+  idGenerator: createIdGenerator(),
+  clock: createClock(),
+});
+
+// B7 随行修复：Project Graph 终止节点（PROJECT_READY/CANCELLED/BLOCKED）此前从未被
+// 注册 executor——driveRun 对 TERMINAL kind 无特殊豁免，见 project-terminal-executors.ts
+// 顶部说明。GE-5"PROJECT_READY 原子闭环"退出条件要求真正到达这些终态，随批次一并补齐。
+registerProjectTerminalExecutors(productionRegistry, productionRunners);
+
 /** D-B3-1 live drive 与任务后推进共用的 NodeRunnerDeps 构造（同一 projDb 生命周期内使用） */
 function buildLiveNodeRunnerDeps(projDb: ProjectDatabase, projectId: string): NodeRunnerDeps {
   return {
@@ -972,6 +987,8 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         researchRepo: projDb.getResearchBundleRepository(),
         buildSearchPort: (apiKey: string) => createTavilySearchProvider({ apiKey }),
         webFetch: createSafeWebFetch(),
+        // BLUEPRINT_GENERATE（B7）：蓝图版本化持久化端口（D-B7-5 版本号取 MAX+1）
+        blueprintRepo: projDb.getStoryBlueprintRepository(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
@@ -1935,8 +1952,9 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
         data = await dispatchResearchCommand(request.command, request.payload, researchReadCtx);
         break;
       }
-      case 'blueprint.generate':
-      case 'blueprint.accept':
+      // D-B7-3：blueprint.generate / blueprint.accept 已从 RPC 面移除（绕过 Graph 语义
+      // 的写入口收口，见 blueprint-handlers.ts 顶部说明）。
+      case 'blueprint.getState':
       case 'blueprint.listChapters': {
         const blueprintCtx: BlueprintHandlerContext = {
           getProjectDb,

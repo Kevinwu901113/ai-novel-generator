@@ -421,18 +421,10 @@ export type {
 export { executeResearch, getResearchBundle } from './research.js';
 
 // ── StoryBlueprint（GE-5）────────────────────────────────────────
+// D-B7-3：generateBlueprint / acceptBlueprint 已移除（收口见 blueprint.ts 顶部说明）。
 
-export type {
-  StoryBlueprintRepositoryPort,
-  BlueprintDeps,
-  GenerateBlueprintInput,
-} from './blueprint.js';
-export {
-  generateBlueprint,
-  getBlueprint,
-  acceptBlueprint,
-  listBlueprintChapters,
-} from './blueprint.js';
+export type { StoryBlueprintRepositoryPort } from './blueprint.js';
+export { getBlueprint, listBlueprintChapters } from './blueprint.js';
 
 // ── Graph Walking Skeleton（GE-2）────────────────────────────────
 

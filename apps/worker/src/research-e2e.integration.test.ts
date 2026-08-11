@@ -2,14 +2,19 @@
  * GE-4 / B5 端到端集成测试（真实 SQLite + 真实 executor + 生产 resolver + fake 搜索/抓取端口）。
  *
  * 覆盖 roadmap GE-4 退出条件的确定性部分：
- * 1. none：无事实依赖想法 → RESEARCH_DECISION=none → 直达 BLUEPRINT_GENERATE（不建任务）；
+ * 1. none：无事实依赖想法 → RESEARCH_DECISION=none → 直达 BLUEPRINT_GENERATE
+ *    （B7 起 GE-5 executor 已注册：真建蓝图任务，停在 PENDING 未执行）；
  * 2. deep 全链：晚清历史想法 → decision=deep → PLAN(marker) → RESEARCH_RUN 任务
  *    （模型脚本产问题计划 + fake Tavily/fetch）→ bundle 落库 → VALIDATE=valid → 停在
- *    BLUEPRINT_GENERATE（GE-5 executor 未注册 → TD-020 跳过保持，run 不死）；
+ *    BLUEPRINT_GENERATE（蓝图任务已建，停在 PENDING 未执行）；
  * 3. invalid 回环：抓取全失败 → validate=invalid → researchRetry 回环（复用问题计划，
  *    不再调模型）→ 预算耗尽 → RESEARCH_ESCALATION 人工 Gate → skip_research 放行；
  * 4. 配置类 PENDING：Tavily key 缺失 → 任务保持 PENDING（SEARCH_KEY_REQUIRED），run 不死；
  *    key 补齐后重执行成功（D-B5-6/7 语义的任务侧半边）。
+ *
+ * BLUEPRINT_GENERATE 全链（真实执行 + accept 原子闭环 + 三终态 + 原子性/失效回归）见
+ * blueprint-e2e.integration.test.ts（B7 GE-5 退出条件）；本文件只需证明 B7 注册后
+ * research-e2e 场景仍能正确把蓝图任务调度出去（不再是 TD-020 unregistered 跳过）。
  *
  * light/deep 的深度判定单测在 research-engine 包；Tavily 真调用见 gated live 测试。
  */
@@ -55,6 +60,7 @@ import {
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
 import { registerIntakeExecutors } from './intake-executors.js';
 import { registerResearchExecutors } from './research-executors.js';
+import { registerBlueprintExecutors } from './blueprint-executors.js';
 import { buildGrillSessionDeps } from './grill-handlers.js';
 import { TaskRepositoryAdapter, ModelInvocationRepositoryAdapter } from './index.js';
 
@@ -112,6 +118,7 @@ function buildRunnerEnv(db: ProjectDatabase) {
   const ctx = { getProjectDb: () => db, idGenerator, clock };
   registerIntakeExecutors(registry, runners, ctx);
   registerResearchExecutors(registry, runners, ctx);
+  registerBlueprintExecutors(registry, runners, ctx);
   const scheduled: string[] = [];
   const skips: string[] = [];
   const deps: NodeRunnerDeps = {
@@ -317,11 +324,12 @@ describe('GE-4 Research E2E（真实 SQLite + 真实 executor + 生产 resolver�
       expect(state.terminalStatus).toBeNull();
       expect(state.nodeStatuses[RESEARCH_DECISION]).toBe('succeeded');
       expect(state.nodeOutcomes[RESEARCH_DECISION]?.value).toBe('none');
-      // 跳过 PLAN/EXECUTE/VALIDATE，直达蓝图（GE-5 executor 未注册 → TD-020 跳过保持）
+      // 跳过 PLAN/EXECUTE/VALIDATE，直达蓝图；B7 起 GE-5 executor 已注册——
+      // 节点仍是 active，但语义是"任务已建、待执行"，不再是 TD-020 unregistered 跳过。
       expect(state.nodeStatuses[BLUEPRINT_GENERATE]).toBe('active');
-      expect(env.skips).toContain(`${BLUEPRINT_GENERATE}:unregistered`);
-      // 只有 SPEC_EXTRACT 一个任务，没有 RESEARCH_RUN
-      expect(uniq(env.scheduled)).toHaveLength(1);
+      expect(env.skips).not.toContain(`${BLUEPRINT_GENERATE}:unregistered`);
+      // SPEC_EXTRACT + BLUEPRINT_GENERATE 两个任务，没有 RESEARCH_RUN
+      expect(uniq(env.scheduled)).toHaveLength(2);
     } finally {
       db.close();
     }

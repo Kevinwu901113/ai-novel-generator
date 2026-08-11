@@ -1291,9 +1291,8 @@ describe('node execution settlement (real SQLite)', () => {
       const runId = run.run.workflowRunId;
       // storyBlueprint 需在权威表内真实存在（resolver 校验底层存储 + version）
       db.getStoryBlueprintRepository().save(
-        { id: 'bp-real-1', projectId: 'p1', version: 1 } as never,
+        { id: 'bp-real-1', projectId: 'p1', version: 1, createdAt: NOW } as never,
         false,
-        NOW,
       );
       // idea / creationSpec 同样需真实底层行（B3/D-B3-2）
       seedIntakeArtifactRows(db);
@@ -1379,9 +1378,8 @@ describe('node execution settlement (real SQLite)', () => {
       const runA = seedProjectRun(db, kit.deps, 'c-own-a');
       const runIdA = runA.run.workflowRunId;
       db.getStoryBlueprintRepository().save(
-        { id: 'bp-real-1', projectId: 'p1', version: 1 } as never,
+        { id: 'bp-real-1', projectId: 'p1', version: 1, createdAt: NOW } as never,
         false,
-        NOW,
       );
       // idea / creationSpec 底层真实行（B3/D-B3-2）
       seedIntakeArtifactRows(db);
