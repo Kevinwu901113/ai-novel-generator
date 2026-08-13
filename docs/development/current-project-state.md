@@ -154,7 +154,7 @@ GE-6 Chapter 生成        → ✅ COMPLETE（B9 wiring v17 + B10 产品 UI v18�
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 B1 多 provider 网关      → ✅ MERGED ON MAIN（2026-08-07，PR #41 + 补丁 `9f98278`，D6 最小形态）
 GE-7 Manuscript/导出     → ✅ COMPLETE（MANUSCRIPT_COMMIT + 稿件工作区 + 导出，v19，2026-08-13）
-GE-8 端到端验收          → 待开始
+GE-8 端到端验收          → ✅ COMPLETE（product-e2e：全链 + 四条产品保证，2026-08-13）
 GE-9 质量增强            → 待开始
 ```
 

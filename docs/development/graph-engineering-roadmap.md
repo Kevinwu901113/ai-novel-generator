@@ -324,6 +324,7 @@ gate 决策、终态）。
 | GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）          | ✅ 确定性 E2E + 真实链路实测 |
 | GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）          | ✅ 三终态真实 E2E            |
 | GE-6 Chapter 生成节点               | ✅ COMPLETE         | ✅         | ✅（四类章节任务引擎，v17/v18）       | ✅ 六节点 executor + 章节终态（B9）            | ✅（B10）         | ✅ 全链到 CANDIDATE_GATE     |
+| GE-8 产品 1.0 端到端验收            | ✅ COMPLETE         | ✅         | ✅                                    | ✅                                             | ✅                | ✅ 全链 + 四条产品保证       |
 | GE-7 稿件写入与导出                 | ✅ COMPLETE         | ✅         | ✅（manuscript 后端 v7 + v19）        | ✅ MANUSCRIPT_COMMIT executor                  | ✅（工作区+导出） | ✅ 提交与覆盖回归            |
 | RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —                 | ✅ 真实 SQLite               |
 
@@ -403,9 +404,15 @@ gate 决策、终态）。
     CAS 保存 / 版本追加）+ TXT/Markdown 导出（worker 渲染、main 落盘）+ resolver 补齐
     manuscript 底层校验
     （2026-08-13；设计 `ge7-manuscript-design.md`；随行登记 TD-033-1/2/3）。
-- **下一步（依依赖顺序）**：
-  - **GE-8 产品 1.0 端到端验收**：模糊想法 → 追问 → CreationSpec → 调研 → 蓝图 →
-    章节生成 → 用户修改 → 继续生成 → 导出，含故障注入与恢复验证。
+  - **GE-8** ✅：产品 1.0 端到端验收（`apps/worker/src/product-e2e.integration.test.ts`）：
+    一条真实路径走通"想法 → 追问 → 回答 → CreationSpec → 深度调研 → 蓝图 → 接受 →
+    两章生成 → 接受写入稿件 → 用户手改 → 导出（导出内容含手改）"，外加四条产品保证的
+    专门回归：用户原始输入不丢失 / 手写正文不被静默覆盖（AI 再次提交后用户版本仍在
+    版本链 + 过期基线被拒）/ 重启后可继续 / 模型中断后重新发起本章可成功且稿件不受影响。
+    先红后绿验证：摘掉 MANUSCRIPT_COMMIT 注册 → 全链与覆盖两条即红（2026-08-13）。
+- **下一步**：
+  - **GE-9 质量与长篇增强**（派生层，不反阻塞闭环）：Story State Ledger、章节摘要、
+    动态检索上下文、多候选生成、Critic 质量基准与人工盲评等；质量基线见 §17。
 
 ## 16. 已删除的历史资料
 
