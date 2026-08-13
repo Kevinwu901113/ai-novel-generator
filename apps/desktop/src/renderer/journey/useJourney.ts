@@ -114,6 +114,7 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
         progress: runProgress,
         hasBlueprintArtifact: bpState.blueprintRef !== null,
         hasResearchArtifact: researchState?.bundleRef != null,
+        blueprintAccepted: bpState.accepted,
       });
       // null = 瞬时态，保留上一次已知阶段
       if (nextStage !== null) setFrontierStage(nextStage);

@@ -148,6 +148,7 @@ import { registerResearchExecutors } from './research-executors.js';
 import { registerBlueprintExecutors } from './blueprint-executors.js';
 import { registerProjectTerminalExecutors } from './project-terminal-executors.js';
 import { registerChapterExecutors } from './chapter-executors.js';
+import { dispatchChapterCommand, type ChapterHandlerContext } from './chapter-handlers.js';
 import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
@@ -931,6 +932,26 @@ function buildLiveNodeRunnerDeps(projDb: ProjectDatabase, projectId: string): No
 }
 
 /**
+ * D-B3-1 live drive：fire-and-forget 驱动 NodeRunner，失败静默（启动恢复兜底）。
+ * `getProjectDb` 每次新建连接，必须随驱动结束关闭（TD-023 纪律）。
+ * graph.* 与 chapter.* 两处分发共用同一份实现，避免复制漂移。
+ */
+function driveRunLive(projectId: string, runId: string): void {
+  void (async () => {
+    const projDb = getProjectDb(projectId);
+    try {
+      await driveRun(buildLiveNodeRunnerDeps(projDb, projectId), projectId, runId);
+    } finally {
+      try {
+        projDb.close();
+      } catch {
+        // 关闭失败不产生 unhandled rejection
+      }
+    }
+  })().catch(() => {});
+}
+
+/**
  * RW-1-R5 生产 artifact 边界：transaction-scoped resolver。
  * 实现已抽到 @ai-novel/application 的 productionArtifactResolver（TD-019），
  * worker 与 packages/database 集成测试共用同一份实现，禁止再各写一份。
@@ -1009,6 +1030,7 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         scenePlanRepo: projDb.getChapterScenePlanRepository(),
         candidateRepo: projDb.getChapterCandidateRepository(),
         critiqueRepo: projDb.getChapterCritiqueRepository(),
+        rewriteFeedbackRepo: projDb.getChapterRewriteFeedbackRepository(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
@@ -1921,21 +1943,7 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           idGenerator: createIdGenerator(),
           clock: createClock(),
           // D-B3-1 live drive：fire-and-forget 驱动 NodeRunner，失败静默（启动恢复兜底）
-          driveAfter: (projectId, runId) => {
-            void (async () => {
-              const projDb = getProjectDb(projectId);
-              try {
-                await driveRun(buildLiveNodeRunnerDeps(projDb, projectId), projectId, runId);
-              } finally {
-                // 复查 Note-2：getProjectDb 每次新建连接，必须随驱动结束关闭
-                try {
-                  projDb.close();
-                } catch {
-                  // 关闭失败不产生 unhandled rejection
-                }
-              }
-            })().catch(() => {});
-          },
+          driveAfter: driveRunLive,
         };
         data = dispatchGraphCommand(request.command, request.payload, graphCtx);
         break;
@@ -1983,6 +1991,21 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           clock: createClock(),
         };
         data = dispatchBlueprintCommand(request.command, request.payload, blueprintCtx);
+        break;
+      }
+      // GE-6（B10）：章节生成产品通道。写入口只有 startRun / submitDecision，二者都
+      // 经 createChapterRun / applyHumanDecision，不提供任何伪造节点完成的通道。
+      case 'chapter.getOverview':
+      case 'chapter.startRun':
+      case 'chapter.getRunState':
+      case 'chapter.submitDecision': {
+        const chapterCtx: ChapterHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+          driveAfter: driveRunLive,
+        };
+        data = dispatchChapterCommand(request.command, request.payload, chapterCtx);
         break;
       }
       default:

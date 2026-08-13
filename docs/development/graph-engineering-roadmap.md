@@ -323,7 +323,7 @@ gate 决策、终态）。
 | GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
 | GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
 | GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）   | ✅ 三终态真实 E2E            |
-| GE-6 Chapter 生成节点               | ⚠️ PARTIAL          | ✅         | ✅（四类章节任务引擎，v17）           | ✅ 六节点 executor + 章节终态（B9）            | ❌（B10）  | ✅ 全链到 CANDIDATE_GATE     |
+| GE-6 Chapter 生成节点               | ✅ COMPLETE         | ✅         | ✅（四类章节任务引擎，v17/v18）       | ✅ 六节点 executor + 章节终态（B9）            | ✅（B10）  | ✅ 全链到 CANDIDATE_GATE     |
 | RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
@@ -391,10 +391,14 @@ gate 决策、终态）。
     escalation 三终态 / 重启恢复）
     （2026-08-13；设计 `b9-chapter-wiring-design.md`；随行登记 TD-031-1/2/3；
     MANUSCRIPT_COMMIT 有意不注册，属 GE-7）。
+  - **B10** ✅：GE-6 产品 UI：`chapter.*` 四通道四层贯通 + 成稿阶段 ChapterRegion
+    （章节列表 / 发起生成 / 作者语言进度 / 候选正文与自查意见 / 候选确认三选项 /
+    升级四选项）+ **改写意见承载（migration v18，销 TD-031-2）** +
+    **PROJECT_READY 后旅程推进到成稿阶段（D-B10-6，App 级测试坐实的可达性缺陷）** +
+    预算上限跨层 parity 守卫
+    （2026-08-13；设计 `b10-chapter-ui-design.md`；随行登记 TD-032-1/2）。
 - **下一步（依依赖顺序）**：
-  - **B10**：GE-6 产品 UI：从蓝图章节发起生成、进度呈现、候选正文查看、
-    accept / reject / request_rewrite（含 TD-031-2 的改写意见承载）；
-  - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
+  - **GE-7**（D9 前置已满足）：MANUSCRIPT_COMMIT + 稿件工作区 + TXT/Markdown 导出。
 
 ## 16. 已删除的历史资料
 

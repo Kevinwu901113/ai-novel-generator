@@ -2,7 +2,7 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：7（2026-08-13）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：8（2026-08-13）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
@@ -11,7 +11,7 @@
 
 | 项              | 值                                                                                                                            |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 7                                                                                                                             |
+| 状态文档版本    | 8                                                                                                                             |
 | 更新日期        | 2026-08-11                                                                                                                    |
 | 基线 main SHA   | `b6220ae`（PR #49 合并后，含 B7 GE-5 蓝图 wiring/accept 原子闭环；本版随 B8 PR #50 提交，合并后 main 含 B8 GE-5 蓝图产品 UI） |
 | 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v16、CI             |
@@ -150,7 +150,7 @@ GE-2 Walking Skeleton    → ⚠️ PARTIAL（2026-08-04，骨架测试达成；
 GE-3 Idea Intake+Spec    → ✅ COMPLETE（B3 wiring+E2E，PR #42；B4 产品 UI，2026-08-10）
 GE-4 Web Research        → ✅ COMPLETE（B5 wiring v14 + B6 产品 UI v15，2026-08-11）
 GE-5 StoryBlueprint      → ✅ COMPLETE（B7 wiring v16 + B8 产品 UI + 独立复查修复，2026-08-11）
-GE-6 Chapter 生成        → ⚠️ PARTIAL（B9 wiring v17 + 全链 E2E 到 CANDIDATE_GATE，2026-08-13；产品 UI 待 B10）
+GE-6 Chapter 生成        → ✅ COMPLETE（B9 wiring v17 + B10 产品 UI v18，2026-08-13）
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 B1 多 provider 网关      → ✅ MERGED ON MAIN（2026-08-07，PR #41 + 补丁 `9f98278`，D6 最小形态）
 GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
@@ -249,7 +249,19 @@ CHAPTER_PLAN / DRAFT / 三 Critic / CRITIQUE_JOIN / REWRITE 六节点真实 exec
 不自动接受、escalation 三终态、重启恢复）。MANUSCRIPT_COMMIT 有意不注册（GE-7），
 accept 后 run 停在该节点等接线——B10 界面必须如实说明。随行登记 TD-031-1/2/3。
 
-下一步：**B10**（GE-6 产品 UI：发起生成 / 进度 / 候选查看 / Gate 决策 + 改写意见承载）。
+B10 交付记录：2026-08-13，GE-6 产品 UI（设计 `b10-chapter-ui-design.md`，D-B10-1..7）：
+`chapter.*` 四通道（getOverview / startRun / getRunState / submitDecision）四层贯通；
+成稿阶段 ChapterRegion（章节列表 → 发起生成 → 作者语言进度 → 候选正文与自查意见 →
+候选确认三选项 / 升级四选项）；**改写意见承载**（migration v18 `chapter_rewrite_feedback`，
+先落意见再推进 Graph，REWRITE prompt 真实消费——销 TD-031-2）；阶段在 worker 侧派生
+（D-B10-2），含 `accepted_pending_commit` 如实态（采用后停在 MANUSCRIPT_COMMIT，
+写入稿件属 GE-7）。**D-B10-6 可达性修复（App 级测试坐实）**：PROJECT_READY 后
+frontierStage 推进到 manuscript——此前 manuscript 永不进 reachedStages，JourneyNav
+的"成稿"恒 disabled，B10 交付的整个界面将永不可达（D-B6-10/D-B8-3 同族）。
+预算上限跨层 parity 守卫（D-B10-7）关掉章节侧的 TD-030-3 手抄面。随行登记 TD-032-1/2。
+
+下一步：**GE-7**（MANUSCRIPT_COMMIT + 稿件工作区 + TXT/Markdown 导出）——
+D9 的前置条件（GE-6 原退出条件通过）已满足。
 批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。

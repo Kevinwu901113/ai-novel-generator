@@ -71,6 +71,10 @@ const IPC_CHANNELS = {
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
   BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
   BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
+  CHAPTER_GET_OVERVIEW: 'ipc:chapter-get-overview',
+  CHAPTER_START_RUN: 'ipc:chapter-start-run',
+  CHAPTER_GET_RUN_STATE: 'ipc:chapter-get-run-state',
+  CHAPTER_SUBMIT_DECISION: 'ipc:chapter-submit-decision',
 } as const;
 
 /**
@@ -151,6 +155,12 @@ import type {
   BlueprintStateDto,
   GetBlueprintInputDto,
   StoryBlueprintDto,
+  GetChapterOverviewInputDto,
+  ChapterOverviewDto,
+  StartChapterRunInputDto,
+  ChapterRunStateDto,
+  GetChapterRunStateInputDto,
+  SubmitChapterDecisionInputDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -483,6 +493,20 @@ const desktopAPI: DesktopAPI = {
     },
     async getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null> {
       return ipcRenderer.invoke(IPC_CHANNELS.BLUEPRINT_GET_BLUEPRINT, input);
+    },
+  },
+  chapter: {
+    async getOverview(input: GetChapterOverviewInputDto): Promise<ChapterOverviewDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CHAPTER_GET_OVERVIEW, input);
+    },
+    async startRun(input: StartChapterRunInputDto): Promise<ChapterRunStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CHAPTER_START_RUN, input);
+    },
+    async getRunState(input: GetChapterRunStateInputDto): Promise<ChapterRunStateDto | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CHAPTER_GET_RUN_STATE, input);
+    },
+    async submitDecision(input: SubmitChapterDecisionInputDto): Promise<ChapterRunStateDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.CHAPTER_SUBMIT_DECISION, input);
     },
   },
 };

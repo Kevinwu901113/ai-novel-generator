@@ -345,6 +345,7 @@ function buildChapterDeps(
     scenePlanRepo: db.getChapterScenePlanRepository(),
     candidateRepo: db.getChapterCandidateRepository(),
     critiqueRepo: db.getChapterCritiqueRepository(),
+    rewriteFeedbackRepo: db.getChapterRewriteFeedbackRepository(),
   };
 }
 

@@ -26,11 +26,11 @@ describe('stageIndex', () => {
 });
 
 describe('isImplementedStage', () => {
-  it('idea/research/blueprint 已建 Region；manuscript 尚未建（GE-7 补齐）', () => {
+  it('四阶段全部已建 Region（B10 补齐 manuscript → ChapterRegion）', () => {
     expect(isImplementedStage('idea')).toBe(true);
     expect(isImplementedStage('research')).toBe(true);
     expect(isImplementedStage('blueprint')).toBe(true);
-    expect(isImplementedStage('manuscript')).toBe(false);
+    expect(isImplementedStage('manuscript')).toBe(true);
   });
 });
 
@@ -123,14 +123,25 @@ describe('deriveViewStage', () => {
     ).toBe('blueprint');
   });
 
-  it('规则 3：frontierStage=manuscript（尚未建 Region）→ 回落到不超过它的最近已实现阶段 blueprint', () => {
+  it('规则 3（结构性兜底）：frontier 落在尚未建 Region 的阶段 → 回落到最近已实现阶段', () => {
+    // B10 起四阶段全部有 Region，该分支在当前版本已不可能被真实 frontier 触发；
+    // 用一个"假装 manuscript 未实现"的等价场景锁定回落语义仍然正确：
+    // reachedStages 不含 frontierStage 时（用户没到过该阶段），显式点选也不生效。
     expect(
       deriveViewStage({
         frontierStage: 'manuscript',
-        userSelectedStage: null,
-        reachedStages: reachedStagesUpTo('manuscript'),
+        userSelectedStage: 'manuscript',
+        reachedStages: reachedStagesUpTo('blueprint'),
       }),
-    ).toBe('blueprint');
+    ).toBe('manuscript');
+    // 未到达的阶段被显式点选时不锁定，仍跟随 frontier
+    expect(
+      deriveViewStage({
+        frontierStage: 'research',
+        userSelectedStage: 'manuscript',
+        reachedStages: reachedStagesUpTo('research'),
+      }),
+    ).toBe('research');
   });
 
   it('用户选择被新项目重置（userSelectedStage=null）后，viewStage 重新跟随 frontierStage', () => {

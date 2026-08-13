@@ -35,11 +35,13 @@ import type {
   ChapterScenePlanRepositoryPort,
   ChapterCandidateRepositoryPort,
   ChapterCritiqueRepositoryPort,
+  ChapterRewriteFeedbackRepositoryPort,
 } from '@ai-novel/application';
 import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
 import type {
   ChapterCandidate,
   ChapterCritique,
+  ChapterRewriteFeedback,
   ChapterScenePlan,
   StoryBlueprint,
   TaskType,
@@ -241,6 +243,7 @@ function buildHarness(options: {
   specSectionsJson?: string | null;
   candidates?: ChapterCandidate[];
   critiques?: ChapterCritique[];
+  feedbacks?: ChapterRewriteFeedback[];
   scenePlans?: ChapterScenePlan[];
   preexistingResult?: NodeExecutionResultEnvelope;
 }): Harness {
@@ -433,6 +436,17 @@ function buildHarness(options: {
     ),
   };
 
+  const feedbacks: ChapterRewriteFeedback[] = [...(options.feedbacks ?? [])];
+  const rewriteFeedbackRepo: ChapterRewriteFeedbackRepositoryPort = {
+    save: vi.fn((feedback: ChapterRewriteFeedback) => {
+      feedbacks.push(feedback);
+    }),
+    getLatestForRevision: vi.fn(
+      (_p: string, _r: string, revisionNo: number) =>
+        [...feedbacks].reverse().find((f) => f.candidateRevisionNo === revisionNo) ?? null,
+    ),
+  };
+
   const critiqueRepo: ChapterCritiqueRepositoryPort = {
     save: vi.fn((critique: ChapterCritique) => {
       critiques.push(critique);
@@ -471,6 +485,7 @@ function buildHarness(options: {
     scenePlanRepo,
     candidateRepo,
     critiqueRepo,
+    rewriteFeedbackRepo,
   };
 
   return {

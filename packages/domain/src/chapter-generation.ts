@@ -151,3 +151,35 @@ export function createChapterCritique(input: ChapterCritique): ChapterCritique {
   }
   return { ...input };
 }
+
+// ── 候选 Gate 的改写意见（B10 / D-B10-3）──────────────────────────
+
+/**
+ * 用户在候选确认环节点"请求改写"时附带的意见。
+ *
+ * 图的 `candidate_gate` 决策 DTO 没有 feedback 字段（图定义已冻结），因此意见走
+ * 独立权威存储：提交决策时先落这一行，再推进 Graph；REWRITE 任务按
+ * run + 被改写的候选修订号取最新一条送进 prompt。
+ */
+export interface ChapterRewriteFeedback {
+  readonly id: string;
+  readonly projectId: string;
+  readonly graphRunId: string;
+  /** 提意见时所针对的候选修订号（即将被改写的那一版） */
+  readonly candidateRevisionNo: number;
+  readonly feedback: string;
+  readonly createdAt: string;
+}
+
+export function createChapterRewriteFeedback(
+  input: ChapterRewriteFeedback,
+): ChapterRewriteFeedback {
+  assertNonEmpty(input.id, 'ChapterRewriteFeedback id');
+  assertNonEmpty(input.projectId, 'ChapterRewriteFeedback projectId');
+  assertNonEmpty(input.graphRunId, 'ChapterRewriteFeedback graphRunId');
+  assertNonEmpty(input.feedback, 'ChapterRewriteFeedback feedback');
+  if (!Number.isInteger(input.candidateRevisionNo) || input.candidateRevisionNo < 1) {
+    throw new Error('ChapterRewriteFeedback candidateRevisionNo 必须是 >=1 的整数');
+  }
+  return { ...input };
+}

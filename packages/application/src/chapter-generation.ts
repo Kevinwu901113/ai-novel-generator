@@ -8,7 +8,12 @@
  * 顶部说明：REWRITE 按图契约 noOut，不换 artifact，只追加修订）。
  */
 
-import type { ChapterCandidate, ChapterCritique, ChapterScenePlan } from '@ai-novel/domain';
+import type {
+  ChapterCandidate,
+  ChapterCritique,
+  ChapterRewriteFeedback,
+  ChapterScenePlan,
+} from '@ai-novel/domain';
 
 export interface ChapterScenePlanRepositoryPort {
   save(plan: ChapterScenePlan): void;
@@ -34,6 +39,17 @@ export interface ChapterCritiqueRepositoryPort {
     graphRunId: string,
     candidateRevisionNo: number,
   ): ReadonlyArray<ChapterCritique>;
+}
+
+/** B10（D-B10-3）：候选 Gate 的改写意见持久化端口 */
+export interface ChapterRewriteFeedbackRepositoryPort {
+  save(feedback: ChapterRewriteFeedback): void;
+  /** 某个候选修订上最新一条意见（同一修订可被多次提交，取最后一条） */
+  getLatestForRevision(
+    projectId: string,
+    graphRunId: string,
+    candidateRevisionNo: number,
+  ): ChapterRewriteFeedback | null;
 }
 
 /** 当前候选正文（无候选时 null） */

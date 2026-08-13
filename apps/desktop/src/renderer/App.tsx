@@ -21,6 +21,7 @@ import {
 } from './journey/journey-logic';
 import { useJourney } from './journey/useJourney';
 import { BlueprintRegion } from './blueprint/BlueprintRegion';
+import { ChapterRegion } from './chapter/ChapterRegion';
 import { hasActiveBlueprintGenerate } from './blueprint/blueprint-logic';
 import { TaskCenter } from './task-center/TaskCenter';
 import { ResearchRegion } from './research/ResearchRegion';
@@ -425,12 +426,13 @@ export function App() {
               )}
               {/* D-B6-10：中栏按展示阶段（viewStage）互斥挂载，与推进阶段
                   （frontierStage）分离——挂载哪个 Region 不再单纯 follow frontier。
-                  B8 起三分流：blueprint → BlueprintRegion（阶段与蓝图态由
-                  App 探针以 props 下发，D-B8-2）；research → ResearchRegion；
-                  否则 IntakeRegion（manuscript 尚未建区域，deriveViewStage 默认
-                  会先回落到 blueprint，只有用户显式点选 manuscript 才会走到
-                  IntakeRegion 的 beyond-intake 占位分支）。 */}
-              {viewStage === 'blueprint' ? (
+                  B10 起四分流：manuscript → ChapterRegion（章节 run 与 project run
+                  是两条独立 run，故 ChapterRegion 自持轮询，不吃 App 探针，D-B10-4）；
+                  blueprint → BlueprintRegion（阶段与蓝图态由 App 探针以 props 下发，
+                  D-B8-2）；research → ResearchRegion；否则 IntakeRegion。 */}
+              {viewStage === 'manuscript' ? (
+                <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
+              ) : viewStage === 'blueprint' ? (
                 <BlueprintRegion
                   key={currentProject.id}
                   projectId={currentProject.id}

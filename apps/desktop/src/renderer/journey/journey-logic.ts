@@ -22,11 +22,16 @@ export function stageIndex(stage: JourneyStage): number {
 }
 
 /**
- * 当前已建 Region 的阶段。B8 起 blueprint 有 BlueprintRegion；manuscript 仍无
- * （GE-7）——frontier 落在 manuscript 时，deriveViewStage 的默认路径（无显式
- * 用户选择）需要回落到已实现阶段，不能挂载一个不存在的 Region。
+ * 当前已建 Region 的阶段。B10 起四个阶段全部有 Region（manuscript → ChapterRegion），
+ * 故 deriveViewStage 的"回落到最近已实现阶段"分支在当前版本不会再被走到——保留该
+ * 分支是因为它是结构性兜底：将来若新增阶段而 Region 未跟上，回落仍然正确。
  */
-const IMPLEMENTED_STAGES: ReadonlySet<JourneyStage> = new Set(['idea', 'research', 'blueprint']);
+const IMPLEMENTED_STAGES: ReadonlySet<JourneyStage> = new Set([
+  'idea',
+  'research',
+  'blueprint',
+  'manuscript',
+]);
 
 export function isImplementedStage(stage: JourneyStage): boolean {
   return IMPLEMENTED_STAGES.has(stage);
@@ -102,7 +107,11 @@ export function deriveViewStage(input: ViewStageInput): JourneyStage {
  * 规则：
  * 1. 无 run → 'idea'；
  * 2. **run 已终态（completed/blocked/cancelled）→ 按已产出 artifact 推导（D-B8-3）**：
- *    有 storyBlueprint → 'blueprint'；否则有 researchBundle → 'research'；否则 'idea'。
+ *    - **蓝图已被接受且 run 正常完成（PROJECT_READY）→ 'manuscript'（D-B10-6）**：
+ *      项目就绪后用户的下一步就是逐章写正文。若仍停在 'blueprint'，manuscript 永远
+ *      不进 reachedStages，JourneyNav 的"成稿"恒为 disabled——B10 交付的整个章节
+ *      生成界面将永不可达（与 D-B6-10 / D-B8-3 同族的可达性缺陷，由 App 级测试坐实）；
+ *    - 否则有 storyBlueprint → 'blueprint'；再否则有 researchBundle → 'research'；否则 'idea'。
  *    activeNodes 在终态恒空，不能作为依据；
  * 3. 无 progress（尚未取到）→ null，调用方保留上一次已知阶段，避免瞬时闪烁；
  * 4. 否则取 waiting_for_human 节点（没有则第一个 active 节点）的 stage 投影——
@@ -120,12 +129,16 @@ export interface FrontierStageInput {
   readonly hasBlueprintArtifact: boolean;
   /** 已产出 researchBundle artifact（research.getResearchState 的 bundleRef 非空） */
   readonly hasResearchArtifact: boolean;
+  /** 蓝图已被用户显式接受（blueprint.getState 的 accepted） */
+  readonly blueprintAccepted: boolean;
 }
 
 export function deriveFrontierStage(input: FrontierStageInput): JourneyStage | null {
-  const { run, progress, hasBlueprintArtifact, hasResearchArtifact } = input;
+  const { run, progress, hasBlueprintArtifact, hasResearchArtifact, blueprintAccepted } = input;
   if (!run) return 'idea';
   if (run.terminalStatus !== null) {
+    // D-B10-6：PROJECT_READY（run completed + 蓝图已接受）→ 进入成稿阶段
+    if (run.terminalStatus === 'completed' && blueprintAccepted) return 'manuscript';
     if (hasBlueprintArtifact) return 'blueprint';
     if (hasResearchArtifact) return 'research';
     return 'idea';

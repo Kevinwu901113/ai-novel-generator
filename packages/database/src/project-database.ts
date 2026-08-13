@@ -39,6 +39,7 @@ import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import {
   ChapterCandidateRepositoryImpl,
   ChapterCritiqueRepositoryImpl,
+  ChapterRewriteFeedbackRepositoryImpl,
   ChapterScenePlanRepositoryImpl,
 } from './chapter-repositories.js';
 import {
@@ -1285,6 +1286,29 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 18,
+    sql: `
+      -- ── GE-6 / B10：候选确认环节的改写意见（D-B10-3）────────────
+      -- 用户在候选 Gate 点"请求改写"时可附意见；REWRITE 任务按 run + 被改写的
+      -- 候选修订号取最新一条送进 prompt。图的 candidate_gate 决策 DTO 没有
+      -- feedback 字段（图定义已冻结），故意见走独立权威存储，不塞进 Graph 状态。
+      CREATE TABLE IF NOT EXISTS chapter_rewrite_feedback (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        candidate_revision_no INTEGER NOT NULL,
+        feedback TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (candidate_revision_no >= 1),
+        CHECK (length(feedback) > 0),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_chapter_rewrite_feedback_run_revision
+        ON chapter_rewrite_feedback(graph_run_id, candidate_revision_no, created_at);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1770,6 +1794,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly chapterScenePlanRepo: ChapterScenePlanRepositoryImpl;
   private readonly chapterCandidateRepo: ChapterCandidateRepositoryImpl;
   private readonly chapterCritiqueRepo: ChapterCritiqueRepositoryImpl;
+  private readonly chapterRewriteFeedbackRepo: ChapterRewriteFeedbackRepositoryImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
 
@@ -1809,6 +1834,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.chapterScenePlanRepo = new ChapterScenePlanRepositoryImpl(this.db);
     this.chapterCandidateRepo = new ChapterCandidateRepositoryImpl(this.db);
     this.chapterCritiqueRepo = new ChapterCritiqueRepositoryImpl(this.db);
+    this.chapterRewriteFeedbackRepo = new ChapterRewriteFeedbackRepositoryImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
   }
@@ -1911,6 +1937,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getChapterCritiqueRepository(): ChapterCritiqueRepositoryImpl {
     return this.chapterCritiqueRepo;
+  }
+
+  getChapterRewriteFeedbackRepository(): ChapterRewriteFeedbackRepositoryImpl {
+    return this.chapterRewriteFeedbackRepo;
   }
 
   getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {

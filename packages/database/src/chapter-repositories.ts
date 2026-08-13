@@ -12,6 +12,7 @@ import type {
   ChapterCandidateSource,
   ChapterCritique,
   ChapterCritiqueIssue,
+  ChapterRewriteFeedback,
   ChapterScene,
   ChapterScenePlan,
   CritiqueVerdict,
@@ -19,6 +20,7 @@ import type {
 import type {
   ChapterCandidateRepositoryPort,
   ChapterCritiqueRepositoryPort,
+  ChapterRewriteFeedbackRepositoryPort,
   ChapterScenePlanRepositoryPort,
 } from '@ai-novel/application';
 
@@ -243,5 +245,59 @@ export class ChapterCritiqueRepositoryImpl implements ChapterCritiqueRepositoryP
       )
       .all(projectId, graphRunId, candidateRevisionNo) as unknown as ReadonlyArray<DbCritiqueRow>;
     return rows.map(decodeCritique);
+  }
+}
+
+/** B10（D-B10-3）：候选 Gate 的改写意见（图决策 DTO 无 feedback 字段，故独立存储） */
+export class ChapterRewriteFeedbackRepositoryImpl implements ChapterRewriteFeedbackRepositoryPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  save(feedback: ChapterRewriteFeedback): void {
+    this.db
+      .prepare(
+        `INSERT INTO chapter_rewrite_feedback
+           (id, project_id, graph_run_id, candidate_revision_no, feedback, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        feedback.id,
+        feedback.projectId,
+        feedback.graphRunId,
+        feedback.candidateRevisionNo,
+        feedback.feedback,
+        feedback.createdAt,
+      );
+  }
+
+  getLatestForRevision(
+    projectId: string,
+    graphRunId: string,
+    candidateRevisionNo: number,
+  ): ChapterRewriteFeedback | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM chapter_rewrite_feedback
+          WHERE project_id = ? AND graph_run_id = ? AND candidate_revision_no = ?
+          ORDER BY created_at DESC, id DESC LIMIT 1`,
+      )
+      .get(projectId, graphRunId, candidateRevisionNo) as
+      | {
+          id: string;
+          project_id: string;
+          graph_run_id: string;
+          candidate_revision_no: number;
+          feedback: string;
+          created_at: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      graphRunId: row.graph_run_id,
+      candidateRevisionNo: row.candidate_revision_no,
+      feedback: row.feedback,
+      createdAt: row.created_at,
+    };
   }
 }

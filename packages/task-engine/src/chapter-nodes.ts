@@ -25,6 +25,7 @@
 import type {
   ChapterCandidateRepositoryPort,
   ChapterCritiqueRepositoryPort,
+  ChapterRewriteFeedbackRepositoryPort,
   ChapterScenePlanRepositoryPort,
   CreationContractVersionRepositoryPort,
   GraphRunRepositoryPort,
@@ -67,6 +68,8 @@ export interface ChapterNodeExecutionDeps extends TaskEngineDeps {
   readonly scenePlanRepo: ChapterScenePlanRepositoryPort;
   readonly candidateRepo: ChapterCandidateRepositoryPort;
   readonly critiqueRepo: ChapterCritiqueRepositoryPort;
+  /** B10（D-B10-3）：候选 Gate 的改写意见（图决策 DTO 无 feedback 字段，独立存储） */
+  readonly rewriteFeedbackRepo: ChapterRewriteFeedbackRepositoryPort;
 }
 
 /** 最终事务内持久化的产物摘要（决定 envelope 与 task.result） */
@@ -202,8 +205,10 @@ export function criticSystemPrompt(criticNodeId: string): string {
 
 export const CHAPTER_REWRITE_SYSTEM_PROMPT = [
   '你是中文小说正文改写助手。输入是故事蓝图、本章目标、场景计划、当前候选正文，',
-  '以及需要修复的问题清单。',
+  '需要修复的问题清单，以及（若有）用户本人的改写意见。',
   '你的职责：在保留候选正文可用部分的前提下，逐条修复问题清单，输出完整的新版正文。',
+  'userFeedback 非空时它是用户的原话，优先级高于问题清单：必须逐条落实；',
+  '若用户意见与问题清单冲突，以用户意见为准。',
   '硬约束：必须输出完整正文（不是差异、不是片段、不是修改说明）；不得借改写之机改变',
   '本章目标或引入场景计划之外的情节；未被问题清单点到的段落应尽量保持原样。',
   PROSE_DISCIPLINE,
@@ -426,6 +431,8 @@ export interface ChapterTaskContext {
   readonly scenePlan: ChapterScenePlan | null;
   readonly candidate: ChapterCandidate | null;
   readonly critiques: ReadonlyArray<ChapterCritique>;
+  /** 用户对当前候选提出的改写意见（B10 D-B10-3；未提意见时 null） */
+  readonly userFeedback: string | null;
 }
 
 interface ChapterRunBinding {
@@ -518,6 +525,13 @@ function loadContext(
     scenePlan: deps.scenePlanRepo.getLatestByRun(input.projectId, input.graphRunId),
     candidate,
     critiques,
+    userFeedback: candidate
+      ? (deps.rewriteFeedbackRepo.getLatestForRevision(
+          input.projectId,
+          input.graphRunId,
+          candidate.revisionNo,
+        )?.feedback ?? null)
+      : null,
   };
 }
 
@@ -596,13 +610,24 @@ export function buildChapterCritiquePrompt(ctx: ChapterTaskContext): string {
   );
 }
 
+/** 改写来源说明：三种情形各自如实措辞，不相互冒充 */
+function buildRewriteNote(userRequestedRewrite: boolean, userFeedback: string | null): string {
+  if (userFeedback !== null) {
+    return '本轮改写由用户在候选确认环节发起，userFeedback 是用户的原话，必须逐条落实；同时兼顾问题清单与创作要求。';
+  }
+  if (userRequestedRewrite) {
+    return '本轮改写由用户在候选确认环节发起，用户未附具体意见；请按问题清单与创作要求提升整体质量。';
+  }
+  return '本轮改写由质量审查发起，请逐条修复问题清单。';
+}
+
 export function buildChapterRewritePrompt(ctx: ChapterTaskContext): string {
   if (!ctx.candidate) {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '改写任务缺少候选正文');
   }
-  // D-B9-6：用户在候选 Gate 点"请求改写"时无法附意见（图的 candidate_gate 决策 DTO 无
-  // feedback 字段，与 TD-029-1 蓝图侧同病）——此处如实告知模型"本轮改写由用户发起但
-  // 未附具体意见"，不得伪造一条用户意见。承载 feedback 属 B10 UI 批次。
+  // D-B9-6 / D-B10-3：图的 candidate_gate 决策 DTO 没有 feedback 字段（图已冻结），
+  // 用户意见走独立权威存储（chapter_rewrite_feedback），此处按当前候选修订取最新一条。
+  // 取不到就如实告知模型"本轮改写由用户发起但未附具体意见"，绝不伪造一条用户意见。
   const userRequestedRewrite = ctx.payload.candidateRewriteAttempt > 0;
   return JSON.stringify(
     {
@@ -621,10 +646,8 @@ export function buildChapterRewritePrompt(ctx: ChapterTaskContext): string {
       })),
       rewriteAttempt: ctx.payload.rewriteAttempt,
       userRequestedRewrite,
-      userFeedback: null,
-      note: userRequestedRewrite
-        ? '本轮改写由用户在候选确认环节发起，用户未附具体意见；请按问题清单与创作要求提升整体质量。'
-        : '本轮改写由质量审查发起，请逐条修复问题清单。',
+      userFeedback: ctx.userFeedback,
+      note: buildRewriteNote(userRequestedRewrite, ctx.userFeedback),
     },
     null,
     2,

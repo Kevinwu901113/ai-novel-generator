@@ -61,6 +61,10 @@ import {
   isValidListSourceExclusionsInput,
   isValidGetBlueprintStateInput,
   isValidGetBlueprintInput,
+  isValidGetChapterOverviewInput,
+  isValidStartChapterRunInput,
+  isValidGetChapterRunStateInput,
+  isValidSubmitChapterDecisionInput,
   encodeErrorCode,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
@@ -68,6 +72,8 @@ import {
   type ResearchBundleDto,
   type BlueprintStateDto,
   type StoryBlueprintDto,
+  type ChapterOverviewDto,
+  type ChapterRunStateDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1158,6 +1164,69 @@ ipcMain.handle(
       command: 'blueprint.getBlueprint',
       payload: input,
     })) as StoryBlueprintDto | null;
+  },
+);
+
+// ── 章节生成（GE-6 / B10）─────────────────────────────────────────
+// 四条通道全部透传到 worker：main 只做输入形状校验，不含任何 Graph 语义。
+
+ipcMain.handle(
+  IPC_CHANNELS.CHAPTER_GET_OVERVIEW,
+  async (_event, input: unknown): Promise<ChapterOverviewDto> => {
+    if (!isValidGetChapterOverviewInput(input)) {
+      throw Object.assign(new Error('无效的章节列表查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'chapter.getOverview',
+      payload: input,
+    })) as ChapterOverviewDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CHAPTER_START_RUN,
+  async (_event, input: unknown): Promise<ChapterRunStateDto> => {
+    if (!isValidStartChapterRunInput(input)) {
+      throw Object.assign(new Error('无效的章节生成发起输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'chapter.startRun',
+      payload: input,
+    })) as ChapterRunStateDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CHAPTER_GET_RUN_STATE,
+  async (_event, input: unknown): Promise<ChapterRunStateDto | null> => {
+    if (!isValidGetChapterRunStateInput(input)) {
+      throw Object.assign(new Error('无效的章节状态查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'chapter.getRunState',
+      payload: input,
+    })) as ChapterRunStateDto | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.CHAPTER_SUBMIT_DECISION,
+  async (_event, input: unknown): Promise<ChapterRunStateDto> => {
+    if (!isValidSubmitChapterDecisionInput(input)) {
+      throw Object.assign(new Error('无效的候选决策输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'chapter.submitDecision',
+      payload: input,
+    })) as ChapterRunStateDto;
   },
 );
 

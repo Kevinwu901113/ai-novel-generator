@@ -377,6 +377,10 @@ export const IPC_CHANNELS = {
   RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
   BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
   BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
+  CHAPTER_GET_OVERVIEW: 'ipc:chapter-get-overview',
+  CHAPTER_START_RUN: 'ipc:chapter-start-run',
+  CHAPTER_GET_RUN_STATE: 'ipc:chapter-get-run-state',
+  CHAPTER_SUBMIT_DECISION: 'ipc:chapter-submit-decision',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1217,6 +1221,214 @@ export interface BlueprintAPI {
   getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null>;
 }
 
+// ── 章节生成（GE-6 / B10）────────────────────────────────────────
+
+/**
+ * 章节生成阶段（作者语言投影）。
+ *
+ * 由 worker 按 Graph 节点状态派生，**渲染进程不自行推导 Graph 语义**（与 B4/B6/B8
+ * 同一纪律）。刻意不暴露节点 id / 任务 / token 等工程概念（PRODUCT_DIRECTION §4）。
+ *
+ * `accepted_pending_commit`：用户已在候选确认环节选择"采用"，但写入权威稿件
+ * （MANUSCRIPT_COMMIT）属 GE-7，尚未接线——run 停在该节点。界面必须如实说明，
+ * 不得让"采用"看起来像"已保存进稿件"。
+ */
+export type ChapterRunPhaseDto =
+  | 'idle'
+  | 'planning'
+  | 'drafting'
+  | 'reviewing'
+  | 'rewriting'
+  | 'awaiting_decision'
+  | 'awaiting_escalation'
+  | 'accepted_pending_commit'
+  | 'completed'
+  | 'blocked'
+  | 'cancelled'
+  | 'failed';
+
+const CHAPTER_RUN_PHASES: ReadonlySet<string> = new Set<ChapterRunPhaseDto>([
+  'idle',
+  'planning',
+  'drafting',
+  'reviewing',
+  'rewriting',
+  'awaiting_decision',
+  'awaiting_escalation',
+  'accepted_pending_commit',
+  'completed',
+  'blocked',
+  'cancelled',
+  'failed',
+]);
+
+export function isChapterRunPhaseDto(value: unknown): value is ChapterRunPhaseDto {
+  return typeof value === 'string' && CHAPTER_RUN_PHASES.has(value);
+}
+
+/** 审查维度（三个 Critic 节点的公开投影，不暴露节点 id） */
+export type ChapterCritiqueDimensionDto = 'continuity' | 'style' | 'requirement';
+
+export interface ChapterCritiqueIssueDto {
+  readonly severity: 'minor' | 'major';
+  readonly excerpt: string;
+  readonly problem: string;
+  readonly suggestion: string;
+}
+
+export interface ChapterCritiqueDto {
+  readonly dimension: ChapterCritiqueDimensionDto;
+  readonly verdict: 'pass' | 'needs_rewrite';
+  readonly summary: string;
+  readonly issues: ReadonlyArray<ChapterCritiqueIssueDto>;
+}
+
+/** 候选正文的一个修订（当前候选 = 同 run 内最大修订号，见 B9 D-B9-1） */
+export interface ChapterCandidateDto {
+  readonly revisionNo: number;
+  /** 首稿还是按审查意见/用户要求改写出来的版本 */
+  readonly source: 'DRAFT' | 'REWRITE';
+  readonly title: string;
+  readonly content: string;
+  readonly createdAt: string;
+}
+
+/** 一次章节生成 run 的完整状态投影 */
+export interface ChapterRunStateDto {
+  readonly runId: string;
+  readonly blueprintChapterId: string;
+  readonly phase: ChapterRunPhaseDto;
+  readonly terminalStatus: RunTerminalStatusDto | null;
+  readonly gateActive: boolean;
+  readonly escalationActive: boolean;
+  readonly candidate: ChapterCandidateDto | null;
+  /** 针对当前候选修订的审查结论（无候选或尚未审查时为空数组） */
+  readonly critiques: ReadonlyArray<ChapterCritiqueDto>;
+  /** 三个循环预算的已用次数（用于"还能改写几次"的如实提示） */
+  readonly rewriteUsed: number;
+  readonly candidateRewriteUsed: number;
+  readonly regenerateUsed: number;
+}
+
+/** 蓝图章节 + 其最新一次生成 run 的概览（章节列表用） */
+export interface ChapterOverviewItemDto {
+  readonly blueprintChapterId: string;
+  readonly title: string;
+  readonly goal: string;
+  readonly runId: string | null;
+  readonly phase: ChapterRunPhaseDto;
+  readonly hasCandidate: boolean;
+}
+
+export interface ChapterOverviewDto {
+  /** 已接受的蓝图 id；未就绪时为 null（此时 chapters 为空数组） */
+  readonly blueprintId: string | null;
+  readonly chapters: ReadonlyArray<ChapterOverviewItemDto>;
+}
+
+export interface GetChapterOverviewInputDto {
+  readonly projectId: string;
+}
+
+export function isValidGetChapterOverviewInput(
+  value: unknown,
+): value is GetChapterOverviewInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+export interface StartChapterRunInputDto {
+  readonly projectId: string;
+  readonly blueprintChapterId: string;
+}
+
+export function isValidStartChapterRunInput(value: unknown): value is StartChapterRunInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'blueprintChapterId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.blueprintChapterId);
+}
+
+export interface GetChapterRunStateInputDto {
+  readonly projectId: string;
+  readonly runId: string;
+}
+
+export function isValidGetChapterRunStateInput(
+  value: unknown,
+): value is GetChapterRunStateInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'runId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.runId);
+}
+
+/**
+ * 章节生成三个循环预算的上限（与 CHAPTER_GENERATION_GRAPH_V1 的 loop.maxIterations
+ * 一致）。界面要如实显示"还能改写几次"，就必须知道上限；contracts 是渲染进程唯一
+ * 能引用到的共享层（domain 不在其依赖内）。
+ *
+ * 这是一处**跨层手抄面**（TD-030-3 同族），因此由 `apps/worker/src/chapter-graph-parity.test.ts`
+ * 逐条比对图定义的真源；图上调整预算而这里没跟上时该测试即红。
+ */
+export const CHAPTER_REWRITE_LIMIT = 3;
+export const CHAPTER_CANDIDATE_REWRITE_LIMIT = 5;
+export const CHAPTER_REGENERATE_LIMIT = 5;
+
+/** 候选确认环节的最大改写意见长度（超出由 main 侧拒绝，不静默截断） */
+export const MAX_CHAPTER_FEEDBACK_LENGTH = 2000;
+
+/**
+ * 候选 Gate / 升级 Gate 的决策提交。
+ *
+ * `feedback` 只在 `kind='gate' && outcome='request_rewrite'` 时有意义：worker 会先把
+ * 它写进权威存储（供 REWRITE 任务消费），再推进 Graph（B10 D-B10-3）。其余组合必须
+ * 传 null —— 不接受"存了但没人读"的字段。
+ */
+export interface SubmitChapterDecisionInputDto {
+  readonly projectId: string;
+  readonly runId: string;
+  readonly kind: 'gate' | 'escalation';
+  readonly outcome: string;
+  readonly feedback: string | null;
+  readonly idempotencyKey: string;
+}
+
+export function isValidSubmitChapterDecisionInput(
+  value: unknown,
+): value is SubmitChapterDecisionInputDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'projectId',
+      'runId',
+      'kind',
+      'outcome',
+      'feedback',
+      'idempotencyKey',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  if (!isBoundedTrimmedId(obj.projectId) || !isBoundedTrimmedId(obj.runId)) return false;
+  if (!isBoundedTrimmedId(obj.idempotencyKey)) return false;
+  if (obj.kind !== 'gate' && obj.kind !== 'escalation') return false;
+  if (!isBoundedTrimmedId(obj.outcome)) return false;
+  if (obj.feedback !== null) {
+    if (typeof obj.feedback !== 'string') return false;
+    if (obj.feedback.trim().length === 0) return false;
+    if (obj.feedback.length > MAX_CHAPTER_FEEDBACK_LENGTH) return false;
+    // 只有"请求改写"这一条决策会消费意见；其余组合必须传 null
+    if (obj.kind !== 'gate' || obj.outcome !== 'request_rewrite') return false;
+  }
+  return true;
+}
+
+export interface ChapterAPI {
+  getOverview(input: GetChapterOverviewInputDto): Promise<ChapterOverviewDto>;
+  startRun(input: StartChapterRunInputDto): Promise<ChapterRunStateDto>;
+  getRunState(input: GetChapterRunStateInputDto): Promise<ChapterRunStateDto | null>;
+  submitDecision(input: SubmitChapterDecisionInputDto): Promise<ChapterRunStateDto>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -1232,6 +1444,7 @@ export interface DesktopAPI {
   search: SearchKeyAPI;
   research: ResearchAPI;
   blueprint: BlueprintAPI;
+  chapter: ChapterAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────

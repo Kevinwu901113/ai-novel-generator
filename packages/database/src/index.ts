@@ -108,6 +108,7 @@ export {
   ChapterScenePlanRepositoryImpl,
   ChapterCandidateRepositoryImpl,
   ChapterCritiqueRepositoryImpl,
+  ChapterRewriteFeedbackRepositoryImpl,
 } from './chapter-repositories.js';
 export {
   NodeExecutionRepositoryImpl,

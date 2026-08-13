@@ -141,6 +141,13 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       }),
       getBlueprint: vi.fn().mockResolvedValue(null),
     },
+    // B10：manuscript 阶段挂 ChapterRegion，挂载即读 chapter.getOverview
+    chapter: {
+      getOverview: vi.fn().mockResolvedValue({ blueprintId: null, chapters: [] }),
+      startRun: vi.fn(),
+      getRunState: vi.fn().mockResolvedValue(null),
+      submitDecision: vi.fn(),
+    },
     ...overrides,
   } as unknown as DesktopAPI;
 }
@@ -480,8 +487,24 @@ describe('App：蓝图 UI 可达性（B8，D-B8-2/D-B8-3）', () => {
   });
 
   // D-B8-3 的回归证据：终态 run 的 activeNodes 恒空，阶段必须按已产出 artifact 回推。
-  it('run 已 completed + 已接受的冷启动下，蓝图仍可达且不显示"重新开始访谈"', async () => {
+  // B10（D-B10-6）行为变化：PROJECT_READY 后默认阶段推进到"成稿"（否则 B10 的章节
+  // 生成界面永不可达）。已接受的蓝图仍必须可回看——本条断言的正是这条回看路径，
+  // 它承载 D-B8-3 冷启动可达性承诺（只是入口从"默认展示"变成"点导航回看"）。
+  it('run 已 completed + 已接受的冷启动下，点导航的蓝图仍可回看且不显示"重新开始访谈"', async () => {
     await createProjectAndWaitForJourney(createProjectReadyDesktopAPI());
+
+    const nav = await screen.findByRole('navigation', { name: '创作旅程阶段' });
+    const blueprintBtn = await waitFor(
+      () => {
+        const btn = within(nav).getByRole('button', { name: /蓝图/ });
+        expect(btn).toBeEnabled();
+        return btn;
+      },
+      { timeout: 5000 },
+    );
+    await act(async () => {
+      blueprintBtn.click();
+    });
 
     await waitFor(
       () => {
@@ -493,10 +516,6 @@ describe('App：蓝图 UI 可达性（B8，D-B8-2/D-B8-3）', () => {
     expect(screen.getByText('✓ 蓝图已确认，项目就绪')).toBeInTheDocument();
     expect(screen.getByText('一个关于星际邮差的故事前提')).toBeInTheDocument();
     expect(screen.queryByText('重新开始访谈')).not.toBeInTheDocument();
-
-    // JourneyNav 的蓝图项必须可点（reachedStages 含 blueprint），否则用户回不去
-    const nav = screen.getByRole('navigation', { name: '创作旅程阶段' });
-    expect(within(nav).getByRole('button', { name: /蓝图/ })).toBeEnabled();
   });
 
   // D-B8-8：结局方向默认折叠（剧透保护）
@@ -1192,6 +1211,98 @@ describe('App 级别测试', () => {
         expect(apiKeyInput).toHaveFocus();
       },
       { timeout: 5000 },
+    );
+  });
+});
+
+// ── B10：章节生成 UI 的 App 级可达性 ──────────────────────────────────
+//
+// 跨批次教训（B6 坐实的 blocker）：组件级测试直接挂载 Region 手喂 state 会绕开
+// App 分流，"内容存在却永不可达"这一族缺陷只有 App 级测试能抓住。本节用真实形状的
+// progress 驱动：project run 已 completed（PROJECT_READY），frontier 派生到
+// manuscript 阶段，断言中栏真的挂上了 ChapterRegion 且章节列表可达。
+
+const COMPLETED_PROJECT_RUN = {
+  runId: 'run-1',
+  graphId: 'idea-to-novel-project-v1',
+  graphVersion: '1',
+  kind: 'project',
+  terminalStatus: 'completed',
+  createdAt: NOW_B6,
+};
+
+function createChapterStageDesktopAPI() {
+  return createMockDesktopAPI({
+    graph: {
+      listRuns: vi.fn().mockResolvedValue([COMPLETED_PROJECT_RUN]),
+      createProjectRun: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      createChapterRun: vi.fn(),
+      // run 已终态：activeNodes 恒空，阶段按 artifact 推导（D-B8-3）
+      getRunProgress: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+    },
+    blueprint: {
+      getState: vi.fn().mockResolvedValue({
+        runId: 'run-1',
+        blueprintRef: 'bp-1',
+        accepted: true,
+        blueprintInvalidated: false,
+        gateActive: false,
+        escalationActive: false,
+        rewriteUsed: 0,
+      }),
+      getBlueprint: vi.fn().mockResolvedValue(null),
+    },
+    chapter: {
+      getOverview: vi.fn().mockResolvedValue({
+        blueprintId: 'bp-1',
+        chapters: [
+          {
+            blueprintChapterId: 'ch-1',
+            title: '第一章 远客',
+            goal: '引出客栈与主角',
+            runId: null,
+            phase: 'idle',
+            hasCandidate: false,
+          },
+        ],
+      }),
+      startRun: vi.fn(),
+      getRunState: vi.fn().mockResolvedValue(null),
+      submitDecision: vi.fn(),
+    },
+  });
+}
+
+describe('App：成稿阶段可达性（B10）', () => {
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+  });
+
+  it('项目就绪后点 JourneyNav 的"成稿"→ 中栏挂 ChapterRegion，章节列表与发起入口可达', async () => {
+    await createProjectAndWaitForJourney(createChapterStageDesktopAPI());
+
+    const nav = await screen.findByRole('navigation', { name: '创作旅程阶段' });
+    const manuscriptBtn = await waitFor(
+      () => {
+        const btn = within(nav).getByRole('button', { name: /成稿/ });
+        expect(btn).not.toBeDisabled();
+        return btn;
+      },
+      { timeout: 10000 },
+    );
+    await act(async () => {
+      manuscriptBtn.click();
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { name: '成稿' })).toBeInTheDocument();
+        expect(screen.getByText('第一章 远客')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
     );
   });
 });
