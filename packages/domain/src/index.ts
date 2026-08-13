@@ -57,7 +57,11 @@ export type TaskType =
   | 'CHAPTER_DRAFT'
   | 'SPEC_EXTRACT'
   | 'RESEARCH_RUN'
-  | 'BLUEPRINT_GENERATE';
+  | 'BLUEPRINT_GENERATE'
+  // GE-6 / B9：章节生成四类模型任务（DRAFT 复用既有 CHAPTER_DRAFT）
+  | 'CHAPTER_PLAN'
+  | 'CHAPTER_CRITIQUE'
+  | 'CHAPTER_REWRITE';
 
 /** 模型调用状态 */
 export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';
@@ -288,3 +292,4 @@ export * from './idea-to-novel-graph-transitions.js';
 export * from './idea-to-novel-graph-stages.js';
 export * from './idea-to-novel-graph-validator.js';
 export * from './story-blueprint.js';
+export * from './chapter-generation.js';

@@ -37,6 +37,11 @@ import {
 } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import {
+  ChapterCandidateRepositoryImpl,
+  ChapterCritiqueRepositoryImpl,
+  ChapterScenePlanRepositoryImpl,
+} from './chapter-repositories.js';
+import {
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
@@ -1162,6 +1167,124 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 17,
+    sql: `
+      -- ── GE-6 / B9：章节生成三张权威表 ──────────────────────────
+      -- chapter_scene_plans：CHAPTER_PLAN 产出的内部 artifact（不是 Graph artifact 槽位）。
+      CREATE TABLE IF NOT EXISTS chapter_scene_plans (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        blueprint_chapter_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        scenes_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (json_valid(scenes_json)),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_chapter_scene_plans_run
+        ON chapter_scene_plans(project_id, graph_run_id, created_at);
+
+      -- chapter_candidates：候选正文修订链（append-only）。
+      -- source='DRAFT' 的行同时是 Graph generationRun artifact（artifact_id 非空）；
+      -- source='REWRITE' 的行按图契约 noOut，artifact_id 必须为 NULL。
+      -- 当前候选 = 同 run 内 revision_no 最大的行。
+      CREATE TABLE IF NOT EXISTS chapter_candidates (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        revision_no INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        artifact_id TEXT,
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (revision_no >= 1),
+        CHECK (source IN ('DRAFT', 'REWRITE')),
+        CHECK ((source = 'DRAFT' AND artifact_id IS NOT NULL)
+               OR (source = 'REWRITE' AND artifact_id IS NULL)),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_candidates_run_revision
+        ON chapter_candidates(graph_run_id, revision_no);
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_candidates_artifact
+        ON chapter_candidates(artifact_id)
+        WHERE artifact_id IS NOT NULL;
+
+      -- chapter_critiques：三个 Critic 对某个候选修订的结论（每 critic 每修订至多一行）。
+      CREATE TABLE IF NOT EXISTS chapter_critiques (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        graph_run_id TEXT NOT NULL,
+        candidate_revision_no INTEGER NOT NULL,
+        critic_node_id TEXT NOT NULL,
+        verdict TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        issues_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (candidate_revision_no >= 1),
+        CHECK (verdict IN ('pass', 'needs_rewrite')),
+        CHECK (json_valid(issues_json)),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_chapter_critiques_revision_critic
+        ON chapter_critiques(graph_run_id, candidate_revision_no, critic_node_id);
+
+      -- ── 重建 tasks 表：task_type CHECK 加入三种章节任务（GE-6 / B9）──
+      -- 镜像 v13/v14/v16 重建模式；DRAFT 复用既有 CHAPTER_DRAFT，不新增类型。
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_version_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        result_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        dedupe_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        stale_at TEXT,
+        cancelled_at TEXT,
+        CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST', 'GRILL_QUESTION_PLAN', 'CREATION_CONTRACT_DRAFT', 'CHAPTER_DRAFT', 'SPEC_EXTRACT', 'RESEARCH_RUN', 'BLUEPRINT_GENERATE', 'CHAPTER_PLAN', 'CHAPTER_CRITIQUE', 'CHAPTER_REWRITE')),
+        CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+        CHECK (attempt_count >= 0),
+        CHECK (json_valid(input_version_json)),
+        CHECK (json_valid(payload_json)),
+        CHECK (result_json IS NULL OR json_valid(result_json))
+      ) STRICT;
+
+      INSERT INTO tasks_new (
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      )
+      SELECT
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedupe_active
+        ON tasks(dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status IN ('PENDING', 'RUNNING');
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_id
+        ON tasks(project_id, id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1644,6 +1767,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly researchBundleRepo: ResearchBundleRepositoryImpl;
   private readonly researchSourceExclusionRepo: ResearchSourceExclusionRepositoryImpl;
   private readonly blueprintRepo: StoryBlueprintRepositoryImpl;
+  private readonly chapterScenePlanRepo: ChapterScenePlanRepositoryImpl;
+  private readonly chapterCandidateRepo: ChapterCandidateRepositoryImpl;
+  private readonly chapterCritiqueRepo: ChapterCritiqueRepositoryImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
 
@@ -1680,6 +1806,9 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.researchBundleRepo = new ResearchBundleRepositoryImpl(this.db);
     this.researchSourceExclusionRepo = new ResearchSourceExclusionRepositoryImpl(this.db);
     this.blueprintRepo = new StoryBlueprintRepositoryImpl(this.db);
+    this.chapterScenePlanRepo = new ChapterScenePlanRepositoryImpl(this.db);
+    this.chapterCandidateRepo = new ChapterCandidateRepositoryImpl(this.db);
+    this.chapterCritiqueRepo = new ChapterCritiqueRepositoryImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
   }
@@ -1770,6 +1899,18 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getResearchSourceExclusionRepository(): ResearchSourceExclusionRepositoryImpl {
     return this.researchSourceExclusionRepo;
+  }
+
+  getChapterScenePlanRepository(): ChapterScenePlanRepositoryImpl {
+    return this.chapterScenePlanRepo;
+  }
+
+  getChapterCandidateRepository(): ChapterCandidateRepositoryImpl {
+    return this.chapterCandidateRepo;
+  }
+
+  getChapterCritiqueRepository(): ChapterCritiqueRepositoryImpl {
+    return this.chapterCritiqueRepo;
   }
 
   getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {

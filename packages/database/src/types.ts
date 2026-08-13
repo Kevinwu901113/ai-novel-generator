@@ -277,7 +277,11 @@ export type DbTaskType =
   | 'CHAPTER_DRAFT'
   | 'SPEC_EXTRACT'
   | 'RESEARCH_RUN'
-  | 'BLUEPRINT_GENERATE';
+  | 'BLUEPRINT_GENERATE'
+  // GE-6 / B9：章节生成三类新任务（DRAFT 复用既有 CHAPTER_DRAFT）
+  | 'CHAPTER_PLAN'
+  | 'CHAPTER_CRITIQUE'
+  | 'CHAPTER_REWRITE';
 
 /** 任务行 */
 export interface TaskRow {

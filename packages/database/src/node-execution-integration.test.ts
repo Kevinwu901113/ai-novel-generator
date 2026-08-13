@@ -56,7 +56,7 @@ import {
   validateCreationContractSections,
 } from '@ai-novel/domain';
 import type { IdeaToNovelProjectRunState } from '@ai-novel/domain';
-import { executeChapterDraft, type ChapterDraftExecutionDeps } from '@ai-novel/task-engine';
+import { executeChapterDraftNode, type ChapterNodeExecutionDeps } from '@ai-novel/task-engine';
 import type {
   ModelInvocationRepositoryPort,
   ModelInvocationData,
@@ -513,7 +513,11 @@ class DbInvocationAdapter implements ModelInvocationRepositoryPort {
 
 function mockChapterModelOutput() {
   return {
-    text: JSON.stringify({ title: '第一章', content: '正文', scenePlans: ['场景一'] }),
+    text: JSON.stringify({
+      schemaVersion: 1,
+      title: '第一章',
+      content: '正文正文正文正文正文'.repeat(30),
+    }),
     providerRequestId: 'req-1',
     finishReason: 'end_turn',
     usage: {
@@ -540,7 +544,7 @@ function buildChapterDraftEngineDeps(
       prompt: string;
     }) => Promise<unknown>;
   } = {},
-): ChapterDraftExecutionDeps {
+): ChapterNodeExecutionDeps {
   const secretStore: SecretStore = {
     hasSecret: async () => true,
     setSecret: async () => {},
@@ -593,7 +597,65 @@ function buildChapterDraftEngineDeps(
     transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
     nodeExecutionResultStore: db.getNodeExecutionResultStore(),
     nodeExecutionRepo: db.getNodeExecutionRepository(),
+    // B9：章节任务上下文一律由执行器按权威 run binding 反查（见 chapter-nodes.ts D-B9-2）
+    graphRunRepo: db.getGraphRunRepository(),
+    blueprintRepo: db.getStoryBlueprintRepository(),
+    specVersionRepo: db.getCreationContractVersionRepository(),
+    scenePlanRepo: db.getChapterScenePlanRepository(),
+    candidateRepo: db.getChapterCandidateRepository(),
+    critiqueRepo: db.getChapterCritiqueRepository(),
   };
+}
+
+/**
+ * B9：新的 DRAFT 执行器在调用模型前会按 run binding 反查蓝图与创作要求版本，
+ * 缺任一者都是确定性失败。用例 14 验证的是"最终事务失败 → 补偿"，因此必须先把
+ * seedChapterRun 绑定的 bp-1 / spec-1 / ch-1 真正落库。
+ */
+function seedChapterContext(db: ProjectDatabase): void {
+  db.getStoryBlueprintRepository().save(
+    {
+      id: 'bp-1',
+      projectId: 'p1',
+      version: 1,
+      premise: '边境走私者接下一桩不能失败的活',
+      characters: [{ name: '林荞', role: '主角', description: '走私者' }],
+      relationships: ['林荞与旧搭档决裂'],
+      world: '架空民国边城',
+      conflict: '货物是禁运品',
+      ending: '林荞交出货物换回搭档',
+      plotlines: [{ name: '主线', summary: '接活到交货' }],
+      chapters: [{ id: 'ch-1', title: '第一章 接头', goal: '交代人物与困境' }],
+      createdAt: NOW,
+    },
+    true,
+  );
+  const sections = validateCreationContractSections({
+    premise: '走私者被迫接下一桩不能失败的活',
+    genre: ['悬疑'],
+    tone: ['冷硬'],
+    targetAudience: '成年读者',
+    narrativePov: 'THIRD_LIMITED',
+    tense: 'PAST',
+    protagonist: { characterKey: 'linqiao', name: '林荞' },
+  });
+  db.getCreationContractVersionRepository().create({
+    id: 'spec-1',
+    projectId: 'p1',
+    version: 1,
+    schemaVersion: 1,
+    sourceProposalId: null,
+    basedOnGrillSessionId: null,
+    basedOnGrillSessionVersion: null,
+    sectionsJson: canonicalSerializeContractSections(sections),
+    lockedFieldPathsJson: '[]',
+    contractSnapshotHash: sha256Utf8(
+      canonicalSerializeContractSnapshot({ sections, lockedFieldPaths: [], schemaVersion: 1 }),
+    ),
+    provenanceJson: '[]',
+    createdAt: NOW,
+    createdBy: 'user',
+  });
 }
 
 describe('node execution settlement (real SQLite)', () => {
@@ -936,14 +998,11 @@ describe('node execution settlement (real SQLite)', () => {
         artifactKind: 'generationRun',
         artifactId: 'gen-other',
         artifactVersion: 1,
-        contentJson: JSON.stringify({
-          kind: 'generationRun',
-          draft: { title: 'X', content: 'Y', scenePlans: [] },
-        }),
+        contentJson: JSON.stringify({ kind: 'generationRun', candidate: { title: 'X' } }),
         outcome: null,
         createdAt: NOW,
       });
-      // 直接调用 executeChapterDraft（task-engine 补偿逻辑由 task-engine 单测覆盖）；
+      // 不经执行器直调 store（task-engine 补偿逻辑由 task-engine 单测覆盖）；
       // 此处验证 saveOrVerifySame 冲突在真实 SQLite 抛错（不留半成品）。
       const store = db.getNodeExecutionResultStore() as unknown as {
         saveOrVerifySame: (e: unknown) => void;
@@ -984,10 +1043,7 @@ describe('node execution settlement (real SQLite)', () => {
           artifactKind: 'generationRun',
           artifactId: 'gen-other',
           artifactVersion: 1,
-          contentJson: JSON.stringify({
-            kind: 'generationRun',
-            draft: { title: 'X', content: 'Y', scenePlans: [] },
-          }),
+          contentJson: JSON.stringify({ kind: 'generationRun', candidate: { title: 'X' } }),
           outcome: null,
           createdAt: NOW,
         }),
@@ -1227,10 +1283,11 @@ describe('node execution settlement (real SQLite)', () => {
     }
   });
 
-  it('14. B10 真实 finalization：executeChapterDraft 对 ProjectDatabase + 强制失败 → 补偿 FAILED', async () => {
+  it('14. B10 真实 finalization：章节 DRAFT 执行器对 ProjectDatabase + 强制失败 → 补偿 FAILED', async () => {
     const db = freshDb();
     try {
       const kit = buildKit(db);
+      seedChapterContext(db);
       const run = seedChapterRun(db, kit.deps, 'c-final-real');
       const runId = run.run.workflowRunId;
       await driveRun(kit.deps, 'p1', runId);
@@ -1250,15 +1307,12 @@ describe('node execution settlement (real SQLite)', () => {
         artifactKind: 'generationRun',
         artifactId: 'gen-other',
         artifactVersion: 1,
-        contentJson: JSON.stringify({
-          kind: 'generationRun',
-          draft: { title: 'X', content: 'Y', scenePlans: [] },
-        }),
+        contentJson: JSON.stringify({ kind: 'generationRun', candidate: { title: 'X' } }),
         outcome: null,
         createdAt: NOW,
       });
       const engineDeps = buildChapterDraftEngineDeps(db);
-      await expect(executeChapterDraft(engineDeps, exec.taskId!, 'prompt')).rejects.toThrow();
+      await expect(executeChapterDraftNode(engineDeps, exec.taskId!)).rejects.toThrow();
       // 补偿：invocation / task 都 FAILED，不留 RUNNING 半成品
       const task = engineDeps.taskRepo.getById(exec.taskId!)!;
       expect(task.status).toBe('FAILED');

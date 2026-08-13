@@ -323,7 +323,7 @@ gate 决策、终态）。
 | GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
 | GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
 | GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）   | ✅ 三终态真实 E2E            |
-| GE-6 Chapter 生成节点               | 🔶 REWORK           | ✅         | ✅（CHAPTER_DRAFT 任务引擎）          | ❌ 无 executor / 无 settlement 接线            | ❌         | ❌                           |
+| GE-6 Chapter 生成节点               | ⚠️ PARTIAL          | ✅         | ✅（四类章节任务引擎，v17）           | ✅ 六节点 executor + 章节终态（B9）            | ❌（B10）  | ✅ 全链到 CANDIDATE_GATE     |
 | RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
@@ -383,8 +383,17 @@ gate 决策、终态）。
     刷新被互斥锁吞掉、escalation 可对不可见内容拍板、两处文案空承诺）全部修复并有
     测试锁定；遗留登记 TD-030-1..5
     （2026-08-11；设计 `b8-blueprint-ui-design.md` §6）。
+  - **B9** ✅：GE-6 wiring：CHAPTER_PLAN / DRAFT / 三 Critic / CRITIQUE_JOIN / REWRITE
+    六节点真实 executor + 三类新任务（CHAPTER_PLAN / CHAPTER_CRITIQUE / CHAPTER_REWRITE，
+    migration v17：候选修订链 `chapter_candidates` + 场景计划 + 审查结论三表）+
+    **Chapter Graph 终态 executor（销 TD-029-4）** + 全链 E2E 到 CANDIDATE_GATE
+    （三 Critic 真并行 / rewrite 循环 / 预算耗尽不自动接受 / reject 重新起草 /
+    escalation 三终态 / 重启恢复）
+    （2026-08-13；设计 `b9-chapter-wiring-design.md`；随行登记 TD-031-1/2/3；
+    MANUSCRIPT_COMMIT 有意不注册，属 GE-7）。
 - **下一步（依依赖顺序）**：
-  - **B9/B10**：补完 GE-6：PLAN/DRAFT/三 Critic/JOIN/REWRITE/GATE 全部真实 executor，运行至 CANDIDATE_GATE；
+  - **B10**：GE-6 产品 UI：从蓝图章节发起生成、进度呈现、候选正文查看、
+    accept / reject / request_rewrite（含 TD-031-2 的改写意见承载）；
   - **仅 GE-6 原退出条件通过后才启动 GE-7 MANUSCRIPT_COMMIT**（D9）。
 
 ## 16. 已删除的历史资料

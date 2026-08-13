@@ -147,6 +147,7 @@ import { registerIntakeExecutors } from './intake-executors.js';
 import { registerResearchExecutors } from './research-executors.js';
 import { registerBlueprintExecutors } from './blueprint-executors.js';
 import { registerProjectTerminalExecutors } from './project-terminal-executors.js';
+import { registerChapterExecutors } from './chapter-executors.js';
 import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
@@ -900,6 +901,16 @@ registerBlueprintExecutors(productionRegistry, productionRunners, {
 // 顶部说明。GE-5"PROJECT_READY 原子闭环"退出条件要求真正到达这些终态，随批次一并补齐。
 registerProjectTerminalExecutors(productionRegistry, productionRunners);
 
+// GE-6（B9）：注册章节生成节点（CHAPTER_PLAN / DRAFT / 三 Critic / REWRITE task-backed，
+// CRITIQUE_JOIN sync）与 Chapter Graph 三个终止节点（销 TD-029-4）。CANDIDATE_GATE /
+// CANDIDATE_ESCALATION 是人工 Gate；MANUSCRIPT_COMMIT 有意不注册（属 GE-7），
+// 见 chapter-executors.ts 顶部说明。
+registerChapterExecutors(productionRegistry, productionRunners, {
+  getProjectDb: (projectId: string) => getProjectDb(projectId),
+  idGenerator: createIdGenerator(),
+  clock: createClock(),
+});
+
 /** D-B3-1 live drive 与任务后推进共用的 NodeRunnerDeps 构造（同一 projDb 生命周期内使用） */
 function buildLiveNodeRunnerDeps(projDb: ProjectDatabase, projectId: string): NodeRunnerDeps {
   return {
@@ -944,7 +955,7 @@ export interface RecoveryOptions {
   readonly scheduleTask?: (projectId: string, taskId: string) => void;
 }
 
-/** 构建真实 Graph task scheduler（幂等；执行 CHAPTER_DRAFT / SPEC_EXTRACT 任务） */
+/** 构建真实 Graph task scheduler（幂等；执行 Graph 全部 task-backed 节点的任务） */
 function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
   return {
     openDb: (projectId: string) => getProjectDb(projectId),
@@ -970,6 +981,8 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
           prompt: string;
           systemPrompt?: string;
           protocol?: ProviderProtocol;
+          // B9：章节正文任务显式抬高输出上限（省略时沿用网关默认 4096）
+          maxTokens?: number;
         }) => {
           return invokeModel({ fetch: globalThis.fetch, clock }, input);
         },
@@ -991,6 +1004,11 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         blueprintRepo: projDb.getStoryBlueprintRepository(),
         // D-B7-13：来源排除读端口（B6 交付，B7 是首个消费方）
         sourceExclusionRepo: projDb.getResearchSourceExclusionRepository(),
+        // 章节生成四类任务（B9）：run binding 反查 + 场景计划/候选修订/审查结论持久化
+        graphRunRepo: projDb.getGraphRunRepository(),
+        scenePlanRepo: projDb.getChapterScenePlanRepository(),
+        candidateRepo: projDb.getChapterCandidateRepository(),
+        critiqueRepo: projDb.getChapterCritiqueRepository(),
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),

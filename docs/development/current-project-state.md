@@ -2,7 +2,7 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：6（2026-08-11）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：7（2026-08-13）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
@@ -11,7 +11,7 @@
 
 | 项              | 值                                                                                                                            |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 6                                                                                                                             |
+| 状态文档版本    | 7                                                                                                                             |
 | 更新日期        | 2026-08-11                                                                                                                    |
 | 基线 main SHA   | `b6220ae`（PR #49 合并后，含 B7 GE-5 蓝图 wiring/accept 原子闭环；本版随 B8 PR #50 提交，合并后 main 含 B8 GE-5 蓝图产品 UI） |
 | 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v16、CI             |
@@ -59,7 +59,7 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 | Manuscript transport/renderer | MISSING（main 无）             | PR #25 参考资产；GE-7 选择性移植                                                                                                                                   |
 | Web Research 产品 UI          | DONE（B6 + D-B6-10 复查修复）  | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate；B6 独立复查曾判 REWORK（frontier 常同快照推进到 blueprint 导致内容永不可达），已修复见上表 |
 | StoryBlueprint                | DONE（B7 wiring + B8 产品 UI） | 蓝图 executor + accept 原子闭环 + 三终态 E2E（B7）；蓝图查看/确认/升级 UI + 阶段派生上提 App（B8，独立对抗复查 REWORK→修复→核验 ACCEPT）                           |
-| Chapter Generation            | FOUNDATION-ONLY                | CHAPTER_DRAFT 任务引擎有；无 executor / settlement 接线；GE-6（B9/B10）                                                                                            |
+| Chapter Generation            | WIRING DONE（B9）；UI 待 B10   | 六节点真实 executor + 四类章节任务（v17：候选修订链/场景计划/审查结论三表）+ 章节终态 executor（销 TD-029-4）+ 全链 E2E 到 CANDIDATE_GATE；产品 UI 属 B10          |
 | Export                        | MISSING                        | `packages/import-export` 为 stub；GE-7                                                                                                                             |
 | PlotPilot                     | PARTIAL                        | 可选 adapter foundation；不进入关键路径                                                                                                                            |
 
@@ -150,7 +150,7 @@ GE-2 Walking Skeleton    → ⚠️ PARTIAL（2026-08-04，骨架测试达成；
 GE-3 Idea Intake+Spec    → ✅ COMPLETE（B3 wiring+E2E，PR #42；B4 产品 UI，2026-08-10）
 GE-4 Web Research        → ✅ COMPLETE（B5 wiring v14 + B6 产品 UI v15，2026-08-11）
 GE-5 StoryBlueprint      → ✅ COMPLETE（B7 wiring v16 + B8 产品 UI + 独立复查修复，2026-08-11）
-GE-6 Chapter 生成        → 🔶 REWORK（FOUNDATION 有：CHAPTER_DRAFT 任务引擎；无 executor / settlement）
+GE-6 Chapter 生成        → ⚠️ PARTIAL（B9 wiring v17 + 全链 E2E 到 CANDIDATE_GATE，2026-08-13；产品 UI 待 B10）
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 B1 多 provider 网关      → ✅ MERGED ON MAIN（2026-08-07，PR #41 + 补丁 `9f98278`，D6 最小形态）
 GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
@@ -238,7 +238,18 @@ B8（GE-5 UI）交付记录：蓝图查看/确认/升级四选项/三终态展�
   6 MAJOR 全部修复、独立核验 ACCEPT 后合并；先红后绿验证两组（相位优先级 / 耗尽入口）；
   遗留登记 TD-030-1..5。详见 `b8-blueprint-ui-design.md` §6。
 
-下一步：**B9/B10**（GE-6：章节生成全部真实 executor，运行至 CANDIDATE_GATE）。
+B9 交付记录：2026-08-13，GE-6 wiring（设计 `b9-chapter-wiring-design.md`，D-B9-1..9）：
+CHAPTER_PLAN / DRAFT / 三 Critic / CRITIQUE_JOIN / REWRITE 六节点真实 executor；三类新
+任务类型 + migration v17（`chapter_candidates` 候选修订链 / `chapter_scene_plans` /
+`chapter_critiques`）；**候选正文的权威定义是"同 run 最大修订号"而非 artifact ref**
+（D-B9-1：图上 REWRITE 是 noOut，改写不换 artifact）；上下文一律按权威 run binding 反查
+（D-B9-2）；三 Critic 共用任务类型、角色由 execution.nodeId 派生（D-B9-3）；CRITIQUE_JOIN
+只触发 domain 聚合（D-B9-4）；**Chapter Graph 终态 executor 补齐，TD-029-4 销账**（D-B9-5）；
+正文任务输出上限抬到 8192（D-B9-7）。E2E 10 条（含三 Critic 真并行、rewrite 预算耗尽
+不自动接受、escalation 三终态、重启恢复）。MANUSCRIPT_COMMIT 有意不注册（GE-7），
+accept 后 run 停在该节点等接线——B10 界面必须如实说明。随行登记 TD-031-1/2/3。
+
+下一步：**B10**（GE-6 产品 UI：发起生成 / 进度 / 候选查看 / Gate 决策 + 改写意见承载）。
 批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。

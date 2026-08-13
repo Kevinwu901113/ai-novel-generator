@@ -105,6 +105,11 @@ export {
 } from './research-repositories.js';
 export { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 export {
+  ChapterScenePlanRepositoryImpl,
+  ChapterCandidateRepositoryImpl,
+  ChapterCritiqueRepositoryImpl,
+} from './chapter-repositories.js';
+export {
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';

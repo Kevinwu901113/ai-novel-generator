@@ -700,7 +700,12 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    `blueprint-generate.ts` 的 `classifyResearchInput` 里拆出独立的 `no_sources_gathered`
    态与 `all_excluded` 区分开，随 B7 本轮修复一并提交（见
    `packages/task-engine/src/blueprint-generate.test.ts` 对应用例）。
-4. **TD-029-4：Chapter Graph 终止节点同样缺 executor**：`PROJECT_READY` 一类的 project
+4. ~~**TD-029-4：Chapter Graph 终止节点同样缺 executor**~~ —— **已解决（B9，D-B9-5，
+   2026-08-13）**：`apps/worker/src/chapter-executors.ts` 的
+   `registerChapterTerminalExecutors` 给 `CHAPTER_READY` / `CHAPTER_CANCELLED` /
+   `CHAPTER_BLOCKED` 各注册一个平凡 sync executor（照 project 侧先例，节点集合从图定义
+   派生而非手抄）。E2E 用例 6/7 真正驱动到 `cancelled` / `blocked` 两个终态并断言
+   `onExecutorMissing` 未记录终态节点跳过。原文如下：**TD-029-4：Chapter Graph 终止节点同样缺 executor**：`PROJECT_READY` 一类的 project
    图终止节点已有 `registerProjectTerminalExecutors`（`project-terminal-executors.ts`）
    兜底；但 Chapter Generation Graph（`CHAPTER_GENERATION_GRAPH_V1`）的终止节点目前
    没有对应的 executor 注册。GE-6（`createChapterRun` 接线）批次落地 chapter run 入口
@@ -741,3 +746,28 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
 5. **TD-030-5：探针可观测性小项**：单条 IPC 挂住时探针静默冻结最长 30s（worker-client
    超时后自恢复，期间无提示）；`loading` 每轮 poll 翻转两次导致 App 每 1.7s 两次无谓
    重渲（仅 `state===null` 时被消费）。均有界。
+
+## TD-031: B9（GE-6 章节生成 wiring）随行三项
+
+**状态**: OPEN
+**优先级**: 中
+**来源**: B9 交付随行（2026-08-13，设计见 `b9-chapter-wiring-design.md`）
+
+1. **TD-031-1：章节任务中断即整条章节 run 报废**：四类章节任务的 recoveryPolicy 都是
+   `settle_if_result`（与 SPEC_EXTRACT / RESEARCH_RUN 同则，防重复计费）。应用在
+   DRAFT/REWRITE 任务 RUNNING 时退出 → 启动 `reconcileTasks` 标 `TASK_INTERRUPTED` →
+   不重放 → `applyNodeFailure` → 章节 run 终态 failed。代价比 intake 侧更痛：一章正文
+   的生成时间最长、用户等待感最强，而失败后只能新建 chapter run 从 CHAPTER_PLAN 重来
+   （既有候选修订仍在库里，但不属于新 run）。方向：(a) 章节任务改可重放并接受重复计费；
+   (b) 允许新 run 继承同一 blueprintChapterId 的既有候选修订链。与 TD-022/TD-027-4 同族。
+2. **TD-031-2：候选 Gate 的"请求改写"无用户意见承载（章节侧的 TD-029-1）**：
+   `candidate_gate` 决策 DTO 无 feedback 字段，用户点"请求改写"时无法说明原因；本批次
+   如实在 prompt 里标注 `userRequestedRewrite: true / userFeedback: null`，不伪造意见。
+   B10（生成 UI）批次连同 feedback 承载一并设计——否则界面上会出现一个"看起来能提意见、
+   实际意见不传"的空承诺（B6/B7/B8 各踩过一次的坑）。
+3. **TD-031-3：Critic 的审查对象与图 artifact 语义不重合**：图上 Critic 的
+   `requiresArtifacts` 是 `generationRun`（恒指向 DRAFT 那一版），而实际审查对象是
+   "同 run 最大修订号"的候选（改写后是 REWRITE 那一版）。两者在 rewrite 循环里必然不同，
+   靠 `budget.rewrite` 进入 inputHash 才使 stale 校验仍然正确。这层错位是图契约冻结
+   （REWRITE 为 noOut）的直接后果，当前实现自洽且有 E2E 覆盖，但对读者不直观；若将来
+   放开图定义，应让 REWRITE 也产出 generationRun artifact，消除这层错位。

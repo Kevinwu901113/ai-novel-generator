@@ -426,6 +426,15 @@ export { executeResearch, getResearchBundle } from './research.js';
 export type { StoryBlueprintRepositoryPort } from './blueprint.js';
 export { getBlueprint, listBlueprintChapters } from './blueprint.js';
 
+// ── 章节生成（GE-6 / B9）─────────────────────────────────────────
+
+export type {
+  ChapterScenePlanRepositoryPort,
+  ChapterCandidateRepositoryPort,
+  ChapterCritiqueRepositoryPort,
+} from './chapter-generation.js';
+export { getCurrentChapterCandidate, listCurrentChapterCritiques } from './chapter-generation.js';
+
 // ── Graph Walking Skeleton（GE-2）────────────────────────────────
 
 export type { FakeNodeBehavior, FakeExecutorConfig, RunFakeStop } from './graph-skeleton.js';

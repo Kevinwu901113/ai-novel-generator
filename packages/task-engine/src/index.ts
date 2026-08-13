@@ -49,6 +49,11 @@ export interface TaskEngineDeps {
     /** system/user 分离（B3 起 SPEC_EXTRACT 使用；model-gateway 原生支持） */
     systemPrompt?: string;
     protocol?: ProviderProtocol;
+    /**
+     * B9：章节正文任务需要突破网关默认 4096 输出上限——一章中文正文（2500~4000 字）
+     * 按 ~1.5 token/字算就会撞顶，被截断的输出必然解析失败。省略时沿用网关默认值。
+     */
+    maxTokens?: number;
   }) => Promise<ModelInvocationOutput>;
   readonly transaction: <T>(fn: () => T) => T;
   /** RW-1：task 成功前持久化 execution-bound 完整解析结果的权威存储（task-backed 节点必需） */
@@ -302,12 +307,38 @@ export type {
   ValidatedContractDraftContext,
 } from './contract-draft-context.js';
 
-export { executeChapterDraft, parseChapterDraftV1 } from './chapter-generation.js';
+export { compensateFinalization } from './chapter-generation.js';
+
+// ── 章节生成四类模型任务（GE-6 / B9）─────────────────────────────
+export {
+  executeChapterPlan,
+  executeChapterDraftNode,
+  executeChapterCritique,
+  executeChapterRewrite,
+  parseChapterPlanV1,
+  parseChapterProseV1,
+  parseChapterCritiqueV1,
+  parseChapterTaskPayload,
+  buildChapterPlanPrompt,
+  buildChapterDraftPrompt,
+  buildChapterCritiquePrompt,
+  buildChapterRewritePrompt,
+  criticSystemPrompt,
+  CHAPTER_PLAN_SYSTEM_PROMPT,
+  CHAPTER_DRAFT_SYSTEM_PROMPT,
+  CHAPTER_REWRITE_SYSTEM_PROMPT,
+  CRITIC_NODE_IDS,
+} from './chapter-nodes.js';
 export type {
-  ChapterDraftV1,
-  ChapterDraftExecutionResult,
-  ChapterDraftExecutionDeps,
-} from './chapter-generation.js';
+  ChapterNodeExecutionDeps,
+  ChapterNodeExecutionResult,
+  ChapterPersistResult,
+  ChapterTaskContext,
+  ChapterTaskPayload,
+  ParsedChapterPlan,
+  ParsedChapterProse,
+  ParsedChapterCritique,
+} from './chapter-nodes.js';
 export * from './spec-extract.js';
 export * from './research-run.js';
 export * from './blueprint-generate.js';

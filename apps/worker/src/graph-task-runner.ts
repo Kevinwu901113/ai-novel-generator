@@ -2,23 +2,26 @@
  * Graph task 后台 runner（RW-1-R5, Blocker 2）。
  *
  * 生产 recoverGraphRuns 的 `scheduleTask` 接线：把 durable PENDING 的 Graph task
- * 真正调度执行（幂等：executeChapterDraft 内部 CAS claim，重复调度安全）。
+ * 真正调度执行（幂等：各任务引擎内部 CAS claim，重复调度安全）。
  *
  * 复用 runner-kernel 的安全边界：独立 ProjectDatabase、单一异常边界、
  * settlement 收口、DB close exactly once、不产生 unhandled rejection。
  */
 
 import type { ProjectDatabase } from '@ai-novel/database';
-import type { NodeRunnerDeps, TaskData } from '@ai-novel/application';
+import type { NodeRunnerDeps } from '@ai-novel/application';
 import { driveRun } from '@ai-novel/application';
 import {
   executeBlueprintGenerate,
-  executeChapterDraft,
+  executeChapterCritique,
+  executeChapterDraftNode,
+  executeChapterPlan,
+  executeChapterRewrite,
   executeResearchRun,
   executeSpecExtract,
   TaskExecutionError,
   type BlueprintGenerateExecutionDeps,
-  type ChapterDraftExecutionDeps,
+  type ChapterNodeExecutionDeps,
   type ResearchRunExecutionDeps,
   type SpecExtractExecutionDeps,
 } from '@ai-novel/task-engine';
@@ -29,8 +32,12 @@ import {
   type SettleMessages,
 } from './runner-kernel.js';
 
-/** Graph 任务引擎 deps：CHAPTER_DRAFT / SPEC_EXTRACT / RESEARCH_RUN / BLUEPRINT_GENERATE 的并集（B3/B5/B7） */
-export type GraphEngineDeps = ChapterDraftExecutionDeps &
+/**
+ * Graph 任务引擎 deps：SPEC_EXTRACT / RESEARCH_RUN / BLUEPRINT_GENERATE 与四类章节
+ * 任务（CHAPTER_PLAN / CHAPTER_DRAFT / CHAPTER_CRITIQUE / CHAPTER_REWRITE）的并集
+ * （B3/B5/B7/B9）。
+ */
+export type GraphEngineDeps = ChapterNodeExecutionDeps &
   SpecExtractExecutionDeps &
   ResearchRunExecutionDeps &
   BlueprintGenerateExecutionDeps;
@@ -76,14 +83,19 @@ export type GraphTaskScheduleResult =
       readonly reason: 'OPEN_FAILED' | 'SETUP_FAILED' | 'UNSUPPORTED' | 'TERMINAL';
     };
 
-function readPrompt(task: TaskData): string {
-  try {
-    const payload = JSON.parse(task.payloadJson ?? '{}') as { prompt?: unknown };
-    return typeof payload.prompt === 'string' ? payload.prompt : '';
-  } catch {
-    return '';
-  }
-}
+/**
+ * 本 runner 支持调度的任务类型（B9：新增三类章节任务；DRAFT 复用 CHAPTER_DRAFT）。
+ * 其余任务类型（GRILL_QUESTION_PLAN / CREATION_CONTRACT_DRAFT 等）有各自的 runner。
+ */
+const SUPPORTED_TASK_TYPES: ReadonlySet<string> = new Set([
+  'SPEC_EXTRACT',
+  'RESEARCH_RUN',
+  'BLUEPRINT_GENERATE',
+  'CHAPTER_PLAN',
+  'CHAPTER_DRAFT',
+  'CHAPTER_CRITIQUE',
+  'CHAPTER_REWRITE',
+]);
 
 /**
  * 调度 Graph task 执行（幂等）。同步返回调度结果；异步执行在 async IIFE 内，
@@ -121,21 +133,21 @@ export function scheduleGraphTask(
       closeDb();
       return { scheduled: false, reason: 'TERMINAL' };
     }
-    if (
-      task.taskType !== 'CHAPTER_DRAFT' &&
-      task.taskType !== 'SPEC_EXTRACT' &&
-      task.taskType !== 'RESEARCH_RUN' &&
-      task.taskType !== 'BLUEPRINT_GENERATE'
-    ) {
+    if (!SUPPORTED_TASK_TYPES.has(task.taskType)) {
       closeDb();
       return { scheduled: false, reason: 'UNSUPPORTED' };
     }
     const taskType = task.taskType;
-    const prompt = readPrompt(task);
     void (async () => {
       try {
         if (taskType === 'CHAPTER_DRAFT') {
-          await executeChapterDraft(engineDeps, taskId, prompt);
+          await executeChapterDraftNode(engineDeps, taskId);
+        } else if (taskType === 'CHAPTER_PLAN') {
+          await executeChapterPlan(engineDeps, taskId);
+        } else if (taskType === 'CHAPTER_CRITIQUE') {
+          await executeChapterCritique(engineDeps, taskId);
+        } else if (taskType === 'CHAPTER_REWRITE') {
+          await executeChapterRewrite(engineDeps, taskId);
         } else if (taskType === 'RESEARCH_RUN') {
           await executeResearchRun(engineDeps, taskId);
         } else if (taskType === 'BLUEPRINT_GENERATE') {
