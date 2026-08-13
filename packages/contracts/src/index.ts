@@ -385,6 +385,8 @@ export const IPC_CHANNELS = {
   MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
   MANUSCRIPT_SAVE_CHAPTER: 'ipc:manuscript-save-chapter',
   MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
+  MANUSCRIPT_LIST_VERSIONS: 'ipc:manuscript-list-versions',
+  MANUSCRIPT_RESTORE_VERSION: 'ipc:manuscript-restore-version',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1558,11 +1560,71 @@ export interface ExportManuscriptResultDto {
   readonly chapterCount: number;
 }
 
+/**
+ * 版本历史条目（不含正文——历史列表只做定位，正文按需在恢复后读取）。
+ * `source` 说明这一版是谁写的：AI 生成 / AI 改写 / 用户手写 / 导入 / 恢复。
+ */
+export interface ManuscriptVersionSummaryDto {
+  readonly versionId: string;
+  readonly versionNumber: number;
+  readonly title: string;
+  readonly source: 'USER' | 'AI_GENERATION' | 'AI_REWRITE' | 'IMPORT' | 'RESTORE';
+  readonly createdAt: string;
+  readonly isCurrent: boolean;
+}
+
+export interface ListManuscriptVersionsInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export function isValidListManuscriptVersionsInput(
+  value: unknown,
+): value is ListManuscriptVersionsInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'chapterId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.chapterId);
+}
+
+/**
+ * 恢复到某个历史版本：只移动 current 指针，**不删除任何版本**
+ * （被恢复走的那一版仍在历史里，可以再切回来）。同样带 CAS 基线。
+ */
+export interface RestoreManuscriptVersionInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly versionId: string;
+  readonly expectedCurrentVersionId: string | null;
+}
+
+export function isValidRestoreManuscriptVersionInput(
+  value: unknown,
+): value is RestoreManuscriptVersionInputDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'projectId',
+      'chapterId',
+      'versionId',
+      'expectedCurrentVersionId',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  if (!isBoundedTrimmedId(obj.projectId) || !isBoundedTrimmedId(obj.chapterId)) return false;
+  if (!isBoundedTrimmedId(obj.versionId)) return false;
+  return obj.expectedCurrentVersionId === null || isBoundedTrimmedId(obj.expectedCurrentVersionId);
+}
+
 export interface ManuscriptAPI {
   getWorkspace(input: GetManuscriptWorkspaceInputDto): Promise<ManuscriptWorkspaceDto>;
   getChapter(input: GetManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto | null>;
   saveChapter(input: SaveManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto>;
   exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto>;
+  listVersions(
+    input: ListManuscriptVersionsInputDto,
+  ): Promise<ReadonlyArray<ManuscriptVersionSummaryDto>>;
+  restoreVersion(input: RestoreManuscriptVersionInputDto): Promise<ManuscriptChapterDetailDto>;
 }
 
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */

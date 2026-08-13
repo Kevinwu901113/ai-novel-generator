@@ -65,7 +65,17 @@ export interface UseResearchReturn {
   readonly actions: ResearchActions;
 }
 
-export function useResearch(projectId: string): UseResearchReturn {
+export function useResearch(
+  projectId: string,
+  /**
+   * TD-030-4（修法同蓝图侧 D-B8 决策收尾）：人工决策落地后的 App 侧收尾回调——
+   * 解除 JourneyNav 视图锁定 + 刷新旅程探针。决策可能把 frontier 带去别处
+   * （modify_requirements 回访谈重出澄清问题），若 userSelectedStage 仍锁在
+   * 'research'，中栏会继续挂着 ResearchRegion，用户点完"修改创作要求"像什么
+   * 都没发生。busy 护航到该 promise 落地为止。
+   */
+  onDecisionSettled?: () => void | Promise<void>,
+): UseResearchReturn {
   const [phase, setPhase] = useState<ResearchPhase>({ kind: 'no-run' });
   const [state, setState] = useState<ResearchStateDto | null>(null);
   const [bundle, setBundle] = useState<ResearchBundleDto | null>(null);
@@ -266,13 +276,16 @@ export function useResearch(projectId: string): UseResearchReturn {
           idempotencyKey: crypto.randomUUID(),
         });
         await refresh();
+        // TD-030-4：决策落地后交 App 收尾（解除视图锁定 + 刷新探针，promise 在
+        // 新状态落地后才 resolve）——busy 护航到新态渲染，镜像 useBlueprint。
+        await onDecisionSettled?.();
       } catch (err) {
         setError(toSafeUserError(err, '提交选择失败').message);
       } finally {
         setBusy(false);
       }
     },
-    [projectId, refresh],
+    [projectId, refresh, onDecisionSettled],
   );
 
   const setSourceExclusion = useCallback(

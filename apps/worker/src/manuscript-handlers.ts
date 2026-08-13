@@ -11,7 +11,13 @@
  * 任何一条都不会删除既有版本（锁定不变量"不静默覆盖用户正文"）。
  */
 
-import { AppError, createChapterVersion, listChapters } from '@ai-novel/application';
+import {
+  AppError,
+  createChapterVersion,
+  listChapterVersions,
+  listChapters,
+  promoteChapterVersion,
+} from '@ai-novel/application';
 import type { ManuscriptQueryDeps } from '@ai-novel/application';
 import type { ChapterSummary } from '@ai-novel/contracts';
 import type { ProjectDatabase } from '@ai-novel/database';
@@ -20,13 +26,17 @@ import {
   isValidExportManuscriptInput,
   isValidGetManuscriptChapterInput,
   isValidGetManuscriptWorkspaceInput,
+  isValidListManuscriptVersionsInput,
+  isValidRestoreManuscriptVersionInput,
   isValidSaveManuscriptChapterInput,
 } from '@ai-novel/contracts';
 import type {
   ExportManuscriptInputDto,
   ManuscriptChapterDetailDto,
   ManuscriptChapterSummaryDto,
+  ManuscriptVersionSummaryDto,
   ManuscriptWorkspaceDto,
+  RestoreManuscriptVersionInputDto,
   SaveManuscriptChapterInputDto,
 } from '@ai-novel/contracts';
 import { renderManuscript, suggestedExportFileName } from '@ai-novel/import-export';
@@ -191,6 +201,50 @@ function getManuscriptChapterInternal(
   };
 }
 
+/**
+ * 版本历史（TD-033-2）：让"不静默覆盖"从数据层的保证变成用户看得见的东西——
+ * 每一版是谁写的、什么时候写的、现在是哪一版。
+ */
+export function listManuscriptVersions(
+  ctx: ManuscriptHandlerContext,
+  projectId: string,
+  chapterId: string,
+): ReadonlyArray<ManuscriptVersionSummaryDto> {
+  return withDb(ctx, projectId, (projDb) => {
+    const deps = queryDeps(projDb);
+    const chapter = deps.chapterRepo.getById(projectId, chapterId);
+    if (!chapter) throw new AppError('VALIDATION_ERROR', '章节不存在');
+    const summaries = listChapterVersions(deps, { projectId, chapterId });
+    return summaries.map((version) => ({
+      versionId: version.id,
+      versionNumber: version.versionNumber,
+      title: version.title,
+      source: version.sourceType,
+      createdAt: version.createdAt,
+      isCurrent: version.id === chapter.currentVersionId,
+    }));
+  });
+}
+
+/** 恢复到某个历史版本：只移动 current 指针，不删除任何版本（CAS 守卫） */
+export function restoreManuscriptVersion(
+  ctx: ManuscriptHandlerContext,
+  input: RestoreManuscriptVersionInputDto,
+): ManuscriptChapterDetailDto {
+  return withDb(ctx, input.projectId, (projDb) => {
+    promoteChapterVersion(mutationDeps(projDb), {
+      projectId: input.projectId,
+      chapterId: input.chapterId,
+      versionId: input.versionId,
+      expectedCurrentVersionId: input.expectedCurrentVersionId,
+      now: ctx.clock.now(),
+    });
+    const detail = getManuscriptChapterInternal(projDb, input.projectId, input.chapterId);
+    if (!detail) throw new AppError('VALIDATION_ERROR', '章节不存在');
+    return detail;
+  });
+}
+
 /** 导出正文（落盘在 main；worker 只负责按稿件顺序渲染） */
 export function exportManuscript(
   ctx: ManuscriptHandlerContext,
@@ -246,6 +300,18 @@ export function dispatchManuscriptCommand(
         throw new AppError('VALIDATION_ERROR', '非法 manuscript.saveChapter 输入');
       }
       return saveManuscriptChapter(ctx, payload);
+    }
+    case 'manuscript.listVersions': {
+      if (!isValidListManuscriptVersionsInput(payload)) {
+        throw new AppError('VALIDATION_ERROR', '非法 manuscript.listVersions 输入');
+      }
+      return listManuscriptVersions(ctx, payload.projectId, payload.chapterId);
+    }
+    case 'manuscript.restoreVersion': {
+      if (!isValidRestoreManuscriptVersionInput(payload)) {
+        throw new AppError('VALIDATION_ERROR', '非法 manuscript.restoreVersion 输入');
+      }
+      return restoreManuscriptVersion(ctx, payload);
     }
     case 'manuscript.export': {
       if (!isValidExportManuscriptInput(payload)) {

@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   ManuscriptChapterDetailDto,
   ManuscriptExportFormatDto,
+  ManuscriptVersionSummaryDto,
   ManuscriptWorkspaceDto,
 } from '@ai-novel/contracts';
 import { toSafeUserError } from '../safety/safe-error';
@@ -30,6 +31,10 @@ export interface ManuscriptActions {
   /** 放弃本地修改，重新加载服务端当前版本（冲突后的出路之一） */
   reload(): Promise<void>;
   exportManuscript(format: ManuscriptExportFormatDto): Promise<void>;
+  /** 展开/收起版本历史（展开时按需拉取） */
+  toggleVersions(): Promise<void>;
+  /** 恢复到某个历史版本（只移动 current 指针，不删除任何版本） */
+  restore(versionId: string): Promise<void>;
   refresh(): Promise<void>;
 }
 
@@ -45,6 +50,7 @@ export interface UseManuscriptReturn {
   readonly saveError: string | null;
   /** 导出结果提示（成功路径也要有反馈，否则用户不知道存到哪了） */
   readonly exportNotice: string | null;
+  readonly versions: ReadonlyArray<ManuscriptVersionSummaryDto> | null;
   readonly actions: ManuscriptActions;
 }
 
@@ -58,6 +64,7 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
   const [error, setError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [versions, setVersions] = useState<ReadonlyArray<ManuscriptVersionSummaryDto> | null>(null);
 
   const generationRef = useRef(0);
 
@@ -98,6 +105,7 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
         setChapter(detail);
         setDraft(detail ? { title: detail.title, content: detail.content } : null);
         setSaveError(null);
+        setVersions(null);
       } catch (err) {
         if (generationRef.current !== currentGen) return;
         setError(toSafeUserError(err, '加载章节正文失败').message);
@@ -114,6 +122,7 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
       setDraft(null);
       setSaveError(null);
       setExportNotice(null);
+      setVersions(null);
       if (chapterId !== null) void loadChapter(chapterId);
     },
     [loadChapter],
@@ -169,6 +178,52 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
     [projectId],
   );
 
+  const toggleVersions = useCallback(async (): Promise<void> => {
+    if (versions !== null) {
+      setVersions(null);
+      return;
+    }
+    if (selectedChapterId === null) return;
+    try {
+      const list = await window.desktop.manuscript.listVersions({
+        projectId,
+        chapterId: selectedChapterId,
+      });
+      setVersions(list);
+    } catch (err) {
+      setSaveError(toSafeUserError(err, '加载版本历史失败').message);
+    }
+  }, [versions, selectedChapterId, projectId]);
+
+  const restore = useCallback(
+    async (versionId: string): Promise<void> => {
+      if (!chapter) return;
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const updated = await window.desktop.manuscript.restoreVersion({
+          projectId,
+          chapterId: chapter.chapterId,
+          versionId,
+          expectedCurrentVersionId: chapter.currentVersionId,
+        });
+        setChapter(updated);
+        setDraft({ title: updated.title, content: updated.content });
+        const list = await window.desktop.manuscript.listVersions({
+          projectId,
+          chapterId: chapter.chapterId,
+        });
+        setVersions(list);
+        await loadWorkspace();
+      } catch (err) {
+        setSaveError(toSafeUserError(err, '恢复版本失败').message);
+      } finally {
+        setSaving(false);
+      }
+    },
+    [chapter, projectId, loadWorkspace],
+  );
+
   const refresh = useCallback(async (): Promise<void> => {
     setLoading(true);
     await loadWorkspace();
@@ -191,6 +246,7 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
     error,
     saveError,
     exportNotice,
-    actions: { select, edit, save, reload, exportManuscript, refresh },
+    versions,
+    actions: { select, edit, save, reload, exportManuscript, toggleVersions, restore, refresh },
   };
 }

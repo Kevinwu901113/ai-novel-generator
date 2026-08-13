@@ -638,6 +638,76 @@ describe('GE-8 产品 1.0 端到端验收', () => {
     }
   });
 
+  it('稿件章节按蓝图顺序排列，即使用户跳着写（TD-033-1）', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const seen: TaskType[] = [];
+      await driveProjectToReady(db, env, seen);
+      const overview = chapterOverview(db);
+      const executed = new Set<string>();
+
+      // 先写第二章
+      const run2 = await generateChapterToGate(
+        db,
+        env,
+        overview.chapters[1]!.blueprintChapterId,
+        executed,
+        seen,
+      );
+      dispatchChapterCommand(
+        'chapter.submitDecision',
+        {
+          projectId: PROJECT_ID,
+          runId: run2,
+          kind: 'gate',
+          outcome: 'accept',
+          feedback: null,
+          idempotencyKey: 'accept-second-first',
+        },
+        chapterHandlerCtx(db),
+      );
+      await driveRun(env.deps, PROJECT_ID, run2);
+
+      // 再写第一章
+      const run1 = await generateChapterToGate(
+        db,
+        env,
+        overview.chapters[0]!.blueprintChapterId,
+        executed,
+        seen,
+      );
+      dispatchChapterCommand(
+        'chapter.submitDecision',
+        {
+          projectId: PROJECT_ID,
+          runId: run1,
+          kind: 'gate',
+          outcome: 'accept',
+          feedback: null,
+          idempotencyKey: 'accept-first-second',
+        },
+        chapterHandlerCtx(db),
+      );
+      await driveRun(env.deps, PROJECT_ID, run1);
+
+      // 稿件里的顺序必须是蓝图顺序（第一章在前），而不是写作先后
+      const links = db.getManuscriptChapterLinkRepository().listByProject(PROJECT_ID);
+      const firstLink = links.find(
+        (l) => l.blueprintChapterId === overview.chapters[0]!.blueprintChapterId,
+      )!;
+      const workspace = dispatchManuscriptCommand(
+        'manuscript.getWorkspace',
+        { projectId: PROJECT_ID },
+        manuscriptHandlerCtx(db),
+      ) as { chapters: ReadonlyArray<{ chapterId: string }> };
+      expect(workspace.chapters).toHaveLength(2);
+      expect(workspace.chapters[0]!.chapterId).toBe(firstLink.chapterId);
+    } finally {
+      db.close();
+    }
+  });
+
   it('用户原始输入不丢失：初始想法与用户回答在链路末端仍可原样取回', async () => {
     const db = makeDb();
     try {

@@ -57,6 +57,29 @@ export const MANUSCRIPT_COMMIT_DESCRIPTOR: NodeExecutorDescriptor = {
   recoveryPolicy: 'replayable',
 };
 
+/**
+ * 按蓝图章节序定位插入点（D-GE7-7）：返回"蓝图里排在本章之后、且已在稿件里存在"的
+ * 第一章对应的稿件章节 id；没有则返回 null（追加到末尾）。
+ */
+function findInsertBeforeChapterId(
+  projDb: ProjectDatabase,
+  projectId: string,
+  storyBlueprintId: string,
+  blueprintChapterId: string,
+): string | null {
+  const found = projDb.getStoryBlueprintRepository().getById(projectId, storyBlueprintId);
+  if (!found) return null;
+  const chapters = found.blueprint.chapters;
+  const index = chapters.findIndex((c) => c.id === blueprintChapterId);
+  if (index < 0) return null;
+  const linkRepo = projDb.getManuscriptChapterLinkRepository();
+  for (const later of chapters.slice(index + 1)) {
+    const link = linkRepo.get(projectId, later.id);
+    if (link) return link.chapterId;
+  }
+  return null;
+}
+
 function manuscriptCommitExecute(
   ctx: ManuscriptCommitContext,
   ectx: NodeExecutionInputContext,
@@ -94,11 +117,21 @@ function manuscriptCommitExecute(
     const linkRepo = projDb.getManuscriptChapterLinkRepository();
     let link = linkRepo.get(ectx.projectId, state.blueprintChapterId);
     if (!link) {
+      // D-GE7-7（销 TD-033-1）：新章节按**蓝图章节序**插入，而不是一律追加到末尾。
+      // 用户跳着写（先第三章再第一章）时，追加会让稿件顺序变成 3、1——顺序错了的
+      // 稿件在导出时就是错的书。定位方式：找蓝图里排在本章之后、且**已经在稿件里
+      // 存在**的第一章，插到它前面；找不到（本章是目前最靠后的）才追加到末尾。
+      const insertBeforeChapterId = findInsertBeforeChapterId(
+        projDb,
+        ectx.projectId,
+        state.storyBlueprintId,
+        state.blueprintChapterId,
+      );
       const chapter = createChapter(deps, {
         projectId: ectx.projectId,
         manuscriptId: manuscript.id,
         newChapterId: ctx.idGenerator.generate(),
-        insertBeforeChapterId: null,
+        insertBeforeChapterId,
         now,
       });
       link = {

@@ -79,6 +79,8 @@ const IPC_CHANNELS = {
   MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
   MANUSCRIPT_SAVE_CHAPTER: 'ipc:manuscript-save-chapter',
   MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
+  MANUSCRIPT_LIST_VERSIONS: 'ipc:manuscript-list-versions',
+  MANUSCRIPT_RESTORE_VERSION: 'ipc:manuscript-restore-version',
 } as const;
 
 /**
@@ -172,6 +174,9 @@ import type {
   SaveManuscriptChapterInputDto,
   ExportManuscriptInputDto,
   ExportManuscriptResultDto,
+  ListManuscriptVersionsInputDto,
+  ManuscriptVersionSummaryDto,
+  RestoreManuscriptVersionInputDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -534,6 +539,16 @@ const desktopAPI: DesktopAPI = {
     },
     async exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_EXPORT, input);
+    },
+    async listVersions(
+      input: ListManuscriptVersionsInputDto,
+    ): Promise<ReadonlyArray<ManuscriptVersionSummaryDto>> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_LIST_VERSIONS, input);
+    },
+    async restoreVersion(
+      input: RestoreManuscriptVersionInputDto,
+    ): Promise<ManuscriptChapterDetailDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_RESTORE_VERSION, input);
     },
   },
 };

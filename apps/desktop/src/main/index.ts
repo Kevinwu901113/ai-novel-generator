@@ -70,6 +70,8 @@ import {
   isValidGetManuscriptChapterInput,
   isValidSaveManuscriptChapterInput,
   isValidExportManuscriptInput,
+  isValidListManuscriptVersionsInput,
+  isValidRestoreManuscriptVersionInput,
   encodeErrorCode,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
@@ -82,6 +84,7 @@ import {
   type ManuscriptWorkspaceDto,
   type ManuscriptChapterDetailDto,
   type ExportManuscriptResultDto,
+  type ManuscriptVersionSummaryDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1280,6 +1283,36 @@ ipcMain.handle(
     return (await forwardToWorker({
       requestId,
       command: 'manuscript.saveChapter',
+      payload: input,
+    })) as ManuscriptChapterDetailDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_LIST_VERSIONS,
+  async (_event, input: unknown): Promise<ReadonlyArray<ManuscriptVersionSummaryDto>> => {
+    if (!isValidListManuscriptVersionsInput(input)) {
+      throw Object.assign(new Error('无效的版本历史查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.listVersions',
+      payload: input,
+    })) as ReadonlyArray<ManuscriptVersionSummaryDto>;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_RESTORE_VERSION,
+  async (_event, input: unknown): Promise<ManuscriptChapterDetailDto> => {
+    if (!isValidRestoreManuscriptVersionInput(input)) {
+      throw Object.assign(new Error('无效的版本恢复输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.restoreVersion',
       payload: input,
     })) as ManuscriptChapterDetailDto;
   },

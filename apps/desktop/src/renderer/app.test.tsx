@@ -147,6 +147,8 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       getChapter: vi.fn().mockResolvedValue(null),
       saveChapter: vi.fn(),
       exportManuscript: vi.fn(),
+      listVersions: vi.fn().mockResolvedValue([]),
+      restoreVersion: vi.fn(),
     },
     // B10：manuscript 阶段挂 ChapterRegion，挂载即读 chapter.getOverview
     chapter: {

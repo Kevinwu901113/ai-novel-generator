@@ -5,8 +5,28 @@
  * 覆盖期间落地的新版本；冲突时**不丢用户输入**，给出"重新加载"的明确出路。
  */
 
-import type { ManuscriptExportFormatDto } from '@ai-novel/contracts';
+import type { ManuscriptExportFormatDto, ManuscriptVersionSummaryDto } from '@ai-novel/contracts';
 import { useManuscript } from './useManuscript';
+
+/** 版本来源的中文说明（界面上不出现 AI_GENERATION 这类工程标识） */
+function versionSourceLabel(source: ManuscriptVersionSummaryDto['source']): string {
+  switch (source) {
+    case 'USER':
+      return '你写的';
+    case 'AI_GENERATION':
+      return 'AI 生成';
+    case 'AI_REWRITE':
+      return 'AI 改写';
+    case 'IMPORT':
+      return '导入';
+    case 'RESTORE':
+      return '恢复';
+    default: {
+      const exhaustive: never = source;
+      return exhaustive;
+    }
+  }
+}
 
 export interface ManuscriptPanelProps {
   readonly projectId: string;
@@ -24,6 +44,7 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
     error,
     saveError,
     exportNotice,
+    versions,
     actions,
   } = useManuscript(projectId);
 
@@ -141,6 +162,43 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
                   </button>
                 </div>
               )}
+
+              <div className="manuscript-versions">
+                <button
+                  type="button"
+                  className="btn-link"
+                  onClick={() => void actions.toggleVersions()}
+                  aria-expanded={versions !== null}
+                >
+                  {versions !== null
+                    ? '收起版本历史'
+                    : `查看版本历史（共 ${chapter.versionCount} 版）`}
+                </button>
+                {versions !== null && (
+                  <ul className="manuscript-version-list">
+                    {versions.map((version) => (
+                      <li key={version.versionId}>
+                        <span className="manuscript-version-label">
+                          第 {version.versionNumber} 版 · {versionSourceLabel(version.source)}
+                          {version.isCurrent ? ' · 当前' : ''}
+                        </span>
+                        {!version.isCurrent && (
+                          <button
+                            type="button"
+                            onClick={() => void actions.restore(version.versionId)}
+                            disabled={saving}
+                          >
+                            恢复到这一版
+                          </button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <p className="candidate-gate-desc">
+                  恢复只是把"当前版本"指回那一版，任何一版都不会被删除。
+                </p>
+              </div>
 
               <div className="manuscript-editor-actions">
                 <button

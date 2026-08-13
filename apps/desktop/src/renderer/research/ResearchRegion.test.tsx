@@ -292,6 +292,69 @@ describe('ResearchRegion', () => {
     });
   });
 
+  // TD-030-4 回归（修法同蓝图侧）：决策落地后必须调 App 收尾回调（解除
+  // JourneyNav 视图锁定 + 刷新探针）——否则 modify_requirements 把 frontier 带回
+  // 访谈后，视图仍锁在 ResearchRegion，用户点完"修改创作要求"像什么都没发生。
+  // busy 须护航到回调 promise 落地（镜像 BlueprintRegion 的 onRefresh 护航语义）。
+  it('escalation：决策落地后调用 onDecisionSettled，busy 护航到其 promise 落地', async () => {
+    const api = mockApi({
+      graph: {
+        listRuns: vi.fn().mockResolvedValue([RUN]),
+        getRunProgress: vi
+          .fn()
+          .mockResolvedValue(researchProgress('RESEARCH_ESCALATION', 'waiting_for_human')),
+        applyHumanDecision: vi.fn().mockResolvedValue({ activeNodes: [], possibleNextNodes: [] }),
+      },
+      research: {
+        getResearchState: vi.fn().mockResolvedValue(
+          researchState({
+            researchDecision: 'deep',
+            researchValid: 'invalid',
+            escalationActive: true,
+          }),
+        ),
+        getBundle: vi.fn().mockResolvedValue(null),
+        listBundles: vi.fn().mockResolvedValue([]),
+        setSourceExclusion: vi.fn().mockResolvedValue([]),
+        listSourceExclusions: vi.fn().mockResolvedValue([]),
+      },
+    });
+    window.desktop = api;
+
+    let resolveSettled: (() => void) | null = null;
+    const settledPromise = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    const onDecisionSettled = vi.fn(() => settledPromise);
+
+    await act(async () => {
+      render(<ResearchRegion projectId="p1" onDecisionSettled={onDecisionSettled} />);
+    });
+    const optionBtn = await waitFor(() => {
+      const btn = screen.getByText('修改创作要求').closest('button');
+      expect(btn).not.toBeNull();
+      return btn!;
+    });
+
+    await act(async () => {
+      optionBtn.click();
+    });
+    await waitFor(() => {
+      expect(api.graph.applyHumanDecision).toHaveBeenCalledTimes(1);
+      expect(onDecisionSettled).toHaveBeenCalledTimes(1);
+    });
+    // 收尾回调（视图解锁 + 探针刷新）尚未落地：busy 必须仍护航（按钮禁用），
+    // 不得以旧态提前重新可点。
+    expect(optionBtn).toBeDisabled();
+
+    await act(async () => {
+      resolveSettled?.();
+    });
+    await waitFor(() => {
+      expect(optionBtn).not.toBeDisabled();
+    });
+  });
+
   // 决策后刷新被互斥锁吞掉修复（复查随行）：chooseEscalation 是
   // `await applyHumanDecision(...); await refresh();`——若这个 refresh() 撞上
   // 1.7s 轮询在途的某一轮，旧实现里互斥锁会直接把它吞掉（什么都不做，busy

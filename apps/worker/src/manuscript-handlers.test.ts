@@ -294,4 +294,64 @@ describe('稿件 RPC（真实 SQLite）', () => {
       ),
     ).toThrow(AppError);
   });
+
+  it('版本历史：按版本号倒序、标注来源与当前版；恢复只移动指针不删版本（TD-033-2）', () => {
+    const seeded = seedManuscript();
+    const saved = dispatchManuscriptCommand(
+      'manuscript.saveChapter',
+      {
+        projectId: PROJECT_ID,
+        chapterId: seeded.chapterId,
+        title: '第一章 远客',
+        content: '第二版正文。',
+        expectedCurrentVersionId: seeded.versionId,
+      },
+      ctx(),
+    ) as ManuscriptChapterDetailDto;
+
+    const versions = dispatchManuscriptCommand(
+      'manuscript.listVersions',
+      { projectId: PROJECT_ID, chapterId: seeded.chapterId },
+      ctx(),
+    ) as ReadonlyArray<{
+      versionId: string;
+      versionNumber: number;
+      source: string;
+      isCurrent: boolean;
+    }>;
+    expect(versions).toHaveLength(2);
+    expect(versions[0]!.versionNumber).toBe(2);
+    expect(versions[0]!.isCurrent).toBe(true);
+    expect(versions.every((v) => v.source === 'USER')).toBe(true);
+
+    // 恢复到第 1 版
+    const restored = dispatchManuscriptCommand(
+      'manuscript.restoreVersion',
+      {
+        projectId: PROJECT_ID,
+        chapterId: seeded.chapterId,
+        versionId: seeded.versionId,
+        expectedCurrentVersionId: saved.currentVersionId,
+      },
+      ctx(),
+    ) as ManuscriptChapterDetailDto;
+    expect(restored.currentVersionId).toBe(seeded.versionId);
+    expect(restored.content).toBe('雨砸在屋檐上。\n小满擦干酒杯。');
+    // 两版都还在（恢复不删除任何版本）
+    expect(restored.versionCount).toBe(2);
+
+    // 过期基线恢复被拒
+    expect(() =>
+      dispatchManuscriptCommand(
+        'manuscript.restoreVersion',
+        {
+          projectId: PROJECT_ID,
+          chapterId: seeded.chapterId,
+          versionId: saved.currentVersionId,
+          expectedCurrentVersionId: saved.currentVersionId,
+        },
+        ctx(),
+      ),
+    ).toThrow();
+  });
 });

@@ -100,8 +100,10 @@ export function App() {
   //    而新的澄清问题在没被挂载的 Region 里干等；
   // 2. 立即刷新探针，且把"新状态落地后才 resolve"的 promise 交回 useBlueprint，
   //    供决策 busy 护航（防止按钮以旧态提前重新可点）。
+  // TD-030-4 起 research 侧同用（escalation 的 modify_requirements 会把 frontier
+  // 带回访谈；若视图仍锁在 'research'，用户点完像什么都没发生——同病同修）。
   const journeyRefresh = journey.refresh;
-  const handleBlueprintDecisionSettled = useCallback(async () => {
+  const handleHumanDecisionSettled = useCallback(async () => {
     setUserSelectedStage(null);
     await journeyRefresh();
   }, [journeyRefresh]);
@@ -440,13 +442,14 @@ export function App() {
                   terminalStatus={journey.run?.terminalStatus ?? null}
                   generating={hasActiveBlueprintGenerate(journey.progress)}
                   stateLoading={journey.loading}
-                  onRefresh={handleBlueprintDecisionSettled}
+                  onRefresh={handleHumanDecisionSettled}
                 />
               ) : viewStage === 'research' ? (
                 <ResearchRegion
                   key={currentProject.id}
                   projectId={currentProject.id}
                   showBeyondResearchNotice={showResearchBeyondNotice}
+                  onDecisionSettled={handleHumanDecisionSettled}
                 />
               ) : (
                 <IntakeRegion key={currentProject.id} projectId={currentProject.id} />

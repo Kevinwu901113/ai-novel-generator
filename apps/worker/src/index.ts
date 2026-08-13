@@ -2023,6 +2023,8 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'manuscript.getWorkspace':
       case 'manuscript.getChapter':
       case 'manuscript.saveChapter':
+      case 'manuscript.listVersions':
+      case 'manuscript.restoreVersion':
       case 'manuscript.export': {
         const manuscriptCtx: ManuscriptHandlerContext = {
           getProjectDb,

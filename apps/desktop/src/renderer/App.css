@@ -4603,3 +4603,29 @@ body {
   align-items: center;
   gap: 12px;
 }
+
+.manuscript-versions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manuscript-version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.manuscript-version-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.manuscript-version-label {
+  color: var(--color-text-secondary);
+}

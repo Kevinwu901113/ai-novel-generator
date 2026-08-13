@@ -739,10 +739,10 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    （data-service-status/retry，存量）。contracts 未导出 NODE_IDS，renderer 结构上
    引用不到真源；补导出或做源码比对 parity 测试（范式已有：ipc-channel-parity）。
    注：gate/escalation outcome 字符串已有闭合枚举双向守卫测试，不在此列。
-4. **TD-030-4：research 侧 escalation 的 userSelectedStage 锁死（B6 存量同病）**：
-   蓝图侧已修（App 在人工决策落地后清锁）；research 的 modify_requirements 回访谈
-   路径上，若用户点过 JourneyNav"调研"，视图仍会锁在 ResearchRegion。修法同蓝图侧
-   （useResearch 决策收尾走 App 回调），顺 GE-6 批次带上。
+4. ~~**TD-030-4：research 侧 escalation 的 userSelectedStage 锁死**~~ —— **已解决
+   （2026-08-13）**：`useResearch` 增 `onDecisionSettled` 回调，App 传入与蓝图侧同一个
+   `handleHumanDecisionSettled`（清视图锁 + 刷新探针，busy 护航到新态落地）。
+   ResearchRegion 组件测试补三条覆盖。
 5. **TD-030-5：探针可观测性小项**：单条 IPC 挂住时探针静默冻结最长 30s（worker-client
    超时后自恢复，期间无提示）；`loading` 每轮 poll 翻转两次导致 App 每 1.7s 两次无谓
    重渲（仅 `state===null` 时被消费）。均有界。
@@ -798,12 +798,20 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
 **优先级**: 中
 **来源**: GE-7 交付随行（2026-08-13，设计见 `ge7-manuscript-design.md`）
 
-1. **TD-033-1：稿件章节顺序按提交先后，不按蓝图章节序**：`MANUSCRIPT_COMMIT` 首次
+1. ~~**TD-033-1：稿件章节顺序按提交先后**~~ —— **已解决（收尾批次 D-GE7-7，2026-08-13）**：
+   MANUSCRIPT_COMMIT 首次为某蓝图章节建稿件章节时，按蓝图章节序定位插入点
+   （找蓝图里排在其后、且已在稿件中存在的第一章，插到它前面）。product-e2e 新增
+   "先写第二章再写第一章 → 稿件顺序仍是蓝图顺序"回归，先红后绿验证。原文如下：
+   **TD-033-1：稿件章节顺序按提交先后，不按蓝图章节序**：`MANUSCRIPT_COMMIT` 首次
    提交某章时用 `createChapter(insertBeforeChapterId: null)` 追加到末尾。用户若跳着
    生成（先写第三章再写第一章），稿件里的顺序就是 3、1。后端已有
    `updateChapterOrder`（含 rebalance），补一个"按蓝图章节序插入"的定位即可；
    当前先如实登记，不假装顺序正确。
-2. **TD-033-2：版本历史没有界面**：后端有完整的版本链与 `promoteChapterVersion`
+2. ~~**TD-033-2：版本历史没有界面**~~ —— **已解决（收尾批次，2026-08-13）**：
+   `manuscript.listVersions` / `manuscript.restoreVersion` 两条通道四层贯通；稿件工作区
+   给出版本列表（第 N 版 · 来源中文标注 · 当前版）与"恢复到这一版"（只移动 current
+   指针、带 CAS，任何一版都不删除），并在界面上如实说明这一点。"不静默覆盖"至此
+   从数据层保证变成用户看得见的能力。原文如下：**TD-033-2：版本历史没有界面**：后端有完整的版本链与 `promoteChapterVersion`
    （回滚到某一版），但稿件工作区只显示"当前第 N 版 · 共 M 版"，看不到也回不去
    历史版本。"不静默覆盖"的保证因此只体现在数据层，用户暂时感知不到。
 3. **TD-033-3：编辑无自动保存**：roadmap §12 提到 autosave，本批次只做显式保存

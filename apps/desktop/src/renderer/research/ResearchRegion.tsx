@@ -33,15 +33,21 @@ export interface ResearchRegionProps {
    * （D-B6-10）。顶部给出明确说明，避免用户以为流程卡住。
    */
   readonly showBeyondResearchNotice?: boolean;
+  /**
+   * TD-030-4：人工决策落地后的 App 侧收尾（解除视图锁定 + 刷新探针），
+   * 语义与 BlueprintRegion 的 onRefresh 相同。
+   */
+  readonly onDecisionSettled?: () => void | Promise<void>;
 }
 
 export function ResearchRegion({
   projectId,
   showBeyondResearchNotice = false,
+  onDecisionSettled,
 }: ResearchRegionProps) {
   // D-B8-2：本 Region 不再回报旅程阶段（原 onStageChange）——阶段派生已上提到
   // App 的旅程探针（journey/useJourney）。
-  const research = useResearch(projectId);
+  const research = useResearch(projectId, onDecisionSettled);
   const { phase } = research;
 
   const initialLoading = research.loading && research.state === null;

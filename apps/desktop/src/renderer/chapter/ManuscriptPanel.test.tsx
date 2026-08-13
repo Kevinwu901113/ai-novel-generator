@@ -51,6 +51,25 @@ function setupDesktop(overrides: Record<string, unknown> = {}) {
     getWorkspace: vi.fn().mockResolvedValue(workspace()),
     getChapter: vi.fn().mockResolvedValue(detail()),
     saveChapter: vi.fn().mockResolvedValue(detail({ versionNumber: 2, versionCount: 2 })),
+    listVersions: vi.fn().mockResolvedValue([
+      {
+        versionId: 'ver-2',
+        versionNumber: 2,
+        title: '第一章 远客',
+        source: 'USER',
+        createdAt: '2026-08-13T00:00:00.000Z',
+        isCurrent: true,
+      },
+      {
+        versionId: 'ver-1',
+        versionNumber: 1,
+        title: '第一章 远客',
+        source: 'AI_GENERATION',
+        createdAt: '2026-08-13T00:00:00.000Z',
+        isCurrent: false,
+      },
+    ]),
+    restoreVersion: vi.fn().mockResolvedValue(detail({ currentVersionId: 'ver-1' })),
     exportManuscript: vi.fn().mockResolvedValue({
       saved: true,
       fileName: '位面客栈.txt',
@@ -153,5 +172,29 @@ describe('ManuscriptPanel', () => {
     await user.click(screen.getByRole('button', { name: '导出 Markdown' }));
     await waitFor(() => expect(screen.getByText('已取消导出')).toBeTruthy());
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('版本历史：展开可见来源标注；恢复带 CAS 基线且说明不会删除任何版本', async () => {
+    const api = setupDesktop();
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    await waitFor(() => expect(screen.getByLabelText('正文')).toBeTruthy());
+
+    await user.click(screen.getByRole('button', { name: /查看版本历史/ }));
+    await waitFor(() => expect(screen.getByText(/第 1 版 · AI 生成/)).toBeTruthy());
+    expect(screen.getByText(/第 2 版 · 你写的 · 当前/)).toBeTruthy();
+    expect(screen.getByText(/任何一版都不会被删除/)).toBeTruthy();
+
+    await user.click(screen.getByRole('button', { name: '恢复到这一版' }));
+    await waitFor(() => {
+      expect(api.restoreVersion).toHaveBeenCalledWith({
+        projectId: PROJECT_ID,
+        chapterId: 'ch-1',
+        versionId: 'ver-1',
+        expectedCurrentVersionId: 'ver-1',
+      });
+    });
   });
 });
