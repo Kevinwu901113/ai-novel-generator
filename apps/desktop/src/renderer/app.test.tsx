@@ -141,6 +141,13 @@ function createMockDesktopAPI(overrides: Record<string, unknown> = {}) {
       }),
       getBlueprint: vi.fn().mockResolvedValue(null),
     },
+    // GE-7：成稿阶段的"稿件"视图挂 ManuscriptPanel（点开才读，但补全形状）
+    manuscript: {
+      getWorkspace: vi.fn().mockResolvedValue({ manuscriptId: null, title: '', chapters: [] }),
+      getChapter: vi.fn().mockResolvedValue(null),
+      saveChapter: vi.fn(),
+      exportManuscript: vi.fn(),
+    },
     // B10：manuscript 阶段挂 ChapterRegion，挂载即读 chapter.getOverview
     chapter: {
       getOverview: vi.fn().mockResolvedValue({ blueprintId: null, chapters: [] }),

@@ -10,7 +10,8 @@
  * 6. Worker ready 后 Renderer 可请求数据
  */
 
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { writeFile } from 'node:fs/promises';
 import crypto from 'node:crypto';
 import {
   IPC_CHANNELS,
@@ -65,6 +66,10 @@ import {
   isValidStartChapterRunInput,
   isValidGetChapterRunStateInput,
   isValidSubmitChapterDecisionInput,
+  isValidGetManuscriptWorkspaceInput,
+  isValidGetManuscriptChapterInput,
+  isValidSaveManuscriptChapterInput,
+  isValidExportManuscriptInput,
   encodeErrorCode,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
@@ -74,6 +79,9 @@ import {
   type StoryBlueprintDto,
   type ChapterOverviewDto,
   type ChapterRunStateDto,
+  type ManuscriptWorkspaceDto,
+  type ManuscriptChapterDetailDto,
+  type ExportManuscriptResultDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1227,6 +1235,92 @@ ipcMain.handle(
       command: 'chapter.submitDecision',
       payload: input,
     })) as ChapterRunStateDto;
+  },
+);
+
+// ── 稿件工作区与导出（GE-7）───────────────────────────────────────
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_GET_WORKSPACE,
+  async (_event, input: unknown): Promise<ManuscriptWorkspaceDto> => {
+    if (!isValidGetManuscriptWorkspaceInput(input)) {
+      throw Object.assign(new Error('无效的稿件查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.getWorkspace',
+      payload: input,
+    })) as ManuscriptWorkspaceDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_GET_CHAPTER,
+  async (_event, input: unknown): Promise<ManuscriptChapterDetailDto | null> => {
+    if (!isValidGetManuscriptChapterInput(input)) {
+      throw Object.assign(new Error('无效的章节查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.getChapter',
+      payload: input,
+    })) as ManuscriptChapterDetailDto | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_SAVE_CHAPTER,
+  async (_event, input: unknown): Promise<ManuscriptChapterDetailDto> => {
+    if (!isValidSaveManuscriptChapterInput(input)) {
+      throw Object.assign(new Error('无效的章节保存输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.saveChapter',
+      payload: input,
+    })) as ManuscriptChapterDetailDto;
+  },
+);
+
+/**
+ * 导出：worker 只渲染正文，**落盘在 main**——渲染进程不碰文件系统（AGENTS.md 安全规则）。
+ * 用户在保存对话框里取消不是错误：返回 saved=false，界面据此不报错。
+ */
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_EXPORT,
+  async (_event, input: unknown): Promise<ExportManuscriptResultDto> => {
+    if (!isValidExportManuscriptInput(input)) {
+      throw Object.assign(new Error('无效的导出输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    const payload = (await forwardToWorker({
+      requestId,
+      command: 'manuscript.export',
+      payload: input,
+    })) as { fileName: string; content: string; chapterCount: number };
+
+    const result = await dialog.showSaveDialog({
+      title: '导出稿件',
+      defaultPath: payload.fileName,
+    });
+    if (result.canceled || !result.filePath) {
+      return {
+        saved: false,
+        fileName: payload.fileName,
+        filePath: null,
+        chapterCount: payload.chapterCount,
+      };
+    }
+    await writeFile(result.filePath, payload.content, 'utf8');
+    return {
+      saved: true,
+      fileName: payload.fileName,
+      filePath: result.filePath,
+      chapterCount: payload.chapterCount,
+    };
   },
 );
 

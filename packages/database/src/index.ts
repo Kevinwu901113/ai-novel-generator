@@ -88,6 +88,7 @@ export { ProjectDatabase, checkProjectDatabaseVersion } from './project-database
 export { SQLiteMigrator } from './migrator.js';
 export { CreationContractTransactionPortImpl } from './creation-contract-transaction.js';
 export { ManuscriptTransactionPortImpl } from './manuscript-transaction.js';
+export { ChapterVersionReadPortImpl } from './manuscript-repositories.js';
 export {
   ManuscriptRepositoryImpl,
   ChapterRepositoryImpl,
@@ -109,6 +110,7 @@ export {
   ChapterCandidateRepositoryImpl,
   ChapterCritiqueRepositoryImpl,
   ChapterRewriteFeedbackRepositoryImpl,
+  ManuscriptChapterLinkRepositoryImpl,
 } from './chapter-repositories.js';
 export {
   NodeExecutionRepositoryImpl,

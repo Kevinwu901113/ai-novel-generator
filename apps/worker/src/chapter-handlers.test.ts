@@ -325,6 +325,8 @@ describe('章节 RPC 分发（真实 SQLite）', () => {
         artifactId: 'cand-1',
         title: '第一章 远客',
         content: '正文'.repeat(120),
+        producedByTaskId: null,
+        producedByInvocationId: null,
         createdAt: NOW,
       });
     } finally {

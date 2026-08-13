@@ -75,6 +75,7 @@ import { registerResearchExecutors } from './research-executors.js';
 import { registerBlueprintExecutors } from './blueprint-executors.js';
 import { registerProjectTerminalExecutors } from './project-terminal-executors.js';
 import { registerChapterExecutors } from './chapter-executors.js';
+import { registerManuscriptCommitExecutor } from './manuscript-commit-executor.js';
 import { buildGrillSessionDeps } from './grill-handlers.js';
 import { TaskRepositoryAdapter, ModelInvocationRepositoryAdapter } from './index.js';
 
@@ -198,6 +199,7 @@ function buildRunnerEnv(db: ProjectDatabase) {
   registerBlueprintExecutors(registry, runners, ctx);
   registerProjectTerminalExecutors(registry, runners);
   registerChapterExecutors(registry, runners, ctx);
+  registerManuscriptCommitExecutor(registry, runners, ctx);
   const scheduled: string[] = [];
   const skips: string[] = [];
   const deps: NodeRunnerDeps = {
@@ -827,7 +829,7 @@ describe('GE-6 章节生成 E2E（真实 SQLite + 真实 executor + 生产 resol
     }
   });
 
-  it('8. gate accept → MANUSCRIPT_COMMIT 无 executor（GE-7）→ 跳过、不失败、不终态', async () => {
+  it('8. gate accept → MANUSCRIPT_COMMIT 写入权威稿件 → CHAPTER_READY（GE-7）', async () => {
     const db = makeDb('一个位面客栈经营的故事');
     try {
       const env = buildRunnerEnv(db);
@@ -837,15 +839,76 @@ describe('GE-6 章节生成 E2E（真实 SQLite + 真实 executor + 生产 resol
       const executed = new Set<string>();
       const stats = newStats();
       let state = await pumpChapterRun(db, env, runId, ALWAYS_PASS, stats, executed);
+      const candidate = db.getChapterCandidateRepository().getLatestByRun('p1', runId)!;
 
       gateDecision(env, runId, 'accept', 'accept-1');
       await driveRun(env.deps, 'p1', runId);
       state = chapterState(env.deps, runId);
 
-      expect(state.nodeStatuses[MANUSCRIPT_COMMIT]).toBe('active');
-      expect(state.terminalStatus).toBeNull();
-      // 能力缺口（TD-020 语义）：跳过等待有能力的 worker，不把 run 打成 failed
-      expect(env.skips).toContain(`${MANUSCRIPT_COMMIT}:unregistered`);
+      // 锁定不变量第 5 条：只有经 MANUSCRIPT_COMMIT 才写权威稿件
+      expect(state.nodeStatuses[MANUSCRIPT_COMMIT]).toBe('succeeded');
+      expect(state.terminalStatus).toBe('completed');
+      expect(state.artifacts.manuscript?.artifactId).toBeTruthy();
+
+      // 稿件里真的有这一章，正文与被接受的候选一致
+      const link = db.getManuscriptChapterLinkRepository().get('p1', binding.blueprintChapterId)!;
+      expect(link).toBeTruthy();
+      const chapterRow = db
+        .getManuscriptTransaction()
+        .runInTransaction((repos) => repos.chapterRepo.getById('p1', link.chapterId))!;
+      expect(chapterRow.currentVersionId).toBe(state.artifacts.manuscript!.artifactId);
+      const version = db
+        .getManuscriptTransaction()
+        .runInTransaction((repos) =>
+          repos.chapterVersionRepo.getById('p1', link.chapterId, chapterRow.currentVersionId!),
+        )!;
+      expect(version.content).toBe(candidate.content);
+      expect(version.sourceType).toBe('AI_GENERATION');
+      // D-GE7-4：AI 来源版本能追溯到产出它的模型调用
+      expect(version.createdByTaskId).toBeTruthy();
+      expect(version.invocationId).toBeTruthy();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('8b. 同一蓝图章节重新生成后再次提交 → 追加新版本，不新建一章（D-GE7-1/3）', async () => {
+    const db = makeDb('一个位面客栈经营的故事');
+    try {
+      const env = buildRunnerEnv(db);
+      const binding = await driveProjectToReady(db, env);
+
+      // 第一次生成并接受
+      const firstRunId = await startChapterRun(env, binding);
+      const executed = new Set<string>();
+      const stats = newStats();
+      await pumpChapterRun(db, env, firstRunId, ALWAYS_PASS, stats, executed);
+      gateDecision(env, firstRunId, 'accept', 'accept-a');
+      await driveRun(env.deps, 'p1', firstRunId);
+      const link = db.getManuscriptChapterLinkRepository().get('p1', binding.blueprintChapterId)!;
+      const firstVersionId = chapterState(env.deps, firstRunId).artifacts.manuscript!.artifactId;
+
+      // 同一章再生成一次（新 run）并接受
+      const secondRunId = await startChapterRun(env, binding);
+      expect(secondRunId).not.toBe(firstRunId);
+      await pumpChapterRun(db, env, secondRunId, ALWAYS_PASS, stats, executed);
+      gateDecision(env, secondRunId, 'accept', 'accept-b');
+      await driveRun(env.deps, 'p1', secondRunId);
+      const secondVersionId = chapterState(env.deps, secondRunId).artifacts.manuscript!.artifactId;
+
+      // 同一章：绑定不变、版本追加、旧版本仍在（不静默覆盖）
+      const linkAfter = db
+        .getManuscriptChapterLinkRepository()
+        .get('p1', binding.blueprintChapterId)!;
+      expect(linkAfter.chapterId).toBe(link.chapterId);
+      expect(secondVersionId).not.toBe(firstVersionId);
+      const versions = db
+        .getManuscriptTransaction()
+        .runInTransaction((repos) =>
+          repos.chapterVersionRepo.listSummariesByChapter('p1', link.chapterId),
+        );
+      expect(versions.length).toBeGreaterThanOrEqual(2);
+      expect(versions.some((v) => v.id === firstVersionId)).toBe(true);
     } finally {
       db.close();
     }

@@ -381,6 +381,10 @@ export const IPC_CHANNELS = {
   CHAPTER_START_RUN: 'ipc:chapter-start-run',
   CHAPTER_GET_RUN_STATE: 'ipc:chapter-get-run-state',
   CHAPTER_SUBMIT_DECISION: 'ipc:chapter-submit-decision',
+  MANUSCRIPT_GET_WORKSPACE: 'ipc:manuscript-get-workspace',
+  MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
+  MANUSCRIPT_SAVE_CHAPTER: 'ipc:manuscript-save-chapter',
+  MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1429,6 +1433,138 @@ export interface ChapterAPI {
   submitDecision(input: SubmitChapterDecisionInputDto): Promise<ChapterRunStateDto>;
 }
 
+// ── 稿件工作区（GE-7）───────────────────────────────────────────
+
+/** 稿件章节摘要（左侧章节列表） */
+export interface ManuscriptChapterSummaryDto {
+  readonly chapterId: string;
+  readonly title: string;
+  readonly position: number;
+  readonly currentVersionId: string | null;
+  /** 正文字数（UTF-16 code point 计数，去掉空白） */
+  readonly wordCount: number;
+  /** 该章由哪个蓝图章节生成而来；手工新增的章节为 null */
+  readonly blueprintChapterId: string | null;
+}
+
+export interface ManuscriptWorkspaceDto {
+  /** 尚无稿件（还没有任何一章被接受）时为 null，chapters 为空数组 */
+  readonly manuscriptId: string | null;
+  readonly title: string;
+  readonly chapters: ReadonlyArray<ManuscriptChapterSummaryDto>;
+}
+
+/** 单章正文（编辑器加载用） */
+export interface ManuscriptChapterDetailDto {
+  readonly chapterId: string;
+  readonly title: string;
+  readonly content: string;
+  /** CAS 基线：保存时必须原样回传，服务端据此拒绝覆盖他人/后续版本 */
+  readonly currentVersionId: string | null;
+  readonly versionNumber: number | null;
+  readonly versionCount: number;
+}
+
+export interface GetManuscriptWorkspaceInputDto {
+  readonly projectId: string;
+}
+
+export function isValidGetManuscriptWorkspaceInput(
+  value: unknown,
+): value is GetManuscriptWorkspaceInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+export interface GetManuscriptChapterInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export function isValidGetManuscriptChapterInput(
+  value: unknown,
+): value is GetManuscriptChapterInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'chapterId'])) return false;
+  const obj = value as Record<string, unknown>;
+  return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.chapterId);
+}
+
+/** 正文长度上限（与 domain validateChapterContent 一致的量级，main 侧先挡一道） */
+export const MAX_MANUSCRIPT_CONTENT_LENGTH = 200000;
+
+/**
+ * 保存一章（追加新版本 + 移动 current 指针）。
+ *
+ * `expectedCurrentVersionId` 是 CAS 基线：**不静默覆盖**用户正文的实现手段——
+ * 加载时拿到哪一版，保存时就必须回传哪一版；期间若有别的写入（例如又一次
+ * MANUSCRIPT_COMMIT），服务端拒绝并让用户看到冲突，而不是悄悄盖掉。
+ */
+export interface SaveManuscriptChapterInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly title: string;
+  readonly content: string;
+  readonly expectedCurrentVersionId: string | null;
+}
+
+export function isValidSaveManuscriptChapterInput(
+  value: unknown,
+): value is SaveManuscriptChapterInputDto {
+  if (
+    !hasRequiredExactKeys(value, [
+      'projectId',
+      'chapterId',
+      'title',
+      'content',
+      'expectedCurrentVersionId',
+    ])
+  ) {
+    return false;
+  }
+  const obj = value as Record<string, unknown>;
+  if (!isBoundedTrimmedId(obj.projectId) || !isBoundedTrimmedId(obj.chapterId)) return false;
+  if (typeof obj.title !== 'string' || obj.title.trim().length === 0) return false;
+  if (obj.title.length > 200) return false;
+  if (typeof obj.content !== 'string' || obj.content.trim().length === 0) return false;
+  if (obj.content.length > MAX_MANUSCRIPT_CONTENT_LENGTH) return false;
+  if (obj.expectedCurrentVersionId !== null && !isBoundedTrimmedId(obj.expectedCurrentVersionId)) {
+    return false;
+  }
+  return true;
+}
+
+export type ManuscriptExportFormatDto = 'txt' | 'markdown';
+
+export interface ExportManuscriptInputDto {
+  readonly projectId: string;
+  readonly format: ManuscriptExportFormatDto;
+}
+
+export function isValidExportManuscriptInput(value: unknown): value is ExportManuscriptInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId', 'format'])) return false;
+  const obj = value as Record<string, unknown>;
+  if (!isBoundedTrimmedId(obj.projectId)) return false;
+  return obj.format === 'txt' || obj.format === 'markdown';
+}
+
+/**
+ * 导出结果。`saved=false` 表示用户在保存对话框里取消——这不是错误，界面不应报错。
+ * 不回传正文内容：渲染进程不需要它，落盘由 main 完成（渲染进程不碰文件系统）。
+ */
+export interface ExportManuscriptResultDto {
+  readonly saved: boolean;
+  readonly fileName: string;
+  readonly filePath: string | null;
+  readonly chapterCount: number;
+}
+
+export interface ManuscriptAPI {
+  getWorkspace(input: GetManuscriptWorkspaceInputDto): Promise<ManuscriptWorkspaceDto>;
+  getChapter(input: GetManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto | null>;
+  saveChapter(input: SaveManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto>;
+  exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto>;
+}
+
 /** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
@@ -1445,6 +1581,7 @@ export interface DesktopAPI {
   research: ResearchAPI;
   blueprint: BlueprintAPI;
   chapter: ChapterAPI;
+  manuscript: ManuscriptAPI;
 }
 
 // ── 运行时验证 ────────────────────────────────────────────────────

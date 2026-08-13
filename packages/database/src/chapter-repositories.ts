@@ -18,6 +18,8 @@ import type {
   CritiqueVerdict,
 } from '@ai-novel/domain';
 import type {
+  ManuscriptChapterLinkRepositoryPort,
+  ManuscriptChapterLink,
   ChapterCandidateRepositoryPort,
   ChapterCritiqueRepositoryPort,
   ChapterRewriteFeedbackRepositoryPort,
@@ -43,6 +45,8 @@ interface DbCandidateRow {
   artifact_id: string | null;
   title: string;
   content: string;
+  produced_by_task_id: string | null;
+  produced_by_invocation_id: string | null;
   created_at: string;
 }
 
@@ -87,6 +91,8 @@ function decodeCandidate(row: DbCandidateRow): ChapterCandidate {
     artifactId: row.artifact_id,
     title: row.title,
     content: row.content,
+    producedByTaskId: row.produced_by_task_id,
+    producedByInvocationId: row.produced_by_invocation_id,
     createdAt: row.created_at,
   };
 }
@@ -152,8 +158,9 @@ export class ChapterCandidateRepositoryImpl implements ChapterCandidateRepositor
     this.db
       .prepare(
         `INSERT INTO chapter_candidates
-           (id, project_id, graph_run_id, revision_no, source, artifact_id, title, content, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, project_id, graph_run_id, revision_no, source, artifact_id, title, content,
+            produced_by_task_id, produced_by_invocation_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         candidate.id,
@@ -164,6 +171,8 @@ export class ChapterCandidateRepositoryImpl implements ChapterCandidateRepositor
         candidate.artifactId,
         candidate.title,
         candidate.content,
+        candidate.producedByTaskId,
+        candidate.producedByInvocationId,
         candidate.createdAt,
       );
   }
@@ -299,5 +308,71 @@ export class ChapterRewriteFeedbackRepositoryImpl implements ChapterRewriteFeedb
       feedback: row.feedback,
       createdAt: row.created_at,
     };
+  }
+}
+
+/** GE-7：蓝图章节 ↔ 稿件章节绑定（一个蓝图章节在稿件里始终是同一章） */
+export class ManuscriptChapterLinkRepositoryImpl implements ManuscriptChapterLinkRepositoryPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  get(projectId: string, blueprintChapterId: string): ManuscriptChapterLink | null {
+    const row = this.db
+      .prepare(
+        'SELECT * FROM manuscript_chapter_links WHERE project_id = ? AND blueprint_chapter_id = ?',
+      )
+      .get(projectId, blueprintChapterId) as
+      | {
+          project_id: string;
+          blueprint_chapter_id: string;
+          manuscript_id: string;
+          chapter_id: string;
+          created_at: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      projectId: row.project_id,
+      blueprintChapterId: row.blueprint_chapter_id,
+      manuscriptId: row.manuscript_id,
+      chapterId: row.chapter_id,
+      createdAt: row.created_at,
+    };
+  }
+
+  save(link: ManuscriptChapterLink): void {
+    this.db
+      .prepare(
+        `INSERT INTO manuscript_chapter_links
+           (project_id, blueprint_chapter_id, manuscript_id, chapter_id, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        link.projectId,
+        link.blueprintChapterId,
+        link.manuscriptId,
+        link.chapterId,
+        link.createdAt,
+      );
+  }
+
+  listByProject(projectId: string): ReadonlyArray<ManuscriptChapterLink> {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM manuscript_chapter_links WHERE project_id = ? ORDER BY created_at ASC',
+      )
+      .all(projectId) as unknown as ReadonlyArray<{
+      project_id: string;
+      blueprint_chapter_id: string;
+      manuscript_id: string;
+      chapter_id: string;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      projectId: row.project_id,
+      blueprintChapterId: row.blueprint_chapter_id,
+      manuscriptId: row.manuscript_id,
+      chapterId: row.chapter_id,
+      createdAt: row.created_at,
+    }));
   }
 }

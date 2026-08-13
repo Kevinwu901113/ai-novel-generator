@@ -31,9 +31,9 @@ export function chapterPhaseLabel(phase: ChapterRunPhaseDto): string {
     case 'awaiting_escalation':
       return '改写次数已用完，等你决定';
     case 'accepted_pending_commit':
-      return '你已采用（尚未写入稿件）';
+      return '你已采用，正在写入稿件';
     case 'completed':
-      return '本章已完成';
+      return '本章已完成（已写入稿件）';
     case 'blocked':
       return '已搁置';
     case 'cancelled':
@@ -84,8 +84,8 @@ export const CANDIDATE_GATE_OPTIONS: ReadonlyArray<{
   {
     outcome: 'accept',
     label: '采用这一版',
-    // 如实文案（锁定不变量第 5 条）：写入权威稿件属 GE-7，本批次只落 Gate 决策。
-    description: '确认这一版为本章定稿；写入稿件的能力还在开发中，采用后正文仍保存在这里',
+    // GE-7 起写入真实发生：accept → MANUSCRIPT_COMMIT → 稿件里追加一个版本。
+    description: '确认这一版为本章定稿，写入稿件；之后可在"稿件"里继续编辑与导出',
   },
   {
     outcome: 'request_rewrite',
@@ -108,7 +108,7 @@ export const CANDIDATE_ESCALATION_OPTIONS: ReadonlyArray<{
   {
     outcome: 'accept_current',
     label: '就用现在这一版',
-    description: '不再改写，采用当前正文（写入稿件的能力还在开发中）',
+    description: '不再改写，采用当前正文并写入稿件',
   },
   {
     outcome: 'modify_requirements',

@@ -56,11 +56,11 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 | 能力                          | 状态                           | 说明                                                                                                                                                               |
 | ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Manuscript transport/renderer | MISSING（main 无）             | PR #25 参考资产；GE-7 选择性移植                                                                                                                                   |
+| Manuscript transport/renderer | DONE（GE-7）                   | manuscript.* 四通道 + 稿件工作区（列表/编辑/CAS 保存/导出）；PR #25 未移植——直接接既有 manuscript 后端                                                             |
 | Web Research 产品 UI          | DONE（B6 + D-B6-10 复查修复）  | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate；B6 独立复查曾判 REWORK（frontier 常同快照推进到 blueprint 导致内容永不可达），已修复见上表 |
 | StoryBlueprint                | DONE（B7 wiring + B8 产品 UI） | 蓝图 executor + accept 原子闭环 + 三终态 E2E（B7）；蓝图查看/确认/升级 UI + 阶段派生上提 App（B8，独立对抗复查 REWORK→修复→核验 ACCEPT）                           |
 | Chapter Generation            | WIRING DONE（B9）；UI 待 B10   | 六节点真实 executor + 四类章节任务（v17：候选修订链/场景计划/审查结论三表）+ 章节终态 executor（销 TD-029-4）+ 全链 E2E 到 CANDIDATE_GATE；产品 UI 属 B10          |
-| Export                        | MISSING                        | `packages/import-export` 为 stub；GE-7                                                                                                                             |
+| Export                        | DONE（GE-7）                   | `packages/import-export` TXT/Markdown 纯函数；worker 渲染、main 落盘（渲染进程不碰文件系统）                                                                       |
 | PlotPilot                     | PARTIAL                        | 可选 adapter foundation；不进入关键路径                                                                                                                            |
 
 ### 已知死链
@@ -153,7 +153,7 @@ GE-5 StoryBlueprint      → ✅ COMPLETE（B7 wiring v16 + B8 产品 UI + 独�
 GE-6 Chapter 生成        → ✅ COMPLETE（B9 wiring v17 + B10 产品 UI v18，2026-08-13）
 RW-1 执行与 Settlement   → ✅ MERGED ON MAIN（2026-08-05，PR #39，merge `ec1e8e7`，migration v12）
 B1 多 provider 网关      → ✅ MERGED ON MAIN（2026-08-07，PR #41 + 补丁 `9f98278`，D6 最小形态）
-GE-7 Manuscript/导出     → 待 GE-6 原退出条件通过后才启动
+GE-7 Manuscript/导出     → ✅ COMPLETE（MANUSCRIPT_COMMIT + 稿件工作区 + 导出，v19，2026-08-13）
 GE-8 端到端验收          → 待开始
 GE-9 质量增强            → 待开始
 ```

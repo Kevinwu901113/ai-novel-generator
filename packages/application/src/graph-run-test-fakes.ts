@@ -310,6 +310,15 @@ export function createFakeGraphRunRepos() {
     getById: (id) => fakeIntakeSessions.get(id) ?? null,
   };
   const fakeSpecVersions = new Map<string, { id: string; projectId: string; version: number }>();
+  const chapterVersionReadRepo: import('./graph-run-types.js').ChapterVersionReadPort = {
+    // 测试替身：宽松放行（生产 resolver 的真实校验由 database 集成测试覆盖）
+    getById: (_projectId: string, versionId: string) => ({
+      id: versionId,
+      chapterId: 'fake-chapter',
+      versionNumber: 1,
+    }),
+  };
+
   const creationSpecVersionReadRepo: import('./graph-run-types.js').CreationSpecVersionReadPort = {
     getById: (projectId, id) => {
       const row = fakeSpecVersions.get(id);
@@ -406,6 +415,7 @@ export function createFakeGraphRunRepos() {
         storyBlueprintRepo: StoryBlueprintRepositoryPort;
         intakeSessionReadRepo: import('./graph-run-types.js').IntakeSessionReadPort;
         creationSpecVersionReadRepo: import('./graph-run-types.js').CreationSpecVersionReadPort;
+        chapterVersionReadRepo: import('./graph-run-types.js').ChapterVersionReadPort;
         taskRepo: import('./types.js').TaskRepositoryPort;
         artifactProvenanceRepo: import('./node-execution-types.js').ArtifactProvenanceRepoPort;
       }) => T,
@@ -420,6 +430,7 @@ export function createFakeGraphRunRepos() {
         storyBlueprintRepo,
         intakeSessionReadRepo,
         creationSpecVersionReadRepo,
+        chapterVersionReadRepo,
         taskRepo,
         artifactProvenanceRepo,
       });

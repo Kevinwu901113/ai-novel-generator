@@ -4530,3 +4530,76 @@ body {
 .candidate-feedback-label {
   font-size: 13px;
 }
+
+/* ── 稿件工作区（GE-7）──────────────────────────────────────── */
+
+.chapter-region-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.chapter-view-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.chapter-view-tabs .tab-active {
+  font-weight: 600;
+  border-bottom: 2px solid var(--color-accent, #2563eb);
+}
+
+.manuscript-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+}
+
+.manuscript-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.manuscript-title {
+  font-weight: 600;
+}
+
+.manuscript-export {
+  display: flex;
+  gap: 8px;
+}
+
+.manuscript-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-border);
+}
+
+.manuscript-title-input,
+.manuscript-content-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.manuscript-content-input {
+  line-height: 1.8;
+  resize: vertical;
+}
+
+.manuscript-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}

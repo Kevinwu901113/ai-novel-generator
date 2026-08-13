@@ -510,6 +510,8 @@ function draftCandidate(revisionNo = 1): ChapterCandidate {
     artifactId: `cand-${revisionNo}`,
     title: '第二章 越境',
     content: LONG_CONTENT,
+    producedByTaskId: 'task-prev',
+    producedByInvocationId: 'inv-prev',
     createdAt: NOW,
   };
 }

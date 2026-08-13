@@ -52,6 +52,27 @@ export interface ChapterRewriteFeedbackRepositoryPort {
   ): ChapterRewriteFeedback | null;
 }
 
+/**
+ * GE-7：蓝图章节 ↔ 稿件章节绑定。
+ *
+ * 一个蓝图章节可以被多次生成（用户否决后重新发起就是新 run），但它在稿件里
+ * 始终是**同一章**——绑定在首次 MANUSCRIPT_COMMIT 时建立，之后的提交都往这一章
+ * 追加新版本，而不是又新建一章。
+ */
+export interface ManuscriptChapterLink {
+  readonly projectId: string;
+  readonly blueprintChapterId: string;
+  readonly manuscriptId: string;
+  readonly chapterId: string;
+  readonly createdAt: string;
+}
+
+export interface ManuscriptChapterLinkRepositoryPort {
+  get(projectId: string, blueprintChapterId: string): ManuscriptChapterLink | null;
+  save(link: ManuscriptChapterLink): void;
+  listByProject(projectId: string): ReadonlyArray<ManuscriptChapterLink>;
+}
+
 /** 当前候选正文（无候选时 null） */
 export function getCurrentChapterCandidate(
   deps: { readonly candidateRepo: ChapterCandidateRepositoryPort },

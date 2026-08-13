@@ -204,7 +204,7 @@ describe('ChapterRegion', () => {
     });
   });
 
-  it('采用后如实说明尚未写入稿件（不冒充"已保存"）', async () => {
+  it('采用后显示正在写入稿件；写入完成后指向"稿件"视图', async () => {
     setupDesktop({
       getOverview: vi.fn().mockResolvedValue(
         overview({
@@ -230,7 +230,8 @@ describe('ChapterRegion', () => {
     await user.click(screen.getByRole('button', { name: '查看' }));
 
     await waitFor(() => {
-      expect(screen.getByText(/把它写入稿件、以及稿件编辑与导出，还在开发中/)).toBeTruthy();
+      // 阶段行与说明卡片都会提到"正在写入稿件"，取全部并断言至少一处可见
+      expect(screen.getAllByText(/正在写入稿件/).length).toBeGreaterThan(0);
     });
     // 已采用时不再给确认按钮
     expect(screen.queryByRole('button', { name: '采用这一版' })).toBeNull();

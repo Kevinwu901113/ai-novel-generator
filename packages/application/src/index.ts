@@ -433,6 +433,8 @@ export type {
   ChapterCandidateRepositoryPort,
   ChapterCritiqueRepositoryPort,
   ChapterRewriteFeedbackRepositoryPort,
+  ManuscriptChapterLinkRepositoryPort,
+  ManuscriptChapterLink,
 } from './chapter-generation.js';
 export { getCurrentChapterCandidate, listCurrentChapterCritiques } from './chapter-generation.js';
 

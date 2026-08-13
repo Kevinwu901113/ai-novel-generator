@@ -60,6 +60,14 @@ export interface ChapterCandidate {
   readonly artifactId: string | null;
   readonly title: string;
   readonly content: string;
+  /**
+   * 产出这一版的模型任务与调用（GE-7 溯源）。MANUSCRIPT_COMMIT 写入稿件版本时
+   * sourceType 是 AI_GENERATION，manuscript 域要求 AI 来源必须能追溯到
+   * task + invocation（assertSourceTypeProvenance），这两列就是那条线索。
+   * v19 之前写入的旧行为 null。
+   */
+  readonly producedByTaskId: string | null;
+  readonly producedByInvocationId: string | null;
   readonly createdAt: string;
 }
 

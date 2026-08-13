@@ -39,6 +39,7 @@ import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
 import { TaskRepositoryPortAdapter } from './task-repository-port-adapter.js';
 import { GrillSessionRepositoryImpl } from './grill-repositories.js';
 import { CreationContractVersionRepositoryImpl } from './creation-contract-repositories.js';
+import { ChapterVersionReadPortImpl } from './manuscript-repositories.js';
 
 // ── SQLite 错误分类 ────────────────────────────────────────────
 
@@ -100,6 +101,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
   private readonly artifactProvenanceRepo: NodeArtifactProvenanceRepositoryImpl;
   private readonly intakeSessionReadRepo: GrillSessionRepositoryImpl;
   private readonly creationSpecVersionReadRepo: CreationContractVersionRepositoryImpl;
+  private readonly chapterVersionReadRepo: ChapterVersionReadPortImpl;
   private inTransaction = false;
 
   constructor(private readonly db: DatabaseSync) {
@@ -114,6 +116,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
     this.artifactProvenanceRepo = new NodeArtifactProvenanceRepositoryImpl(db);
     this.intakeSessionReadRepo = new GrillSessionRepositoryImpl(db);
     this.creationSpecVersionReadRepo = new CreationContractVersionRepositoryImpl(db);
+    this.chapterVersionReadRepo = new ChapterVersionReadPortImpl(db);
   }
 
   runInTransaction<T>(operation: (repos: GraphRunTransactionRepositories) => T): T {
@@ -139,6 +142,7 @@ export class GraphRunTransactionPortImpl implements GraphRunTransactionPort {
       storyBlueprintRepo: this.storyBlueprintRepo,
       intakeSessionReadRepo: this.intakeSessionReadRepo,
       creationSpecVersionReadRepo: this.creationSpecVersionReadRepo,
+      chapterVersionReadRepo: this.chapterVersionReadRepo,
       taskRepo: this.taskRepo,
       artifactProvenanceRepo: this.artifactProvenanceRepo,
     };

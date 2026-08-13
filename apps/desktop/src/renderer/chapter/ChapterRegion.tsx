@@ -10,12 +10,14 @@
  *   不出现节点 / 任务 / token 等工程概念；
  * - 只要有候选正文就展示（含生成中、终态、升级决策）——不让用户对着看不见的内容
  *   做决定或失去回看（B6/B8 同族缺陷的通用防线）；
- * - "采用"如实说明**尚未写入稿件**（写入属 GE-7，MANUSCRIPT_COMMIT 当前无 executor）。
+ * - GE-7 起"采用"真的会把这一版写入权威稿件（MANUSCRIPT_COMMIT），完成后可在
+ *   同区域的"稿件"视图继续编辑与导出。
  */
 
 import { useState } from 'react';
 import type { ChapterOverviewItemDto } from '@ai-novel/contracts';
 import { useChapter } from './useChapter';
+import { ManuscriptPanel } from './ManuscriptPanel';
 import { CandidateView } from './CandidateView';
 import { CandidateGatePanel } from './CandidateGatePanel';
 import { CandidateEscalationPanel } from './CandidateEscalationPanel';
@@ -62,6 +64,8 @@ function ChapterListRow({
 export function ChapterRegion({ projectId }: ChapterRegionProps) {
   const chapter = useChapter(projectId);
   const [showCritiques, setShowCritiques] = useState(false);
+  // GE-7：成稿阶段两个视图——"生成"（候选流程）与"稿件"（已采用正文的编辑与导出）。
+  const [view, setView] = useState<'generate' | 'manuscript'>('generate');
 
   const { overview, selectedChapterId, runState, loading, error, actionError, busy, actions } =
     chapter;
@@ -74,9 +78,31 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
     <div className="chapter-region">
       <div className="chapter-region-header">
         <h2 id="chapter-heading">成稿</h2>
+        <div className="chapter-view-tabs" role="tablist" aria-label="成稿视图">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'generate'}
+            className={view === 'generate' ? 'tab-active' : undefined}
+            onClick={() => setView('generate')}
+          >
+            生成
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'manuscript'}
+            className={view === 'manuscript' ? 'tab-active' : undefined}
+            onClick={() => setView('manuscript')}
+          >
+            稿件
+          </button>
+        </div>
       </div>
 
-      {error && (
+      {view === 'manuscript' && <ManuscriptPanel projectId={projectId} />}
+
+      {view === 'generate' && error && (
         <div className="chapter-error" role="alert">
           <span>{error}</span>
           <button
@@ -90,7 +116,7 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
         </div>
       )}
 
-      {loading && overview === null && (
+      {view === 'generate' && loading && overview === null && (
         <div className="chapter-status" role="status" aria-live="polite">
           <span className="intake-spinner" aria-hidden="true">
             ⟳
@@ -99,30 +125,33 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
         </div>
       )}
 
-      {overview !== null && overview.blueprintId === null && (
+      {view === 'generate' && overview !== null && overview.blueprintId === null && (
         <div className="chapter-status" role="status">
           还不能开始写正文：需要先在"蓝图"阶段接受一份故事蓝图。
         </div>
       )}
 
-      {overview !== null && overview.blueprintId !== null && selectedItem === null && (
-        <>
-          <p className="chapter-hint">选择一章开始生成。每次生成一章，生成完由你确认。</p>
-          <ul className="chapter-list">
-            {overview.chapters.map((item) => (
-              <ChapterListRow
-                key={item.blueprintChapterId}
-                item={item}
-                busy={busy}
-                onOpen={() => actions.select(item.blueprintChapterId)}
-                onStart={() => void actions.startRun(item.blueprintChapterId)}
-              />
-            ))}
-          </ul>
-        </>
-      )}
+      {view === 'generate' &&
+        overview !== null &&
+        overview.blueprintId !== null &&
+        selectedItem === null && (
+          <>
+            <p className="chapter-hint">选择一章开始生成。每次生成一章，生成完由你确认。</p>
+            <ul className="chapter-list">
+              {overview.chapters.map((item) => (
+                <ChapterListRow
+                  key={item.blueprintChapterId}
+                  item={item}
+                  busy={busy}
+                  onOpen={() => actions.select(item.blueprintChapterId)}
+                  onStart={() => void actions.startRun(item.blueprintChapterId)}
+                />
+              ))}
+            </ul>
+          </>
+        )}
 
-      {selectedItem !== null && (
+      {view === 'generate' && selectedItem !== null && (
         <div className="chapter-detail">
           <div className="chapter-detail-header">
             <button type="button" className="btn-link" onClick={() => actions.select(null)}>
@@ -169,8 +198,13 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
 
               {runState.phase === 'accepted_pending_commit' && (
                 <div className="chapter-info-card" role="status">
-                  你已采用这一版。把它写入稿件、以及稿件编辑与导出，还在开发中；在那之前，
-                  这份正文就保存在这里，可以随时回来查看。
+                  你已采用这一版，正在写入稿件…
+                </div>
+              )}
+
+              {runState.phase === 'completed' && (
+                <div className="chapter-info-card" role="status">
+                  这一章已写入稿件。切到上方的"稿件"可以继续编辑正文或导出整本。
                 </div>
               )}
 

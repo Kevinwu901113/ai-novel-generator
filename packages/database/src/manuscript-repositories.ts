@@ -412,3 +412,28 @@ export class ChapterVersionRepositoryImpl implements ChapterVersionRepositoryPor
     };
   }
 }
+
+/**
+ * GE-7：按 versionId 直接定位稿件版本的只读端口（graph run 事务内 resolver 用）。
+ *
+ * 与 `ChapterVersionRepositoryImpl.getById(projectId, chapterId, id)` 的区别：
+ * resolver 只拿得到 artifactId（= versionId），拿不到 chapterId——artifact ref 的
+ * 语义就是"这一条版本"，要求调用方先知道它属于哪一章等于把校验反过来做。
+ */
+export class ChapterVersionReadPortImpl {
+  constructor(private readonly db: DatabaseSync) {}
+
+  getById(
+    projectId: string,
+    versionId: string,
+  ): { readonly id: string; readonly chapterId: string; readonly versionNumber: number } | null {
+    const row = this.db
+      .prepare(
+        'SELECT id, chapter_id, version_number FROM chapter_versions WHERE project_id = ? AND id = ?',
+      )
+      .get(projectId, versionId) as
+      { id: string; chapter_id: string; version_number: number } | undefined;
+    if (!row) return null;
+    return { id: row.id, chapterId: row.chapter_id, versionNumber: row.version_number };
+  }
+}

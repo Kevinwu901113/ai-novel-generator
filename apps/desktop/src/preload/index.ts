@@ -75,6 +75,10 @@ const IPC_CHANNELS = {
   CHAPTER_START_RUN: 'ipc:chapter-start-run',
   CHAPTER_GET_RUN_STATE: 'ipc:chapter-get-run-state',
   CHAPTER_SUBMIT_DECISION: 'ipc:chapter-submit-decision',
+  MANUSCRIPT_GET_WORKSPACE: 'ipc:manuscript-get-workspace',
+  MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
+  MANUSCRIPT_SAVE_CHAPTER: 'ipc:manuscript-save-chapter',
+  MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
 } as const;
 
 /**
@@ -161,6 +165,13 @@ import type {
   ChapterRunStateDto,
   GetChapterRunStateInputDto,
   SubmitChapterDecisionInputDto,
+  GetManuscriptWorkspaceInputDto,
+  ManuscriptWorkspaceDto,
+  GetManuscriptChapterInputDto,
+  ManuscriptChapterDetailDto,
+  SaveManuscriptChapterInputDto,
+  ExportManuscriptInputDto,
+  ExportManuscriptResultDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -507,6 +518,22 @@ const desktopAPI: DesktopAPI = {
     },
     async submitDecision(input: SubmitChapterDecisionInputDto): Promise<ChapterRunStateDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.CHAPTER_SUBMIT_DECISION, input);
+    },
+  },
+  manuscript: {
+    async getWorkspace(input: GetManuscriptWorkspaceInputDto): Promise<ManuscriptWorkspaceDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_WORKSPACE, input);
+    },
+    async getChapter(
+      input: GetManuscriptChapterInputDto,
+    ): Promise<ManuscriptChapterDetailDto | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_CHAPTER, input);
+    },
+    async saveChapter(input: SaveManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_SAVE_CHAPTER, input);
+    },
+    async exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_EXPORT, input);
     },
   },
 };

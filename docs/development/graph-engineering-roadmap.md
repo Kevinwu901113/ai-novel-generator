@@ -315,16 +315,17 @@ gate 决策、终态）。
 > **更新（2026-08-07，B3/PR #42）**：GE-3 原退出条件（Intake→CreationSpec 真实路径端到端绿）已达成；
 > 产品 UI 按 D8 拆分为独立批次 B4。GE-4/5/6 判定不变。
 
-| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI | E2E                          |
-| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ---------- | ---------------------------- |
-| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —          | —                            |
-| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —          | —                            |
-| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌         | ⚠️ 骨架测试达成              |
-| GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）   | ✅ 真实链路 E2E              |
-| GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）   | ✅ 确定性 E2E + 真实链路实测 |
-| GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）   | ✅ 三终态真实 E2E            |
-| GE-6 Chapter 生成节点               | ✅ COMPLETE         | ✅         | ✅（四类章节任务引擎，v17/v18）       | ✅ 六节点 executor + 章节终态（B9）            | ✅（B10）  | ✅ 全链到 CANDIDATE_GATE     |
-| RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —          | ✅ 真实 SQLite               |
+| GE                                  | 状态                | FOUNDATION | BACKEND                               | RUNTIME_WIRING（节点 executor）                | PRODUCT_UI        | E2E                          |
+| ----------------------------------- | ------------------- | ---------- | ------------------------------------- | ---------------------------------------------- | ----------------- | ---------------------------- |
+| GE-0 文档收束                       | ✅ COMPLETE         | ✅         | —                                     | —                                              | —                 | —                            |
+| GE-1 Runtime Kernel                 | ✅ COMPLETE（内核） | ✅         | ✅                                    | ✅（内核即运行时层；无节点 executor 属预期）   | —                 | —                            |
+| GE-2 Walking Skeleton               | ⚠️ PARTIAL          | ✅         | ✅                                    | ❌（仅测试 fake runner，worker 非测试零引用）  | ❌                | ⚠️ 骨架测试达成              |
+| GE-3 Idea Intake + CreationSpec     | ✅ COMPLETE         | ✅         | ✅（intake.* helper）                 | ✅ 五节点真实 executor（B3，PR #42，v13）      | ✅（B4）          | ✅ 真实链路 E2E              |
+| GE-4 Web Research + ResearchBundle  | ✅ COMPLETE         | ✅         | ✅（research.execute, fake provider） | ✅ 四节点真实 executor（B5，v14）              | ✅（B6）          | ✅ 确定性 E2E + 真实链路实测 |
+| GE-5 StoryBlueprint + PROJECT_READY | ✅ COMPLETE         | ✅         | ✅（blueprint.getState/getBlueprint） | ✅ 蓝图 executor + accept 原子闭环（B7，v16）  | ✅（B8）          | ✅ 三终态真实 E2E            |
+| GE-6 Chapter 生成节点               | ✅ COMPLETE         | ✅         | ✅（四类章节任务引擎，v17/v18）       | ✅ 六节点 executor + 章节终态（B9）            | ✅（B10）         | ✅ 全链到 CANDIDATE_GATE     |
+| GE-7 稿件写入与导出                 | ✅ COMPLETE         | ✅         | ✅（manuscript 后端 v7 + v19）        | ✅ MANUSCRIPT_COMMIT executor                  | ✅（工作区+导出） | ✅ 提交与覆盖回归            |
+| RW-1 执行与 Settlement 桥           | ✅ MERGED ON MAIN   | ✅         | ✅                                    | ✅（跨阶段门禁本体；节点 executor 属 GE-3..6） | —                 | ✅ 真实 SQLite               |
 
 - **当前状态**：见 `docs/development/current-project-state.md`（唯一状态文档）。
 - **RW-1（跨阶段门禁，GE-3..GE-6 共同依赖）— MERGED ON MAIN**：Durable Node Execution & Settlement
@@ -397,8 +398,14 @@ gate 决策、终态）。
     **PROJECT_READY 后旅程推进到成稿阶段（D-B10-6，App 级测试坐实的可达性缺陷）** +
     预算上限跨层 parity 守卫
     （2026-08-13；设计 `b10-chapter-ui-design.md`；随行登记 TD-032-1/2）。
+  - **GE-7** ✅：MANUSCRIPT_COMMIT executor（候选 → 权威稿件；绑定表 v19 保证同一蓝图
+    章节始终是稿件里的同一章、重复提交幂等）+ 稿件工作区（章节列表 / 正文编辑 /
+    CAS 保存 / 版本追加）+ TXT/Markdown 导出（worker 渲染、main 落盘）+ resolver 补齐
+    manuscript 底层校验
+    （2026-08-13；设计 `ge7-manuscript-design.md`；随行登记 TD-033-1/2/3）。
 - **下一步（依依赖顺序）**：
-  - **GE-7**（D9 前置已满足）：MANUSCRIPT_COMMIT + 稿件工作区 + TXT/Markdown 导出。
+  - **GE-8 产品 1.0 端到端验收**：模糊想法 → 追问 → CreationSpec → 调研 → 蓝图 →
+    章节生成 → 用户修改 → 继续生成 → 导出，含故障注入与恢复验证。
 
 ## 16. 已删除的历史资料
 

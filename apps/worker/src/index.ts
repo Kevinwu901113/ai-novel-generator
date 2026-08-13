@@ -148,7 +148,9 @@ import { registerResearchExecutors } from './research-executors.js';
 import { registerBlueprintExecutors } from './blueprint-executors.js';
 import { registerProjectTerminalExecutors } from './project-terminal-executors.js';
 import { registerChapterExecutors } from './chapter-executors.js';
+import { registerManuscriptCommitExecutor } from './manuscript-commit-executor.js';
 import { dispatchChapterCommand, type ChapterHandlerContext } from './chapter-handlers.js';
+import { dispatchManuscriptCommand, type ManuscriptHandlerContext } from './manuscript-handlers.js';
 import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
@@ -907,6 +909,14 @@ registerProjectTerminalExecutors(productionRegistry, productionRunners);
 // CANDIDATE_ESCALATION 是人工 Gate；MANUSCRIPT_COMMIT 有意不注册（属 GE-7），
 // 见 chapter-executors.ts 顶部说明。
 registerChapterExecutors(productionRegistry, productionRunners, {
+  getProjectDb: (projectId: string) => getProjectDb(projectId),
+  idGenerator: createIdGenerator(),
+  clock: createClock(),
+});
+
+// GE-7：注册 MANUSCRIPT_COMMIT（sync）——用户在候选 Gate 接受后把那一版正文写入
+// 权威稿件（锁定不变量第 5 条的唯一入口）。见 manuscript-commit-executor.ts。
+registerManuscriptCommitExecutor(productionRegistry, productionRunners, {
   getProjectDb: (projectId: string) => getProjectDb(projectId),
   idGenerator: createIdGenerator(),
   clock: createClock(),
@@ -2006,6 +2016,20 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
           driveAfter: driveRunLive,
         };
         data = dispatchChapterCommand(request.command, request.payload, chapterCtx);
+        break;
+      }
+      // GE-7：稿件工作区与导出。写入口只有 saveChapter（用户手写，CAS + append-only）；
+      // AI 产出的写入路径是 MANUSCRIPT_COMMIT executor，不在 RPC 面上。
+      case 'manuscript.getWorkspace':
+      case 'manuscript.getChapter':
+      case 'manuscript.saveChapter':
+      case 'manuscript.export': {
+        const manuscriptCtx: ManuscriptHandlerContext = {
+          getProjectDb,
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+        };
+        data = dispatchManuscriptCommand(request.command, request.payload, manuscriptCtx);
         break;
       }
       default:

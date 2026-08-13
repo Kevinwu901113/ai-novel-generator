@@ -93,6 +93,9 @@ importers:
       '@ai-novel/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@ai-novel/import-export':
+        specifier: workspace:*
+        version: link:../../packages/import-export
       '@ai-novel/model-gateway':
         specifier: workspace:*
         version: link:../../packages/model-gateway

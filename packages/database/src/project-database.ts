@@ -36,11 +36,13 @@ import {
   ResearchSourceExclusionRepositoryImpl,
 } from './research-repositories.js';
 import { StoryBlueprintRepositoryImpl } from './blueprint-repositories.js';
+import { ManuscriptTransactionPortImpl } from './manuscript-transaction.js';
 import {
   ChapterCandidateRepositoryImpl,
   ChapterCritiqueRepositoryImpl,
   ChapterRewriteFeedbackRepositoryImpl,
   ChapterScenePlanRepositoryImpl,
+  ManuscriptChapterLinkRepositoryImpl,
 } from './chapter-repositories.js';
 import {
   NodeExecutionRepositoryImpl,
@@ -1309,6 +1311,33 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON chapter_rewrite_feedback(graph_run_id, candidate_revision_no, created_at);
     `,
   },
+  {
+    version: 19,
+    sql: `
+      -- ── GE-7：候选修订的模型调用溯源 ───────────────────────────
+      -- MANUSCRIPT_COMMIT 写入的稿件版本 sourceType 是 AI_GENERATION，
+      -- 而 manuscript 域要求 AI 来源版本必须能追溯到 task + invocation
+      -- （assertSourceTypeProvenance）。候选行此前只存内容，补两列溯源。
+      ALTER TABLE chapter_candidates ADD COLUMN produced_by_task_id TEXT;
+      ALTER TABLE chapter_candidates ADD COLUMN produced_by_invocation_id TEXT;
+
+      -- ── GE-7：蓝图章节 ↔ 稿件章节的绑定 ────────────────────────
+      -- 一个蓝图章节可以被多次生成（新 run），但在稿件里始终是**同一章**——
+      -- 否则每次重新生成都会在稿件里多出一章。绑定在首次 commit 时建立。
+      CREATE TABLE IF NOT EXISTS manuscript_chapter_links (
+        project_id TEXT NOT NULL,
+        blueprint_chapter_id TEXT NOT NULL,
+        manuscript_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, blueprint_chapter_id),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_manuscript_chapter_links_chapter
+        ON manuscript_chapter_links(project_id, chapter_id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1795,6 +1824,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly chapterCandidateRepo: ChapterCandidateRepositoryImpl;
   private readonly chapterCritiqueRepo: ChapterCritiqueRepositoryImpl;
   private readonly chapterRewriteFeedbackRepo: ChapterRewriteFeedbackRepositoryImpl;
+  private readonly manuscriptChapterLinkRepo: ManuscriptChapterLinkRepositoryImpl;
+  private readonly manuscriptTransaction: ManuscriptTransactionPortImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
 
@@ -1835,6 +1866,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.chapterCandidateRepo = new ChapterCandidateRepositoryImpl(this.db);
     this.chapterCritiqueRepo = new ChapterCritiqueRepositoryImpl(this.db);
     this.chapterRewriteFeedbackRepo = new ChapterRewriteFeedbackRepositoryImpl(this.db);
+    this.manuscriptChapterLinkRepo = new ManuscriptChapterLinkRepositoryImpl(this.db);
+    this.manuscriptTransaction = new ManuscriptTransactionPortImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
   }
@@ -1941,6 +1974,15 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getChapterRewriteFeedbackRepository(): ChapterRewriteFeedbackRepositoryImpl {
     return this.chapterRewriteFeedbackRepo;
+  }
+
+  getManuscriptChapterLinkRepository(): ManuscriptChapterLinkRepositoryImpl {
+    return this.manuscriptChapterLinkRepo;
+  }
+
+  /** GE-7：稿件写入事务端口（MANUSCRIPT_COMMIT 与稿件工作区共用） */
+  getManuscriptTransaction(): ManuscriptTransactionPortImpl {
+    return this.manuscriptTransaction;
   }
 
   getStoryBlueprintRepository(): StoryBlueprintRepositoryImpl {

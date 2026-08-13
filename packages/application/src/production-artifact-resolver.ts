@@ -5,7 +5,8 @@
  * 删除旧的 artifactId===executionId 伪校验。
  * - researchBundle / storyBlueprint：provenance 行 + 真实表（research_bundles / story_blueprints）；
  * - generationRun：权威 execution-bound durable envelope（按真实 artifactId 可寻址）；
- * - idea / creationSpec / manuscript：provenance 行校验 producer 归属（GE-3/GE-7 接底层存储）。
+ * - idea / creationSpec / manuscript：provenance 行 + 各自底层权威存储
+ *   （intake session / creation_contract_versions / chapter_versions）。
  *
  * 此实现原为 apps/worker/src/index.ts 内的对象字面量；packages/database 的集成测试曾手写一份
  * 等价逻辑（realResolver），两者一度在 idea/creationSpec/manuscript 放行分支上漂移。现抽成
@@ -96,9 +97,20 @@ export const productionArtifactResolver: ArtifactResolverPort = {
         }
         break;
       }
-      case 'manuscript':
-        // provenance 已校验 producer 归属；底层权威存储属于 GE-7
+      case 'manuscript': {
+        // GE-7：provenance 之外补齐底层权威存储校验——稿件版本行必须真实存在、
+        // 属于本项目，且版本号与 artifact version 一致（与 researchBundle /
+        // storyBlueprint 同一强度；此前这里是空分支）。
+        const version = repos.chapterVersionReadRepo.getById(
+          input.projectId,
+          input.proposed.artifactId,
+        );
+        if (!version) throw new Error('manuscript 对应的稿件版本不存在');
+        if (version.versionNumber !== input.proposed.version) {
+          throw new Error('manuscript version 不匹配');
+        }
         break;
+      }
     }
     return {
       kind: input.proposed.kind,

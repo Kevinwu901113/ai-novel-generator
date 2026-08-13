@@ -92,6 +92,20 @@ export interface CreationSpecVersionReadPort {
   getById(projectId: string, id: string): { readonly id: string; readonly version: number } | null;
 }
 
+/**
+ * manuscript artifact 底层权威存储读端口（GE-7）。
+ *
+ * 在此之前 resolver 对 `manuscript` 只校验 provenance 行（"是这个 execution 产出的"），
+ * 不校验底层稿件版本是否真的存在——注释里如实标着"底层权威存储属于 GE-7"。
+ * MANUSCRIPT_COMMIT 接线后这道校验补齐：版本行必须存在、属于本项目、版本号一致。
+ */
+export interface ChapterVersionReadPort {
+  getById(
+    projectId: string,
+    versionId: string,
+  ): { readonly id: string; readonly chapterId: string; readonly versionNumber: number } | null;
+}
+
 /** 事务内可用的仓库集合 */
 export interface GraphRunTransactionRepositories {
   readonly graphRunRepo: GraphRunRepositoryPort;
@@ -111,6 +125,8 @@ export interface GraphRunTransactionRepositories {
   readonly taskRepo: TaskRepositoryPort;
   /** execution→artifact 溯源（Blocker 5；sync 产物的权威 provenance） */
   readonly artifactProvenanceRepo: ArtifactProvenanceRepoPort;
+  /** 真实 artifact 权威存储（transaction-scoped resolver 校验 manuscript；GE-7） */
+  readonly chapterVersionReadRepo: ChapterVersionReadPort;
 }
 
 /** 原子 transition 辅助：拥有 BEGIN IMMEDIATE / COMMIT / ROLLBACK / 嵌套检测 */

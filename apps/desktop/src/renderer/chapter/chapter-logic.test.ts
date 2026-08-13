@@ -71,8 +71,9 @@ describe('阶段文案与分类', () => {
     }
   });
 
-  it('"已采用"不冒充"已完成"：文案明确说明尚未写入稿件', () => {
-    expect(chapterPhaseLabel('accepted_pending_commit')).toContain('尚未写入稿件');
+  it('"已采用"与"已完成"文案区分：前者是写入过程中，后者才是已写入稿件', () => {
+    expect(chapterPhaseLabel('accepted_pending_commit')).toContain('正在写入稿件');
+    expect(chapterPhaseLabel('completed')).toContain('已写入稿件');
   });
 
   it('工作中 / 终态分类', () => {
@@ -129,8 +130,8 @@ describe('选项集合', () => {
     );
   });
 
-  it('"采用"文案如实说明写入稿件尚未实现（不做空承诺）', () => {
+  it('"采用"文案说明写入稿件与后续去处（GE-7 起写入真实发生）', () => {
     const accept = CANDIDATE_GATE_OPTIONS.find((o) => o.outcome === 'accept')!;
-    expect(accept.description).toContain('还在开发中');
+    expect(accept.description).toContain('写入稿件');
   });
 });

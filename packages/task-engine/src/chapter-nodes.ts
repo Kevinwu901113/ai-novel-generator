@@ -663,8 +663,17 @@ interface ChapterTaskSpec<P> {
   systemPrompt(ctx: ChapterTaskContext): string;
   buildPrompt(ctx: ChapterTaskContext): string;
   parse(text: string): P;
-  /** 在最终事务内执行：持久化领域行，返回 envelope / task.result 所需摘要 */
-  persist(ctx: ChapterTaskContext, parsed: P, now: string): ChapterPersistResult;
+  /**
+   * 在最终事务内执行：持久化领域行，返回 envelope / task.result 所需摘要。
+   * `provenance` 是本次模型调用的身份（GE-7：候选行要能追溯到 task + invocation，
+   * 否则 MANUSCRIPT_COMMIT 写不出合法的 AI 来源稿件版本）。
+   */
+  persist(
+    ctx: ChapterTaskContext,
+    parsed: P,
+    now: string,
+    provenance: { readonly taskId: string; readonly invocationId: string },
+  ): ChapterPersistResult;
 }
 
 function requireCas(updated: boolean, message: string): void {
@@ -859,7 +868,7 @@ async function runChapterModelTask<P>(
   let persisted!: ChapterPersistResult;
   try {
     deps.transaction(() => {
-      persisted = spec.persist(ctx, parsed, now);
+      persisted = spec.persist(ctx, parsed, now, { taskId, invocationId });
       nodeExecutionResultStore.saveOrVerifySame({
         executionId: execution.id,
         projectId: task.projectId,
@@ -960,7 +969,7 @@ export async function executeChapterDraftNode(
     systemPrompt: () => CHAPTER_DRAFT_SYSTEM_PROMPT,
     buildPrompt: buildChapterDraftPrompt,
     parse: (text) => parseChapterProseV1(text, '章节草稿'),
-    persist: (ctx, parsed, now) => {
+    persist: (ctx, parsed, now, provenance) => {
       const revisionNo = deps.candidateRepo.getMaxRevisionNo(ctx.projectId, ctx.graphRunId) + 1;
       const artifactId = deps.idGenerator.generate();
       const candidate = createChapterCandidate({
@@ -972,6 +981,8 @@ export async function executeChapterDraftNode(
         artifactId,
         title: parsed.title,
         content: parsed.content,
+        producedByTaskId: provenance.taskId,
+        producedByInvocationId: provenance.invocationId,
         createdAt: now,
       });
       deps.candidateRepo.save(candidate);
@@ -1049,7 +1060,7 @@ export async function executeChapterRewrite(
     systemPrompt: () => CHAPTER_REWRITE_SYSTEM_PROMPT,
     buildPrompt: buildChapterRewritePrompt,
     parse: (text) => parseChapterProseV1(text, '章节改写稿'),
-    persist: (ctx, parsed, now) => {
+    persist: (ctx, parsed, now, provenance) => {
       const revisionNo = deps.candidateRepo.getMaxRevisionNo(ctx.projectId, ctx.graphRunId) + 1;
       const candidate = createChapterCandidate({
         id: deps.idGenerator.generate(),
@@ -1060,6 +1071,8 @@ export async function executeChapterRewrite(
         artifactId: null,
         title: parsed.title,
         content: parsed.content,
+        producedByTaskId: provenance.taskId,
+        producedByInvocationId: provenance.invocationId,
         createdAt: now,
       });
       deps.candidateRepo.save(candidate);
