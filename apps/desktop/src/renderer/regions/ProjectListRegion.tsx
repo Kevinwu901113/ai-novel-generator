@@ -1,7 +1,7 @@
 /**
  * 项目列表区域组件。
  *
- * 独立渲染左栏项目列表，包含：
+ * 独立渲染项目列表，支持首页卡片与兼容的侧栏形态，包含：
  * - 数据服务状态判断
  * - 项目列表渲染（使用真实 button）
  * - 格式化时间显示
@@ -20,6 +20,7 @@
 import type { DataServiceStatus, ProjectListItem } from '@ai-novel/contracts';
 
 interface ProjectListRegionProps {
+  variant?: 'sidebar' | 'cards';
   dataServiceStatus: DataServiceStatus;
   projects: ReadonlyArray<ProjectListItem>;
   currentProjectId: string | null;
@@ -51,6 +52,7 @@ function buildProjectAriaLabel(p: ProjectListItem): string {
 }
 
 export function ProjectListRegion({
+  variant = 'sidebar',
   dataServiceStatus,
   projects,
   currentProjectId,
@@ -59,6 +61,86 @@ export function ProjectListRegion({
   onOpenProject,
 }: ProjectListRegionProps) {
   const isDataServiceStarting = dataServiceStatus === 'starting';
+
+  const content = isDataServiceStarting ? (
+    <div className="empty-state project-empty-state" role="status">
+      <p className="loading-indicator" aria-hidden="true">
+        ⟳
+      </p>
+      <p>数据服务启动中…</p>
+    </div>
+  ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
+    <div className="empty-state project-empty-state">
+      <p>暂时无法读取项目</p>
+      <button className="btn-retry" onClick={onRetry}>
+        重试数据服务
+      </button>
+    </div>
+  ) : projects.length === 0 ? (
+    <div className="empty-state project-empty-state">
+      <p>还没有项目</p>
+      <p className="empty-hint">先把上面的第一个想法写下来。</p>
+    </div>
+  ) : (
+    <ul
+      className={variant === 'cards' ? 'project-card-grid' : 'project-list'}
+      role="list"
+      aria-label={variant === 'cards' ? '最近项目' : undefined}
+      aria-labelledby={variant === 'sidebar' ? 'project-list-heading' : undefined}
+    >
+      {projects.map((p) => (
+        <li
+          key={p.id}
+          className={variant === 'cards' ? 'project-card-wrapper' : 'project-item-wrapper'}
+        >
+          {p.isMissing ? (
+            <div
+              className={`${variant === 'cards' ? 'project-card' : 'project-item'} missing`}
+              aria-disabled="true"
+              aria-label={buildProjectAriaLabel(p)}
+            >
+              <span className="project-item-name">{p.name}</span>
+              <span className="project-item-badge" role="status">
+                项目文件缺失
+              </span>
+              <span className="project-item-time">{formatTime(p.lastOpenedAt ?? p.createdAt)}</span>
+            </div>
+          ) : (
+            <button
+              className={`${variant === 'cards' ? 'project-card' : 'project-item'} ${
+                currentProjectId === p.id ? 'active' : ''
+              }`}
+              onClick={() => onOpenProject(p.id)}
+              aria-current={currentProjectId === p.id ? 'page' : undefined}
+              aria-label={buildProjectAriaLabel(p)}
+              disabled={dataServiceStatus !== 'ready'}
+            >
+              {variant === 'cards' && (
+                <span className="project-card-mark" aria-hidden="true">
+                  文
+                </span>
+              )}
+              <span className="project-card-body">
+                <span className="project-item-name">{p.name}</span>
+                <span className="project-item-time">
+                  最近打开 · {formatTime(p.lastOpenedAt ?? p.createdAt)}
+                </span>
+              </span>
+              {variant === 'cards' && (
+                <span className="project-card-action" aria-hidden="true">
+                  继续创作 <span>→</span>
+                </span>
+              )}
+            </button>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+
+  if (variant === 'cards') {
+    return <div aria-label="项目列表">{content}</div>;
+  }
 
   return (
     <>
@@ -74,61 +156,7 @@ export function ProjectListRegion({
         </button>
       </div>
       <div className="panel-content" aria-labelledby="project-list-heading">
-        {isDataServiceStarting ? (
-          <div className="empty-state" role="status">
-            <p className="loading-indicator" aria-hidden="true">
-              ⟳
-            </p>
-            <p>数据服务启动中…</p>
-          </div>
-        ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
-          <div className="empty-state">
-            <p>数据服务不可用</p>
-            <button className="btn-retry" onClick={onRetry}>
-              重试数据服务
-            </button>
-          </div>
-        ) : projects.length === 0 ? (
-          <div className="empty-state">
-            <p>尚未创建项目</p>
-            <p className="empty-hint">在中间栏创建第一个项目</p>
-          </div>
-        ) : (
-          <ul className="project-list" role="list" aria-labelledby="project-list-heading">
-            {projects.map((p) => (
-              <li key={p.id} className="project-item-wrapper">
-                {p.isMissing ? (
-                  <div
-                    className={`project-item missing`}
-                    aria-disabled="true"
-                    aria-label={buildProjectAriaLabel(p)}
-                  >
-                    <span className="project-item-name">{p.name}</span>
-                    <span className="project-item-badge" role="status">
-                      缺失
-                    </span>
-                    <span className="project-item-time">
-                      {formatTime(p.lastOpenedAt ?? p.createdAt)}
-                    </span>
-                  </div>
-                ) : (
-                  <button
-                    className={`project-item ${currentProjectId === p.id ? 'active' : ''}`}
-                    onClick={() => onOpenProject(p.id)}
-                    aria-current={currentProjectId === p.id ? 'page' : undefined}
-                    aria-label={buildProjectAriaLabel(p)}
-                    disabled={dataServiceStatus !== 'ready'}
-                  >
-                    <span className="project-item-name">{p.name}</span>
-                    <span className="project-item-time">
-                      {formatTime(p.lastOpenedAt ?? p.createdAt)}
-                    </span>
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
+        {content}
       </div>
     </>
   );

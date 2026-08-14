@@ -8,7 +8,6 @@ import type {
   CreateProviderProfileInput,
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
-import { INITIAL_PANEL_STATE, togglePanel, type PanelId, type PanelState } from './panel-state';
 // B4：旧 Grill 工作台从默认入口移除（代码保留，见 grill/GrillWorkbench.tsx）
 import { IntakeRegion } from './intake/IntakeRegion';
 import { JourneyNav } from './journey/JourneyNav';
@@ -28,16 +27,16 @@ import { ResearchRegion } from './research/ResearchRegion';
 import { SearchKeyPanel } from './research/SearchKeyPanel';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
-import {
-  ProjectListRegion,
-  CreateProjectRegion,
-  ProjectStatusRegion,
-  ProviderRegion,
-} from './regions';
+import { ProjectStatusRegion, ProviderRegion } from './regions';
+import { HomePage } from './home/HomePage';
+import { AppDrawer } from './shell/AppDrawer';
+import { AppIcon } from './shell/AppIcon';
+import { AppRail } from './shell/AppRail';
+import type { DrawerId } from './shell-state';
 
 export function App() {
-  const [panelState, setPanelState] = useState<PanelState>(INITIAL_PANEL_STATE);
   const [health, setHealth] = useState<HealthCheckResponse | null>(null);
+  const [openDrawer, setOpenDrawer] = useState<DrawerId | null>(null);
 
   // 数据服务状态
   const [dataServiceStatus, setDataServiceStatus] = useState<DataServiceStatus>('starting');
@@ -53,6 +52,7 @@ export function App() {
 
   // 模型服务列表
   const [providers, setProviders] = useState<ReadonlyArray<ProviderPublicState>>([]);
+  const [searchConfigured, setSearchConfigured] = useState<boolean | null>(null);
 
   // 旅程阶段。
   // B6 REWORK 复查 D-B6-10：展示阶段（viewStage，决定中栏挂载哪个 Region）与
@@ -78,10 +78,6 @@ export function App() {
   const createSectionRef = useRef<HTMLElement | null>(null);
   const [shouldFocusGrill, setShouldFocusGrill] = useState(false);
   const [shouldFocusCreate, setShouldFocusCreate] = useState(false);
-
-  const handleTogglePanel = useCallback((panel: PanelId) => {
-    setPanelState((prev) => togglePanel(prev, panel));
-  }, []);
 
   // 探针推进 frontierStage 时单调推进历史最远 frontier（D-B6-10）。
   useEffect(() => {
@@ -186,6 +182,15 @@ export function App() {
     }
   }, []);
 
+  const loadSearchStatus = useCallback(async () => {
+    try {
+      const state = await window.desktop.search.hasApiKey();
+      setSearchConfigured(state.hasApiKey);
+    } catch {
+      setSearchConfigured(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (dataServiceStatus === 'ready' && !hasLoadedProjects.current) {
       void loadProjects();
@@ -195,8 +200,9 @@ export function App() {
   useEffect(() => {
     if (dataServiceStatus === 'ready') {
       void loadProviders();
+      void loadSearchStatus();
     }
-  }, [dataServiceStatus, loadProviders]);
+  }, [dataServiceStatus, loadProviders, loadSearchStatus]);
 
   // 创建项目
   const handleCreate = useCallback(
@@ -266,6 +272,23 @@ export function App() {
     setShouldFocusCreate(true);
   }, []);
 
+  const handleHome = useCallback(() => {
+    setCurrentProject(null);
+    setError(null);
+  }, []);
+
+  const handleOpenSettings = useCallback(() => {
+    setOpenDrawer('settings');
+  }, []);
+
+  const handleOpenTasks = useCallback(() => {
+    setOpenDrawer('tasks');
+  }, []);
+
+  const handleCloseDrawer = useCallback(() => {
+    setOpenDrawer(null);
+  }, []);
+
   // 创建成功后焦点进入 Grill 工作区
   useEffect(() => {
     if (shouldFocusGrill && currentProject && grillSectionRef.current) {
@@ -331,252 +354,222 @@ export function App() {
 
   const isDataServiceReady = dataServiceStatus === 'ready';
   const isDataServiceStarting = dataServiceStatus === 'starting';
+  const defaultProvider = providers.find((provider) => provider.isDefault) ?? null;
+  const currentStageLabel = currentProject
+    ? (JOURNEY_STAGES.find((stage) => stage.id === frontierStage)?.label ?? '想法')
+    : null;
 
   return (
-    <div className="app">
-      {/* 顶部工具栏 */}
-      <header className="toolbar" role="banner">
-        <nav className="toolbar-left" aria-label="面板控制">
-          <button
-            className="toolbar-btn"
-            onClick={() => handleTogglePanel('left')}
-            aria-label={panelState.left ? '收起项目列表' : '展开项目列表'}
-            aria-expanded={panelState.left}
-            aria-controls="panel-left"
-          >
-            ☰
-          </button>
-          <h1 className="app-title">AI 小说创作代理</h1>
-        </nav>
-        <div className="toolbar-right">
-          <span
-            className={`data-service-badge ${dataServiceStatus}`}
-            role="status"
-            aria-live="polite"
-          >
-            {isDataServiceStarting && '⟳ 数据服务启动中…'}
-            {isDataServiceReady && '● 数据服务就绪'}
-            {dataServiceStatus === 'failed' && '✕ 数据服务不可用'}
-            {dataServiceStatus === 'disconnected' && '✕ 数据服务已断开'}
-          </span>
-          <span className="dev-badge" aria-hidden="true">
-            开发模式
-          </span>
-          <button
-            className="toolbar-btn"
-            onClick={() => handleTogglePanel('right')}
-            aria-label={panelState.right ? '收起状态面板' : '展开状态面板'}
-            aria-expanded={panelState.right}
-            aria-controls="panel-right"
-          >
-            ☰
-          </button>
-        </div>
-      </header>
+    <div className="app app-shell">
+      <AppRail
+        isHome={!currentProject}
+        onHome={handleHome}
+        onNewProject={handleNewProject}
+        onOpenSettings={handleOpenSettings}
+      />
 
-      {/* 错误提示 */}
-      {error && (
-        <div className="global-error" role="alert" aria-live="assertive">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} aria-label="关闭错误提示">
-            ✕
-          </button>
-        </div>
-      )}
+      <div className="app-surface">
+        <header className="app-header" role="banner">
+          <div className="header-identity">
+            {currentProject ? (
+              <>
+                <button className="header-home-link" type="button" onClick={handleHome}>
+                  项目
+                </button>
+                <AppIcon name="chevron" size={15} />
+                <h1>{currentProject.name}</h1>
+                <span className="stage-pill">{currentStageLabel}</span>
+              </>
+            ) : (
+              <>
+                <span className="header-product-name">AI 小说创作代理</span>
+                <span className="header-product-note">本地优先创作台</span>
+              </>
+            )}
+          </div>
 
-      {/* 主内容区 */}
-      <main className="workspace">
-        {/* 左栏：项目列表 */}
-        {panelState.left && (
-          <aside id="panel-left" className="panel panel-left" aria-label="项目列表">
-            <RendererErrorBoundary label="项目列表">
-              <ProjectListRegion
-                dataServiceStatus={dataServiceStatus}
-                projects={projects}
-                currentProjectId={currentProject?.id ?? null}
-                onRetry={handleRetry}
-                onNewProject={handleNewProject}
-                onOpenProject={handleOpenProject}
-              />
-            </RendererErrorBoundary>
-          </aside>
+          <div className="header-actions">
+            {!isDataServiceReady && (
+              <span className={`service-status-pill ${dataServiceStatus}`} role="status">
+                {isDataServiceStarting ? '数据服务启动中' : '数据服务不可用'}
+              </span>
+            )}
+            {currentProject && (
+              <button className="header-button" type="button" onClick={handleOpenTasks}>
+                <AppIcon name="activity" size={18} />
+                <span>任务活动</span>
+              </button>
+            )}
+            <button className="header-button" type="button" onClick={handleOpenSettings}>
+              <AppIcon name="settings" size={18} />
+              <span>{defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}</span>
+            </button>
+          </div>
+        </header>
+
+        {error && (
+          <div className="global-error" role="alert" aria-live="assertive">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} aria-label="关闭错误提示">
+              ✕
+            </button>
+          </div>
         )}
 
-        {/* 中栏：新建项目 / 创作旅程（B4：对话式访谈替换 Grill 工作台默认入口） */}
-        {currentProject ? (
-          <section
-            ref={grillSectionRef}
-            className="panel panel-center"
-            style={{ padding: 0 }}
-            aria-label="创作旅程"
-          >
-            <RendererErrorBoundary label="创作旅程">
-              <JourneyNav
-                frontierStage={frontierStage}
-                viewStage={viewStage}
-                reachedStages={reachedStages}
-                onSelectStage={handleSelectJourneyStage}
-              />
-              {/* 探针失败必须可见（B8 复查随行）：D-B8-2 之后阶段派生只由这条
-                  循环驱动，它一旦静默失败，界面会冻在"想法"阶段而用户毫无察觉——
-                  正是"没有 Region 该被挂载时无人回报"那类问题换了个面目。这里给
-                  非阻塞提示（探针下一轮成功即自动消失），不打断当前 Region。 */}
+        <main className="main-surface">
+          {currentProject ? (
+            <section ref={grillSectionRef} className="project-workspace" aria-label="创作旅程">
+              <div className="project-journey-bar">
+                <JourneyNav
+                  frontierStage={frontierStage}
+                  viewStage={viewStage}
+                  reachedStages={reachedStages}
+                  onSelectStage={handleSelectJourneyStage}
+                />
+              </div>
               {journey.error && (
                 <div className="journey-probe-error" role="status" aria-live="polite">
                   {journey.error}（正在自动重试）
                 </div>
               )}
-              {/* D-B6-10：中栏按展示阶段（viewStage）互斥挂载，与推进阶段
-                  （frontierStage）分离——挂载哪个 Region 不再单纯 follow frontier。
-                  B10 起四分流：manuscript → ChapterRegion（章节 run 与 project run
-                  是两条独立 run，故 ChapterRegion 自持轮询，不吃 App 探针，D-B10-4）；
-                  blueprint → BlueprintRegion（阶段与蓝图态由 App 探针以 props 下发，
-                  D-B8-2）；research → ResearchRegion；否则 IntakeRegion。 */}
-              {viewStage === 'manuscript' ? (
-                <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
-              ) : viewStage === 'blueprint' ? (
-                <BlueprintRegion
-                  key={currentProject.id}
-                  projectId={currentProject.id}
-                  state={journey.blueprintState}
-                  terminalStatus={journey.run?.terminalStatus ?? null}
-                  generating={hasActiveBlueprintGenerate(journey.progress)}
-                  stateLoading={journey.loading}
-                  onRefresh={handleHumanDecisionSettled}
-                />
-              ) : viewStage === 'research' ? (
-                <ResearchRegion
-                  key={currentProject.id}
-                  projectId={currentProject.id}
-                  showBeyondResearchNotice={showResearchBeyondNotice}
-                  onDecisionSettled={handleHumanDecisionSettled}
-                />
-              ) : (
-                <IntakeRegion key={currentProject.id} projectId={currentProject.id} />
-              )}
-            </RendererErrorBoundary>
-          </section>
-        ) : (
-          <section ref={createSectionRef} className="panel panel-center" aria-label="新建项目">
-            <RendererErrorBoundary label="新建项目">
-              <CreateProjectRegion
+              <div className="project-canvas">
+                <div className="project-canvas-inner">
+                  <RendererErrorBoundary label="创作旅程">
+                    {viewStage === 'manuscript' ? (
+                      <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
+                    ) : viewStage === 'blueprint' ? (
+                      <BlueprintRegion
+                        key={currentProject.id}
+                        projectId={currentProject.id}
+                        state={journey.blueprintState}
+                        terminalStatus={journey.run?.terminalStatus ?? null}
+                        generating={hasActiveBlueprintGenerate(journey.progress)}
+                        stateLoading={journey.loading}
+                        onRefresh={handleHumanDecisionSettled}
+                      />
+                    ) : viewStage === 'research' ? (
+                      <ResearchRegion
+                        key={currentProject.id}
+                        projectId={currentProject.id}
+                        showBeyondResearchNotice={showResearchBeyondNotice}
+                        onDecisionSettled={handleHumanDecisionSettled}
+                      />
+                    ) : (
+                      <IntakeRegion key={currentProject.id} projectId={currentProject.id} />
+                    )}
+                  </RendererErrorBoundary>
+                </div>
+              </div>
+            </section>
+          ) : (
+            <RendererErrorBoundary label="首页">
+              <HomePage
                 dataServiceStatus={dataServiceStatus}
+                projects={projects}
+                defaultProvider={defaultProvider}
+                searchConfigured={searchConfigured}
+                createSectionRef={createSectionRef}
                 onRetry={handleRetry}
                 onCreate={handleCreate}
+                onOpenProject={handleOpenProject}
+                onOpenSettings={handleOpenSettings}
               />
             </RendererErrorBoundary>
-          </section>
-        )}
+          )}
+        </main>
+      </div>
 
-        {/* 右栏：状态 */}
-        {panelState.right && (
-          <aside id="panel-right" className="panel panel-right" aria-label="状态面板">
-            <div className="panel-header">
-              <h2 id="status-heading">状态</h2>
-            </div>
-            <div className="panel-content">
-              <section className="status-section" aria-labelledby="status-local-heading">
-                <h3 id="status-local-heading">本地存储</h3>
-                <p>
-                  {isDataServiceReady
-                    ? 'SQLite 已就绪'
-                    : isDataServiceStarting
-                      ? '启动中…'
-                      : '不可用'}
-                </p>
-              </section>
-              <section className="status-section" aria-labelledby="status-service-heading">
-                <h3 id="status-service-heading">数据服务</h3>
-                <p>
-                  {isDataServiceStarting && '启动中…'}
-                  {isDataServiceReady && '正常运行'}
-                  {dataServiceStatus === 'failed' && (
-                    <>
-                      不可用
-                      <button
-                        className="btn-retry-inline"
-                        onClick={handleRetry}
-                        aria-label="重试数据服务"
-                      >
-                        重试
-                      </button>
-                    </>
-                  )}
-                  {dataServiceStatus === 'disconnected' && '已断开'}
-                </p>
-              </section>
-              <section className="status-section" aria-labelledby="status-stage-heading">
-                <h3 id="status-stage-heading">当前阶段</h3>
-                <p>
-                  {currentProject
-                    ? (JOURNEY_STAGES.find((s) => s.id === frontierStage)?.label ?? '—')
-                    : '—'}
-                </p>
-              </section>
+      {openDrawer === 'tasks' && (
+        <AppDrawer
+          title="任务活动"
+          description={currentProject ? `${currentProject.name} 的模型调用与运行记录` : undefined}
+          onClose={handleCloseDrawer}
+        >
+          <RendererErrorBoundary label="任务中心">
+            <TaskCenter projectId={currentProject?.id ?? null} />
+          </RendererErrorBoundary>
+          {currentProject && (
+            <details className="drawer-details">
+              <summary>项目信息</summary>
               <RendererErrorBoundary label="项目状态">
                 <ProjectStatusRegion currentProject={currentProject} />
               </RendererErrorBoundary>
-
-              {/* 任务活动 */}
-              <section
-                className="status-section task-center-section"
-                aria-labelledby="task-center-heading"
-              >
-                <h3 id="task-center-heading">任务活动</h3>
-                <RendererErrorBoundary label="任务中心">
-                  <TaskCenter projectId={currentProject?.id ?? null} />
-                </RendererErrorBoundary>
-              </section>
-
-              {/* 模型服务 */}
-              <section
-                className="status-section provider-section"
-                aria-labelledby="provider-heading"
-              >
-                <h3 id="provider-heading">模型服务</h3>
-                <RendererErrorBoundary label="模型服务">
-                  <ProviderRegion
-                    providers={providers}
-                    dataServiceStatus={dataServiceStatus}
-                    onCreate={handleCreateProvider}
-                    onSetDefault={handleSetDefaultProvider}
-                    onRemove={handleRemoveProvider}
-                    onSaveApiKey={handleSaveApiKey}
-                    onDeleteApiKey={handleDeleteApiKey}
-                    onTestConnection={handleTestConnection}
-                  />
-                </RendererErrorBoundary>
-              </section>
-
-              {/* 搜索服务（Tavily，B6：D-B6-5 全局单槽位，与模型服务并列） */}
-              <section
-                className="status-section search-key-section"
-                aria-labelledby="search-key-heading"
-              >
-                <h3 id="search-key-heading">搜索服务</h3>
-                <RendererErrorBoundary label="搜索服务">
-                  <SearchKeyPanel dataServiceStatus={dataServiceStatus} />
-                </RendererErrorBoundary>
-              </section>
-            </div>
-          </aside>
-        )}
-      </main>
-
-      {/* 状态栏 */}
-      <footer className="status-bar" role="contentinfo">
-        <div className="status-left">
-          <span className="status-item">桌面服务：{health?.ok ? '正常' : '检查中...'}</span>
-          {health && <span className="status-item">版本：{health.version}</span>}
-        </div>
-        <div className="status-right">
-          {health && (
-            <span className="status-item">
-              最后检查：{new Date(health.timestamp).toLocaleTimeString('zh-CN')}
-            </span>
+            </details>
           )}
-        </div>
-      </footer>
+        </AppDrawer>
+      )}
+
+      {openDrawer === 'settings' && (
+        <AppDrawer
+          title="创作服务设置"
+          description="配置生成模型、联网搜索与本地运行状态"
+          onClose={handleCloseDrawer}
+        >
+          <section className="drawer-section" aria-labelledby="provider-heading">
+            <div className="drawer-section-heading">
+              <AppIcon name="sparkles" size={18} />
+              <div>
+                <h3 id="provider-heading">模型提供商</h3>
+                <p>正文、蓝图和创作要求都使用这里的默认模型。</p>
+              </div>
+            </div>
+            <RendererErrorBoundary label="模型服务">
+              <ProviderRegion
+                providers={providers}
+                dataServiceStatus={dataServiceStatus}
+                onCreate={handleCreateProvider}
+                onSetDefault={handleSetDefaultProvider}
+                onRemove={handleRemoveProvider}
+                onSaveApiKey={handleSaveApiKey}
+                onDeleteApiKey={handleDeleteApiKey}
+                onTestConnection={handleTestConnection}
+              />
+            </RendererErrorBoundary>
+          </section>
+
+          <section className="drawer-section" aria-labelledby="search-key-heading">
+            <div className="drawer-section-heading">
+              <AppIcon name="search" size={18} />
+              <div>
+                <h3 id="search-key-heading">联网搜索</h3>
+                <p>可选。需要历史或现实资料时，使用 Tavily 完成调研。</p>
+              </div>
+            </div>
+            <RendererErrorBoundary label="搜索服务">
+              <SearchKeyPanel
+                dataServiceStatus={dataServiceStatus}
+                onStatusChange={setSearchConfigured}
+              />
+            </RendererErrorBoundary>
+          </section>
+
+          <section className="drawer-section system-overview" aria-labelledby="system-heading">
+            <div className="drawer-section-heading">
+              <AppIcon name="database" size={18} />
+              <div>
+                <h3 id="system-heading">本地运行</h3>
+                <p>项目和稿件只保存在这台电脑。</p>
+              </div>
+            </div>
+            <dl>
+              <div>
+                <dt>数据服务</dt>
+                <dd>{isDataServiceReady ? 'SQLite 已就绪' : '暂不可用'}</dd>
+              </div>
+              <div>
+                <dt>桌面服务</dt>
+                <dd>{health?.ok ? '正常' : '检查中'}</dd>
+              </div>
+              {health && (
+                <div>
+                  <dt>版本</dt>
+                  <dd>{health.version}</dd>
+                </div>
+              )}
+            </dl>
+          </section>
+        </AppDrawer>
+      )}
     </div>
   );
 }

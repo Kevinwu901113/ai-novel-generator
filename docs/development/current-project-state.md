@@ -272,6 +272,14 @@ frontierStage 推进到 manuscript——此前 manuscript 永不进 reachedStage
 的"成稿"恒 disabled，B10 交付的整个界面将永不可达（D-B6-10/D-B8-3 同族）。
 预算上限跨层 parity 守卫（D-B10-7）关掉章节侧的 TD-030-3 手抄面。随行登记 TD-032-1/2。
 
+2026-08-14 创作台布局重设计：应用外壳不再用"项目列表 / 创作内容 / 开发状态"三个
+常驻等权栏。未打开项目时进入独立首页：首要入口是模糊想法与项目名称，最近项目改为
+卡片式"继续创作"；默认模型与联网搜索只显示紧凑就绪状态。打开项目后进入独立工作台：
+四阶段导航保留 App 级真实进度/回看语义，创作 Region 放进居中的宽主画布。模型提供商、
+Tavily、SQLite/版本信息移入可关闭的"创作服务设置"抽屉，模型调用统计与任务列表移入
+项目级"任务活动"抽屉；两抽屉支持 Escape、焦点恢复与 Tab 循环。新增 App 级回归锁定
+首页入口、最近项目、设置按需挂载及原有阶段可达性。
+
 下一步：**GE-7**（MANUSCRIPT_COMMIT + 稿件工作区 + TXT/Markdown 导出）——
 D9 的前置条件（GE-6 原退出条件通过）已满足。
 批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
@@ -295,10 +303,10 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 
 | 项                  | 命令                                                          | 结果                                                                            |
 | ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-11 于 feat/b8-blueprint-ui 复查修复批次实测）             |
-| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-11 同上）                                                 |
+| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-14 于 main + 创作台布局重设计工作树实测）                 |
+| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-14 同上）                                                 |
 | macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁（未本地实测）                                             |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 148 passed / 2 skipped（150）；Tests 3346 passed / 7 skipped（3353） |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 161 passed / 3 skipped（164）；Tests 3470 passed / 8 skipped（3478） |
 | GitHub Actions      | main 分支 CI                                                  | PR #49 合并 commit `b6220ae` success；PR #50 分支 CI 全绿                       |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。

@@ -166,6 +166,19 @@ function setupDesktop(api?: DesktopAPI) {
   return window.desktop;
 }
 
+function getCreateProjectButton() {
+  return screen.getByRole('button', { name: '开始整理想法' });
+}
+
+async function openSettingsDrawer() {
+  await act(async () => {
+    screen.getByRole('button', { name: '打开设置' }).click();
+  });
+  await waitFor(() => {
+    expect(screen.getByRole('dialog', { name: '创作服务设置' })).toBeInTheDocument();
+  });
+}
+
 // ── B6 REWORK 复查：展示阶段与推进阶段分离（D-B6-10）──────────────────
 //
 // 已坐实的 blocker：调研有结果的那一刻，Graph frontier 往往已经同快照推进到
@@ -266,7 +279,7 @@ async function createProjectAndWaitForJourney(api: DesktopAPI) {
   const ideaInput = screen.getByLabelText('描述你想写的小说……');
   fireEvent.change(nameInput, { target: { value: '测试项目' } });
   fireEvent.change(ideaInput, { target: { value: '测试想法' } });
-  const createBtn = screen.getByText('创建项目');
+  const createBtn = getCreateProjectButton();
   await act(async () => {
     createBtn.click();
   });
@@ -645,42 +658,48 @@ describe('App 级别测试', () => {
     expect(mainElements.length).toBe(1);
   });
 
-  // 2. panel aria-expanded 与真实 App 状态联动
-  it('panel aria-expanded 与真实 App 状态联动', async () => {
+  it('首页突出想法入口和最近项目，服务配置默认不占用主界面', async () => {
     setupDesktop();
     await act(async () => {
       render(<App />);
     });
 
-    // 等待 App 完成初始渲染
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: '今天想写什么？' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: '继续创作' })).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /测试项目一/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '开始整理想法' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: '创作服务设置' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('form', { name: '新增模型服务' })).not.toBeInTheDocument();
+  });
+
+  // 2. 全局导航与设置抽屉真实联动
+  it('全局导航与设置抽屉真实联动，并在关闭后恢复触发按钮焦点', async () => {
+    setupDesktop();
+    await act(async () => {
+      render(<App />);
+    });
+
     await waitFor(
       () => {
-        expect(
-          screen.getByRole('button', { name: /收起项目列表|展开项目列表/ }),
-        ).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: '首页' })).toHaveAttribute(
+          'aria-current',
+          'page',
+        );
       },
       { timeout: 10000 },
     );
 
-    // 左面板默认展开
-    const leftToggle = screen.getByRole('button', { name: /收起项目列表|展开项目列表/ });
-    expect(leftToggle).toHaveAttribute('aria-expanded', 'true');
+    const settingsButton = screen.getByRole('button', { name: '打开设置' });
+    settingsButton.focus();
+    await openSettingsDrawer();
 
-    // 点击收起
-    act(() => {
-      leftToggle.click();
+    await act(async () => {
+      screen.getByRole('button', { name: '关闭创作服务设置' }).click();
     });
-    expect(leftToggle).toHaveAttribute('aria-expanded', 'false');
-
-    // 右面板默认展开
-    const rightToggle = screen.getByRole('button', { name: /收起状态面板|展开状态面板/ });
-    expect(rightToggle).toHaveAttribute('aria-expanded', 'true');
-
-    // 点击收起
-    act(() => {
-      rightToggle.click();
-    });
-    expect(rightToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('dialog', { name: '创作服务设置' })).not.toBeInTheDocument();
+    expect(settingsButton).toHaveFocus();
   });
 
   // 3. 实际 App DOM 不存在重复关键 id
@@ -740,7 +759,7 @@ describe('App 级别测试', () => {
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
     // 点击创建
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -799,7 +818,7 @@ describe('App 级别测试', () => {
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
     // 点击创建
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -854,7 +873,7 @@ describe('App 级别测试', () => {
     fireEvent.change(ideaInput, { target: { value: '一个关于未来的故事' } });
 
     // 点击创建
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -914,7 +933,7 @@ describe('App 级别测试', () => {
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
     // 第一次创建失败
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -967,6 +986,8 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
+    await openSettingsDrawer();
+
     await waitFor(
       () => {
         expect(screen.getByRole('button', { name: '测试连接' })).toBeInTheDocument();
@@ -988,7 +1009,7 @@ describe('App 级别测试', () => {
       { timeout: 5000 },
     );
 
-    const providerSection = screen.getByLabelText('模型服务');
+    const providerSection = screen.getByRole('region', { name: '模型提供商' });
     expect(within(providerSection).getByText(/PROVIDER_TIMEOUT/)).toHaveTextContent(/连接超时/);
     const testTimeLabel = within(providerSection).getByText(/测试时间/);
     expect(testTimeLabel.closest('p')).not.toHaveTextContent('—');
@@ -1033,7 +1054,7 @@ describe('App 级别测试', () => {
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
     // 点击创建
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -1068,6 +1089,8 @@ describe('App 级别测试', () => {
     await act(async () => {
       render(<App />);
     });
+
+    await openSettingsDrawer();
 
     // 等待 App 完成初始渲染
     await waitFor(
@@ -1157,7 +1180,7 @@ describe('App 级别测试', () => {
     fireEvent.change(nameInput, { target: { value: '测试项目' } });
     fireEvent.change(ideaInput, { target: { value: '测试想法' } });
 
-    const createBtn = screen.getByText('创建项目');
+    const createBtn = getCreateProjectButton();
     await act(async () => {
       createBtn.click();
     });
@@ -1185,6 +1208,8 @@ describe('App 级别测试', () => {
     await act(async () => {
       render(<App />);
     });
+
+    await openSettingsDrawer();
 
     // 等待 App 完成初始渲染
     await waitFor(

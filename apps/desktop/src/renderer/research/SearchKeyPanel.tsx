@@ -1,8 +1,8 @@
 /**
  * 搜索服务（Tavily）API Key 面板（B6，D-B6-5）。
  *
- * 全局单槽位（无 profileId，独立于任何项目），挂在右栏、与"模型服务"
- * （ProviderRegion）并列。镜像 ProviderRow 的 key 区块结构与无障碍处理：
+ * 全局单槽位（无 profileId，独立于任何项目），挂在创作服务设置抽屉、与
+ * "模型提供商"（ProviderRegion）并列。镜像 ProviderRow 的 key 区块结构与无障碍处理：
  * - 未配置：password input（sr-only label）+ 保存按钮（aria-busy）；
  * - 已配置：删除按钮 + 二次确认（role="group"、Escape 取消、焦点管理）；
  * - 不做测试连接（无对应后端，D-B6-5 明确不新增）。
@@ -22,9 +22,10 @@ import { toSafeUserError } from '../safety/safe-error';
 
 export interface SearchKeyPanelProps {
   readonly dataServiceStatus: DataServiceStatus;
+  readonly onStatusChange?: (hasApiKey: boolean) => void;
 }
 
-export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
+export function SearchKeyPanel({ dataServiceStatus, onStatusChange }: SearchKeyPanelProps) {
   const isReady = dataServiceStatus === 'ready';
   const [hasApiKey, setHasApiKey] = useState<boolean | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState('');
@@ -47,7 +48,10 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
     void window.desktop.search
       .hasApiKey()
       .then((state) => {
-        if (!cancelled) setHasApiKey(state.hasApiKey);
+        if (!cancelled) {
+          setHasApiKey(state.hasApiKey);
+          onStatusChange?.(state.hasApiKey);
+        }
       })
       .catch((err: unknown) => {
         if (!cancelled) {
@@ -58,7 +62,7 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [isReady]);
+  }, [isReady, onStatusChange]);
 
   // 删除确认显示时，焦点移到确认按钮
   useEffect(() => {
@@ -100,6 +104,7 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
     try {
       const state = await window.desktop.search.saveApiKey({ apiKey: trimmed });
       setHasApiKey(state.hasApiKey);
+      onStatusChange?.(state.hasApiKey);
       setApiKeyInput('');
       setSavedNotice(true);
     } catch (err) {
@@ -107,7 +112,7 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
     } finally {
       setIsSavingKey(false);
     }
-  }, [apiKeyInput, isSavingKey, isReady]);
+  }, [apiKeyInput, isSavingKey, isReady, onStatusChange]);
 
   const handleDeleteClick = useCallback(() => {
     setDeleteConfirmVisible(true);
@@ -126,6 +131,7 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
       shouldFocusApiKeyRef.current = true;
       const state = await window.desktop.search.deleteApiKey();
       setHasApiKey(state.hasApiKey);
+      onStatusChange?.(state.hasApiKey);
       setDeleteConfirmVisible(false);
     } catch (err) {
       shouldFocusApiKeyRef.current = false;
@@ -133,7 +139,7 @@ export function SearchKeyPanel({ dataServiceStatus }: SearchKeyPanelProps) {
     } finally {
       setIsDeletingKey(false);
     }
-  }, [isReady]);
+  }, [isReady, onStatusChange]);
 
   const handleDeleteKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
