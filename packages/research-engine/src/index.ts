@@ -26,7 +26,7 @@ export {
 
 export { dependsOnRealWorldFacts, determineResearchDepth } from './depth.js';
 
-export { orchestrateResearch } from './orchestrator.js';
+export { orchestrateResearch, isSearchResultRelevant } from './orchestrator.js';
 export type { ResearchOrchestratorDeps, OrchestrateInput } from './orchestrator.js';
 
 export { createSafeWebFetch } from './safe-web-fetch.js';

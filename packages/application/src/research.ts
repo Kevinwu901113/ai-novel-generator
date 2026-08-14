@@ -20,6 +20,7 @@ export interface ResearchBundleRepositoryPort {
   save(bundle: ResearchBundle, updatedAt: string): void;
   getById(projectId: string, bundleId: string): ResearchBundle | null;
   listByProject(projectId: string): ReadonlyArray<ResearchBundle>;
+  getMaxVersion(projectId: string): number;
 }
 
 /**
@@ -54,12 +55,13 @@ export async function executeResearch(
   deps: ExecuteResearchDeps,
   input: ExecuteResearchInput,
 ): Promise<ResearchBundle> {
-  const bundle = await orchestrateResearch(deps, {
+  const orchestrated = await orchestrateResearch(deps, {
     projectId: input.projectId,
     depth: input.depth,
     idea: input.idea,
     questions: input.questions,
   });
+  const bundle = { ...orchestrated, version: deps.researchRepo.getMaxVersion(input.projectId) + 1 };
   deps.researchRepo.save(bundle, deps.clock.now());
   return bundle;
 }

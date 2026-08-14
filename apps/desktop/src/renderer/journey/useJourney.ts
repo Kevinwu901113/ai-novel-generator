@@ -183,14 +183,17 @@ export function useJourney(projectId: string | null): UseJourneyReturn {
   }, []);
 
   useEffect(() => {
-    if (projectId === null || !isDocumentVisible) return undefined;
+    if (projectId === null) return undefined;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function poll() {
       if (cancelled) return;
       await refresh();
-      if (!cancelled) timer = setTimeout(poll, POLL_INTERVAL_MS);
+      // 冷启动/切项目时即使窗口暂在后台也必须至少读取一次，否则已完成项目会一直
+      // 假停在“想法”，且后续阶段全部不可点击。后台只暂停后续轮询；窗口恢复可见
+      // 后 isDocumentVisible 变化会重建 effect 并立即再读一轮。
+      if (!cancelled && isDocumentVisible) timer = setTimeout(poll, POLL_INTERVAL_MS);
     }
 
     void poll();

@@ -121,7 +121,7 @@ export async function executeModelInvocationTest(
   }
 
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
 
   // 2. 解析 provider profile（D6 两层路由：任务类型覆盖 → 全局默认；claim 前，不增加 attempt_count）
@@ -154,7 +154,7 @@ export async function executeModelInvocationTest(
   // 4. CAS claim：PENDING → RUNNING + attempt_count++（原子）
   const claimed = taskRepo.claimPending(taskId);
   if (!claimed) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
 
   // 读取更新后的任务（attempt_count 已递增）
@@ -288,6 +288,36 @@ export class TaskExecutionError extends Error {
   }
 }
 
+/**
+ * CAS claim 未命中：同一 durable task 已被另一 runner 领取或结算。
+ *
+ * 这是幂等调度中的良性竞争，不应由后到的 runner 反向把先到的 RUNNING task
+ * 结算为 FAILED。独立错误类型让 worker 能可靠识别该语义，而不依赖中文消息文本。
+ */
+export class TaskAlreadyClaimedError extends TaskExecutionError {
+  constructor(message: string) {
+    super('TASK_STATE_CONFLICT', message);
+    this.name = 'TaskAlreadyClaimedError';
+  }
+}
+
+/**
+ * 识别幂等重复领取错误。
+ *
+ * Electron 开发态、测试替身或打包产物可能加载出不同的模块实例，此时单靠
+ * `instanceof` 会误判同一个领域错误。保留 class 判定，同时用稳定的 name/code
+ * 作为跨模块边界的结构化标识。
+ */
+export function isTaskAlreadyClaimedError(error: unknown): error is TaskAlreadyClaimedError {
+  if (error instanceof TaskAlreadyClaimedError) return true;
+  return (
+    error instanceof Error &&
+    error.name === 'TaskAlreadyClaimedError' &&
+    'code' in error &&
+    error.code === 'TASK_STATE_CONFLICT'
+  );
+}
+
 export {
   executeGrillQuestionPlan,
   type GrillQuestionPlanEngineDeps,
@@ -323,6 +353,7 @@ export {
   buildChapterDraftPrompt,
   buildChapterCritiquePrompt,
   buildChapterRewritePrompt,
+  inferPerChapterTargetCharacters,
   criticSystemPrompt,
   CHAPTER_PLAN_SYSTEM_PROMPT,
   CHAPTER_DRAFT_SYSTEM_PROMPT,

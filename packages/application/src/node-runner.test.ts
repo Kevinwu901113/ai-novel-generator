@@ -84,6 +84,7 @@ function runnerDeps(
     runners?: Map<string, unknown>;
     resolver?: ArtifactResolverPort;
     now?: () => string;
+    scheduleTask?: (taskId: string) => void;
   } = {},
 ): NodeRunnerDeps {
   return {
@@ -93,6 +94,7 @@ function runnerDeps(
     runners: (overrides.runners ?? new Map()) as NodeRunnerDeps['runners'],
     artifactResolver: overrides.resolver ?? rejectingResolver(),
     runnerId: 'test-runner',
+    ...(overrides.scheduleTask ? { scheduleTask: overrides.scheduleTask } : {}),
   };
 }
 
@@ -457,6 +459,42 @@ describe('NodeRunner crash windows', () => {
     expect(
       getRunProgress(deps, { projectId: 'p1', runId: run.workflowRunId }).nodeStatuses[DRAFT],
     ).toBe('active');
+  });
+
+  it('3a. 首次 task-backed dispatch 在同一 driveRun 内只调度一次', async () => {
+    const registry = new ExecutorRegistry();
+    const runners = new Map<string, unknown>();
+    const idea = syncRunner(
+      syncDescriptor(IDEA_CAPTURE, 'idea-capture-once-v1'),
+      ideaCaptureOutput(),
+    );
+    const spec = taskBackedRunner(
+      {
+        executorId: 'spec-extract-once-v1',
+        executorVersion: 'v1',
+        graphKind: 'project',
+        nodeId: SPEC_EXTRACT as never,
+        kind: 'task_backed',
+        recoveryPolicy: 'settle_if_result',
+      },
+      'SPEC_EXTRACT',
+    );
+    register(registry, runners, idea.descriptor, idea);
+    register(registry, runners, spec.descriptor, spec);
+    const scheduled: string[] = [];
+    const deps = runnerDeps(base, {
+      registry,
+      runners,
+      resolver: acceptingResolver((p) => p.artifactId === 'idea-real-1'),
+      scheduleTask: (taskId) => scheduled.push(taskId),
+    });
+
+    const { run } = createProjectRun(deps, { projectId: 'p1', idempotencyKey: 'c3a' });
+    await driveRun(deps, 'p1', run.workflowRunId);
+
+    const exec = base.nodeExecutionRepo.getInFlightByRunNode(run.workflowRunId, SPEC_EXTRACT);
+    expect(exec?.taskId).not.toBeNull();
+    expect(scheduled).toEqual([exec!.taskId!]);
   });
 
   it('3b. task-backed infra retry：TASK_INTERRUPTED → 统一 claim 新 attempt 新 task（同 activation）', async () => {

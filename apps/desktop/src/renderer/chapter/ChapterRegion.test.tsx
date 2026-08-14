@@ -134,6 +134,53 @@ describe('ChapterRegion', () => {
     });
   });
 
+  it('失败的章节可从列表和详情重新发起，不会困在无正文页面', async () => {
+    const failedOverview = overview({
+      chapters: [
+        {
+          blueprintChapterId: CHAPTER_ID,
+          title: '第一章 远客',
+          goal: '引出客栈与主角',
+          runId: 'run-failed',
+          phase: 'failed',
+          hasCandidate: false,
+        },
+      ],
+    });
+    const api = setupDesktop({
+      getOverview: vi.fn().mockResolvedValue(failedOverview),
+      getRunState: vi.fn().mockResolvedValue(
+        runState({
+          runId: 'run-failed',
+          phase: 'failed',
+          terminalStatus: 'failed',
+          gateActive: false,
+          candidate: null,
+          critiques: [],
+        }),
+      ),
+      startRun: vi
+        .fn()
+        .mockResolvedValue(
+          runState({ phase: 'planning', gateActive: false, candidate: null, critiques: [] }),
+        ),
+    });
+    const user = userEvent.setup();
+    await renderRegion();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '重新生成' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '查看' }));
+    await waitFor(() => expect(screen.getByText(/这次流程已经结束/)).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '重新生成' }));
+
+    await waitFor(() => {
+      expect(api.startRun).toHaveBeenCalledWith({
+        projectId: PROJECT_ID,
+        blueprintChapterId: CHAPTER_ID,
+      });
+    });
+  });
+
   it('候选正文与自查意见可查看（意见默认折叠）', async () => {
     setupDesktop({
       getOverview: vi.fn().mockResolvedValue(
@@ -161,7 +208,8 @@ describe('ChapterRegion', () => {
     });
     // 自查意见默认折叠
     expect(screen.queryByText('套话')).toBeNull();
-    await user.click(screen.getByRole('button', { name: /查看自查意见/ }));
+    expect(screen.getByRole('button', { name: '查看自查结果（1 项，1 条问题）' })).toBeTruthy();
+    await user.click(screen.getByRole('button', { name: /查看自查结果/ }));
     expect(screen.getByText('套话')).toBeTruthy();
   });
 

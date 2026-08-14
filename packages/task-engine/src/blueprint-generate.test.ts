@@ -11,6 +11,8 @@ import {
   filterResearchForPrompt,
   classifyResearchInput,
   assertBlueprintDomainInvariants,
+  BLUEPRINT_AUTOMATIC_REPAIR_LIMIT,
+  BLUEPRINT_GENERATE_MAX_TOKENS,
   BLUEPRINT_GENERATE_SYSTEM_PROMPT,
   type BlueprintResearchInput,
   type ParsedBlueprintGenerate,
@@ -51,6 +53,13 @@ describe('parseBlueprintGenerateV1', () => {
   it('relationships 允许为空数组', () => {
     const parsed = parseBlueprintGenerateV1(valid({ relationships: [] }));
     expect(parsed.relationships).toEqual([]);
+  });
+
+  it('兼容 JSON 代码围栏和简短前后说明', () => {
+    expect(parseBlueprintGenerateV1(`\n\`\`\`json\n${valid()}\n\`\`\`\n`).premise).toContain(
+      '侦探',
+    );
+    expect(parseBlueprintGenerateV1(`蓝图如下：\n${valid()}\n请查收。`).premise).toContain('侦探');
   });
 
   it.each([
@@ -141,6 +150,11 @@ describe('parseBlueprintGenerateV1', () => {
 });
 
 describe('prompt 构造', () => {
+  it('为完整章节蓝图和模型推理保留 8192 token', () => {
+    expect(BLUEPRINT_GENERATE_MAX_TOKENS).toBe(8192);
+    expect(BLUEPRINT_AUTOMATIC_REPAIR_LIMIT).toBe(1);
+  });
+
   it('系统提示声明顶层结构与字段边界', () => {
     expect(BLUEPRINT_GENERATE_SYSTEM_PROMPT).toContain('schemaVersion');
     expect(BLUEPRINT_GENERATE_SYSTEM_PROMPT).toContain('chapters');

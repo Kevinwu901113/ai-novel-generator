@@ -20,6 +20,7 @@ import {
   executeResearchRun,
   executeSpecExtract,
   TaskExecutionError,
+  isTaskAlreadyClaimedError,
   type BlueprintGenerateExecutionDeps,
   type ChapterNodeExecutionDeps,
   type ResearchRunExecutionDeps,
@@ -156,12 +157,15 @@ export function scheduleGraphTask(
           await executeSpecExtract(engineDeps, taskId);
         }
       } catch (err) {
-        if (isConfigError(err)) {
+        if (isTaskAlreadyClaimedError(err)) {
+          // 幂等重复调度：另一个 runner 已经领取/结算，当前 runner 不得覆盖其状态。
+        } else if (isConfigError(err)) {
           // BLK-2：保持 PENDING，不 settle、不 drive，等配置后重调度
           closeDb();
           return;
+        } else {
+          settleRunnerFailure(deps, projDb, taskId, GRAPH_TASK_MESSAGES);
         }
-        settleRunnerFailure(deps, projDb, taskId, GRAPH_TASK_MESSAGES);
       }
       // D-B3-1：任务终结（成功或失败）后驱动一次 driveRun —— 结算刚完成的节点并
       // 推进后续 frontier。失败被吞：推进属尽力而为，权威路径仍是启动恢复的 driveRun。

@@ -18,6 +18,12 @@ describe('parseResearchPlanV1', () => {
     expect(questions).toEqual(['问题一', '问题二']);
   });
 
+  it('兼容 JSON 代码围栏和简短前后说明', () => {
+    const json = JSON.stringify({ schemaVersion: 1, questions: [{ text: '问题一' }] });
+    expect(parseResearchPlanV1(`\`\`\`json\n${json}\n\`\`\``)).toEqual(['问题一']);
+    expect(parseResearchPlanV1(`问题计划如下：\n${json}\n请查收。`)).toEqual(['问题一']);
+  });
+
   it('拒绝：非 JSON / 非对象 / 顶层字段不符 / schemaVersion 不符', () => {
     expect(() => parseResearchPlanV1('not json')).toThrow(/JSON/);
     expect(() => parseResearchPlanV1('[]')).toThrow(/对象/);

@@ -181,7 +181,7 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
 
       {phase.kind === 'beyond-intake' && (
         <div className="intake-status" role="status">
-          创作要求整理完成。后续阶段（调研、蓝图、成稿）将在后续版本逐步开放。
+          创作要求已整理，正在继续调研与蓝图流程。
         </div>
       )}
 

@@ -32,7 +32,12 @@ import type {
   WebSearchPort,
 } from '@ai-novel/research-engine';
 import { orchestrateResearch } from '@ai-novel/research-engine';
-import { sha256Hex, TaskExecutionError, type TaskEngineDeps } from './index.js';
+import {
+  sha256Hex,
+  TaskAlreadyClaimedError,
+  TaskExecutionError,
+  type TaskEngineDeps,
+} from './index.js';
 import { compensateFinalization } from './chapter-generation.js';
 
 // ── deps / 类型 ───────────────────────────────────────────────────
@@ -144,10 +149,25 @@ function parsePayload(payloadJson: string): ResearchRunPayload {
 
 /** 严格解析问题计划：exact top-level keys + 数量/内容边界 */
 export function parseResearchPlanV1(text: string): ReadonlyArray<string> {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  for (const candidate of new Set(candidates)) {
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      // 继续尝试代码围栏或简短前后说明中的受限 JSON 候选
+    }
+  }
+  if (parsed === undefined) {
     throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '问题计划不是合法 JSON');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -243,7 +263,7 @@ export async function executeResearchRun(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务类型不符: ${task.taskType}`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
   const payload = parsePayload(task.payloadJson);
 
@@ -296,7 +316,7 @@ export async function executeResearchRun(
   const nodeExecutionResultStore = deps.nodeExecutionResultStore;
 
   if (!taskRepo.claimPending(taskId)) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
 
   // ── 权威 execution context（从 DB 反查）──
@@ -497,6 +517,10 @@ export async function executeResearchRun(
   const now = deps.clock.now();
   try {
     transaction(() => {
+      bundle = {
+        ...bundle,
+        version: deps.researchRepo.getMaxVersion(task.projectId) + 1,
+      };
       deps.researchRepo.save(bundle, now);
 
       // execution-bound durable envelope：task 成功前必达（RW-1 不变量）。

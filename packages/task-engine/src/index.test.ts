@@ -8,7 +8,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   executeModelInvocationTest,
+  isTaskAlreadyClaimedError,
   sha256Hex,
+  TaskAlreadyClaimedError,
   TaskExecutionError,
   type TaskEngineDeps,
 } from './index.js';
@@ -579,7 +581,7 @@ describe('executeModelInvocationTest', () => {
       await executeModelInvocationTest(deps, 'task-1', '测试');
       expect.fail('应该抛出错误');
     } catch (err) {
-      expect(err).toBeInstanceOf(TaskExecutionError);
+      expect(err).toBeInstanceOf(TaskAlreadyClaimedError);
       expect((err as TaskExecutionError).code).toBe('TASK_STATE_CONFLICT');
     }
   });
@@ -592,9 +594,21 @@ describe('executeModelInvocationTest', () => {
       await executeModelInvocationTest(deps, 'task-1', '测试');
       expect.fail('应该抛出错误');
     } catch (err) {
-      expect(err).toBeInstanceOf(TaskExecutionError);
+      expect(err).toBeInstanceOf(TaskAlreadyClaimedError);
       expect((err as TaskExecutionError).code).toBe('TASK_STATE_CONFLICT');
     }
+  });
+
+  it('跨模块边界仍能按稳定标识识别重复领取错误', () => {
+    const error = Object.assign(new Error('任务已被其他进程领取'), {
+      name: 'TaskAlreadyClaimedError',
+      code: 'TASK_STATE_CONFLICT',
+    });
+
+    expect(isTaskAlreadyClaimedError(error)).toBe(true);
+    expect(
+      isTaskAlreadyClaimedError(new TaskExecutionError('TASK_STATE_CONFLICT', '其他冲突')),
+    ).toBe(false);
   });
 
   it('task 和 invocation 应该原子一致（成功）', async () => {

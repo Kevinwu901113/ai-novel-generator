@@ -23,6 +23,7 @@ interface TavilyResponseShape {
     readonly title?: unknown;
     readonly content?: unknown;
     readonly published_date?: unknown;
+    readonly score?: unknown;
   }>;
 }
 
@@ -65,6 +66,13 @@ export function createTavilySearchProvider(options: TavilySearchOptions): WebSea
             title: typeof r.title === 'string' && r.title.length > 0 ? r.title : r.url,
             snippet: typeof r.content === 'string' ? r.content.slice(0, 500) : '',
             publishedAt: typeof r.published_date === 'string' ? r.published_date : null,
+            relevanceScore:
+              typeof r.score === 'number' &&
+              Number.isFinite(r.score) &&
+              r.score >= 0 &&
+              r.score <= 1
+                ? r.score
+                : null,
           });
           if (mapped.length >= input.maxResults) break;
         }

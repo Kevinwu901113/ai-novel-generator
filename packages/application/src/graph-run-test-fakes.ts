@@ -261,6 +261,14 @@ export function createFakeGraphRunRepos() {
     listByProject(projectId: string): ReadonlyArray<ResearchBundle> {
       return [...researchBundles.values()].filter((b) => b.projectId === projectId);
     },
+    getMaxVersion(projectId: string): number {
+      return Math.max(
+        0,
+        ...[...researchBundles.values()]
+          .filter((bundle) => bundle.projectId === projectId)
+          .map((bundle) => bundle.version),
+      );
+    },
   };
 
   const storyBlueprints = new Map<string, { blueprint: StoryBlueprint; accepted: boolean }>();

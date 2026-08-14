@@ -409,6 +409,14 @@ describe('GE-4 Research E2E（真实 SQLite + 真实 executor + 生产 resolver�
         await driveRun(env.deps, 'p1', runId);
       }
 
+      // 同一项目的首轮 + 两次自动重试必须形成可辨识的版本链，不能全部显示成 v1。
+      expect(
+        db
+          .getResearchBundleRepository()
+          .listByProject('p1')
+          .map((bundle) => bundle.version),
+      ).toEqual([1, 2, 3]);
+
       // 人工升级：skip_research 放行到蓝图
       applyHumanDecision(
         env.deps as GraphRunDeps,

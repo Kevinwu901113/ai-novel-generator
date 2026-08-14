@@ -39,6 +39,8 @@ function ChapterListRow({
   readonly onStart: () => void;
 }) {
   const started = item.runId !== null;
+  const canRestart =
+    item.phase === 'failed' || item.phase === 'blocked' || item.phase === 'cancelled';
   return (
     <li className="chapter-list-row">
       <div className="chapter-list-main">
@@ -48,9 +50,16 @@ function ChapterListRow({
       <span className="chapter-list-phase">{chapterPhaseLabel(item.phase)}</span>
       <div className="chapter-list-actions">
         {started ? (
-          <button type="button" onClick={onOpen} disabled={busy}>
-            查看
-          </button>
+          <>
+            <button type="button" onClick={onOpen} disabled={busy}>
+              查看
+            </button>
+            {canRestart && (
+              <button type="button" className="btn-primary" onClick={onStart} disabled={busy}>
+                重新生成
+              </button>
+            )}
+          </>
         ) : (
           <button type="button" className="btn-primary" onClick={onStart} disabled={busy}>
             开始生成
@@ -205,6 +214,22 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
               {runState.phase === 'completed' && (
                 <div className="chapter-info-card" role="status">
                   这一章已写入稿件。切到上方的"稿件"可以继续编辑正文或导出整本。
+                </div>
+              )}
+
+              {(runState.phase === 'failed' ||
+                runState.phase === 'blocked' ||
+                runState.phase === 'cancelled') && (
+                <div className="chapter-info-card" role="status">
+                  <p>这次流程已经结束，可以重新发起本章生成。</p>
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    onClick={() => void actions.startRun(selectedItem.blueprintChapterId)}
+                    disabled={busy}
+                  >
+                    重新生成
+                  </button>
                 </div>
               )}
 

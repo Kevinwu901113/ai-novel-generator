@@ -6,12 +6,13 @@
  * - 编排：搜索 + 抓取 + 事实笔记 + 来源绑定；失败跳过；none 不调研。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   validateResearchTargetUrl,
   isSafeSourceUrl,
   determineResearchDepth,
   orchestrateResearch,
+  isSearchResultRelevant,
   type ResearchInput,
   type WebFetchPort,
   type WebSearchPort,
@@ -95,9 +96,19 @@ describe('orchestrateResearch', () => {
     const search: WebSearchPort = {
       async search(input) {
         return [
-          { url: 'https://example.com/a', title: 'A', snippet: 'snippet-a', publishedAt: null },
+          {
+            url: 'https://example.com/a',
+            title: '晚清租界格局 A',
+            snippet: '晚清租界格局摘要-a',
+            publishedAt: null,
+          },
           { url: 'http://127.0.0.1/blocked', title: 'blocked', snippet: '', publishedAt: null },
-          { url: 'https://example.com/b', title: 'B', snippet: 'snippet-b', publishedAt: null },
+          {
+            url: 'https://example.com/b',
+            title: '租界行政区划 B',
+            snippet: '当时租界行政区划摘要-b',
+            publishedAt: null,
+          },
         ].slice(0, input.maxResults) as SearchResult[];
       },
     };
@@ -106,7 +117,7 @@ describe('orchestrateResearch', () => {
         if (input.url.includes('blocked')) throw new Error('blocked');
         return {
           url: input.url,
-          title: input.url.includes('/a') ? 'A' : 'B',
+          title: input.url.includes('/a') ? '晚清租界格局 A' : '租界行政区划 B',
           extractedText: `正文 ${input.url}`,
           fetchedAt: '2026-08-04T00:00:00.000Z',
         } as FetchedDocument;
@@ -126,7 +137,8 @@ describe('orchestrateResearch', () => {
   }
 
   it('light 调研：搜索 + 抓取 + 事实笔记 + 来源绑定', async () => {
-    const { deps } = fakeDeps();
+    const { deps, search } = fakeDeps();
+    const searchSpy = vi.spyOn(search, 'search');
     const bundle = await orchestrateResearch(deps, {
       projectId: 'p1',
       depth: 'light',
@@ -139,6 +151,53 @@ describe('orchestrateResearch', () => {
     expect(bundle.questions[0].sources.length).toBeGreaterThan(0);
     expect(bundle.factNotes.length).toBeGreaterThan(0);
     expect(bundle.factNotes[0].sourceUrls[0]).toContain('example.com');
+    expect(bundle.factNotes[0].text).toBe(
+      '【晚清租界格局 A】晚清租界格局摘要-a\n【租界行政区划 B】当时租界行政区划摘要-b',
+    );
+    expect(bundle.questions[0].sources[0].excerpt).toBe('晚清租界格局摘要-a');
+    expect(bundle.factNotes[0].text).not.toContain('正文');
+    expect(searchSpy).toHaveBeenCalledWith({
+      query: '当时的租界格局是什么？',
+      maxResults: 3,
+    });
+    expect(bundle.conclusion).toContain('1 个调研问题，其中 1 个获得来源');
+  });
+
+  it('搜索摘要为空时才回退到已抓取正文，并压平网页空白', async () => {
+    const search: WebSearchPort = {
+      async search() {
+        return [
+          {
+            url: 'https://example.com/a',
+            title: '网页正文来源 A',
+            snippet: '  ',
+            publishedAt: null,
+          },
+        ];
+      },
+    };
+    const fetch: WebFetchPort = {
+      async fetch(input) {
+        return {
+          url: input.url,
+          title: '网页标题',
+          extractedText: '正文第一段\n\n   正文第二段',
+          fetchedAt: '2026-08-04T00:00:00.000Z',
+        };
+      },
+    };
+    const bundle = await orchestrateResearch(
+      {
+        search,
+        fetch,
+        idGenerator: { generate: () => crypto.randomUUID() },
+        clock: { now: () => '2026-08-04T00:00:00.000Z' },
+      },
+      { projectId: 'p1', depth: 'light', idea: '不会拼进查询', questions: ['网页正文内容'] },
+    );
+
+    expect(bundle.questions[0].sources[0].excerpt).toBe('正文第一段 正文第二段');
+    expect(bundle.factNotes[0].text).toBe('【网页正文来源 A】正文第一段 正文第二段');
   });
 
   it('none 调研：不搜索、不抓取', async () => {
@@ -161,9 +220,91 @@ describe('orchestrateResearch', () => {
       projectId: 'p1',
       depth: 'deep',
       idea: 'x',
-      questions: ['q'],
+      questions: ['当时的租界格局是什么？'],
     });
     // 仍有来源（example.com 成功），blocked 被跳过
     expect(bundle.questions[0].sources.every((s) => s.url.includes('example.com'))).toBe(true);
+  });
+
+  it('明显偏题来源在抓取前被过滤；相关来源仍进入事实笔记并在结论中披露过滤数', async () => {
+    const search: WebSearchPort = {
+      async search() {
+        return [
+          {
+            url: 'https://news.example/bbc-boat',
+            title: '男子刷新全球最长独木舟旅程纪录',
+            snippet: '一名探险家在海外完成长距离水上旅行。',
+            publishedAt: null,
+            relevanceScore: 0.12,
+          },
+          {
+            url: 'https://history.example/yangtze-shipping',
+            title: '民国长江航运与轮船业',
+            snippet: '民国时期长江轮船、码头与主要航线资料。',
+            publishedAt: null,
+            relevanceScore: 0.72,
+          },
+        ];
+      },
+    };
+    const fetch: WebFetchPort = {
+      fetch: vi.fn(async (input) => ({
+        url: input.url,
+        title: '页面',
+        extractedText: '正文',
+        fetchedAt: '2026-08-04T00:00:00.000Z',
+      })),
+    };
+
+    const bundle = await orchestrateResearch(
+      {
+        search,
+        fetch,
+        idGenerator: { generate: () => crypto.randomUUID() },
+        clock: { now: () => '2026-08-04T00:00:00.000Z' },
+      },
+      {
+        projectId: 'p1',
+        depth: 'deep',
+        idea: '民国长江信客',
+        questions: ['民国时期长江航运有哪些常见船只、码头与航线？'],
+      },
+    );
+
+    expect(fetch.fetch).toHaveBeenCalledTimes(1);
+    expect(fetch.fetch).toHaveBeenCalledWith({
+      url: 'https://history.example/yangtze-shipping',
+      timeoutMs: 10_000,
+    });
+    expect(bundle.questions[0].sources.map((source) => source.url)).toEqual([
+      'https://history.example/yangtze-shipping',
+    ]);
+    expect(bundle.conclusion).toContain('已自动过滤 1 个明显偏题结果');
+  });
+});
+
+describe('search result relevance', () => {
+  const question = '民国时期长江航运有哪些常见船只、码头与航线？';
+
+  it('接受标题或摘要与问题有稳定文本重合的结果', () => {
+    expect(
+      isSearchResultRelevant(question, {
+        url: 'https://history.example/yangtze',
+        title: '民国长江轮船运输史',
+        snippet: '长江码头与航线变迁。',
+        publishedAt: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('拒绝低分或标题摘要均偏题的结果，提供商高分不能替代可解释的文本相关性', () => {
+    const unrelated = {
+      url: 'https://news.example/boat',
+      title: '男子刷新全球最长独木舟旅程纪录',
+      snippet: '探险家完成海外水上旅行。',
+      publishedAt: null,
+    };
+    expect(isSearchResultRelevant(question, { ...unrelated, relevanceScore: 0.1 })).toBe(false);
+    expect(isSearchResultRelevant(question, { ...unrelated, relevanceScore: 0.9 })).toBe(false);
   });
 });

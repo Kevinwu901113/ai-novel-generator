@@ -6,6 +6,10 @@ coverage/
 *.db-journal
 *.db-wal
 pnpm-lock.yaml
+# Local agent metadata and nested worktrees are not product source files.
+.claude/
+.codex/
+CLAUDE.md
 # Writing experiment artifacts (real model candidates stay local, never formatted/committed).
 # `pnpm --filter` runs the CLI with cwd = package dir → match at any depth.
 **/artifacts/writing-experiments/

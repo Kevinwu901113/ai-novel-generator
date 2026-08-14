@@ -43,7 +43,12 @@ import {
   type StoryBlueprint,
 } from '@ai-novel/domain';
 import type { ResearchBundle } from '@ai-novel/research-engine';
-import { sha256Hex, TaskExecutionError, type TaskEngineDeps } from './index.js';
+import {
+  sha256Hex,
+  TaskAlreadyClaimedError,
+  TaskExecutionError,
+  type TaskEngineDeps,
+} from './index.js';
 import { compensateFinalization } from './chapter-generation.js';
 
 // ── deps / 类型 ───────────────────────────────────────────────────
@@ -79,6 +84,15 @@ const MAX_CHAPTER_GOAL_LENGTH = 500;
 const MAX_CHAPTER_TITLE_LENGTH = 200;
 const MAX_LONG_FIELD_LENGTH = 4000;
 const MAX_SHORT_FIELD_LENGTH = 300;
+
+/** 章节蓝图加上推理额度会超过网关默认 4096，结构化 JSON 必须完整闭合。 */
+export const BLUEPRINT_GENERATE_MAX_TOKENS = 8192;
+
+/**
+ * 模型偶尔会以 HTTP 成功返回空白或非法 JSON。蓝图是长结构化输出，允许一次带明确
+ * 纠错指令的自动重试；每次上游调用仍各自落一条 invocation，保证费用与失败可审计。
+ */
+export const BLUEPRINT_AUTOMATIC_REPAIR_LIMIT = 1;
 
 export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
   '你是小说故事蓝图生成助手。输入是创作想法、创作要求，以及（若有）调研资料。',
@@ -383,9 +397,24 @@ function requireExactKeys(
 /** 严格解析模型输出：exact top-level keys + 逐字段类型/长度/数量边界；越界一律 MODEL_RESPONSE_INVALID */
 export function parseBlueprintGenerateV1(text: string): ParsedBlueprintGenerate {
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+  for (const candidate of new Set(candidates)) {
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      // 继续尝试代码围栏或简短前后说明中的受限 JSON 候选
+    }
+  }
+  if (parsed === undefined) {
     throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '蓝图生成结果不是合法 JSON');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -617,7 +646,7 @@ export async function executeBlueprintGenerate(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务类型不符: ${task.taskType}`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
   const payload = parsePayload(task.payloadJson);
 
@@ -653,7 +682,7 @@ export async function executeBlueprintGenerate(
   const nodeExecutionResultStore = deps.nodeExecutionResultStore;
 
   if (!taskRepo.claimPending(taskId)) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
 
   // ── 权威 execution context（从 DB 反查）──
@@ -725,129 +754,178 @@ export async function executeBlueprintGenerate(
   });
 
   const updatedTask = taskRepo.getById(taskId)!;
-  const invocationId = idGenerator.generate();
-  invocationRepo.create({
-    id: invocationId,
-    projectId: task.projectId,
-    taskId: task.id,
-    providerProfileId: profile.id,
-    model: profile.model,
-    attemptNumber: updatedTask.attemptCount,
-    requestKind: 'blueprint_generate',
-    promptHash: sha256Hex(prompt),
-    requestMetadataJson: JSON.stringify({
-      promptLength: prompt.length,
-      rewriteAttempt: payload.rewriteAttempt,
-      researchStatus: research.status,
-    }),
-  });
-  transaction(() => {
-    requireCas(invocationRepo.markRunning(invocationId, 'PENDING'), '无法标记调用为 RUNNING');
-  });
-
-  const result = await invokeModel({
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    apiKey,
-    prompt,
-    systemPrompt: BLUEPRINT_GENERATE_SYSTEM_PROMPT,
-    protocol,
-  }).catch((err: unknown) => {
-    const message = err instanceof Error ? err.message : '模型调用异常';
+  const invokeAttempt = async (attemptPrompt: string, automaticRepairAttempt: number) => {
+    const previousInvocations = invocationRepo.listByTask(taskId);
+    const attemptNumber = previousInvocations.reduce(
+      (next, invocation) => Math.max(next, invocation.attemptNumber + 1),
+      updatedTask.attemptCount,
+    );
+    const currentInvocationId = idGenerator.generate();
+    invocationRepo.create({
+      id: currentInvocationId,
+      projectId: task.projectId,
+      taskId: task.id,
+      providerProfileId: profile.id,
+      model: profile.model,
+      attemptNumber,
+      requestKind: 'blueprint_generate',
+      promptHash: sha256Hex(attemptPrompt),
+      requestMetadataJson: JSON.stringify({
+        promptLength: attemptPrompt.length,
+        rewriteAttempt: payload.rewriteAttempt,
+        researchStatus: research.status,
+        automaticRepairAttempt,
+      }),
+    });
     transaction(() => {
       requireCas(
-        invocationRepo.markFailed(
-          invocationId,
-          ['RUNNING'],
-          'PROVIDER_CONNECTION_FAILED',
-          message,
-          null,
-        ),
-        '无法标记调用失败',
-      );
-      requireCas(
-        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
-        '无法标记任务失败',
+        invocationRepo.markRunning(currentInvocationId, 'PENDING'),
+        '无法标记调用为 RUNNING',
       );
     });
-    return { failed: true as const };
-  });
-  if ('failed' in result) return failedResult(deps, taskId, invocationId);
 
-  if (result.errorCode) {
-    transaction(() => {
-      requireCas(
-        invocationRepo.markFailed(
-          invocationId,
-          ['RUNNING'],
-          result.errorCode!,
-          result.errorMessage ?? '模型调用失败',
-          result.latencyMs,
-        ),
-        '无法标记调用失败',
-      );
-      requireCas(
-        taskRepo.failRunning(
-          taskId,
-          'TASK_EXECUTION_FAILED',
-          result.errorMessage ?? '模型调用失败',
-        ),
-        '无法标记任务失败',
-      );
+    const currentResult = await invokeModel({
+      baseUrl: profile.baseUrl,
+      model: profile.model,
+      apiKey,
+      prompt: attemptPrompt,
+      systemPrompt: BLUEPRINT_GENERATE_SYSTEM_PROMPT,
+      maxTokens: BLUEPRINT_GENERATE_MAX_TOKENS,
+      protocol,
+    }).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : '模型调用异常';
+      transaction(() => {
+        requireCas(
+          invocationRepo.markFailed(
+            currentInvocationId,
+            ['RUNNING'],
+            'PROVIDER_CONNECTION_FAILED',
+            message,
+            null,
+          ),
+          '无法标记调用失败',
+        );
+        requireCas(
+          taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
+          '无法标记任务失败',
+        );
+      });
+      return { failed: true as const };
     });
-    return failedResult(deps, taskId, invocationId);
+    if ('failed' in currentResult) {
+      return { failed: true as const, invocationId: currentInvocationId };
+    }
+
+    if (currentResult.errorCode) {
+      const canRepairProviderResponse =
+        currentResult.errorCode === 'PROVIDER_RESPONSE_INVALID' &&
+        automaticRepairAttempt < BLUEPRINT_AUTOMATIC_REPAIR_LIMIT;
+      transaction(() => {
+        requireCas(
+          invocationRepo.markFailed(
+            currentInvocationId,
+            ['RUNNING'],
+            currentResult.errorCode!,
+            currentResult.errorMessage ?? '模型调用失败',
+            currentResult.latencyMs,
+          ),
+          '无法标记调用失败',
+        );
+        if (!canRepairProviderResponse) {
+          requireCas(
+            taskRepo.failRunning(
+              taskId,
+              'TASK_EXECUTION_FAILED',
+              currentResult.errorMessage ?? '模型调用失败',
+            ),
+            '无法标记任务失败',
+          );
+        }
+      });
+      if (canRepairProviderResponse) {
+        return {
+          failed: false as const,
+          retryRequired: true as const,
+          invocationId: currentInvocationId,
+        };
+      }
+      return { failed: true as const, invocationId: currentInvocationId };
+    }
+
+    return {
+      failed: false as const,
+      retryRequired: false as const,
+      invocationId: currentInvocationId,
+      result: currentResult,
+    };
+  };
+
+  let automaticRepairAttempt = 0;
+  let attempt = await invokeAttempt(prompt, automaticRepairAttempt);
+  if (attempt.failed) return failedResult(deps, taskId, attempt.invocationId);
+  if (attempt.retryRequired) {
+    automaticRepairAttempt += 1;
+    const providerRepairPrompt = `${prompt}\n\n上一次响应为空或协议格式异常。请重新生成完整结果；只返回单个 JSON 对象，不要解释、不要代码围栏，也不要省略任何必填字段。`;
+    attempt = await invokeAttempt(providerRepairPrompt, automaticRepairAttempt);
+    if (attempt.failed) return failedResult(deps, taskId, attempt.invocationId);
+    if (attempt.retryRequired) {
+      throw new TaskExecutionError('TASK_EXECUTION_FAILED', '蓝图自动纠错次数状态异常');
+    }
   }
 
+  let invocationId = attempt.invocationId;
+  let result = attempt.result;
   let parsedResult: ParsedBlueprintGenerate;
-  try {
-    parsedResult = parseBlueprintGenerateV1(result.text);
-  } catch (err) {
-    const message = err instanceof TaskExecutionError ? err.message : '模型输出解析失败';
-    transaction(() => {
-      requireCas(
-        invocationRepo.markFailed(
-          invocationId,
-          ['RUNNING'],
-          'MODEL_RESPONSE_INVALID',
-          message,
-          result.latencyMs,
-        ),
-        '无法标记调用失败',
-      );
-      requireCas(
-        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
-        '无法标记任务失败',
-      );
-    });
-    return failedResult(deps, taskId, invocationId);
-  }
-
   const now = deps.clock.now();
 
-  // 域校验前置到最终事务外（复查随行修复 note 2）：与 parse 失败共享同一套错误码
-  // 归属（invocation=MODEL_RESPONSE_INVALID / task=TASK_EXECUTION_FAILED），不再
-  // 被最终事务失败后的通用 compensateFinalization 统一冲成 TASK_EXECUTION_FAILED。
-  try {
-    assertBlueprintDomainInvariants(parsedResult, now);
-  } catch (err) {
-    const message = err instanceof TaskExecutionError ? err.message : '蓝图域校验失败';
-    transaction(() => {
-      requireCas(
-        invocationRepo.markFailed(
-          invocationId,
-          ['RUNNING'],
-          'MODEL_RESPONSE_INVALID',
-          message,
-          result.latencyMs,
-        ),
-        '无法标记调用失败',
-      );
-      requireCas(
-        taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
-        '无法标记任务失败',
-      );
-    });
-    return failedResult(deps, taskId, invocationId);
+  while (true) {
+    try {
+      parsedResult = parseBlueprintGenerateV1(result.text);
+      // 域校验前置到最终事务外：与 parse 失败共享 MODEL_RESPONSE_INVALID 归属。
+      assertBlueprintDomainInvariants(parsedResult, now);
+      break;
+    } catch (err) {
+      const baseMessage = err instanceof TaskExecutionError ? err.message : '蓝图模型输出校验失败';
+      const outputTokens = result.usage.outputTokens;
+      const reachedOutputLimit =
+        result.finishReason === 'max_tokens' || result.finishReason === 'length';
+      const message = reachedOutputLimit
+        ? `${baseMessage}（模型输出达到${outputTokens === null ? '' : ` ${outputTokens} token`}上限，内容可能被截断）`
+        : baseMessage;
+      const canRepair =
+        !reachedOutputLimit && automaticRepairAttempt < BLUEPRINT_AUTOMATIC_REPAIR_LIMIT;
+
+      transaction(() => {
+        requireCas(
+          invocationRepo.markFailed(
+            invocationId,
+            ['RUNNING'],
+            'MODEL_RESPONSE_INVALID',
+            message,
+            result.latencyMs,
+          ),
+          '无法标记调用失败',
+        );
+        if (!canRepair) {
+          requireCas(
+            taskRepo.failRunning(taskId, 'TASK_EXECUTION_FAILED', message),
+            '无法标记任务失败',
+          );
+        }
+      });
+
+      if (!canRepair) return failedResult(deps, taskId, invocationId);
+
+      automaticRepairAttempt += 1;
+      const repairPrompt = `${prompt}\n\n上一次响应无法通过蓝图 JSON 校验。请重新生成完整结果；只返回单个 JSON 对象，不要解释、不要代码围栏，也不要省略任何必填字段。`;
+      attempt = await invokeAttempt(repairPrompt, automaticRepairAttempt);
+      if (attempt.failed) return failedResult(deps, taskId, attempt.invocationId);
+      if (attempt.retryRequired) {
+        throw new TaskExecutionError('TASK_EXECUTION_FAILED', '蓝图自动纠错次数状态异常');
+      }
+      invocationId = attempt.invocationId;
+      result = attempt.result;
+    }
   }
 
   // ── 最终事务：版本号取 MAX+1（D-B7-5）+ 落库 + envelope + invocation/task 终态 ──

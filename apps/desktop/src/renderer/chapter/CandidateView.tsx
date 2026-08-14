@@ -47,7 +47,9 @@ export function CandidateView({
             onClick={onToggleCritiques}
             aria-expanded={showCritiques}
           >
-            {showCritiques ? '收起自查意见' : `查看自查意见（${issueCount} 条）`}
+            {showCritiques
+              ? '收起自查结果'
+              : `查看自查结果（${critiques.length} 项，${issueCount} 条问题）`}
           </button>
           {showCritiques && (
             <ul className="critique-list">

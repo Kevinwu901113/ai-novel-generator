@@ -15,6 +15,7 @@
 
 import type { ProjectDatabase } from '@ai-novel/database';
 import type { TaskRepositoryPort, ModelInvocationRepositoryPort } from '@ai-novel/application';
+import { isTaskAlreadyClaimedError } from '@ai-novel/task-engine';
 
 // ── 依赖接口 ─────────────────────────────────────────────────────
 
@@ -196,8 +197,12 @@ export function scheduleRunnerRun<TDeps>(
   void (async () => {
     try {
       await execute(engineDeps, taskId);
-    } catch {
-      settleRunnerFailure(deps, projDb, taskId, messages);
+    } catch (err) {
+      // 幂等重复调度：后到 runner claim 失败时必须退出，不能反向误杀先到 runner
+      // 已经领取的 RUNNING task。真正的执行错误仍由 settlement 收口。
+      if (!isTaskAlreadyClaimedError(err)) {
+        settleRunnerFailure(deps, projDb, taskId, messages);
+      }
     } finally {
       closeDb();
     }

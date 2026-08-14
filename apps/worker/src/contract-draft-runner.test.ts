@@ -362,7 +362,9 @@ function createRunnerDeps(
 }
 
 async function waitForRun(): Promise<void> {
-  await new Promise((r) => setTimeout(r, 20));
+  // runner 刻意 deferred；并行全套测试时固定 sleep 20ms 不保证微任务已经得到调度。
+  // 以 close exactly once 作为真实完成信号，避免负载相关的假失败。
+  await vi.waitFor(() => expect(state.dbCloseCount).toBe(1), { timeout: 1000 });
 }
 
 let state: MockState;
@@ -413,15 +415,15 @@ describe('scheduleContractDraftRun', () => {
     expect(state.dbCloseCount).toBe(1);
   });
 
-  it('引擎异步抛错 → settlement 收口 + close once', async () => {
-    state.task = makeTask({ status: 'RUNNING' }); // 引擎抛 TASK_STATE_CONFLICT
+  it('任务已被另一 runner 领取 → 后到 runner 不反向误杀，且 close once', async () => {
+    state.task = makeTask({ status: 'RUNNING' });
     const result = scheduleContractDraftRun(createRunnerDeps(state), 'proj-1', 'task-1');
     expect(result).toEqual({ scheduled: true });
     await waitForRun();
-    // 非终态 RUNNING 被 settlement 标记 FAILED（固定安全消息）
-    expect(state.task.status).toBe('FAILED');
-    expect(state.task.errorCode).toBe('TASK_EXECUTION_FAILED');
-    expect(state.task.errorMessage).toBe('创作契约草案任务执行失败');
+    // claim 冲突是幂等重复调度，不是执行失败；后到 runner 不能杀掉先到 runner。
+    expect(state.task.status).toBe('RUNNING');
+    expect(state.task.errorCode).toBeNull();
+    expect(state.task.errorMessage).toBeNull();
     expect(state.dbCloseCount).toBe(1);
   });
 

@@ -63,6 +63,15 @@ export class ResearchBundleRepositoryImpl implements ResearchBundleRepositoryPor
       .all(projectId) as unknown as ReadonlyArray<DbResearchBundleRow>;
     return rows.map(decodeBundle);
   }
+
+  getMaxVersion(projectId: string): number {
+    const row = this.db
+      .prepare(
+        'SELECT COALESCE(MAX(version), 0) AS max_version FROM research_bundles WHERE project_id = ?',
+      )
+      .get(projectId) as { max_version: number };
+    return row.max_version;
+  }
 }
 
 /**

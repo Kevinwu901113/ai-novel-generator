@@ -40,7 +40,12 @@ import {
   validateCreationContractSections,
   type CreationContractSections,
 } from '@ai-novel/domain';
-import { sha256Hex, TaskExecutionError, type TaskEngineDeps } from './index.js';
+import {
+  sha256Hex,
+  TaskAlreadyClaimedError,
+  TaskExecutionError,
+  type TaskEngineDeps,
+} from './index.js';
 import { compensateFinalization } from './chapter-generation.js';
 
 // ── deps / 类型 ───────────────────────────────────────────────────
@@ -70,12 +75,41 @@ export interface SpecExtractExecutionResult {
 
 const MAX_NEXT_QUESTIONS = 3;
 
+/**
+ * MiMo 等推理模型会把内部推理也计入输出额度。默认 4096 token 可能在真正的 JSON
+ * 完成前耗尽，表现为正文末尾缺少闭合括号。抽取结果本身很短，但仍需给推理留足空间。
+ */
+export const SPEC_EXTRACT_MAX_TOKENS = 8192;
+
+const SECTIONS_SCHEMA_INSTRUCTIONS = [
+  'sections 必须严格遵守以下字段表；不得输出未列出的字段，不得用 null 表示未知值：',
+  '必填字段：premise（非空字符串）、genre（1..5 个字符串）、tone（1..5 个字符串）、',
+  'targetAudience（非空字符串）、narrativePov（FIRST|THIRD_LIMITED|THIRD_OMNISCIENT|SECOND|OTHER）、',
+  'tense（PAST|PRESENT|MIXED）、protagonist。',
+  '用户未明确语法时态时 tense 固定用 PAST；故事发生在未来不等于 FUTURE 时态，禁止输出枚举表以外的值。',
+  'protagonist 必须至少含 characterKey 与 name；characterKey 只能用 1..50 位小写英文字母、数字、_、-，',
+  '未知姓名可用用户原称谓（例如“老板娘”），characterKey 可用 protagonist。可选字段仅有 role、motivation、arc、traits。',
+  'sections 可选字段：themes、targetLength、structure、supportingCharacters、relationships、worldRules、',
+  'mustInclude、mustAvoid、contentBoundaries、unresolvedQuestions。信息未知时直接省略整个可选字段，禁止输出 null。',
+  'structure 必须是一个字符串，不得写成对象；例如“长篇连载，每章约3000字”。',
+  'themes、worldRules、mustInclude、mustAvoid、unresolvedQuestions 都必须是字符串数组；即使只有一项也写成 ["..."]，不得写成对象。',
+  'targetLength 只能是 {"unit":"words"或"chapters","value":正整数}，表示全书总字数或总章节数；每章字数只写入 structure。',
+  'protagonist.traits 必须是字符串数组。supportingCharacters 必须是对象数组，每项只允许 characterKey、name、role、relationship、traits；',
+  '其中 traits 也必须是字符串数组，characterKey 同样使用稳定英文键。',
+  'relationships 必须是对象数组，每项只允许 relationshipKey、fromCharacterKey、toCharacterKey、type、dynamic；',
+  'relationshipKey 与角色键使用相同的稳定英文格式，且引用的角色键必须已存在。',
+  'contentBoundaries 必须是对象，只允许 rating、allowedContent、prohibitedContent、notes；',
+  '其中 allowedContent 与 prohibitedContent 必须是字符串数组，其余字段是字符串。',
+  '最小合法形状示例（只示字段形状，内容必须依据用户输入改写）：',
+  '{"premise":"故事前提","genre":["奇幻"],"tone":["冷峻"],"targetAudience":"中文成人网文读者","narrativePov":"THIRD_LIMITED","tense":"PAST","protagonist":{"characterKey":"protagonist","name":"老板娘"}}',
+].join('\n');
+
 export const SPEC_EXTRACT_SYSTEM_PROMPT = [
   '你是小说创作要求的抽取助手。用户给出一段模糊的创作想法，可能附带此前的问答补充。',
   '你的职责：把已表达的信息整理为结构化创作要求；只在信息确实缺失且值得追问时提出下一批问题。',
   '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
   '{"schemaVersion":1,"decision":"ask_more"或"spec_complete","sections":{...},"nextQuestions":[...]}',
-  'sections 的结构与字段约束遵循用户消息中给出的 schema 说明；未知信息使用 schema 允许的空值表达，不得编造。',
+  'sections 的结构与字段约束必须逐项遵循用户消息中的完整字段表；未知的可选信息直接省略，禁止输出 null 或自造字段。',
   'decision 判定标准：题材/视角/篇幅/基调等关键要求已可支撑开始创作即 spec_complete；否则 ask_more。',
   'nextQuestions 规则：spec_complete 时必须为空数组；ask_more 时给 1 到 3 个问题，',
   '每个问题为 {"topic":"...","text":"...","rationale":"..."}，只问缺失且影响创作的信息，禁止重复已回答内容。',
@@ -133,9 +167,11 @@ export function buildSpecExtractPrompt(context: {
     '以下是创作想法与已知信息（JSON）：',
     JSON.stringify(payload),
     '',
-    'sections 的 schema 与 Creation Contract sections 域模型一致：包含题材类型、目标读者、',
-    '篇幅目标、作品形式、叙事视角、基调、节奏、语言偏好、必须包含、必须避免、内容边界、',
-    '人物、世界观等分区；结构必须能通过严格校验，枚举值与嵌套字段不得自造。',
+    SECTIONS_SCHEMA_INSTRUCTIONS,
+    '完整性硬约束：initialIdea 与 qa.answer 中用户明确说过的每一项要求都必须保留到 sections，',
+    '不能因为当前追问只问一个主题就忽略同一条回答里的其他信息。',
+    '字段映射：长篇/短篇、连载形式、每章字数、分卷方式等统一写入 structure；',
+    '“每章三千字左右”应规范为“每章约3000字”。明确的禁忌写入 mustAvoid，明确的结局选择写入 protagonist.arc 或 mustInclude。',
     '基线（baselineSections）非空时在其上增量修订：保留用户已确认的内容，只补充或修正新信息。',
     '现在输出结果 JSON。',
   ].join('\n');
@@ -157,14 +193,179 @@ function isNonEmptyBoundedString(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeSingleOrArray(value: unknown): unknown {
+  if (typeof value === 'string') return [value];
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value;
+  if (!isRecord(value) && !Array.isArray(value)) return value;
+
+  const flattened: string[] = [];
+  const collectStrings = (nested: unknown, depth: number): void => {
+    if (typeof nested === 'string') {
+      const trimmed = nested.trim();
+      if (trimmed.length > 0) flattened.push(trimmed);
+      return;
+    }
+    if (depth >= 3) return;
+    if (Array.isArray(nested)) {
+      for (const item of nested) collectStrings(item, depth + 1);
+      return;
+    }
+    if (isRecord(nested)) {
+      for (const item of Object.values(nested)) collectStrings(item, depth + 1);
+    }
+  };
+  collectStrings(value, 0);
+
+  // 布尔映射等没有字符串值，无法无歧义还原，继续交给域校验器拒绝。
+  return flattened.length > 0 ? [...new Set(flattened)] : value;
+}
+
+function stringifyRuleValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+    return value.join('；');
+  }
+  return JSON.stringify(value);
+}
+
+function normalizeStructure(value: unknown): unknown {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value) && value.every((item) => typeof item === 'string')) {
+    return value.join('；');
+  }
+  if (!isRecord(value)) return value;
+
+  return Object.entries(value)
+    .map(([key, raw]) => {
+      const rendered = stringifyRuleValue(raw);
+      const normalizedKey = key.toLowerCase().replaceAll('_', '').replaceAll('-', '');
+      const isPerChapter =
+        key.includes('每章') ||
+        key.includes('单章') ||
+        (/chapter/.test(normalizedKey) && /word|char|length|size/.test(normalizedKey));
+      if (!isPerChapter) return `${key}：${rendered}`;
+      if (typeof raw === 'number' && Number.isFinite(raw)) return `每章约${raw}字`;
+      return /每章|单章/.test(rendered) ? rendered : `每章${rendered}`;
+    })
+    .join('；');
+}
+
+/**
+ * 只规范化可无歧义还原的兼容模型常见偏差；未知字段、缺字段和任意坏类型仍交给域校验器拒绝。
+ * FUTURE 是模型把故事年代误当成语法时态的常见结果，按提示词声明的未指定默认值 PAST 归一。
+ */
+function normalizeSectionsForValidation(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const sections: Record<string, unknown> = { ...value };
+
+  for (const field of [
+    'genre',
+    'tone',
+    'themes',
+    'mustInclude',
+    'mustAvoid',
+    'unresolvedQuestions',
+  ]) {
+    if (field in sections) sections[field] = normalizeSingleOrArray(sections[field]);
+  }
+
+  if ('structure' in sections) sections.structure = normalizeStructure(sections.structure);
+
+  if (isRecord(sections.worldRules)) {
+    sections.worldRules = Object.entries(sections.worldRules).map(
+      ([key, rule]) => `${key}：${stringifyRuleValue(rule)}`,
+    );
+  } else if ('worldRules' in sections) {
+    sections.worldRules = normalizeSingleOrArray(sections.worldRules);
+  }
+
+  if (isRecord(sections.protagonist) && 'traits' in sections.protagonist) {
+    sections.protagonist = {
+      ...sections.protagonist,
+      traits: normalizeSingleOrArray(sections.protagonist.traits),
+    };
+  }
+  if (Array.isArray(sections.supportingCharacters)) {
+    sections.supportingCharacters = sections.supportingCharacters.map((character) =>
+      isRecord(character) && 'traits' in character
+        ? { ...character, traits: normalizeSingleOrArray(character.traits) }
+        : character,
+    );
+  }
+  if (isRecord(sections.contentBoundaries)) {
+    const boundaries: Record<string, unknown> = { ...sections.contentBoundaries };
+    for (const field of ['allowedContent', 'prohibitedContent']) {
+      if (field in boundaries) boundaries[field] = normalizeSingleOrArray(boundaries[field]);
+    }
+    sections.contentBoundaries = boundaries;
+  }
+
+  if (typeof sections.narrativePov === 'string') {
+    const pov = sections.narrativePov
+      .trim()
+      .toUpperCase()
+      .replaceAll('-', '_')
+      .replaceAll(' ', '_');
+    const povAliases: Readonly<Record<string, string>> = {
+      FIRST_PERSON: 'FIRST',
+      THIRD_PERSON_LIMITED: 'THIRD_LIMITED',
+      THIRD_PERSON_OMNISCIENT: 'THIRD_OMNISCIENT',
+      SECOND_PERSON: 'SECOND',
+      第三人称限制视角: 'THIRD_LIMITED',
+      第三人称限知: 'THIRD_LIMITED',
+      第三人称全知: 'THIRD_OMNISCIENT',
+      第一人称: 'FIRST',
+      第二人称: 'SECOND',
+    };
+    sections.narrativePov = povAliases[pov] ?? pov;
+  }
+  if (typeof sections.tense === 'string') {
+    const tense = sections.tense.trim().toUpperCase().replaceAll('-', '_').replaceAll(' ', '_');
+    const tenseAliases: Readonly<Record<string, string>> = {
+      PAST_TENSE: 'PAST',
+      PRESENT_TENSE: 'PRESENT',
+      MIXED_TENSE: 'MIXED',
+      FUTURE: 'PAST',
+      FUTURE_TENSE: 'PAST',
+      过去时: 'PAST',
+      现在时: 'PRESENT',
+      混合时态: 'MIXED',
+      将来时: 'PAST',
+    };
+    sections.tense = tenseAliases[tense] ?? tense;
+  }
+
+  return sections;
+}
+
+/** 容忍常见的代码围栏或简短前后说明，但提取出的 JSON 仍须通过后续全部严格校验。 */
+function parseModelJson(text: string): unknown {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+  for (const candidate of new Set(candidates)) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // 继续尝试下一个受限候选
+    }
+  }
+  throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '创作要求抽取结果不是合法 JSON');
+}
+
 /** 严格解析模型输出：exact top-level keys；sections 走域校验器；问题数量/形状/边界受限 */
 export function parseSpecExtractV1(text: string): ParsedSpecExtract {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '创作要求抽取结果不是合法 JSON');
-  }
+  const parsed = parseModelJson(text);
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '创作要求抽取结果不是对象');
   }
@@ -184,9 +385,13 @@ export function parseSpecExtractV1(text: string): ParsedSpecExtract {
 
   let sections: CreationContractSections;
   try {
-    sections = validateCreationContractSections(obj.sections);
-  } catch {
-    throw new TaskExecutionError('MODEL_RESPONSE_INVALID', '抽取结果 sections 未通过域校验');
+    sections = validateCreationContractSections(normalizeSectionsForValidation(obj.sections));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : '未知原因';
+    throw new TaskExecutionError(
+      'MODEL_RESPONSE_INVALID',
+      `抽取结果 sections 未通过域校验：${detail}`,
+    );
   }
 
   if (!Array.isArray(obj.nextQuestions)) {
@@ -257,7 +462,7 @@ export async function executeSpecExtract(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务类型不符: ${task.taskType}`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
   const payload = parsePayload(task.payloadJson);
 
@@ -292,7 +497,7 @@ export async function executeSpecExtract(
   }
 
   if (!taskRepo.claimPending(taskId)) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
 
   // ── 权威 execution context（从 DB 反查，不信任调用方手拼 context）──
@@ -391,6 +596,7 @@ export async function executeSpecExtract(
     apiKey,
     prompt,
     systemPrompt: SPEC_EXTRACT_SYSTEM_PROMPT,
+    maxTokens: SPEC_EXTRACT_MAX_TOKENS,
     protocol,
   }).catch((err: unknown) => {
     const message = err instanceof Error ? err.message : '模型调用异常';
@@ -459,7 +665,13 @@ export async function executeSpecExtract(
   try {
     parsedResult = parseSpecExtractV1(result.text);
   } catch (err) {
-    const message = err instanceof TaskExecutionError ? err.message : '模型输出解析失败';
+    const baseMessage = err instanceof TaskExecutionError ? err.message : '模型输出解析失败';
+    const outputTokens = result.usage.outputTokens;
+    const reachedOutputLimit =
+      result.finishReason === 'max_tokens' || result.finishReason === 'length';
+    const message = reachedOutputLimit
+      ? `${baseMessage}（模型输出达到${outputTokens === null ? '' : ` ${outputTokens} token`}上限，内容可能被截断）`
+      : baseMessage;
     transaction(() => {
       requireCas(
         invocationRepo.markFailed(

@@ -50,11 +50,17 @@ import {
   type ChapterCritiqueIssue,
   type ChapterScene,
   type ChapterScenePlan,
+  type CreationContractSections,
   type CritiqueVerdict,
   type StoryBlueprint,
   type TaskType,
 } from '@ai-novel/domain';
-import { sha256Hex, TaskExecutionError, type TaskEngineDeps } from './index.js';
+import {
+  sha256Hex,
+  TaskAlreadyClaimedError,
+  TaskExecutionError,
+  type TaskEngineDeps,
+} from './index.js';
 import { compensateFinalization } from './chapter-generation.js';
 
 // ── deps / 结果类型 ───────────────────────────────────────────────
@@ -111,6 +117,11 @@ const MAX_SUMMARY_LENGTH = 2000;
  */
 const PROSE_MAX_TOKENS = 8192;
 
+const MIN_PER_CHAPTER_TARGET = 500;
+const MAX_PER_CHAPTER_TARGET = 40000;
+const MIN_TARGET_RATIO = 0.85;
+const MAX_TARGET_RATIO = 1.2;
+
 // ── 系统提示词 ────────────────────────────────────────────────────
 
 /**
@@ -122,6 +133,10 @@ const PROSE_DISCIPLINE = [
   '- 用具体的动作、对白、可感知的细节推进，不用抽象总结代替场景；',
   '- 不写"他感到一阵莫名的悸动"这类直陈情绪的句子，情绪由动作与对白外显；',
   '- 比喻克制：一个场景至多一个新鲜比喻，禁止连续排比式比喻堆叠；',
+  '- 严控“像、像是、仿佛、似乎”：不要用连续类比替代准确观察；同一千字内最多两处；',
+  '- 环境细节必须被人物动作触发，不要用“材质 + 颜色 + 气味 + 光线”的清单式静态陈列开场；',
+  '- 禁止模板化微表情与过场句：“机械地”“精准而重复”“几不可察地皱眉又松开”',
+  '“眼神空洞”“处理完这些”“不知何时”“声音里带着疲惫”等应改成可见动作或直接删掉；',
   '- 禁止空泛套话（"仿佛整个世界都安静了""命运的齿轮开始转动""空气仿佛凝固"）；',
   '- 对白要有区分度：不同人物的用词习惯、句长、语气必须能被读者分辨；',
   '- 不做上帝视角的主题升华与读者说教，不在结尾强行点题；',
@@ -132,6 +147,10 @@ export const CHAPTER_PLAN_SYSTEM_PROMPT = [
   '你是中文小说的章节场景规划助手。输入是故事蓝图、本章目标与创作要求。',
   '你的职责：把本章目标拆解为有先后因果的场景序列，每个场景给出梗概与关键节拍。',
   '规划必须服务于本章目标，不得越界写到后续章节的内容，也不得重复已完成章节已经交代过的信息。',
+  '本章 goal 是范围边界；蓝图中的其他人物、情节线和结局只是约束背景，不是本章待办清单。',
+  '除非本章 goal 明确需要，否则不要让其他人物登场，不要提前兑现后续情节。',
+  '输入中的 lengthRequirement 非空时，按目标篇幅控制场景颗粒度；约 3000 字通常规划 3..5 个',
+  '有实质推进的场景，不要拆成大量只能匆匆带过的短场景。',
   '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
   '{"schemaVersion":1,"title":"...","scenes":[{"summary":"...","beats":["...","..."]}]}',
   `字段边界：scenes ${MIN_SCENES}..${MAX_SCENES} 个；每个场景 beats 0..${MAX_BEATS} 条；`,
@@ -142,13 +161,13 @@ export const CHAPTER_DRAFT_SYSTEM_PROMPT = [
   '你是中文小说正文写作助手。输入是故事蓝图、本章目标、场景计划与创作要求。',
   '你的职责：按场景计划写出这一章的完整正文。',
   '正文必须覆盖场景计划的全部场景，按计划顺序推进，不得跳过场景，也不得写入计划之外的情节。',
+  '输入中的 lengthRequirement 非空时是硬约束：content 的正文字符数必须落在 minimumCharacters',
+  '与 maximumCharacters 之间；不得用重复描写、空泛抒情或元信息凑字数。',
   'regenerateAttempt 大于 0 时说明用户否决了上一版草稿，本次必须换一种写法（不同的切入',
   '场景、叙述视角或节奏安排），不得只做措辞层面的微调。',
   PROSE_DISCIPLINE,
-  '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
-  '{"schemaVersion":1,"title":"...","content":"..."}',
-  `字段边界：content 为本章完整正文（${MIN_CONTENT_LENGTH}..${MAX_CONTENT_LENGTH} 字符，`,
-  '段落之间用换行分隔，不要写章节号或"第X章"以外的元信息）。字符串字段禁止为空。',
+  '只输出本章正文，不要 JSON、Markdown 代码围栏、标题、章节号、写作说明或其它元信息。',
+  `正文边界：${MIN_CONTENT_LENGTH}..${MAX_CONTENT_LENGTH} 字符，段落之间直接用换行分隔。`,
 ].join('\n');
 
 const CRITIC_SYSTEM_PROMPT_HEAD = [
@@ -159,6 +178,8 @@ const CRITIC_SYSTEM_PROMPT_HEAD = [
 const CRITIC_SYSTEM_PROMPT_TAIL = [
   '判定标准：只有当问题严重到必须改写才判 needs_rewrite；纯粹的偏好差异判 pass。',
   '判 needs_rewrite 时必须给出至少一条可定位、可执行的问题（excerpt 取自候选正文原文）。',
+  'pass 不等于只写表扬：发现可执行但不阻塞的问题时仍应放入 issues 并标 minor；',
+  '只有逐项核查后确实找不到具体问题，issues 才能为空。summary 禁止只写“符合要求”一类空泛结论。',
   '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
   '{"schemaVersion":1,"verdict":"pass"|"needs_rewrite","summary":"...",' +
     '"issues":[{"severity":"minor"|"major","excerpt":"...","problem":"...","suggestion":"..."}]}',
@@ -173,7 +194,7 @@ const CRITIC_DIMENSIONS: Readonly<Record<string, { role: string; focus: Readonly
       focus: [
         '审查维度：连续性。检查本章与蓝图设定、人物设定、已确立的事实是否自洽；',
         '人物是否做出与其设定/动机相悖的行为；时间线、地点、道具、称谓是否前后一致；',
-        '是否出现蓝图中不存在的重大设定而未作交代。',
+        '是否出现蓝图中不存在的重大设定而未作交代；是否把当前 goal 未要求的后续角色或事件提前写入。',
       ],
     },
     [STYLE_CRITIC]: {
@@ -181,7 +202,8 @@ const CRITIC_DIMENSIONS: Readonly<Record<string, { role: string; focus: Readonly
       focus: [
         '审查维度：语言与风格。检查是否有 AI 腔（空泛抒情、机械排比、滥用比喻、',
         '直陈情绪、每段同样节奏）；对白是否有人物区分度；是否有语病、重复用词、',
-        '视角混乱；叙述与创作要求声明的语气/风格是否一致。',
+        '视角混乱；叙述与创作要求声明的语气/风格是否一致。必须实际统计“像、像是、仿佛、似乎”',
+        '等类比标记的密度，并检查清单式环境描写、模板化微表情和总结式过场；不能仅凭题材氛围相符就判无问题。',
       ],
     },
     [REQUIREMENT_CRITIC]: {
@@ -189,6 +211,8 @@ const CRITIC_DIMENSIONS: Readonly<Record<string, { role: string; focus: Readonly
       focus: [
         '审查维度：要求符合度。检查本章是否达成蓝图给定的本章目标；是否覆盖场景计划的',
         '全部场景且未擅自新增计划外情节；是否违反创作要求中的题材、受众、篇幅、禁忌等约束。',
+        '输入提供 candidateCharacterCount 与 lengthRequirement 时必须逐项比对；低于 minimumCharacters',
+        '或高于 maximumCharacters 都是 major 问题，必须判 needs_rewrite。',
       ],
     },
   };
@@ -209,22 +233,36 @@ export const CHAPTER_REWRITE_SYSTEM_PROMPT = [
   '你的职责：在保留候选正文可用部分的前提下，逐条修复问题清单，输出完整的新版正文。',
   'userFeedback 非空时它是用户的原话，优先级高于问题清单：必须逐条落实；',
   '若用户意见与问题清单冲突，以用户意见为准。',
+  '输入中的 lengthRequirement 非空时是硬约束，新版完整正文必须落在给定字符数范围内。',
   '硬约束：必须输出完整正文（不是差异、不是片段、不是修改说明）；不得借改写之机改变',
   '本章目标或引入场景计划之外的情节；未被问题清单点到的段落应尽量保持原样。',
   PROSE_DISCIPLINE,
-  '输出必须是单个 JSON 对象，不加任何解释文字或代码围栏，顶层结构精确为：',
-  '{"schemaVersion":1,"title":"...","content":"..."}',
-  `字段边界：content 为本章完整正文（${MIN_CONTENT_LENGTH}..${MAX_CONTENT_LENGTH} 字符）。`,
-  '字符串字段禁止为空。',
+  '只输出改写后的完整正文，不要 JSON、Markdown 代码围栏、标题、章节号、修改说明或其它元信息。',
+  `正文边界：${MIN_CONTENT_LENGTH}..${MAX_CONTENT_LENGTH} 字符，段落之间直接用换行分隔。`,
 ].join('\n');
 
 // ── 严格解析 ──────────────────────────────────────────────────────
 
 function parseJsonObject(text: string, what: string): Record<string, unknown> {
+  const trimmed = text.trim();
+  const candidates = [trimmed];
+  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
+  if (fenced) candidates.push(fenced[1].trim());
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
   let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
+  for (const candidate of new Set(candidates)) {
+    try {
+      parsed = JSON.parse(candidate);
+      break;
+    } catch {
+      // 继续尝试代码围栏或简短前后说明中的受限 JSON 候选
+    }
+  }
+  if (parsed === undefined) {
     throw new TaskExecutionError('MODEL_RESPONSE_INVALID', `${what}不是合法 JSON`);
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -311,19 +349,43 @@ export interface ParsedChapterProse {
   readonly content: string;
 }
 
-/** DRAFT 与 REWRITE 共用同一输出形状（都是"完整正文"） */
-export function parseChapterProseV1(text: string, what: string): ParsedChapterProse {
-  const obj = parseJsonObject(text, what);
-  assertExactKeys(obj, ['schemaVersion', 'title', 'content'], what);
-  assertSchemaVersion(obj, what);
-  const title = requireString(obj.title, `${what} title`, MAX_TITLE_LENGTH);
+/**
+ * 正文不用 JSON 包裹：长篇正文天然含大量换行、引号，兼容模型很容易忘记转义，且 JSON
+ * 尾括号只有在完整输出后才出现，任何截断都会让整章不可恢复。仍兼容旧版合法 JSON，方便
+ * 已脚本化的 provider 与滚动升级；新协议以蓝图标题为权威标题，只解析纯正文。
+ */
+export function parseChapterProseV1(
+  text: string,
+  what: string,
+  fallbackTitle = '未命名章节',
+): ParsedChapterProse {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    const obj = parseJsonObject(trimmed, what);
+    assertExactKeys(obj, ['schemaVersion', 'title', 'content'], what);
+    assertSchemaVersion(obj, what);
+    return {
+      title: requireString(obj.title, `${what} title`, MAX_TITLE_LENGTH),
+      content: requireString(
+        obj.content,
+        `${what} content`,
+        MAX_CONTENT_LENGTH,
+        MIN_CONTENT_LENGTH,
+      ),
+    };
+  }
+
+  const fenced = /^```(?:markdown|md|text)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
   const content = requireString(
-    obj.content,
+    fenced ? fenced[1] : trimmed,
     `${what} content`,
     MAX_CONTENT_LENGTH,
     MIN_CONTENT_LENGTH,
   );
-  return { title, content };
+  return {
+    title: requireString(fallbackTitle, `${what} title`, MAX_TITLE_LENGTH),
+    content,
+  };
 }
 
 export interface ParsedChapterCritique {
@@ -427,12 +489,53 @@ export interface ChapterTaskContext {
   readonly chapterNumber: number;
   /** 蓝图中排在目标章节之前的章节目标（本 run 只写一章，前情以蓝图目标为准） */
   readonly precedingChapters: ReadonlyArray<BlueprintChapter>;
-  readonly creationSpec: unknown;
+  readonly creationSpec: CreationContractSections;
   readonly scenePlan: ChapterScenePlan | null;
   readonly candidate: ChapterCandidate | null;
   readonly critiques: ReadonlyArray<ChapterCritique>;
   /** 用户对当前候选提出的改写意见（B10 D-B10-3；未提意见时 null） */
   readonly userFeedback: string | null;
+}
+
+interface ChapterLengthRequirement {
+  readonly targetCharacters: number;
+  readonly minimumCharacters: number;
+  readonly maximumCharacters: number;
+}
+
+/** 从 structure 中提取用户明确给出的“每章 N 字”要求；未知时不猜。 */
+export function inferPerChapterTargetCharacters(
+  creationSpec: CreationContractSections,
+): number | null {
+  if (!creationSpec.structure) return null;
+  const normalized = creationSpec.structure
+    .normalize('NFKC')
+    .replace(/[，,]/g, '')
+    .replace(/\s+/g, ' ');
+  const match = /(?:每章|单章|一章)[^\d]{0,12}(\d{3,6})\s*(?:字|字符)/.exec(normalized);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isSafeInteger(value) &&
+    value >= MIN_PER_CHAPTER_TARGET &&
+    value <= MAX_PER_CHAPTER_TARGET
+    ? value
+    : null;
+}
+
+function chapterLengthRequirement(
+  creationSpec: CreationContractSections,
+): ChapterLengthRequirement | null {
+  const targetCharacters = inferPerChapterTargetCharacters(creationSpec);
+  if (targetCharacters === null) return null;
+  return {
+    targetCharacters,
+    minimumCharacters: Math.floor(targetCharacters * MIN_TARGET_RATIO),
+    maximumCharacters: Math.ceil(targetCharacters * MAX_TARGET_RATIO),
+  };
+}
+
+function countProseCharacters(content: string): number {
+  return [...content.replace(/\s/g, '')].length;
 }
 
 interface ChapterRunBinding {
@@ -498,7 +601,7 @@ function loadContext(
   if (!specVersion) {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '章节 run 绑定的创作要求版本不存在');
   }
-  let creationSpec: unknown;
+  let creationSpec: CreationContractSections;
   try {
     creationSpec = validateCreationContractSections(JSON.parse(specVersion.sectionsJson));
   } catch {
@@ -566,6 +669,7 @@ export function buildChapterPlanPrompt(ctx: ChapterTaskContext): string {
       blueprint: blueprintContextPayload(ctx),
       chapter: chapterContextPayload(ctx),
       creationSpec: ctx.creationSpec,
+      lengthRequirement: chapterLengthRequirement(ctx.creationSpec),
       note: '结局方向仅用于把握伏笔与走向，本章不得提前写出结局。',
     },
     null,
@@ -579,6 +683,7 @@ export function buildChapterDraftPrompt(ctx: ChapterTaskContext): string {
       blueprint: blueprintContextPayload(ctx),
       chapter: chapterContextPayload(ctx),
       creationSpec: ctx.creationSpec,
+      lengthRequirement: chapterLengthRequirement(ctx.creationSpec),
       scenePlan: ctx.scenePlan
         ? { title: ctx.scenePlan.title, scenes: ctx.scenePlan.scenes }
         : null,
@@ -603,6 +708,8 @@ export function buildChapterCritiquePrompt(ctx: ChapterTaskContext): string {
         ? { title: ctx.scenePlan.title, scenes: ctx.scenePlan.scenes }
         : null,
       candidate: { title: ctx.candidate.title, content: ctx.candidate.content },
+      candidateCharacterCount: countProseCharacters(ctx.candidate.content),
+      lengthRequirement: chapterLengthRequirement(ctx.creationSpec),
       rewriteAttempt: ctx.payload.rewriteAttempt,
     },
     null,
@@ -634,6 +741,7 @@ export function buildChapterRewritePrompt(ctx: ChapterTaskContext): string {
       blueprint: blueprintContextPayload(ctx),
       chapter: chapterContextPayload(ctx),
       creationSpec: ctx.creationSpec,
+      lengthRequirement: chapterLengthRequirement(ctx.creationSpec),
       scenePlan: ctx.scenePlan
         ? { title: ctx.scenePlan.title, scenes: ctx.scenePlan.scenes }
         : null,
@@ -654,6 +762,81 @@ export function buildChapterRewritePrompt(ctx: ChapterTaskContext): string {
   );
 }
 
+function appendCritiqueIssue(
+  parsed: ParsedChapterCritique,
+  issue: ChapterCritiqueIssue,
+  summarySuffix: string,
+): ParsedChapterCritique {
+  const summaryPrefix = parsed.summary.slice(
+    0,
+    Math.max(0, MAX_SUMMARY_LENGTH - summarySuffix.length),
+  );
+  return {
+    verdict: 'needs_rewrite',
+    summary: `${summaryPrefix}${summarySuffix}`,
+    issues: [issue, ...parsed.issues].slice(0, MAX_ISSUES),
+  };
+}
+
+function enforceDeterministicCritiqueChecks(
+  ctx: ChapterTaskContext,
+  parsed: ParsedChapterCritique,
+): ParsedChapterCritique {
+  if (!ctx.candidate) return parsed;
+
+  if (ctx.nodeId === REQUIREMENT_CRITIC) {
+    const requirement = chapterLengthRequirement(ctx.creationSpec);
+    if (requirement) {
+      const actual = countProseCharacters(ctx.candidate.content);
+      if (actual < requirement.minimumCharacters || actual > requirement.maximumCharacters) {
+        const direction = actual < requirement.minimumCharacters ? '不足' : '超出';
+        return appendCritiqueIssue(
+          parsed,
+          {
+            severity: 'major',
+            excerpt: '',
+            problem: `正文 ${actual} 字，${direction}用户要求的约 ${requirement.targetCharacters} 字范围（${requirement.minimumCharacters}..${requirement.maximumCharacters} 字）。`,
+            suggestion:
+              '在不增加计划外情节的前提下调整场景展开与节奏，使完整正文落入目标字数范围。',
+          },
+          `；确定性篇幅检查：${actual} 字，不在 ${requirement.minimumCharacters}..${requirement.maximumCharacters} 字范围内`,
+        );
+      }
+    }
+  }
+
+  if (ctx.nodeId === STYLE_CRITIC) {
+    const markers = ctx.candidate.content.match(/仿佛|似乎|像是|像被|像一(?:缕|层|把|只)/g) ?? [];
+    const characterCount = Math.max(1, countProseCharacters(ctx.candidate.content));
+    const alreadyReported = parsed.issues.some((issue) =>
+      /比喻|类比|仿佛|似乎|AI 腔/.test(issue.problem),
+    );
+    if (
+      !alreadyReported &&
+      markers.length >= 6 &&
+      (markers.length * 1000) / characterCount >= 2.5
+    ) {
+      const firstMarker = markers[0]!;
+      const markerAt = ctx.candidate.content.indexOf(firstMarker);
+      const excerpt = ctx.candidate.content
+        .slice(Math.max(0, markerAt - 30), markerAt + firstMarker.length + 50)
+        .trim();
+      return appendCritiqueIssue(
+        parsed,
+        {
+          severity: 'major',
+          excerpt,
+          problem: `全章出现 ${markers.length} 处“像/仿佛/似乎”类比标记，密度过高，形成模板化 AI 腔。`,
+          suggestion: '保留少数真正必要的比喻，其余改为人物动作、物体变化或更准确的感官事实。',
+        },
+        `；确定性风格检查：类比标记 ${markers.length} 处，密度过高`,
+      );
+    }
+  }
+
+  return parsed;
+}
+
 // ── 共享执行骨架 ──────────────────────────────────────────────────
 
 interface ChapterTaskSpec<P> {
@@ -662,7 +845,7 @@ interface ChapterTaskSpec<P> {
   readonly maxTokens?: number;
   systemPrompt(ctx: ChapterTaskContext): string;
   buildPrompt(ctx: ChapterTaskContext): string;
-  parse(text: string): P;
+  parse(text: string, ctx: ChapterTaskContext): P;
   /**
    * 在最终事务内执行：持久化领域行，返回 envelope / task.result 所需摘要。
    * `provenance` 是本次模型调用的身份（GE-7：候选行要能追溯到 task + invocation，
@@ -733,7 +916,7 @@ async function runChapterModelTask<P>(
     throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务类型不符: ${task.taskType}`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
   const payload = parseChapterTaskPayload(task.payloadJson);
 
@@ -769,7 +952,7 @@ async function runChapterModelTask<P>(
   const nodeExecutionResultStore = deps.nodeExecutionResultStore;
 
   if (!taskRepo.claimPending(taskId)) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
 
   // ── 权威 execution context（从 DB 反查，不信任调用方手拼 context）──
@@ -855,7 +1038,15 @@ async function runChapterModelTask<P>(
 
   let parsed: P;
   try {
-    parsed = spec.parse(result.text);
+    const outputLimitReached =
+      result.finishReason === 'max_tokens' || result.finishReason === 'length';
+    if (outputLimitReached) {
+      throw new TaskExecutionError(
+        'MODEL_RESPONSE_INVALID',
+        `${spec.requestKind} 达到 ${spec.maxTokens ?? '默认'} token 输出上限，结果可能被截断`,
+      );
+    }
+    parsed = spec.parse(result.text, ctx);
   } catch (err) {
     const message = err instanceof Error ? err.message : '模型输出解析失败';
     failAfterClaim(deps, taskId, invocationId, 'MODEL_RESPONSE_INVALID', message, result.latencyMs);
@@ -968,7 +1159,7 @@ export async function executeChapterDraftNode(
     maxTokens: PROSE_MAX_TOKENS,
     systemPrompt: () => CHAPTER_DRAFT_SYSTEM_PROMPT,
     buildPrompt: buildChapterDraftPrompt,
-    parse: (text) => parseChapterProseV1(text, '章节草稿'),
+    parse: (text, ctx) => parseChapterProseV1(text, '章节草稿', ctx.chapter.title),
     persist: (ctx, parsed, now, provenance) => {
       const revisionNo = deps.candidateRepo.getMaxRevisionNo(ctx.projectId, ctx.graphRunId) + 1;
       const artifactId = deps.idGenerator.generate();
@@ -1020,15 +1211,16 @@ export async function executeChapterCritique(
       if (!ctx.candidate) {
         throw new TaskExecutionError('TASK_EXECUTION_FAILED', '审查任务缺少候选正文');
       }
+      const checked = enforceDeterministicCritiqueChecks(ctx, parsed);
       const critique = createChapterCritique({
         id: deps.idGenerator.generate(),
         projectId: ctx.projectId,
         graphRunId: ctx.graphRunId,
         candidateRevisionNo: ctx.candidate.revisionNo,
         criticNodeId: ctx.nodeId,
-        verdict: parsed.verdict,
-        summary: parsed.summary,
-        issues: parsed.issues,
+        verdict: checked.verdict,
+        summary: checked.summary,
+        issues: checked.issues,
         createdAt: now,
       });
       deps.critiqueRepo.save(critique);
@@ -1037,7 +1229,7 @@ export async function executeChapterCritique(
         artifactId: null,
         artifactVersion: null,
         contentJson: JSON.stringify({ kind: 'chapterCritique', critique }),
-        outcome: { condition: 'critique_verdict', value: parsed.verdict },
+        outcome: { condition: 'critique_verdict', value: checked.verdict },
         resultJson: JSON.stringify({
           critiqueId: critique.id,
           verdict: critique.verdict,
@@ -1059,7 +1251,8 @@ export async function executeChapterRewrite(
     maxTokens: PROSE_MAX_TOKENS,
     systemPrompt: () => CHAPTER_REWRITE_SYSTEM_PROMPT,
     buildPrompt: buildChapterRewritePrompt,
-    parse: (text) => parseChapterProseV1(text, '章节改写稿'),
+    parse: (text, ctx) =>
+      parseChapterProseV1(text, '章节改写稿', ctx.candidate?.title ?? ctx.chapter.title),
     persist: (ctx, parsed, now, provenance) => {
       const revisionNo = deps.candidateRepo.getMaxRevisionNo(ctx.projectId, ctx.graphRunId) + 1;
       const candidate = createChapterCandidate({

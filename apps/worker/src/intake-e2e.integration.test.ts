@@ -12,7 +12,7 @@
  * 4. CreationSpec 用户编辑 → 失效级联（propagateCreationSpecInvalidation）。
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -670,6 +670,56 @@ describe('GE-3 Intake E2E（真实 SQLite + 真实 executor + 生产 resolver）
       ).toThrow('intake session 不存在');
       expect(opened).toHaveLength(2);
       expect(opened[1].closed).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('11. 重复调度竞争：后到 runner 不得把先到 runner 的模型调用误标失败', async () => {
+    const db = makeDb();
+    try {
+      const env = buildRunnerEnv(db);
+      const { run } = createProjectRun(env.deps, { projectId: 'p1', idempotencyKey: 'e2e-8' });
+      const runId = run.workflowRunId;
+      await driveRun(env.deps, 'p1', runId);
+      const taskId = uniq(env.scheduled)[0];
+      const dbPath = dbPaths.get(db)!;
+
+      let releaseModel!: () => void;
+      const modelGate = new Promise<void>((resolve) => {
+        releaseModel = resolve;
+      });
+      const runnerDeps = {
+        openDb: () => new ProjectDatabase(dbPath),
+        buildEngineDeps: (runnerDb: ProjectDatabase) => {
+          const base = buildSpecDeps(runnerDb, [specCompleteJson()]);
+          return {
+            ...base,
+            invokeModel: async (...args: Parameters<typeof base.invokeModel>) => {
+              await modelGate;
+              return base.invokeModel(...args);
+            },
+          };
+        },
+        getTaskRepo: (runnerDb: ProjectDatabase) => new TaskRepositoryAdapter(runnerDb),
+        getInvocationRepo: (runnerDb: ProjectDatabase) =>
+          new ModelInvocationRepositoryAdapter(runnerDb),
+      };
+
+      expect(scheduleGraphTask(runnerDeps as never, 'p1', taskId).scheduled).toBe(true);
+      expect(scheduleGraphTask(runnerDeps as never, 'p1', taskId).scheduled).toBe(true);
+
+      await vi.waitFor(() => {
+        expect(new TaskRepositoryAdapter(db).getById(taskId)?.status).toBe('RUNNING');
+        expect(new ModelInvocationRepositoryAdapter(db).listByTask(taskId)).toHaveLength(1);
+      });
+      releaseModel();
+
+      await vi.waitFor(() => {
+        expect(new TaskRepositoryAdapter(db).getById(taskId)?.status).toBe('SUCCEEDED');
+      });
+      await driveRun(env.deps, 'p1', runId);
+      expect(projectState(env.deps, runId).nodeStatuses[SPEC_EXTRACT]).toBe('succeeded');
     } finally {
       db.close();
     }

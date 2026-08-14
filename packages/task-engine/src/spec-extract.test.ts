@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseSpecExtractV1,
+  SPEC_EXTRACT_MAX_TOKENS,
   SPEC_EXTRACT_SYSTEM_PROMPT,
   buildSpecExtractPrompt,
 } from './spec-extract.js';
@@ -56,6 +57,11 @@ describe('parseSpecExtractV1', () => {
     expect(() => parseSpecExtractV1(text)).toThrow(TaskExecutionError);
   });
 
+  it('兼容 JSON 代码围栏和简短前后说明', () => {
+    expect(parseSpecExtractV1(`\n\`\`\`json\n${valid()}\n\`\`\`\n`).decision).toBe('ask_more');
+    expect(parseSpecExtractV1(`整理结果如下：\n${valid()}\n请查收。`).decision).toBe('ask_more');
+  });
+
   it('拒绝：多余顶层字段', () => {
     expect(() => parseSpecExtractV1(valid({ extra: 1 }))).toThrow('顶层字段不符');
   });
@@ -76,8 +82,61 @@ describe('parseSpecExtractV1', () => {
 
   it('拒绝：sections 未过域校验', () => {
     expect(() => parseSpecExtractV1(valid({ sections: { premise: 123 } }))).toThrow(
+      'sections 未通过域校验：',
+    );
+  });
+
+  it('规范化兼容模型的已知枚举与单项数组偏差，未知坏结构仍拒绝', () => {
+    const sections = {
+      ...SECTIONS,
+      genre: '奇幻',
+      tone: '冷峻',
+      narrativePov: 'THIRD_PERSON_LIMITED',
+      tense: 'FUTURE',
+      protagonist: { characterKey: 'protag', name: '主角', traits: '寡言' },
+      worldRules: { 房钱: '客人留下一段记忆', 移动: ['随客人移动', '目的未知'] },
+      mustAvoid: '甜宠',
+      structure: { format: '长篇连载', chapterLength: 3000 },
+    };
+    const parsed = parseSpecExtractV1(valid({ sections }));
+    expect(parsed.sections.genre).toEqual(['奇幻']);
+    expect(parsed.sections.narrativePov).toBe('THIRD_LIMITED');
+    expect(parsed.sections.tense).toBe('PAST');
+    expect(parsed.sections.protagonist.traits).toEqual(['寡言']);
+    expect(parsed.sections.worldRules).toEqual([
+      '房钱：客人留下一段记忆',
+      '移动：随客人移动；目的未知',
+    ]);
+    expect(parsed.sections.mustAvoid).toEqual(['甜宠']);
+    expect(parsed.sections.structure).toBe('format：长篇连载；每章约3000字');
+    expect(() => parseSpecExtractV1(valid({ sections: { ...sections, premise: 123 } }))).toThrow(
       'sections 未通过域校验',
     );
+  });
+
+  it('兼容模型把字符串集合输出成主项/子项对象', () => {
+    const parsed = parseSpecExtractV1(
+      valid({
+        sections: {
+          ...SECTIONS,
+          genre: {
+            primary: { name: '历史' },
+            secondary: [{ name: '悬疑' }, { name: '公路' }],
+            confidence: 0.9,
+          },
+          tone: { main: '严肃', supporting: ['克制'] },
+        },
+      }),
+    );
+
+    expect(parsed.sections.genre).toEqual(['历史', '悬疑', '公路']);
+    expect(parsed.sections.tone).toEqual(['严肃', '克制']);
+  });
+
+  it('不猜测布尔映射的字符串集合', () => {
+    expect(() =>
+      parseSpecExtractV1(valid({ sections: { ...SECTIONS, genre: { 历史: true, 悬疑: false } } })),
+    ).toThrow('genre 必须是数组');
   });
 
   it('拒绝：spec_complete 却带问题', () => {
@@ -109,6 +168,10 @@ describe('parseSpecExtractV1', () => {
 });
 
 describe('prompt 构造', () => {
+  it('为含推理额度的模型保留 8192 token，避免 JSON 在闭合前被截断', () => {
+    expect(SPEC_EXTRACT_MAX_TOKENS).toBe(8192);
+  });
+
   it('系统提示声明顶层结构与问题规则', () => {
     expect(SPEC_EXTRACT_SYSTEM_PROMPT).toContain('schemaVersion');
     expect(SPEC_EXTRACT_SYSTEM_PROMPT).toContain('nextQuestions');
@@ -122,5 +185,21 @@ describe('prompt 构造', () => {
     };
     expect(buildSpecExtractPrompt(ctx)).toBe(buildSpecExtractPrompt(ctx));
     expect(buildSpecExtractPrompt(ctx)).toContain('想法');
+  });
+
+  it('用户消息给出完整必填字段、枚举和禁止 null 规则', () => {
+    const prompt = buildSpecExtractPrompt({ initialIdea: '想法', baselineSections: null, qa: [] });
+    expect(prompt).toContain('narrativePov（FIRST|THIRD_LIMITED');
+    expect(prompt).toContain('characterKey 只能用');
+    expect(prompt).toContain('禁止输出 null');
+    expect(prompt).toContain('不得输出未列出的字段');
+    expect(prompt).toContain(
+      'worldRules、mustInclude、mustAvoid、unresolvedQuestions 都必须是字符串数组',
+    );
+    expect(prompt).toContain('每章字数只写入 structure');
+    expect(prompt).toContain('structure 必须是一个字符串');
+    expect(prompt).toContain('故事发生在未来不等于 FUTURE 时态');
+    expect(prompt).toContain('每章约3000字');
+    expect(prompt).toContain('同一条回答里的其他信息');
   });
 });

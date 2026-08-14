@@ -773,4 +773,51 @@ describe('ResearchRegion', () => {
     expect(screen.getByText('深度调研')).toBeInTheDocument();
     expect(screen.queryByText('轻度调研')).not.toBeInTheDocument();
   });
+
+  it('兼容旧数据：重复版本号在版本链中附生成时间，两个 v1 可区分并可切换', async () => {
+    const oldV1 = bundle({
+      id: 'legacy-v1-a',
+      version: 1,
+      conclusion: '旧 v1 结论',
+      createdAt: '2026-08-10T01:02:03.000Z',
+    });
+    const currentV1 = bundle({
+      id: 'legacy-v1-b',
+      version: 1,
+      conclusion: '新 v1 结论',
+      createdAt: '2026-08-11T04:05:06.000Z',
+    });
+    window.desktop = mockApi({
+      research: {
+        getResearchState: vi.fn().mockResolvedValue(
+          researchState({
+            researchDecision: 'deep',
+            researchValid: 'valid',
+            bundleRef: currentV1.id,
+          }),
+        ),
+        getBundle: vi.fn().mockResolvedValue(currentV1),
+        listBundles: vi.fn().mockResolvedValue([oldV1, currentV1]),
+        setSourceExclusion: vi.fn().mockResolvedValue([]),
+        listSourceExclusions: vi.fn().mockResolvedValue([]),
+      },
+    });
+
+    await act(async () => {
+      render(<ResearchRegion projectId="p1" />);
+    });
+    const chain = await screen.findByRole('navigation', { name: '资料包版本历史' });
+    expect(
+      within(chain).getByRole('button', { name: 'v1 · 2026-08-10 01:02:03 UTC' }),
+    ).toBeInTheDocument();
+    expect(
+      within(chain).getByRole('button', { name: 'v1 · 2026-08-11 04:05:06 UTC' }),
+    ).toHaveAttribute('aria-current', 'true');
+
+    await act(async () => {
+      within(chain).getByRole('button', { name: 'v1 · 2026-08-10 01:02:03 UTC' }).click();
+    });
+    expect(await screen.findByText('旧 v1 结论')).toBeInTheDocument();
+    expect(screen.getByText(/正在查看历史版本 v1 · 2026-08-10 01:02:03 UTC/)).toBeInTheDocument();
+  });
 });

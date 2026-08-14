@@ -491,7 +491,12 @@ async function dispatchClaimed(
   if (descriptor.kind === 'sync') {
     return runSyncAndSettle(deps, projectId, runId, nodeId, claim, drive);
   }
-  if (claim.taskId !== undefined) deps.scheduleTask?.(claim.taskId);
+  if (claim.taskId !== undefined) {
+    // 首次 dispatch 也属于本轮调度。若不登记，下一轮看到 task 仍为 PENDING
+    // （例如 runner 正在异步读取 Keychain）会再次 schedule 同一 task。
+    drive.rescheduled.add(claim.taskId);
+    deps.scheduleTask?.(claim.taskId);
+  }
   return true;
 }
 

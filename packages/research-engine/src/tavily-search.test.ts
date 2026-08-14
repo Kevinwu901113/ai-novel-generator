@@ -36,7 +36,13 @@ describe('createTavilySearchProvider', () => {
   it('解析结果：字段映射 + 不安全 URL 过滤 + maxResults 截断', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       tavilyOk([
-        { url: 'https://a.example/1', title: 'A', content: 'ca', published_date: '2024-01-01' },
+        {
+          url: 'https://a.example/1',
+          title: 'A',
+          content: 'ca',
+          published_date: '2024-01-01',
+          score: 0.87,
+        },
         { url: 'http://127.0.0.1/evil', title: 'X', content: 'cx' },
         { url: 'file:///etc/passwd', title: 'Y', content: 'cy' },
         { url: 'https://b.example/2', title: '', content: 42 },
@@ -54,6 +60,7 @@ describe('createTavilySearchProvider', () => {
       title: 'A',
       snippet: 'ca',
       publishedAt: '2024-01-01',
+      relevanceScore: 0.87,
     });
     // 空 title 回退 URL；非字符串 content 置空
     expect(results[1]).toEqual({
@@ -61,6 +68,7 @@ describe('createTavilySearchProvider', () => {
       title: 'https://b.example/2',
       snippet: '',
       publishedAt: null,
+      relevanceScore: null,
     });
   });
 

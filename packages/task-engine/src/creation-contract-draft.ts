@@ -62,7 +62,7 @@ import {
   type ContractBaselineRef,
   type CreationContractSections,
 } from '@ai-novel/domain';
-import { sha256Hex, TaskExecutionError } from './index.js';
+import { sha256Hex, TaskAlreadyClaimedError, TaskExecutionError } from './index.js';
 
 // ── 依赖接口 ──────────────────────────────────────────────────────
 
@@ -547,7 +547,7 @@ export async function executeCreationContractDraft(
     throw new TaskExecutionError('TASK_NOT_FOUND', `任务 ${taskId} 不存在`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
   if (task.taskType !== 'CREATION_CONTRACT_DRAFT') {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', '任务类型不正确');
@@ -593,7 +593,7 @@ export async function executeCreationContractDraft(
   // 5. CAS claim：PENDING → RUNNING + attempt_count++
   const claimed = taskRepo.claimPending(taskId);
   if (!claimed) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
   const updatedTask = taskRepo.getById(taskId)!;
 

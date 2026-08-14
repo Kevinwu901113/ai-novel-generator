@@ -40,6 +40,9 @@ describe('taskTypeLabel', () => {
     expect(taskTypeLabel('MODEL_INVOCATION_TEST')).toBe('模型调用测试');
     expect(taskTypeLabel('GRILL_QUESTION_PLAN')).toBe('Grill 问题规划');
     expect(taskTypeLabel('CREATION_CONTRACT_DRAFT')).toBe('创作契约草案');
+    expect(taskTypeLabel('CHAPTER_PLAN')).toBe('章节场景规划');
+    expect(taskTypeLabel('CHAPTER_CRITIQUE')).toBe('章节自查');
+    expect(taskTypeLabel('CHAPTER_REWRITE')).toBe('章节改写');
   });
 
   it('未知类型使用安全 fallback', () => {

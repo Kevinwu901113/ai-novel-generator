@@ -35,6 +35,11 @@ export interface ResearchBundleViewProps {
 /** 事实笔记默认截断长度（多篇 2000 字拼接的长文必须默认折叠） */
 const FACT_NOTE_TRUNCATE_LENGTH = 160;
 
+function formatBundleTimestamp(createdAt: string): string {
+  const utc = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/.exec(createdAt);
+  return utc ? `${utc[1]} ${utc[2]} UTC` : createdAt;
+}
+
 export function ResearchBundleView({
   bundle,
   bundles,
@@ -48,6 +53,11 @@ export function ResearchBundleView({
   const displayed = (viewingId && bundles.find((b) => b.id === viewingId)) || bundle;
   const isViewingCurrent = displayed.id === bundle.id;
   const exclusionSet = new Set(exclusions);
+  const versionCounts = new Map<number, number>();
+  for (const item of chain) {
+    versionCounts.set(item.version, (versionCounts.get(item.version) ?? 0) + 1);
+  }
+  const hasDuplicateVersion = (version: number) => (versionCounts.get(version) ?? 0) > 1;
 
   return (
     <div
@@ -63,6 +73,8 @@ export function ResearchBundleView({
         </span>
         <span className="research-bundle-version">
           版本 v{displayed.version}
+          {hasDuplicateVersion(displayed.version) &&
+            ` · ${formatBundleTimestamp(displayed.createdAt)}`}
           {!isViewingCurrent && '（历史版本）'}
         </span>
       </div>
@@ -79,6 +91,7 @@ export function ResearchBundleView({
                   onClick={() => setViewingId(b.id === bundle.id ? null : b.id)}
                 >
                   v{b.version}
+                  {hasDuplicateVersion(b.version) && ` · ${formatBundleTimestamp(b.createdAt)}`}
                 </button>
               </li>
             ))}
@@ -88,7 +101,10 @@ export function ResearchBundleView({
 
       {!isViewingCurrent && (
         <p className="research-version-notice" role="status">
-          正在查看历史版本 v{displayed.version}。
+          正在查看历史版本 v{displayed.version}
+          {hasDuplicateVersion(displayed.version) &&
+            ` · ${formatBundleTimestamp(displayed.createdAt)}`}
+          。
           <button
             type="button"
             className="research-version-back"

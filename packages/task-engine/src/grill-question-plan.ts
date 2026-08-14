@@ -40,7 +40,7 @@ import {
   topologicalPlanOrder,
   type NormalizedQuestionPlan,
 } from '@ai-novel/domain';
-import { sha256Hex, TaskExecutionError } from './index.js';
+import { sha256Hex, TaskAlreadyClaimedError, TaskExecutionError } from './index.js';
 
 // ── 依赖接口 ──────────────────────────────────────────────────────
 
@@ -184,7 +184,7 @@ export async function executeGrillQuestionPlan(
     throw new TaskExecutionError('TASK_NOT_FOUND', `任务 ${taskId} 不存在`);
   }
   if (task.status !== 'PENDING') {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', `任务状态不是 PENDING: ${task.status}`);
+    throw new TaskAlreadyClaimedError(`任务状态不是 PENDING: ${task.status}`);
   }
 
   // claim 前终结：将任务置为 FAILED（CAS，不递增 attempt_count），不留下 PENDING
@@ -224,7 +224,7 @@ export async function executeGrillQuestionPlan(
   // 5. CAS claim：PENDING → RUNNING + attempt_count++
   const claimed = taskRepo.claimPending(taskId);
   if (!claimed) {
-    throw new TaskExecutionError('TASK_STATE_CONFLICT', '任务已被其他进程领取');
+    throw new TaskAlreadyClaimedError('任务已被其他进程领取');
   }
   const updatedTask = taskRepo.getById(taskId)!;
 

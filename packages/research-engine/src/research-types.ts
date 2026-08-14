@@ -16,6 +16,8 @@ export interface SearchResult {
   readonly title: string;
   readonly snippet: string;
   readonly publishedAt: string | null;
+  /** 搜索提供商给出的可选相关度（0..1）；缺失时由编排器做保守的文本相关性判断。 */
+  readonly relevanceScore?: number | null;
 }
 
 /** 抓取到的文档 */

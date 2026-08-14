@@ -179,6 +179,13 @@ migration v14）；Tavily provider（D7）+ SafeWebFetch（V1 安全边界运行
 Tavily live 测试 TAVILY_LIVE 门控。**真实使用需负责人录入 Tavily API key**
 （B6 提供界面；当前可经 search.saveApiKey 通道）。
 
+2026-08-14 真实模型加固：搜索只使用模型规划的问题，不再拼接整段剧情；事实笔记优先
+采用 Tavily 的查询相关摘要，网页正文只在摘要为空时回退；抓取前以标题/摘要文本重合及
+提供商低分下限过滤明显偏题结果，并在调研结论中披露过滤数量。高分不能单独放行文本上
+完全无关的结果，过滤后来源不足时沿用既有校验/升级路径，不把不相关内容注入蓝图。
+同项目重新调研或自动回环时，ResearchBundle 版本在最终写入事务内按现存最大版本加一，
+避免版本历史出现多个无法区分的 v1。
+
 B6 交付记录：2026-08-11，GE-4 产品 UI（设计 `b6-research-ui-design.md`，D-B6-1..9）：
 ResearchRegion 九态相位（区分"本项目无需调研 none"与"尚未调研 null"）+ 资料包查看
 （问题/来源/长事实笔记折叠/结论/basedOnBundleId 版本链）+ 来源排除（project 级 URL
@@ -231,6 +238,11 @@ BLUEPRINT_GENERATE task-backed executor（新任务类型，migration v16）+ **
 （将来新增入边若未接 accept 副作用即红）。独立对抗复查两路：原子性与图语义 ACCEPT，
 任务引擎路 REWORK 两 blocker（来源排除只删 URL 不删正文 / skip_research 与
 use_current_research 等价）已修复。
+
+2026-08-14 真实模型加固：蓝图首次返回空白、非法 JSON 或未通过域校验时，在同一任务内
+自动执行一次带纠错指令的重试；两次上游请求分别写入 model invocation（首条 FAILED、
+第二条独立终态），费用、失败原因和 prompt hash 均可审计。达到输出上限时不自动重试，
+继续保留明确的截断诊断，避免重复消耗配额。
 
 B8（GE-5 UI）交付记录：蓝图查看/确认/升级四选项/三终态展示 + 阶段派生上提 App（D-B8-2）
 

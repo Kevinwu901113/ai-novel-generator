@@ -46,12 +46,19 @@ import type {
   StoryBlueprint,
   TaskType,
 } from '@ai-novel/domain';
-import { CONTINUITY_CRITIC, STYLE_CRITIC } from '@ai-novel/domain';
 import {
+  CONTINUITY_CRITIC,
+  REQUIREMENT_CRITIC,
+  STYLE_CRITIC,
+  validateCreationContractSections,
+} from '@ai-novel/domain';
+import {
+  CHAPTER_PLAN_SYSTEM_PROMPT,
   executeChapterCritique,
   executeChapterDraftNode,
   executeChapterPlan,
   executeChapterRewrite,
+  inferPerChapterTargetCharacters,
   parseChapterCritiqueV1,
   parseChapterPlanV1,
   parseChapterProseV1,
@@ -238,6 +245,7 @@ function buildHarness(options: {
   taskType: TaskType;
   nodeId: string;
   responseText: string;
+  responseFinishReason?: string | null;
   payloadJson?: string;
   blueprint?: StoryBlueprint | null;
   specSectionsJson?: string | null;
@@ -466,7 +474,10 @@ function buildHarness(options: {
   let idCounter = 0;
   const idGenerator: IdGenerator = { generate: vi.fn(() => `id-${++idCounter}`) };
   const clock: Clock = { now: vi.fn(() => NOW) };
-  const invokeModel = vi.fn(async () => successOutput(options.responseText));
+  const invokeModel = vi.fn(async () => ({
+    ...successOutput(options.responseText),
+    finishReason: options.responseFinishReason ?? 'end_turn',
+  }));
 
   const deps: ChapterNodeExecutionDeps = {
     taskRepo,
@@ -528,9 +539,34 @@ const PROSE_RESPONSE = JSON.stringify({
   content: LONG_CONTENT,
 });
 
+const SPEC_WITH_CHAPTER_LENGTH = validateCreationContractSections({
+  premise: '走私者被迫接下一桩不能失败的活',
+  genre: ['悬疑'],
+  tone: ['冷硬'],
+  targetAudience: '成年读者',
+  narrativePov: 'THIRD_LIMITED',
+  tense: 'PAST',
+  structure: '长篇连载，每章约3000字',
+  protagonist: { characterKey: 'linqiao', name: '林荞' },
+});
+
+const PASS_CRITIQUE_RESPONSE = JSON.stringify({
+  schemaVersion: 1,
+  verdict: 'pass',
+  summary: '没有阻塞问题',
+  issues: [],
+});
+
 // ── 解析边界 ──────────────────────────────────────────────────────
 
 describe('章节输出严格解析', () => {
+  it('从 structure 提取明确的每章目标字数，未知时不猜', () => {
+    expect(inferPerChapterTargetCharacters(SPEC_WITH_CHAPTER_LENGTH)).toBe(3000);
+    expect(
+      inferPerChapterTargetCharacters({ ...SPEC_WITH_CHAPTER_LENGTH, structure: '长篇连载' }),
+    ).toBeNull();
+  });
+
   it('场景计划：合法 JSON → 解析；多余字段/空 scenes/超量 scenes 拒绝', () => {
     const plan = parseChapterPlanV1(PLAN_RESPONSE);
     expect(plan.title).toBe('第二章 越境');
@@ -554,9 +590,17 @@ describe('章节输出严格解析', () => {
     ).toThrow(TaskExecutionError);
   });
 
-  it('正文：过短内容判非法（截断/占位不得当作一章正文）', () => {
+  it('正文：纯文本是主协议，兼容旧 JSON 与代码围栏；过短内容判非法', () => {
     const prose = parseChapterProseV1(PROSE_RESPONSE, '章节草稿');
     expect(prose.content).toBe(LONG_CONTENT);
+
+    expect(parseChapterProseV1(LONG_CONTENT, '章节草稿', '蓝图标题')).toEqual({
+      title: '蓝图标题',
+      content: LONG_CONTENT,
+    });
+    expect(
+      parseChapterProseV1(`\`\`\`text\n${LONG_CONTENT}\n\`\`\``, '章节草稿', '蓝图标题'),
+    ).toEqual({ title: '蓝图标题', content: LONG_CONTENT });
 
     expect(() =>
       parseChapterProseV1(
@@ -630,6 +674,7 @@ describe('executeChapterPlan', () => {
     };
     expect(payload.chapter.title).toBe('第二章 越境');
     expect(payload.chapter.precedingChapterGoals.map((c) => c.title)).toEqual(['第一章 接头']);
+    expect(CHAPTER_PLAN_SYSTEM_PROMPT).toContain('不是本章待办清单');
   });
 
   it('蓝图缺失 → 任务确定性 FAILED，不留半成品', async () => {
@@ -710,6 +755,54 @@ describe('executeChapterDraftNode', () => {
     await executeChapterDraftNode(h.deps, 't1');
     const call = h.invokeModel.mock.calls[0]![0] as { maxTokens?: number };
     expect(call.maxTokens).toBeGreaterThan(4096);
+  });
+
+  it('正文要求模型直接输出纯文本，避免长正文的换行与引号破坏 JSON', async () => {
+    const h = buildHarness({
+      taskType: 'CHAPTER_DRAFT',
+      nodeId: 'DRAFT',
+      responseText: LONG_CONTENT,
+    });
+    await executeChapterDraftNode(h.deps, 't1');
+    const call = h.invokeModel.mock.calls[0]![0] as { systemPrompt: string };
+    expect(call.systemPrompt).toContain('不要 JSON');
+    expect(h.candidates[0]).toMatchObject({ title: '第二章 越境', content: LONG_CONTENT });
+  });
+
+  it('provider 明确因输出上限截断时给出可诊断错误，不落半章候选', async () => {
+    const h = buildHarness({
+      taskType: 'CHAPTER_DRAFT',
+      nodeId: 'DRAFT',
+      responseText: LONG_CONTENT,
+      responseFinishReason: 'max_tokens',
+    });
+    const result = await executeChapterDraftNode(h.deps, 't1');
+    expect(result.task.status).toBe('FAILED');
+    expect(result.task.errorMessage).toContain('8192 token 输出上限');
+    expect(h.candidates).toHaveLength(0);
+  });
+
+  it('正文 prompt 把“每章约 3000 字”转换为可计算的硬范围', async () => {
+    const h = buildHarness({
+      taskType: 'CHAPTER_DRAFT',
+      nodeId: 'DRAFT',
+      responseText: PROSE_RESPONSE,
+      specSectionsJson: JSON.stringify(SPEC_WITH_CHAPTER_LENGTH),
+    });
+    await executeChapterDraftNode(h.deps, 't1');
+    const call = h.invokeModel.mock.calls[0]![0] as { prompt: string };
+    const payload = JSON.parse(call.prompt) as {
+      lengthRequirement: {
+        targetCharacters: number;
+        minimumCharacters: number;
+        maximumCharacters: number;
+      };
+    };
+    expect(payload.lengthRequirement).toEqual({
+      targetCharacters: 3000,
+      minimumCharacters: 2550,
+      maximumCharacters: 3600,
+    });
   });
 
   it('模型输出不合法 → 任务 FAILED，候选与 envelope 都不留', async () => {
@@ -815,6 +908,41 @@ describe('executeChapterCritique', () => {
     const result = await executeChapterCritique(h.deps, 't1');
     expect(result.task.status).toBe('FAILED');
     expect(h.invokeModel).not.toHaveBeenCalled();
+  });
+
+  it('要求 Critic 漏判时，确定性字数检查仍触发 needs_rewrite', async () => {
+    const h = buildHarness({
+      taskType: 'CHAPTER_CRITIQUE',
+      nodeId: REQUIREMENT_CRITIC,
+      responseText: PASS_CRITIQUE_RESPONSE,
+      specSectionsJson: JSON.stringify(SPEC_WITH_CHAPTER_LENGTH),
+      candidates: [{ ...draftCandidate(1), content: '正文'.repeat(1000) }],
+    });
+    await executeChapterCritique(h.deps, 't1');
+
+    expect(h.critiques[0]!.verdict).toBe('needs_rewrite');
+    expect(h.critiques[0]!.issues[0]!.problem).toContain('2000 字');
+    expect(h.resultStore.get('exec-1')!.outcome).toEqual({
+      condition: 'critique_verdict',
+      value: 'needs_rewrite',
+    });
+    const call = h.invokeModel.mock.calls[0]![0] as { prompt: string };
+    expect(call.prompt).toContain('"candidateCharacterCount": 2000');
+  });
+
+  it('风格 Critic 漏判时，高密度类比标记仍触发 needs_rewrite', async () => {
+    const aiLikeContent = '她仿佛看见旧影，又似乎听见回声，灯头像是一只闭合的眼睛。'.repeat(30);
+    const h = buildHarness({
+      taskType: 'CHAPTER_CRITIQUE',
+      nodeId: STYLE_CRITIC,
+      responseText: PASS_CRITIQUE_RESPONSE,
+      candidates: [{ ...draftCandidate(1), content: aiLikeContent }],
+    });
+    await executeChapterCritique(h.deps, 't1');
+
+    expect(h.critiques[0]!.verdict).toBe('needs_rewrite');
+    expect(h.critiques[0]!.issues[0]!.problem).toContain('模板化 AI 腔');
+    expect(h.resultStore.get('exec-1')!.outcome?.value).toBe('needs_rewrite');
   });
 });
 

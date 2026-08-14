@@ -2111,28 +2111,32 @@ function shutdown(): void {
 
 // ── 启动 ──────────────────────────────────────────────────────────
 
-void (async () => {
-  try {
-    // RW-1-R5：await 全部恢复（含 recoverGraphRuns）后才发布 READY / 接受 RPC
-    await initialize();
+// 只有 Electron Utility Process 才有 parentPort。该模块还导出数据库适配器供集成测试
+// 与其它 worker 模块复用；普通 Node/Vitest import 绝不能顺带初始化真实用户数据库、注册
+// 生命周期或在失败时 process.exit(1)。这类 import-time 副作用会让并行测试随机整进程失败。
+const utilityParentPort = process.parentPort;
+if (typeof utilityParentPort !== 'undefined') {
+  void (async () => {
+    try {
+      // RW-1-R5：await 全部恢复（含 recoverGraphRuns）后才发布 READY / 接受 RPC
+      await initialize();
 
-    // 监听来自 Main Process 的消息
-    if (typeof process.parentPort !== 'undefined') {
-      process.parentPort.on('message', (event: { data: unknown }) => {
+      // 监听来自 Main Process 的消息
+      utilityParentPort.on('message', (event: { data: unknown }) => {
         handleMessage(event.data);
       });
+
+      // 发送就绪信号
+      sendToParent({ type: 'ready' } satisfies ReadyMessage);
+    } catch (err) {
+      // 初始化失败，发送错误信号
+      const message = err instanceof Error ? err.message : 'Worker 初始化失败';
+      sendToParent({ type: 'error', message });
+      process.exit(1);
     }
+  })();
 
-    // 发送就绪信号
-    sendToParent({ type: 'ready' } satisfies ReadyMessage);
-  } catch (err) {
-    // 初始化失败，发送错误信号
-    const message = err instanceof Error ? err.message : 'Worker 初始化失败';
-    sendToParent({ type: 'error', message });
-    process.exit(1);
-  }
-})();
-
-// 处理进程退出
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+  // 处理 Utility Process 退出；普通 import 不污染宿主进程的信号处理器。
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+}

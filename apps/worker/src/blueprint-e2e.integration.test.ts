@@ -312,24 +312,25 @@ function buildResearchDeps(db: ProjectDatabase): ResearchRunExecutionDeps {
     specVersionRepo: db.getCreationContractVersionRepository(),
     researchRepo: db.getResearchBundleRepository(),
     // BLK-1（B7 复查修复）：每个问题返回 2 条来源（deep 深度 maxFetch=4，都能被抓取），
-    // 使 orchestrateResearch 产出的每条 factNote 聚合 2 篇文档正文——这是生产常态
-    // （orchestrator.ts 按问题拼接全部抓取文档），单来源 fake 会让"部分排除"分支
-    // 端到端从未被执行。fetch 内容按 url 打上可辨识标记，便于测试断言"哪段正文出现/
-    // 不出现在最终 prompt 里"。
+    // 使 orchestrateResearch 产出的每条 factNote 聚合 2 篇来源摘要。单来源 fake 会让
+    // "部分排除"分支端到端从未被执行。摘要按 url 打上可辨识标记，便于测试断言
+    // "哪条事实出现/不出现在最终 prompt 里"，同时避免重新依赖已废弃的整页正文拼接。
     buildSearchPort: () => ({
       search: async (input: { query: string; maxResults: number }): Promise<SearchResult[]> => {
         const base = encodeURIComponent(input.query.slice(0, 10));
+        const firstUrl = `https://facts.example/${base}-1`;
+        const secondUrl = `https://facts.example/${base}-2`;
         return [
           {
-            url: `https://facts.example/${base}-1`,
+            url: firstUrl,
             title: `资料一：${input.query.slice(0, 10)}`,
-            snippet: '摘要',
+            snippet: `摘要 CONTENT-FOR[${firstUrl}]`,
             publishedAt: null,
           },
           {
-            url: `https://facts.example/${base}-2`,
+            url: secondUrl,
             title: `资料二：${input.query.slice(0, 10)}`,
-            snippet: '摘要',
+            snippet: `摘要 CONTENT-FOR[${secondUrl}]`,
             publishedAt: null,
           },
         ];
@@ -390,7 +391,7 @@ function buildEscalationResearchDeps(db: ProjectDatabase): ResearchRunExecutionD
           {
             url: 'https://facts.example/postal-system',
             title: '资料：晚清邮政',
-            snippet: '摘要',
+            snippet: 'ESCALATION-BUNDLE-CONTENT：晚清邮政系统采用驿站与新式邮局并行的制度。',
             publishedAt: null,
           },
         ];
@@ -1152,6 +1153,67 @@ describe('GE-5 Blueprint E2E（真实 SQLite + 真实 executor + 生产 resolver
       }
     });
 
+    it('11b. provider 空内容/响应结构异常 → 自动重试一次，第二次合法则原任务成功', async () => {
+      const db = makeDb('一个纯幻想的客栈经营故事');
+      try {
+        const env = buildRunnerEnv(db);
+        await driveToBlueprintTaskNone(db, env);
+        const taskIds = uniq(env.scheduled);
+        const blueprintTaskId = taskIds[taskIds.length - 1];
+        let callCount = 0;
+
+        const deps = buildBlueprintDeps(db, [], undefined, {
+          invokeModel: async () => {
+            callCount += 1;
+            if (callCount === 1) {
+              return {
+                text: '',
+                providerRequestId: null,
+                finishReason: null,
+                usage: {
+                  inputTokens: null,
+                  outputTokens: null,
+                  cacheReadTokens: null,
+                  cacheWriteTokens: null,
+                  totalTokens: null,
+                },
+                latencyMs: 4,
+                errorCode: 'PROVIDER_RESPONSE_INVALID' as const,
+                errorMessage: '响应格式异常',
+              };
+            }
+            return {
+              text: blueprintJson(),
+              providerRequestId: 'req-recovered',
+              finishReason: 'stop',
+              usage: {
+                inputTokens: 10,
+                outputTokens: 20,
+                cacheReadTokens: null,
+                cacheWriteTokens: null,
+                totalTokens: 30,
+              },
+              latencyMs: 5,
+              errorCode: null,
+              errorMessage: null,
+            };
+          },
+        });
+        const result = await executeBlueprintGenerate(deps, blueprintTaskId);
+
+        expect(callCount).toBe(2);
+        expect(result.task.status).toBe('SUCCEEDED');
+        expect(result.blueprintId).toBeTruthy();
+        const invocations = db.getModelInvocationRepository().listByTask(blueprintTaskId);
+        expect(invocations.map((invocation) => [invocation.status, invocation.errorCode])).toEqual([
+          ['FAILED', 'PROVIDER_RESPONSE_INVALID'],
+          ['SUCCEEDED', null],
+        ]);
+      } finally {
+        db.close();
+      }
+    });
+
     it('12. 模型输出解析失败（非法 JSON）→ invocation=MODEL_RESPONSE_INVALID，task=TASK_EXECUTION_FAILED，不留孤儿蓝图行', async () => {
       const db = makeDb('一个纯幻想的客栈经营故事');
       try {
@@ -1171,7 +1233,88 @@ describe('GE-5 Blueprint E2E（真实 SQLite + 真实 executor + 生产 resolver
         expect(result.task.errorCode).toBe('TASK_EXECUTION_FAILED');
         expect(result.invocation?.status).toBe('FAILED');
         expect(result.invocation?.errorCode).toBe('MODEL_RESPONSE_INVALID');
+        const invocations = db.getModelInvocationRepository().listByTask(blueprintTaskId);
+        expect(invocations).toHaveLength(2);
+        expect(invocations.every((invocation) => invocation.status === 'FAILED')).toBe(true);
+        expect(invocations.map((invocation) => invocation.attemptNumber)).toEqual([1, 2]);
         expect(db.getStoryBlueprintRepository().listByProject('p1')).toHaveLength(0);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('12b. 首次非法 JSON → 留下失败 invocation 后自动纠错一次，第二次合法则原任务成功', async () => {
+      const db = makeDb('一个纯幻想的客栈经营故事');
+      try {
+        const env = buildRunnerEnv(db);
+        await driveToBlueprintTaskNone(db, env);
+        const taskIds = uniq(env.scheduled);
+        const blueprintTaskId = taskIds[taskIds.length - 1];
+        const capturedPrompts: string[] = [];
+
+        const result = await executeBlueprintGenerate(
+          buildBlueprintDeps(db, ['蓝图如下但没有 JSON', blueprintJson()], capturedPrompts),
+          blueprintTaskId,
+        );
+
+        expect(result.task.status).toBe('SUCCEEDED');
+        expect(result.blueprintId).toBeTruthy();
+        expect(capturedPrompts).toHaveLength(2);
+        expect(capturedPrompts[1]).toContain('上一次响应无法通过蓝图 JSON 校验');
+
+        const invocations = db.getModelInvocationRepository().listByTask(blueprintTaskId);
+        expect(invocations).toHaveLength(2);
+        expect(invocations[0].status).toBe('FAILED');
+        expect(invocations[0].errorCode).toBe('MODEL_RESPONSE_INVALID');
+        expect(invocations[1].status).toBe('SUCCEEDED');
+        expect(JSON.parse(invocations[0].requestMetadataJson)).toMatchObject({
+          automaticRepairAttempt: 0,
+        });
+        expect(JSON.parse(invocations[1].requestMetadataJson)).toMatchObject({
+          automaticRepairAttempt: 1,
+        });
+        expect(db.getStoryBlueprintRepository().listByProject('p1')).toHaveLength(1);
+      } finally {
+        db.close();
+      }
+    });
+
+    it('12c. 输出达到 token 上限时不盲目自动重试，并保留明确截断诊断', async () => {
+      const db = makeDb('一个纯幻想的客栈经营故事');
+      try {
+        const env = buildRunnerEnv(db);
+        await driveToBlueprintTaskNone(db, env);
+        const taskIds = uniq(env.scheduled);
+        const blueprintTaskId = taskIds[taskIds.length - 1];
+        let invocationCount = 0;
+
+        const deps = buildBlueprintDeps(db, [], undefined, {
+          invokeModel: async () => {
+            invocationCount += 1;
+            return {
+              text: '{"schemaVersion":1,"premise":"被截断',
+              providerRequestId: 'req-truncated',
+              finishReason: 'max_tokens',
+              usage: {
+                inputTokens: 2000,
+                outputTokens: 8192,
+                cacheReadTokens: null,
+                cacheWriteTokens: null,
+                totalTokens: 10192,
+              },
+              latencyMs: 50,
+              errorCode: null,
+              errorMessage: null,
+            };
+          },
+        });
+        const result = await executeBlueprintGenerate(deps, blueprintTaskId);
+
+        expect(invocationCount).toBe(1);
+        expect(result.task.status).toBe('FAILED');
+        expect(result.task.errorMessage).toContain('8192 token');
+        expect(result.task.errorMessage).toContain('内容可能被截断');
+        expect(db.getModelInvocationRepository().listByTask(blueprintTaskId)).toHaveLength(1);
       } finally {
         db.close();
       }
