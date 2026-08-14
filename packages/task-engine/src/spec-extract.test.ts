@@ -49,6 +49,25 @@ describe('parseSpecExtractV1', () => {
     expect(parsed.nextQuestions).toHaveLength(0);
   });
 
+  it('把单章 15000 字保存为结构化 chapterLength，并兼容旧 structure', () => {
+    const structured = parseSpecExtractV1(
+      valid({
+        sections: {
+          ...SECTIONS,
+          targetLength: { unit: 'chapters', value: 1 },
+          chapterLength: { targetCharacters: 15000 },
+        },
+      }),
+    );
+    expect(structured.sections.targetLength).toEqual({ unit: 'chapters', value: 1 });
+    expect(structured.sections.chapterLength).toEqual({ targetCharacters: 15000 });
+
+    const legacy = parseSpecExtractV1(
+      valid({ sections: { ...SECTIONS, structure: '短篇，一章正文一万五千字' } }),
+    );
+    expect(legacy.sections.chapterLength).toEqual({ targetCharacters: 15000 });
+  });
+
   it.each([
     ['非 JSON', 'not json {'],
     ['非对象', '42'],
@@ -196,10 +215,11 @@ describe('prompt 构造', () => {
     expect(prompt).toContain(
       'worldRules、mustInclude、mustAvoid、unresolvedQuestions 都必须是字符串数组',
     );
-    expect(prompt).toContain('每章字数只写入 structure');
+    expect(prompt).toContain('单章字数写入 chapterLength');
+    expect(prompt).toContain('单章15000字');
     expect(prompt).toContain('structure 必须是一个字符串');
     expect(prompt).toContain('故事发生在未来不等于 FUTURE 时态');
-    expect(prompt).toContain('每章约3000字');
+    expect(prompt).toContain('chapterLength={"targetCharacters":15000}');
     expect(prompt).toContain('同一条回答里的其他信息');
   });
 });

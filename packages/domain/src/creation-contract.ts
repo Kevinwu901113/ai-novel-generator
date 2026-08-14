@@ -47,6 +47,19 @@ export interface TargetLength {
   readonly value: number;
 }
 
+/**
+ * 单章正文篇幅。与 targetLength（全书总字数/总章节数）分离，避免把“单章 15000 字”
+ * 塞进自由文本 structure 后再靠正则猜测。
+ *
+ * minimum/maximum 仅在用户明确给出范围时保存；只给“约 N 字”时由章节执行器使用
+ * 统一容差计算运行时硬边界。
+ */
+export interface ChapterLength {
+  readonly targetCharacters: number;
+  readonly minimumCharacters?: number;
+  readonly maximumCharacters?: number;
+}
+
 export interface ProtagonistCharacter {
   readonly characterKey: CharacterKey;
   readonly name: string;
@@ -88,6 +101,7 @@ export interface CreationContractSections {
   readonly narrativePov: NarrativePov;
   readonly tense: Tense;
   readonly targetLength?: TargetLength;
+  readonly chapterLength?: ChapterLength;
   readonly structure?: string;
   readonly protagonist: ProtagonistCharacter;
   readonly supportingCharacters?: readonly SupportingCharacter[];
@@ -448,6 +462,52 @@ function validateTargetLength(value: unknown): TargetLength {
   return { unit: obj.unit as TargetLengthUnit, value: obj.value };
 }
 
+function validateChapterLength(value: unknown): ChapterLength {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('chapterLength 必须是对象');
+  }
+  const obj = value as Record<string, unknown>;
+  const allowed = new Set(['targetCharacters', 'minimumCharacters', 'maximumCharacters']);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) throw new Error(`chapterLength 包含未知字段: "${key}"`);
+  }
+  const readCharacters = (field: string, required: boolean): number | undefined => {
+    const raw = obj[field];
+    if (raw === undefined && !required) return undefined;
+    if (
+      typeof raw !== 'number' ||
+      !Number.isFinite(raw) ||
+      !Number.isSafeInteger(raw) ||
+      raw < 500 ||
+      raw > 40_000
+    ) {
+      throw new Error(`chapterLength.${field} 必须是 500..40000 的整数`);
+    }
+    return raw;
+  };
+  const targetCharacters = readCharacters('targetCharacters', true)!;
+  const minimumCharacters = readCharacters('minimumCharacters', false);
+  const maximumCharacters = readCharacters('maximumCharacters', false);
+  if (minimumCharacters !== undefined && minimumCharacters > targetCharacters) {
+    throw new Error('chapterLength.minimumCharacters 不得大于 targetCharacters');
+  }
+  if (maximumCharacters !== undefined && maximumCharacters < targetCharacters) {
+    throw new Error('chapterLength.maximumCharacters 不得小于 targetCharacters');
+  }
+  if (
+    minimumCharacters !== undefined &&
+    maximumCharacters !== undefined &&
+    minimumCharacters > maximumCharacters
+  ) {
+    throw new Error('chapterLength.minimumCharacters 不得大于 maximumCharacters');
+  }
+  return {
+    targetCharacters,
+    ...(minimumCharacters !== undefined && { minimumCharacters }),
+    ...(maximumCharacters !== undefined && { maximumCharacters }),
+  };
+}
+
 function validateProtagonistCharacter(value: unknown): ProtagonistCharacter {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('protagonist 必须是对象');
@@ -606,6 +666,7 @@ const ALLOWED_TOP_LEVEL_KEYS = new Set([
   'narrativePov',
   'tense',
   'targetLength',
+  'chapterLength',
   'structure',
   'protagonist',
   'supportingCharacters',
@@ -647,6 +708,8 @@ export function validateCreationContractSections(input: unknown): CreationContra
     obj.themes !== undefined ? validateStringArray(obj.themes, 'themes', 0, 10, 100) : undefined;
   const targetLength =
     obj.targetLength !== undefined ? validateTargetLength(obj.targetLength) : undefined;
+  const chapterLength =
+    obj.chapterLength !== undefined ? validateChapterLength(obj.chapterLength) : undefined;
   const structure = validateOptionalString(obj.structure, 'structure', 500);
 
   let supportingCharacters: readonly SupportingCharacter[] | undefined;
@@ -731,6 +794,7 @@ export function validateCreationContractSections(input: unknown): CreationContra
     protagonist,
     ...(themes !== undefined && { themes }),
     ...(targetLength !== undefined && { targetLength }),
+    ...(chapterLength !== undefined && { chapterLength }),
     ...(structure !== undefined && { structure }),
     ...(supportingCharacters !== undefined && { supportingCharacters }),
     ...(relationships !== undefined && { relationships }),
@@ -753,6 +817,7 @@ const VALID_SECTIONS: ReadonlySet<string> = new Set([
   'narrativePov',
   'tense',
   'targetLength',
+  'chapterLength',
   'structure',
   'protagonist',
   'supportingCharacters',
@@ -766,6 +831,7 @@ const VALID_SECTIONS: ReadonlySet<string> = new Set([
 
 const STRUCTURED_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['targetLength', new Set(['unit', 'value'])],
+  ['chapterLength', new Set(['targetCharacters', 'minimumCharacters', 'maximumCharacters'])],
   ['contentBoundaries', new Set(['rating', 'allowedContent', 'prohibitedContent', 'notes'])],
   ['protagonist', new Set(['characterKey', 'name', 'role', 'motivation', 'arc', 'traits'])],
 ]);
@@ -848,6 +914,7 @@ export function pathsOverlap(a: string, b: string): boolean {
 const STRUCTURED_OPTIONAL_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['protagonist', new Set(['role', 'motivation', 'arc', 'traits'])],
   ['targetLength', new Set<string>()],
+  ['chapterLength', new Set(['minimumCharacters', 'maximumCharacters'])],
   ['contentBoundaries', new Set(['rating', 'allowedContent', 'prohibitedContent', 'notes'])],
 ]);
 
@@ -979,7 +1046,12 @@ const SCALAR_ENUM_PATHS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['/targetLength/unit', new Set(['words', 'chapters'])],
 ]);
 
-const SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set(['/targetLength/value']);
+const SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set([
+  '/targetLength/value',
+  '/chapterLength/targetCharacters',
+  '/chapterLength/minimumCharacters',
+  '/chapterLength/maximumCharacters',
+]);
 
 const SUPPORTING_CHAR_SCALAR_FIELDS: ReadonlySet<string> = new Set([
   'name',
@@ -1002,11 +1074,16 @@ const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
   '/contentBoundaries/prohibitedContent',
 ]);
 
-const STRUCTURED_PATHS: ReadonlySet<string> = new Set(['/targetLength', '/contentBoundaries']);
+const STRUCTURED_PATHS: ReadonlySet<string> = new Set([
+  '/targetLength',
+  '/chapterLength',
+  '/contentBoundaries',
+]);
 
 const REMOVE_FIELD_PATHS: ReadonlySet<string> = new Set([
   '/themes',
   '/targetLength',
+  '/chapterLength',
   '/structure',
   '/supportingCharacters',
   '/relationships',
@@ -1051,6 +1128,14 @@ export type SetScalarFieldOperation =
       readonly value: TargetLengthUnit;
     }
   | { readonly kind: 'set-scalar'; readonly path: '/targetLength/value'; readonly value: number }
+  | {
+      readonly kind: 'set-scalar';
+      readonly path:
+        | '/chapterLength/targetCharacters'
+        | '/chapterLength/minimumCharacters'
+        | '/chapterLength/maximumCharacters';
+      readonly value: number;
+    }
   | {
       readonly kind: 'set-scalar';
       readonly path: '/contentBoundaries/rating';
@@ -1129,6 +1214,11 @@ export type SetStructuredFieldOperation =
     }
   | {
       readonly kind: 'set-structured';
+      readonly path: '/chapterLength';
+      readonly value: ChapterLength;
+    }
+  | {
+      readonly kind: 'set-structured';
       readonly path: '/contentBoundaries';
       readonly value: ContentBoundaries;
     };
@@ -1138,6 +1228,7 @@ export type RemoveOptionalFieldOperation = {
   readonly path:
     | '/themes'
     | '/targetLength'
+    | '/chapterLength'
     | '/structure'
     | '/supportingCharacters'
     | '/relationships'
@@ -1346,6 +1437,11 @@ function parseSetStructured(input: Record<string, unknown>): SetStructuredFieldO
   if (path === '/targetLength') {
     const validated = validateTargetLength(input.value);
     return { kind: 'set-structured', path: '/targetLength', value: validated };
+  }
+
+  if (path === '/chapterLength') {
+    const validated = validateChapterLength(input.value);
+    return { kind: 'set-structured', path: '/chapterLength', value: validated };
   }
 
   if (typeof input.value !== 'object' || input.value === null || Array.isArray(input.value)) {
@@ -1577,7 +1673,7 @@ function applySetStringListField(
 function applySetStructuredField(
   snapshot: CreationContractSections,
   path: string,
-  value: TargetLength | ContentBoundaries,
+  value: TargetLength | ChapterLength | ContentBoundaries,
 ): CreationContractSections {
   const parsed = parseContractFieldPath(path);
   if (parsed.entityKey !== undefined || parsed.field !== undefined) {

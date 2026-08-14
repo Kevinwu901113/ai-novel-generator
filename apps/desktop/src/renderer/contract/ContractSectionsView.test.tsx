@@ -26,6 +26,7 @@ const fullSections: CreationContractSectionsPublicData = {
   narrativePov: 'THIRD_LIMITED',
   tense: 'PAST',
   targetLength: { unit: 'words', value: 80000 },
+  chapterLength: { targetCharacters: 3000 },
   structure: '三幕式：觉醒、对抗、和解',
   protagonist: {
     characterKey: 'hero',
@@ -119,6 +120,7 @@ describe('ContractSectionsView', () => {
   it('目标长度格式化为"约 N 字"', () => {
     render(<ContractSectionsView sections={fullSections} />);
     expect(screen.getByText('约 80,000 字')).toBeDefined();
+    expect(screen.getByText('约 3,000 字')).toBeDefined();
   });
 
   // ── 主角子卡片 ────────────────────────────────────────────────

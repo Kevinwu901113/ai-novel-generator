@@ -20,6 +20,7 @@ import {
   NARRATIVE_POV_LABELS,
   TENSE_LABELS,
   formatTargetLength,
+  formatChapterLength,
   isLockedFieldPath,
 } from './contract-labels';
 
@@ -39,6 +40,9 @@ export function ContractSectionsView({
       <GenreToneSection sections={sections} lockedFieldPaths={lockedFieldPaths} />
       {sections.targetLength !== undefined && (
         <TargetLengthSection targetLength={sections.targetLength} />
+      )}
+      {sections.chapterLength !== undefined && (
+        <ChapterLengthSection chapterLength={sections.chapterLength} />
       )}
       <ProtagonistSection protagonist={sections.protagonist} lockedFieldPaths={lockedFieldPaths} />
       {sections.supportingCharacters !== undefined && sections.supportingCharacters.length > 0 && (
@@ -237,6 +241,21 @@ function TargetLengthSection({
       <FieldRow
         label={labelFor(SECTION_LABELS, 'targetLength')}
         value={formatTargetLength(targetLength)}
+      />
+    </GroupSection>
+  );
+}
+
+function ChapterLengthSection({
+  chapterLength,
+}: {
+  readonly chapterLength: NonNullable<CreationContractSectionsPublicData['chapterLength']>;
+}) {
+  return (
+    <GroupSection title="单章篇幅">
+      <FieldRow
+        label={labelFor(SECTION_LABELS, 'chapterLength')}
+        value={formatChapterLength(chapterLength)}
       />
     </GroupSection>
   );

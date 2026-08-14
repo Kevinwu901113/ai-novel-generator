@@ -48,6 +48,8 @@ import {
   executeChapterRewrite,
   executeResearchRun,
   executeSpecExtract,
+  analyzeChineseProseQuality,
+  resolveChapterLengthRequirement,
   sha256Hex,
 } from '@ai-novel/task-engine';
 import { invokeModel } from '@ai-novel/model-gateway';
@@ -85,8 +87,8 @@ const HAS_TAVILY = !!process.env.TAVILY_API_KEY;
 
 /** 有 Tavily key 时用历史题材（触发真实调研），否则用纯幻想（图判 none 跳过调研） */
 const INITIAL_IDEA = HAS_TAVILY
-  ? '一个晚清邮差在乱世里送最后一封信的故事'
-  : '一个在异世界经营客栈的故事，客栈连接多个位面';
+  ? '一个晚清邮差在乱世里送最后一封信的故事，长篇连载，每章三千字左右'
+  : '一个在异世界经营客栈的故事，客栈连接多个位面。长篇连载，每章三千字左右';
 
 const PROJECT_ID = 'p1';
 const NOW = new Date('2026-08-13T00:00:00.000Z').toISOString();
@@ -440,8 +442,24 @@ describe.skipIf(!LIVE)('真实模型全链实跑（gated）', () => {
 
         expect(chapterState.phase).toBe('awaiting_decision');
         expect(chapterState.candidate).not.toBeNull();
-        expect(chapterState.candidate!.content.length).toBeGreaterThan(500);
+        const finalContent = chapterState.candidate!.content;
+        const finalCharacterCount = [...finalContent.replace(/\s/g, '')].length;
+        expect(finalCharacterCount).toBeGreaterThanOrEqual(2700);
+        expect(finalCharacterCount).toBeLessThanOrEqual(3300);
+        expect(analyzeChineseProseQuality(finalContent).blockingIssues).toEqual([]);
         expect(chapterState.critiques).toHaveLength(3);
+
+        const currentSpec = db.getCreationContractCurrentRepository().get(PROJECT_ID);
+        const currentVersion = currentSpec
+          ? db
+              .getCreationContractVersionRepository()
+              .getById(PROJECT_ID, currentSpec.currentVersionId)
+          : null;
+        expect(currentVersion).not.toBeNull();
+        const lengthRequirement = resolveChapterLengthRequirement(
+          JSON.parse(currentVersion!.sectionsJson),
+        );
+        expect(lengthRequirement?.targetCharacters).toBe(3000);
 
         // 采用 → 写入稿件 → 导出
         dispatchChapterCommand(

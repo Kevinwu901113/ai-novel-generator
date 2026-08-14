@@ -123,16 +123,18 @@ const SECTIONS = {
   protagonist: { characterKey: 'xiaoman', name: '店主小满' },
 };
 
-function specCompleteJson(): string {
+function specCompleteJson(sections: typeof SECTIONS | Record<string, unknown> = SECTIONS): string {
   return JSON.stringify({
     schemaVersion: 1,
     decision: 'spec_complete',
-    sections: SECTIONS,
+    sections,
     nextQuestions: [],
   });
 }
 
-function blueprintJson(): string {
+function blueprintJson(
+  chapters?: ReadonlyArray<{ readonly title: string; readonly goal: string }>,
+): string {
   return JSON.stringify({
     schemaVersion: 1,
     premise: '店主小满在位面客栈迎来形形色色的旅人',
@@ -142,7 +144,7 @@ function blueprintJson(): string {
     conflict: '客栈的位面通道逐渐不稳定',
     ending: '小满找到稳定通道的方法',
     plotlines: [{ name: '主线', summary: '追查通道不稳定的根源' }],
-    chapters: [
+    chapters: chapters ?? [
       { title: '第一章 远客', goal: '引出客栈与主角' },
       { title: '第二章 异动', goal: '发现通道异常' },
     ],
@@ -283,7 +285,10 @@ function fakeInvokeModel(script: string[], capturedPrompts?: string[]) {
   };
 }
 
-function buildSpecDeps(db: ProjectDatabase): SpecExtractExecutionDeps {
+function buildSpecDeps(
+  db: ProjectDatabase,
+  sections: typeof SECTIONS | Record<string, unknown> = SECTIONS,
+): SpecExtractExecutionDeps {
   const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
   return {
     taskRepo: new TaskRepositoryAdapter(db),
@@ -292,7 +297,7 @@ function buildSpecDeps(db: ProjectDatabase): SpecExtractExecutionDeps {
     providerRepo: fakeProviderRepo,
     idGenerator,
     clock,
-    invokeModel: fakeInvokeModel([specCompleteJson()]),
+    invokeModel: fakeInvokeModel([specCompleteJson(sections)]),
     transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
     nodeExecutionResultStore: db.getNodeExecutionResultStore(),
     nodeExecutionRepo: db.getNodeExecutionRepository(),
@@ -304,7 +309,10 @@ function buildSpecDeps(db: ProjectDatabase): SpecExtractExecutionDeps {
   };
 }
 
-function buildBlueprintDeps(db: ProjectDatabase): BlueprintGenerateExecutionDeps {
+function buildBlueprintDeps(
+  db: ProjectDatabase,
+  chapters?: ReadonlyArray<{ readonly title: string; readonly goal: string }>,
+): BlueprintGenerateExecutionDeps {
   const grillDeps = buildGrillSessionDeps(db, { getProjectDb: () => db, idGenerator, clock });
   return {
     taskRepo: new TaskRepositoryAdapter(db),
@@ -313,7 +321,7 @@ function buildBlueprintDeps(db: ProjectDatabase): BlueprintGenerateExecutionDeps
     providerRepo: fakeProviderRepo,
     idGenerator,
     clock,
-    invokeModel: fakeInvokeModel([blueprintJson()]),
+    invokeModel: fakeInvokeModel([blueprintJson(chapters)]),
     transaction: <T>(fn: () => T) => db.transactionImmediate(fn),
     nodeExecutionResultStore: db.getNodeExecutionResultStore(),
     nodeExecutionRepo: db.getNodeExecutionRepository(),
@@ -374,6 +382,10 @@ interface ProjectReadyBinding {
 async function driveProjectToReady(
   db: ProjectDatabase,
   env: ReturnType<typeof buildRunnerEnv>,
+  options: {
+    readonly sections?: Record<string, unknown>;
+    readonly chapters?: ReadonlyArray<{ readonly title: string; readonly goal: string }>;
+  } = {},
 ): Promise<ProjectReadyBinding> {
   const { run } = createProjectRun(env.deps, {
     projectId: 'p1',
@@ -381,7 +393,7 @@ async function driveProjectToReady(
   });
   const runId = run.workflowRunId;
   await driveRun(env.deps, 'p1', runId);
-  await executeSpecExtract(buildSpecDeps(db), uniq(env.scheduled)[0]!);
+  await executeSpecExtract(buildSpecDeps(db, options.sections), uniq(env.scheduled)[0]!);
   await driveRun(env.deps, 'p1', runId);
 
   const blueprintTaskId = uniq(env.scheduled).find((taskId) => {
@@ -389,7 +401,7 @@ async function driveProjectToReady(
     return task?.taskType === 'BLUEPRINT_GENERATE';
   });
   expect(blueprintTaskId).toBeTruthy();
-  await executeBlueprintGenerate(buildBlueprintDeps(db), blueprintTaskId!);
+  await executeBlueprintGenerate(buildBlueprintDeps(db, options.chapters), blueprintTaskId!);
   await driveRun(env.deps, 'p1', runId);
 
   const state = projectState(env.deps, runId);
@@ -426,6 +438,7 @@ interface ChapterScript {
   /** 每个 Critic 每一轮的结论；round 自 1 起（第 N 次审查同一 run） */
   verdictFor(nodeId: string, round: number): 'pass' | 'needs_rewrite';
   capturedPrompts?: string[];
+  draftOutputs?(draftAttempt: number): string[];
 }
 
 interface PumpStats {
@@ -496,7 +509,11 @@ async function pumpChapterRun(
       } else if (taskType === 'CHAPTER_DRAFT') {
         stats.draftCount += 1;
         await executeChapterDraftNode(
-          buildChapterDeps(db, [proseJson(`DRAFT-${stats.draftCount}`)], script.capturedPrompts),
+          buildChapterDeps(
+            db,
+            script.draftOutputs?.(stats.draftCount) ?? [proseJson(`DRAFT-${stats.draftCount}`)],
+            script.capturedPrompts,
+          ),
           taskId,
         );
       } else if (taskType === 'CHAPTER_CRITIQUE') {
@@ -636,6 +653,51 @@ describe('GE-6 章节生成 E2E（真实 SQLite + 真实 executor + 生产 resol
       expect(critiques.map((c) => c.criticNodeId).sort()).toEqual([...CRITIC_NODES].sort());
       // 场景计划（内部 artifact）落库，且没有被登记成 Graph artifact
       expect(db.getChapterScenePlanRepository().getLatestByRun('p1', runId)).not.toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  it('1b. 一章完结且单章 15000 字：五次内部调用仍只落一个候选', async () => {
+    const db = makeDb('只写一章完结的位面客栈故事，正文一万五千字');
+    try {
+      const env = buildRunnerEnv(db);
+      const binding = await driveProjectToReady(db, env, {
+        sections: {
+          ...SECTIONS,
+          targetLength: { unit: 'chapters', value: 1 },
+          chapterLength: { targetCharacters: 15_000 },
+        },
+        chapters: [{ title: '唯一章 远客', goal: '在一章内完成相遇、危机与选择' }],
+      });
+      const runId = await startChapterRun(env, binding);
+      const stats = newStats();
+      const state = await pumpChapterRun(
+        db,
+        env,
+        runId,
+        {
+          verdictFor: () => 'pass',
+          draftOutputs: () =>
+            Array.from({ length: 5 }, (_, index) => `第${index + 1}段${'甲'.repeat(2997)}`),
+        },
+        stats,
+        new Set(),
+      );
+
+      expect(state.pendingHumanDecision?.nodeId).toBe(CANDIDATE_GATE);
+      const candidates = db.getChapterCandidateRepository().listByRun('p1', runId);
+      expect(candidates).toHaveLength(1);
+      expect([...candidates[0]!.content.replace(/\s/g, '')]).toHaveLength(15_000);
+
+      const draftTask = db
+        .getTaskRepository()
+        .listByProject('p1')
+        .find((task) => task.taskType === 'CHAPTER_DRAFT' && task.status === 'SUCCEEDED');
+      expect(draftTask).toBeTruthy();
+      const invocation = db.getModelInvocationRepository().listByTask(draftTask!.id)[0]!;
+      expect(JSON.parse(invocation.requestMetadataJson)).toMatchObject({ modelCallCount: 5 });
+      expect(invocation.outputTokens).toBe(100);
     } finally {
       db.close();
     }

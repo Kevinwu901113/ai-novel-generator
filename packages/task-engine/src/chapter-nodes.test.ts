@@ -527,6 +527,21 @@ function draftCandidate(revisionNo = 1): ChapterCandidate {
   };
 }
 
+function scenePlanFixture(sceneCount = 5): ChapterScenePlan {
+  return {
+    id: 'plan-1',
+    projectId: PROJECT_ID,
+    graphRunId: RUN_ID,
+    blueprintChapterId: CHAPTER_ID,
+    title: '第二章 越境',
+    scenes: Array.from({ length: sceneCount }, (_, index) => ({
+      summary: `场景 ${index + 1}`,
+      beats: [`节拍 ${index + 1}`],
+    })),
+    createdAt: NOW,
+  };
+}
+
 const PLAN_RESPONSE = JSON.stringify({
   schemaVersion: 1,
   title: '第二章 越境',
@@ -800,9 +815,39 @@ describe('executeChapterDraftNode', () => {
     };
     expect(payload.lengthRequirement).toEqual({
       targetCharacters: 3000,
-      minimumCharacters: 2550,
-      maximumCharacters: 3600,
+      minimumCharacters: 2700,
+      maximumCharacters: 3300,
     });
+  });
+
+  it('单章 15000 字按场景分段调用并组装为一个完整候选', async () => {
+    const segmentContent = '甲乙丙丁戊己'.repeat(500);
+    const longSpec = validateCreationContractSections({
+      ...SPEC_WITH_CHAPTER_LENGTH,
+      structure: '一章完结',
+      targetLength: { unit: 'chapters', value: 1 },
+      chapterLength: { targetCharacters: 15_000 },
+    });
+    const h = buildHarness({
+      taskType: 'CHAPTER_DRAFT',
+      nodeId: 'DRAFT',
+      responseText: segmentContent,
+      specSectionsJson: JSON.stringify(longSpec),
+      scenePlans: [scenePlanFixture(5)],
+    });
+
+    const result = await executeChapterDraftNode(h.deps, 't1');
+
+    expect(result.task.status).toBe('SUCCEEDED');
+    expect(h.invokeModel).toHaveBeenCalledTimes(5);
+    expect([...h.candidates[0]!.content.replace(/\s/g, '')]).toHaveLength(15_000);
+    const prompts = h.invokeModel.mock.calls.map(
+      (call) =>
+        JSON.parse((call[0] as { prompt: string }).prompt) as { segment: { index: number } },
+    );
+    expect(prompts.map((prompt) => prompt.segment.index)).toEqual([1, 2, 3, 4, 5]);
+    const invocation = [...h.invocationStore.values()][0]!;
+    expect(JSON.parse(invocation.requestMetadataJson)).toMatchObject({ modelCallCount: 5 });
   });
 
   it('模型输出不合法 → 任务 FAILED，候选与 envelope 都不留', async () => {
@@ -944,6 +989,36 @@ describe('executeChapterCritique', () => {
     expect(h.critiques[0]!.issues[0]!.problem).toContain('模板化 AI 腔');
     expect(h.resultStore.get('exec-1')!.outcome?.value).toBe('needs_rewrite');
   });
+
+  it('模型只报 minor 类比问题时也不能绕过确定性风格门', async () => {
+    const aiLikeContent = '她仿佛看见旧影，又似乎听见回声，灯头像是一只闭合的眼睛。'.repeat(30);
+    const minorResponse = JSON.stringify({
+      schemaVersion: 1,
+      verdict: 'pass',
+      summary: '整体可用，类比略多',
+      issues: [
+        {
+          severity: 'minor',
+          excerpt: '她仿佛看见旧影',
+          problem: '类比标记可以再少一些',
+          suggestion: '删去个别仿佛',
+        },
+      ],
+    });
+    const h = buildHarness({
+      taskType: 'CHAPTER_CRITIQUE',
+      nodeId: STYLE_CRITIC,
+      responseText: minorResponse,
+      candidates: [{ ...draftCandidate(1), content: aiLikeContent }],
+    });
+
+    await executeChapterCritique(h.deps, 't1');
+
+    expect(h.critiques[0]!.verdict).toBe('needs_rewrite');
+    expect(h.critiques[0]!.issues.some((issue) => issue.problem.includes('模板化 AI 腔'))).toBe(
+      true,
+    );
+  });
 });
 
 // ── REWRITE ───────────────────────────────────────────────────────
@@ -1009,5 +1084,36 @@ describe('executeChapterRewrite', () => {
     };
     expect(payload.userRequestedRewrite).toBe(true);
     expect(payload.userFeedback).toBeNull();
+  });
+
+  it('15000 字候选按段改写并重新组装，不要求模型一次返回整章', async () => {
+    const paragraph = '甲乙丙丁戊己'.repeat(500);
+    const original = Array.from({ length: 5 }, () => paragraph).join('\n');
+    const segmentContent = '庚辛壬癸子丑'.repeat(500);
+    const longSpec = validateCreationContractSections({
+      ...SPEC_WITH_CHAPTER_LENGTH,
+      structure: '一章完结',
+      targetLength: { unit: 'chapters', value: 1 },
+      chapterLength: { targetCharacters: 15_000 },
+    });
+    const h = buildHarness({
+      taskType: 'CHAPTER_REWRITE',
+      nodeId: 'REWRITE',
+      responseText: segmentContent,
+      specSectionsJson: JSON.stringify(longSpec),
+      candidates: [{ ...draftCandidate(1), content: original }],
+      scenePlans: [scenePlanFixture(5)],
+    });
+
+    const result = await executeChapterRewrite(h.deps, 't1');
+
+    expect(result.task.status).toBe('SUCCEEDED');
+    expect(h.invokeModel).toHaveBeenCalledTimes(5);
+    expect([...h.candidates.at(-1)!.content.replace(/\s/g, '')]).toHaveLength(15_000);
+    expect(
+      h.invokeModel.mock.calls.every((call) =>
+        (call[0] as { systemPrompt: string }).systemPrompt.includes('分段改写助手'),
+      ),
+    ).toBe(true);
   });
 });

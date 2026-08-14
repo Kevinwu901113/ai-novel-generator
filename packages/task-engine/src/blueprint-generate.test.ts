@@ -11,6 +11,7 @@ import {
   filterResearchForPrompt,
   classifyResearchInput,
   assertBlueprintDomainInvariants,
+  assertBlueprintMatchesCreationSpec,
   BLUEPRINT_AUTOMATIC_REPAIR_LIMIT,
   BLUEPRINT_GENERATE_MAX_TOKENS,
   BLUEPRINT_GENERATE_SYSTEM_PROMPT,
@@ -19,6 +20,7 @@ import {
 } from './blueprint-generate.js';
 import { TaskExecutionError } from './index.js';
 import type { ResearchBundle } from '@ai-novel/research-engine';
+import { createCharacterKey } from '@ai-novel/domain';
 
 const CHARACTER = { name: '侦探', role: '主角', description: '冷静自持' };
 const PLOTLINE = { name: '主线', summary: '追查真凶' };
@@ -158,6 +160,26 @@ describe('prompt 构造', () => {
   it('系统提示声明顶层结构与字段边界', () => {
     expect(BLUEPRINT_GENERATE_SYSTEM_PROMPT).toContain('schemaVersion');
     expect(BLUEPRINT_GENERATE_SYSTEM_PROMPT).toContain('chapters');
+    expect(BLUEPRINT_GENERATE_SYSTEM_PROMPT).toContain('一章完结');
+  });
+
+  it('全书目标为一章时拒绝擅自扩成长篇', () => {
+    const parsed = parseBlueprintGenerateV1(
+      valid({ chapters: [CHAPTER, { title: '第二章', goal: '继续展开' }] }),
+    );
+    expect(() =>
+      assertBlueprintMatchesCreationSpec(parsed, {
+        premise: 'p',
+        genre: ['悬疑'],
+        tone: ['冷硬'],
+        targetAudience: '成年读者',
+        narrativePov: 'THIRD_LIMITED',
+        tense: 'PAST',
+        targetLength: { unit: 'chapters', value: 1 },
+        chapterLength: { targetCharacters: 15_000 },
+        protagonist: { characterKey: createCharacterKey('lead'), name: '主角' },
+      }),
+    ).toThrow('用户要求的 1 章');
   });
 
   const NOT_CONDUCTED: BlueprintResearchInput = { status: 'not_conducted' };

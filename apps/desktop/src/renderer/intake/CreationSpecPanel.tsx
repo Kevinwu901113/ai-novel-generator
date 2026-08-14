@@ -3,11 +3,13 @@
  *
  * 编辑走 contract.updateByUser（CAS：expectedContractVersion），成功后显式触发
  * intake.propagateSpecInvalidation 失效级联（D-B4-4）。V1 可编辑：前提 / 目标读者 /
- * 结构（set-scalar）+ 类型 / 基调 / 主题（set-string-list）；其余字段只读展示。
+ * 结构（set-scalar）+ 单章目标/范围（set-structured）+ 类型 / 基调 / 主题
+ * （set-string-list）；其余字段只读展示。
  */
 
 import { useCallback, useState } from 'react';
 import type { ContractPatchOperationDTO, ContractVersionPublicData } from '@ai-novel/contracts';
+import { formatChapterLength } from '../contract/contract-labels';
 import { toSafeUserError } from '../safety/safe-error';
 
 export interface CreationSpecPanelProps {
@@ -28,6 +30,9 @@ interface DraftFields {
   premise: string;
   targetAudience: string;
   structure: string;
+  chapterLengthTarget: string;
+  chapterLengthMinimum: string;
+  chapterLengthMaximum: string;
   genre: string;
   tone: string;
   themes: string;
@@ -38,13 +43,26 @@ function draftFromSpec(spec: ContractVersionPublicData): DraftFields {
     premise: spec.sections.premise,
     targetAudience: spec.sections.targetAudience,
     structure: spec.sections.structure ?? '',
+    chapterLengthTarget: spec.sections.chapterLength?.targetCharacters.toString() ?? '',
+    chapterLengthMinimum: spec.sections.chapterLength?.minimumCharacters?.toString() ?? '',
+    chapterLengthMaximum: spec.sections.chapterLength?.maximumCharacters?.toString() ?? '',
     genre: spec.sections.genre.join('、'),
     tone: spec.sections.tone.join('、'),
     themes: (spec.sections.themes ?? []).join('、'),
   };
 }
 
-/** 由草稿字段构造变更操作集（仅包含实际变化的字段；空值不做删除语义） */
+function parseChapterCharacters(raw: string, label: string): number | undefined {
+  const normalized = raw.trim().replace(/[，,]/g, '');
+  if (normalized.length === 0) return undefined;
+  const value = Number(normalized);
+  if (!Number.isSafeInteger(value) || value < 500 || value > 40_000) {
+    throw new Error(`${label}必须是 500 到 40,000 之间的整数`);
+  }
+  return value;
+}
+
+/** 由草稿字段构造变更操作集（仅包含实际变化的字段） */
 export function buildSpecOperations(
   spec: ContractVersionPublicData,
   draft: DraftFields,
@@ -59,6 +77,40 @@ export function buildSpecOperations(
   const structure = draft.structure.trim();
   if (structure.length > 0 && structure !== (spec.sections.structure ?? '')) {
     ops.push({ kind: 'set-scalar', path: '/structure', value: structure });
+  }
+  const targetCharacters = parseChapterCharacters(draft.chapterLengthTarget, '单章目标字数');
+  const minimumCharacters = parseChapterCharacters(draft.chapterLengthMinimum, '单章最少字数');
+  const maximumCharacters = parseChapterCharacters(draft.chapterLengthMaximum, '单章最多字数');
+  if (targetCharacters === undefined && spec.sections.chapterLength) {
+    ops.push({ kind: 'remove-field', path: '/chapterLength' });
+  } else if (
+    targetCharacters === undefined &&
+    (minimumCharacters !== undefined || maximumCharacters !== undefined)
+  ) {
+    throw new Error('填写单章字数范围前，请先填写单章目标字数');
+  } else if (targetCharacters !== undefined) {
+    if (minimumCharacters !== undefined && minimumCharacters > targetCharacters) {
+      throw new Error('单章最少字数不能大于目标字数');
+    }
+    if (maximumCharacters !== undefined && maximumCharacters < targetCharacters) {
+      throw new Error('单章最多字数不能小于目标字数');
+    }
+    const chapterLength = {
+      targetCharacters,
+      ...(minimumCharacters !== undefined && { minimumCharacters }),
+      ...(maximumCharacters !== undefined && { maximumCharacters }),
+    };
+    if (
+      chapterLength.targetCharacters !== spec.sections.chapterLength?.targetCharacters ||
+      chapterLength.minimumCharacters !== spec.sections.chapterLength?.minimumCharacters ||
+      chapterLength.maximumCharacters !== spec.sections.chapterLength?.maximumCharacters
+    ) {
+      ops.push({
+        kind: 'set-structured',
+        path: '/chapterLength',
+        value: chapterLength,
+      });
+    }
   }
   const genre = parseListInput(draft.genre);
   if (genre.join('\u0000') !== spec.sections.genre.join('\u0000')) {
@@ -93,7 +145,13 @@ export function CreationSpecPanel({ projectId, spec, onSaved }: CreationSpecPane
   }, []);
 
   const save = useCallback(async () => {
-    const operations = buildSpecOperations(spec, draft);
+    let operations: ContractPatchOperationDTO[];
+    try {
+      operations = buildSpecOperations(spec, draft);
+    } catch (err) {
+      setError(toSafeUserError(err, '创作要求格式不正确').message);
+      return;
+    }
     if (operations.length === 0) {
       setEditing(false);
       return;
@@ -170,6 +228,33 @@ export function CreationSpecPanel({ projectId, spec, onSaved }: CreationSpecPane
             />
           </label>
           <label>
+            单章目标字数（可留空，500–40,000）
+            <input
+              inputMode="numeric"
+              value={draft.chapterLengthTarget}
+              onChange={(e) => field('chapterLengthTarget', e.target.value)}
+              placeholder="例如 15000"
+            />
+          </label>
+          <label>
+            单章最少字数（可留空）
+            <input
+              inputMode="numeric"
+              value={draft.chapterLengthMinimum}
+              onChange={(e) => field('chapterLengthMinimum', e.target.value)}
+              placeholder="例如 14000"
+            />
+          </label>
+          <label>
+            单章最多字数（可留空）
+            <input
+              inputMode="numeric"
+              value={draft.chapterLengthMaximum}
+              onChange={(e) => field('chapterLengthMaximum', e.target.value)}
+              placeholder="例如 16000"
+            />
+          </label>
+          <label>
             结构（可留空）
             <textarea
               value={draft.structure}
@@ -208,6 +293,12 @@ export function CreationSpecPanel({ projectId, spec, onSaved }: CreationSpecPane
             <>
               <dt>结构</dt>
               <dd>{spec.sections.structure}</dd>
+            </>
+          )}
+          {spec.sections.chapterLength && (
+            <>
+              <dt>单章目标字数</dt>
+              <dd>{formatChapterLength(spec.sections.chapterLength)}</dd>
             </>
           )}
         </dl>

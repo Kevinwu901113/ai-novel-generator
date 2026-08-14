@@ -17,6 +17,7 @@ export const SECTION_LABELS: Readonly<Record<string, string>> = {
   narrativePov: '叙事视角',
   tense: '时态',
   targetLength: '目标长度',
+  chapterLength: '单章篇幅',
   structure: '结构',
   protagonist: '主角',
   supportingCharacters: '配角',
@@ -115,6 +116,21 @@ export function formatTargetLength(targetLength: {
 }): string {
   const unitLabel = labelFor(TARGET_LENGTH_UNIT_LABELS, targetLength.unit);
   return `约 ${targetLength.value.toLocaleString('zh-CN')} ${unitLabel}`;
+}
+
+export function formatChapterLength(chapterLength: {
+  readonly targetCharacters: number;
+  readonly minimumCharacters?: number;
+  readonly maximumCharacters?: number;
+}): string {
+  const target = chapterLength.targetCharacters.toLocaleString('zh-CN');
+  if (
+    chapterLength.minimumCharacters !== undefined &&
+    chapterLength.maximumCharacters !== undefined
+  ) {
+    return `${chapterLength.minimumCharacters.toLocaleString('zh-CN')}–${chapterLength.maximumCharacters.toLocaleString('zh-CN')} 字（目标 ${target}）`;
+  }
+  return `约 ${target} 字`;
 }
 
 /** 短 ID（前 8 字符 + 省略号） */

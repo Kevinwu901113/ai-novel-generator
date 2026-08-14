@@ -2340,6 +2340,11 @@ export interface CreationContractSectionsPublicData {
   readonly narrativePov: NarrativePov;
   readonly tense: Tense;
   readonly targetLength?: { readonly unit: TargetLengthUnit; readonly value: number };
+  readonly chapterLength?: {
+    readonly targetCharacters: number;
+    readonly minimumCharacters?: number;
+    readonly maximumCharacters?: number;
+  };
   readonly structure?: string;
   readonly protagonist: {
     readonly characterKey: string;
@@ -2516,6 +2521,7 @@ export type ContractPatchOperationDTO =
   | ContractPatchSetProtagonistScalarDTO
   | ContractPatchSetTargetLengthUnitDTO
   | ContractPatchSetTargetLengthValueDTO
+  | ContractPatchSetChapterLengthValueDTO
   | ContractPatchSetContentBoundariesScalarDTO
   | ContractPatchSetSupportingCharScalarDTO
   | ContractPatchSetRelationshipScalarDTO
@@ -2524,6 +2530,7 @@ export type ContractPatchOperationDTO =
   | ContractPatchSetContentBoundariesListDTO
   | ContractPatchSetSupportingCharTraitsDTO
   | ContractPatchSetTargetLengthDTO
+  | ContractPatchSetChapterLengthDTO
   | ContractPatchSetContentBoundariesDTO
   | ContractPatchRemoveOptionalFieldDTO
   | ContractPatchUpsertProtagonistDTO
@@ -2572,6 +2579,16 @@ export interface ContractPatchSetTargetLengthUnitDTO {
 export interface ContractPatchSetTargetLengthValueDTO {
   readonly kind: 'set-scalar';
   readonly path: '/targetLength/value';
+  readonly value: number;
+}
+
+/** set-scalar: chapterLength numeric children */
+export interface ContractPatchSetChapterLengthValueDTO {
+  readonly kind: 'set-scalar';
+  readonly path:
+    | '/chapterLength/targetCharacters'
+    | '/chapterLength/minimumCharacters'
+    | '/chapterLength/maximumCharacters';
   readonly value: number;
 }
 
@@ -2641,6 +2658,17 @@ export interface ContractPatchSetTargetLengthDTO {
   readonly value: { readonly unit: TargetLengthUnit; readonly value: number };
 }
 
+/** set-structured: /chapterLength → 单章正文字符目标 */
+export interface ContractPatchSetChapterLengthDTO {
+  readonly kind: 'set-structured';
+  readonly path: '/chapterLength';
+  readonly value: {
+    readonly targetCharacters: number;
+    readonly minimumCharacters?: number;
+    readonly maximumCharacters?: number;
+  };
+}
+
 /** set-structured: /contentBoundaries → object */
 export interface ContractPatchSetContentBoundariesDTO {
   readonly kind: 'set-structured';
@@ -2659,6 +2687,7 @@ export interface ContractPatchRemoveOptionalFieldDTO {
   readonly path:
     | '/themes'
     | '/targetLength'
+    | '/chapterLength'
     | '/structure'
     | '/supportingCharacters'
     | '/relationships'
@@ -2798,7 +2827,12 @@ const SET_SCALAR_ENUM_PATHS: ReadonlyMap<string, ReadonlySet<string>> = new Map(
   ['/targetLength/unit', VALID_TARGET_LENGTH_UNIT],
 ]);
 
-const SET_SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set(['/targetLength/value']);
+const SET_SCALAR_NUMBER_PATHS: ReadonlySet<string> = new Set([
+  '/targetLength/value',
+  '/chapterLength/targetCharacters',
+  '/chapterLength/minimumCharacters',
+  '/chapterLength/maximumCharacters',
+]);
 
 const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
   '/genre',
@@ -2813,11 +2847,16 @@ const STRING_LIST_PATHS: ReadonlySet<string> = new Set([
   '/contentBoundaries/prohibitedContent',
 ]);
 
-const STRUCTURED_PATHS: ReadonlySet<string> = new Set(['/targetLength', '/contentBoundaries']);
+const STRUCTURED_PATHS: ReadonlySet<string> = new Set([
+  '/targetLength',
+  '/chapterLength',
+  '/contentBoundaries',
+]);
 
 const REMOVE_FIELD_PATHS: ReadonlySet<string> = new Set([
   '/themes',
   '/targetLength',
+  '/chapterLength',
   '/structure',
   '/supportingCharacters',
   '/relationships',
@@ -2925,6 +2964,30 @@ function isValidStructuredDTO(obj: Record<string, unknown>): boolean {
       Number.isSafeInteger(v.value) &&
       v.value > 0
     );
+  }
+  if (obj.path === '/chapterLength') {
+    const v = obj.value as Record<string, unknown>;
+    if (
+      !hasKeys(
+        v,
+        ['targetCharacters', 'minimumCharacters', 'maximumCharacters'],
+        ['targetCharacters'],
+      )
+    ) {
+      return false;
+    }
+    const isCharacters = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 500 && value <= 40_000;
+    if (!isCharacters(v.targetCharacters)) return false;
+    if (v.minimumCharacters !== undefined && !isCharacters(v.minimumCharacters)) return false;
+    if (v.maximumCharacters !== undefined && !isCharacters(v.maximumCharacters)) return false;
+    if (typeof v.minimumCharacters === 'number' && v.minimumCharacters > v.targetCharacters) {
+      return false;
+    }
+    if (typeof v.maximumCharacters === 'number' && v.maximumCharacters < v.targetCharacters) {
+      return false;
+    }
+    return true;
   }
   if (obj.path === '/contentBoundaries') {
     const v = obj.value as Record<string, unknown>;
@@ -3096,6 +3159,7 @@ export function isValidCreationContractSectionsPublicData(
     'narrativePov',
     'tense',
     'targetLength',
+    'chapterLength',
     'structure',
     'protagonist',
     'supportingCharacters',
@@ -3126,6 +3190,31 @@ export function isValidCreationContractSectionsPublicData(
     if (typeof tl.value !== 'number' || !Number.isSafeInteger(tl.value) || tl.value <= 0)
       return false;
     if (!hasExactKeys(tl, ['unit', 'value'])) return false;
+  }
+
+  if (obj.chapterLength !== undefined) {
+    if (typeof obj.chapterLength !== 'object' || obj.chapterLength === null) return false;
+    const cl = obj.chapterLength as Record<string, unknown>;
+    if (
+      !hasKeys(
+        cl,
+        ['targetCharacters', 'minimumCharacters', 'maximumCharacters'],
+        ['targetCharacters'],
+      )
+    ) {
+      return false;
+    }
+    const validCharacters = (value: unknown): value is number =>
+      typeof value === 'number' && Number.isSafeInteger(value) && value >= 500 && value <= 40_000;
+    if (!validCharacters(cl.targetCharacters)) return false;
+    if (cl.minimumCharacters !== undefined && !validCharacters(cl.minimumCharacters)) return false;
+    if (cl.maximumCharacters !== undefined && !validCharacters(cl.maximumCharacters)) return false;
+    if (typeof cl.minimumCharacters === 'number' && cl.minimumCharacters > cl.targetCharacters) {
+      return false;
+    }
+    if (typeof cl.maximumCharacters === 'number' && cl.maximumCharacters < cl.targetCharacters) {
+      return false;
+    }
   }
 
   if (obj.structure !== undefined && typeof obj.structure !== 'string') return false;
@@ -3323,6 +3412,7 @@ const CONTRACT_VALID_SECTIONS: ReadonlySet<string> = new Set([
   'narrativePov',
   'tense',
   'targetLength',
+  'chapterLength',
   'structure',
   'protagonist',
   'supportingCharacters',
@@ -3336,6 +3426,7 @@ const CONTRACT_VALID_SECTIONS: ReadonlySet<string> = new Set([
 
 const CONTRACT_STRUCTURED_CHILDREN: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['targetLength', new Set(['unit', 'value'])],
+  ['chapterLength', new Set(['targetCharacters', 'minimumCharacters', 'maximumCharacters'])],
   ['contentBoundaries', new Set(['rating', 'allowedContent', 'prohibitedContent', 'notes'])],
   ['protagonist', new Set(['characterKey', 'name', 'role', 'motivation', 'arc', 'traits'])],
 ]);

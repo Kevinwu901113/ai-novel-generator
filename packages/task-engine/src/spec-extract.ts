@@ -46,6 +46,7 @@ import {
   TaskExecutionError,
   type TaskEngineDeps,
 } from './index.js';
+import { inferChapterLengthFromStructure } from './chapter-length.js';
 import { compensateFinalization } from './chapter-generation.js';
 
 // ── deps / 类型 ───────────────────────────────────────────────────
@@ -89,11 +90,17 @@ const SECTIONS_SCHEMA_INSTRUCTIONS = [
   '用户未明确语法时态时 tense 固定用 PAST；故事发生在未来不等于 FUTURE 时态，禁止输出枚举表以外的值。',
   'protagonist 必须至少含 characterKey 与 name；characterKey 只能用 1..50 位小写英文字母、数字、_、-，',
   '未知姓名可用用户原称谓（例如“老板娘”），characterKey 可用 protagonist。可选字段仅有 role、motivation、arc、traits。',
-  'sections 可选字段：themes、targetLength、structure、supportingCharacters、relationships、worldRules、',
+  'sections 可选字段：themes、targetLength、chapterLength、structure、supportingCharacters、relationships、worldRules、',
   'mustInclude、mustAvoid、contentBoundaries、unresolvedQuestions。信息未知时直接省略整个可选字段，禁止输出 null。',
-  'structure 必须是一个字符串，不得写成对象；例如“长篇连载，每章约3000字”。',
+  'structure 必须是一个字符串，只描述连载/分卷/叙事结构，不在这里保存单章字数。',
   'themes、worldRules、mustInclude、mustAvoid、unresolvedQuestions 都必须是字符串数组；即使只有一项也写成 ["..."]，不得写成对象。',
-  'targetLength 只能是 {"unit":"words"或"chapters","value":正整数}，表示全书总字数或总章节数；每章字数只写入 structure。',
+  'targetLength 只能是 {"unit":"words"或"chapters","value":正整数}，表示全书总字数或总章节数。',
+  'chapterLength 表示单章正文篇幅，只允许 targetCharacters、minimumCharacters、maximumCharacters；',
+  'targetCharacters 必填且为 500..40000 的整数。用户只说“每章约 N 字”时只写 targetCharacters；',
+  '用户明确给出范围时再写 minimumCharacters 与 maximumCharacters，且 minimum <= target <= maximum。',
+  '例如“一共一章，单章15000字”应写 targetLength={"unit":"chapters","value":1}，',
+  'chapterLength={"targetCharacters":15000}；“每章一万二到一万五千字”应写',
+  'chapterLength={"targetCharacters":13500,"minimumCharacters":12000,"maximumCharacters":15000}。',
   'protagonist.traits 必须是字符串数组。supportingCharacters 必须是对象数组，每项只允许 characterKey、name、role、relationship、traits；',
   '其中 traits 也必须是字符串数组，characterKey 同样使用稳定英文键。',
   'relationships 必须是对象数组，每项只允许 relationshipKey、fromCharacterKey、toCharacterKey、type、dynamic；',
@@ -170,8 +177,8 @@ export function buildSpecExtractPrompt(context: {
     SECTIONS_SCHEMA_INSTRUCTIONS,
     '完整性硬约束：initialIdea 与 qa.answer 中用户明确说过的每一项要求都必须保留到 sections，',
     '不能因为当前追问只问一个主题就忽略同一条回答里的其他信息。',
-    '字段映射：长篇/短篇、连载形式、每章字数、分卷方式等统一写入 structure；',
-    '“每章三千字左右”应规范为“每章约3000字”。明确的禁忌写入 mustAvoid，明确的结局选择写入 protagonist.arc 或 mustInclude。',
+    '字段映射：长篇/短篇、连载形式、分卷方式写入 structure；单章字数写入 chapterLength，',
+    '全书总字数或总章节数写入 targetLength。明确的禁忌写入 mustAvoid，明确的结局选择写入 protagonist.arc 或 mustInclude。',
     '基线（baselineSections）非空时在其上增量修订：保留用户已确认的内容，只补充或修正新信息。',
     '现在输出结果 JSON。',
   ].join('\n');
@@ -274,6 +281,25 @@ function normalizeSectionsForValidation(value: unknown): unknown {
   }
 
   if ('structure' in sections) sections.structure = normalizeStructure(sections.structure);
+
+  if (isRecord(sections.chapterLength)) {
+    const raw = sections.chapterLength;
+    const normalized: Record<string, unknown> = {
+      targetCharacters:
+        raw.targetCharacters ?? raw.target ?? raw.value ?? raw.characters ?? raw.words,
+    };
+    const minimum = raw.minimumCharacters ?? raw.minimum ?? raw.min;
+    const maximum = raw.maximumCharacters ?? raw.maximum ?? raw.max;
+    if (minimum !== undefined) normalized.minimumCharacters = minimum;
+    if (maximum !== undefined) normalized.maximumCharacters = maximum;
+    sections.chapterLength = normalized;
+  }
+
+  // 兼容升级前模型仍把“每章 N 字”写入 structure；新版本一经保存即转成结构化字段。
+  if (sections.chapterLength === undefined && typeof sections.structure === 'string') {
+    const inferred = inferChapterLengthFromStructure(sections.structure);
+    if (inferred) sections.chapterLength = inferred;
+  }
 
   if (isRecord(sections.worldRules)) {
     sections.worldRules = Object.entries(sections.worldRules).map(

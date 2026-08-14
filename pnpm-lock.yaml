@@ -289,6 +289,9 @@ importers:
       '@ai-novel/research-engine':
         specifier: workspace:*
         version: link:../research-engine
+      '@ai-novel/writing-evaluation':
+        specifier: workspace:*
+        version: link:../writing-evaluation
     devDependencies:
       '@types/node':
         specifier: ^24.0.0

@@ -20,7 +20,8 @@
     "@ai-novel/contracts": "workspace:*",
     "@ai-novel/application": "workspace:*",
     "@ai-novel/model-gateway": "workspace:*",
-    "@ai-novel/research-engine": "workspace:*"
+    "@ai-novel/research-engine": "workspace:*",
+    "@ai-novel/writing-evaluation": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

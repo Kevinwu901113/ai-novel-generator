@@ -331,6 +331,19 @@ export {
   type ContractDraftExecutionResult,
 } from './creation-contract-draft.js';
 
+export {
+  inferChapterLengthFromStructure,
+  inferPerChapterTargetCharacters,
+  resolveChapterLengthRequirement,
+  MIN_PER_CHAPTER_TARGET,
+  MAX_PER_CHAPTER_TARGET,
+  MIN_TARGET_RATIO,
+  MAX_TARGET_RATIO,
+  type ChapterLengthRequirement,
+} from './chapter-length.js';
+
+export { analyzeChineseProseQuality, type ChineseProseQualityReport } from './prose-quality.js';
+
 export { validateContractDraftContext } from './contract-draft-context.js';
 export type {
   ContractDraftContextDeps,
@@ -353,7 +366,6 @@ export {
   buildChapterDraftPrompt,
   buildChapterCritiquePrompt,
   buildChapterRewritePrompt,
-  inferPerChapterTargetCharacters,
   criticSystemPrompt,
   CHAPTER_PLAN_SYSTEM_PROMPT,
   CHAPTER_DRAFT_SYSTEM_PROMPT,

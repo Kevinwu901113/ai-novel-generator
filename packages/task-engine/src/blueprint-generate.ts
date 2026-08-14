@@ -40,6 +40,7 @@ import {
   type BlueprintCharacter,
   type BlueprintChapter,
   type BlueprintPlotline,
+  type CreationContractSections,
   type StoryBlueprint,
 } from '@ai-novel/domain';
 import type { ResearchBundle } from '@ai-novel/research-engine';
@@ -98,6 +99,9 @@ export const BLUEPRINT_GENERATE_SYSTEM_PROMPT = [
   '你是小说故事蓝图生成助手。输入是创作想法、创作要求，以及（若有）调研资料。',
   '你的职责：产出完整的故事蓝图，至少包含核心前提、主角与关键人物、主要关系、世界背景、',
   '主要冲突、结局方向、主要情节线、章节结构与每章目标。',
+  '创作要求 targetLength.unit=chapters 时，chapters 数量必须与 targetLength.value 完全一致；',
+  '一章完结的小说也必须只规划一章，不得擅自扩成长篇。chapterLength 只控制每章正文篇幅，',
+  '不代表章节数量。',
   '若 rewriteAttempt 大于 0，说明用户对上一版蓝图请求了改写，本次必须产出实质不同的蓝图',
   '（更换叙事角度、结构安排或核心冲突的处理方式），不得只做措辞层面的微调。',
   '若调研信息标注 conducted=false，说明本项目未做事实调研，蓝图不得依赖具体的事实性',
@@ -604,6 +608,21 @@ export function assertBlueprintDomainInvariants(
   }
 }
 
+export function assertBlueprintMatchesCreationSpec(
+  parsed: ParsedBlueprintGenerate,
+  creationSpec: CreationContractSections,
+): void {
+  if (
+    creationSpec.targetLength?.unit === 'chapters' &&
+    parsed.chapters.length !== creationSpec.targetLength.value
+  ) {
+    throw new TaskExecutionError(
+      'MODEL_RESPONSE_INVALID',
+      `蓝图章节数 ${parsed.chapters.length} 与用户要求的 ${creationSpec.targetLength.value} 章不一致`,
+    );
+  }
+}
+
 // ── 执行 ──────────────────────────────────────────────────────────
 
 function requireCas(updated: boolean, message: string): void {
@@ -709,7 +728,7 @@ export async function executeBlueprintGenerate(
     });
     return failedResult(deps, taskId, null);
   }
-  let creationSpecSummary: unknown;
+  let creationSpecSummary: CreationContractSections;
   try {
     creationSpecSummary = validateCreationContractSections(JSON.parse(specVersion.sectionsJson));
   } catch {
@@ -881,6 +900,7 @@ export async function executeBlueprintGenerate(
   while (true) {
     try {
       parsedResult = parseBlueprintGenerateV1(result.text);
+      assertBlueprintMatchesCreationSpec(parsedResult, creationSpecSummary);
       // 域校验前置到最终事务外：与 parse 失败共享 MODEL_RESPONSE_INVALID 归属。
       assertBlueprintDomainInvariants(parsedResult, now);
       break;

@@ -51,6 +51,9 @@ describe('buildSpecOperations', () => {
       premise: '赛博都市修仙快递员',
       targetAudience: 'adults',
       structure: '',
+      chapterLengthTarget: '',
+      chapterLengthMinimum: '',
+      chapterLengthMaximum: '',
       genre: 'sci-fi',
       tone: 'dark',
       themes: '',
@@ -61,6 +64,9 @@ describe('buildSpecOperations', () => {
       premise: '新前提',
       targetAudience: 'adults',
       structure: '三幕结构',
+      chapterLengthTarget: '',
+      chapterLengthMinimum: '',
+      chapterLengthMaximum: '',
       genre: 'sci-fi、修仙',
       tone: 'dark',
       themes: '',
@@ -77,12 +83,95 @@ describe('buildSpecOperations', () => {
       premise: '赛博都市修仙快递员',
       targetAudience: 'adults',
       structure: '',
+      chapterLengthTarget: '',
+      chapterLengthMinimum: '',
+      chapterLengthMaximum: '',
       genre: 'sci-fi',
       tone: 'dark',
       themes: '',
     });
     expect(ops.find((o) => o.path === '/structure')).toBeUndefined();
     expect(ops.find((o) => o.path === '/themes')).toBeUndefined();
+  });
+
+  it('单章目标字数使用结构化字段并校验 500..40000', () => {
+    const ops = buildSpecOperations(SPEC, {
+      premise: '赛博都市修仙快递员',
+      targetAudience: 'adults',
+      structure: '',
+      chapterLengthTarget: '15,000',
+      chapterLengthMinimum: '',
+      chapterLengthMaximum: '',
+      genre: 'sci-fi',
+      tone: 'dark',
+      themes: '',
+    });
+    expect(ops).toContainEqual({
+      kind: 'set-structured',
+      path: '/chapterLength',
+      value: { targetCharacters: 15_000 },
+    });
+    expect(() =>
+      buildSpecOperations(SPEC, {
+        premise: '赛博都市修仙快递员',
+        targetAudience: 'adults',
+        structure: '',
+        chapterLengthTarget: '50000',
+        chapterLengthMinimum: '',
+        chapterLengthMaximum: '',
+        genre: 'sci-fi',
+        tone: 'dark',
+        themes: '',
+      }),
+    ).toThrow('500 到 40,000');
+
+    expect(
+      buildSpecOperations(SPEC, {
+        premise: '赛博都市修仙快递员',
+        targetAudience: 'adults',
+        structure: '',
+        chapterLengthTarget: '15000',
+        chapterLengthMinimum: '14000',
+        chapterLengthMaximum: '16000',
+        genre: 'sci-fi',
+        tone: 'dark',
+        themes: '',
+      }),
+    ).toContainEqual({
+      kind: 'set-structured',
+      path: '/chapterLength',
+      value: {
+        targetCharacters: 15_000,
+        minimumCharacters: 14_000,
+        maximumCharacters: 16_000,
+      },
+    });
+  });
+
+  it('清空已有单章目标时显式删除结构化字段', () => {
+    const withChapterLength = {
+      ...SPEC,
+      sections: {
+        ...SPEC.sections,
+        chapterLength: {
+          targetCharacters: 15_000,
+          minimumCharacters: 14_000,
+          maximumCharacters: 16_000,
+        },
+      },
+    } as unknown as ContractVersionPublicData;
+    const ops = buildSpecOperations(withChapterLength, {
+      premise: '赛博都市修仙快递员',
+      targetAudience: 'adults',
+      structure: '',
+      chapterLengthTarget: '',
+      chapterLengthMinimum: '14000',
+      chapterLengthMaximum: '16000',
+      genre: 'sci-fi',
+      tone: 'dark',
+      themes: '',
+    });
+    expect(ops).toContainEqual({ kind: 'remove-field', path: '/chapterLength' });
   });
 });
 

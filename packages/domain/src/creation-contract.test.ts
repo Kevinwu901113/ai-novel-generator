@@ -432,6 +432,36 @@ describe('validateCreationContractSections', () => {
     ).toThrow();
   });
 
+  it('validates structured chapterLength including 15000-character single chapters', () => {
+    const result = validateCreationContractSections(
+      makeSections({
+        targetLength: { unit: 'chapters', value: 1 },
+        chapterLength: {
+          targetCharacters: 15000,
+          minimumCharacters: 14000,
+          maximumCharacters: 16000,
+        },
+      }),
+    );
+    expect(result.chapterLength).toEqual({
+      targetCharacters: 15000,
+      minimumCharacters: 14000,
+      maximumCharacters: 16000,
+    });
+    expect(() =>
+      validateCreationContractSections(
+        makeSections({
+          chapterLength: { targetCharacters: 15000, minimumCharacters: 16000 },
+        }),
+      ),
+    ).toThrow('不得大于 targetCharacters');
+    expect(() =>
+      validateCreationContractSections(
+        makeSections({ chapterLength: { targetCharacters: 40001 } }),
+      ),
+    ).toThrow('500..40000');
+  });
+
   it('rejects targetLength.value NaN', () => {
     expect(() =>
       validateCreationContractSections(

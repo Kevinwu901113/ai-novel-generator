@@ -733,6 +733,13 @@ describe('isValidContractPatchOperationDTO', () => {
         value: { unit: 'words', value: 100 },
       }),
     ).toBe(true);
+    expect(
+      isValidContractPatchOperationDTO({
+        kind: 'set-structured',
+        path: '/chapterLength',
+        value: { targetCharacters: 15000 },
+      }),
+    ).toBe(true);
   });
 
   it('rejects set-structured with invalid path', () => {
@@ -795,6 +802,13 @@ describe('isValidContractPatchOperationsDTO', () => {
 describe('isValidCreationContractSectionsPublicData', () => {
   it('accepts valid sections', () => {
     expect(isValidCreationContractSectionsPublicData(VALID_SECTIONS_PUBLIC)).toBe(true);
+    expect(
+      isValidCreationContractSectionsPublicData({
+        ...VALID_SECTIONS_PUBLIC,
+        targetLength: { unit: 'chapters', value: 1 },
+        chapterLength: { targetCharacters: 15000 },
+      }),
+    ).toBe(true);
   });
 
   it('rejects missing premise', () => {

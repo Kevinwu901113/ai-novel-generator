@@ -41,7 +41,16 @@ export const DEFAULT_AI_SMELL_LEXICON: AiSmellLexicon = {
     { id: 'mo-ming', phrase: '莫名' },
     { id: 'xin-zhong-yi-zhen', phrase: '心中一阵' },
     { id: 'kong-qi-fang-fu-ning-gu', phrase: '空气仿佛凝固' },
+    { id: 'nan-yi-yan-yu', phrase: '难以言喻' },
+    { id: 'shuo-bu-qing-dao-bu-ming', phrase: '说不清道不明' },
+    { id: 'mou-zhong-dong-xi', phrase: '某种东西' },
+    { id: 'ruo-you-ruo-wu', phrase: '若有若无' },
+    { id: 'yi-shi-zhi-jian', phrase: '一时之间' },
+    { id: 'ming-yun-chi-lun', phrase: '命运的齿轮' },
+    { id: 'fang-fu-zai-su-shuo', phrase: '仿佛在诉说' },
+    { id: 'zheng-ge-shi-jie-an-jing', phrase: '整个世界都安静' },
     { id: 'bu-shi-er-shi', pair: { first: '不是', second: '而是' } },
+    { id: 'bu-jin-er-qie', pair: { first: '不仅', second: '而且' } },
   ],
 };
 

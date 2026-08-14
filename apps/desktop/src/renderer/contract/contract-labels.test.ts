@@ -12,6 +12,7 @@ import {
   CONTRACT_VERSION_CREATED_BY_LABELS,
   PROVENANCE_SOURCE_LABELS,
   formatTargetLength,
+  formatChapterLength,
   formatShortId,
   formatContractTime,
   isLockedFieldPath,
@@ -28,6 +29,7 @@ describe('SECTION_LABELS', () => {
       'narrativePov',
       'tense',
       'targetLength',
+      'chapterLength',
       'structure',
       'protagonist',
       'supportingCharacters',
@@ -110,6 +112,19 @@ describe('formatTargetLength', () => {
 
   it('未知单位回退为原始单位', () => {
     expect(formatTargetLength({ unit: 'unknown', value: 5 })).toBe('约 5 unknown');
+  });
+});
+
+describe('formatChapterLength', () => {
+  it('格式化单章目标和显式范围', () => {
+    expect(formatChapterLength({ targetCharacters: 15000 })).toBe('约 15,000 字');
+    expect(
+      formatChapterLength({
+        targetCharacters: 13500,
+        minimumCharacters: 12000,
+        maximumCharacters: 15000,
+      }),
+    ).toBe('12,000–15,000 字（目标 13,500）');
   });
 });
 

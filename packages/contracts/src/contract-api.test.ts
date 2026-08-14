@@ -39,6 +39,7 @@ describe('isCanonicalContractFieldPath', () => {
     expect(isCanonicalContractFieldPath('/supportingCharacters/alice/role')).toBe(true);
     expect(isCanonicalContractFieldPath('/relationships/r1/type')).toBe(true);
     expect(isCanonicalContractFieldPath('/targetLength/value')).toBe(true);
+    expect(isCanonicalContractFieldPath('/chapterLength/targetCharacters')).toBe(true);
   });
 
   it('拒绝非法 path', () => {

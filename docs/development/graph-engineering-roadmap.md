@@ -302,6 +302,11 @@ gate 决策、终态）。
 动态检索上下文、人物知识范围、关系与状态、时间线、伏笔与未解决线程、Writer Preference Profile、多候选生成、
 自动指标、Critic 质量基准、人工盲评、PlotPilot 对比实验、精确局部修订。
 
+**已落地的基础质量门（2026-08-14）**：CreationSpec 使用独立 `chapterLength`；500–40,000 字单章可按场景
+分段生成和分段改写，仍保持“一章一个候选”的权威语义；要求 Critic 确定性核验字数，风格 Critic 增加
+模板化类比、套话、直陈情绪和重复句的确定性兜底。设计与验收见
+`docs/development/ai-writing-quality.md`。这只是防退化机制，不替代 PlotPilot A/B 与人工盲评。
+
 **约束**：不得反向阻塞 GE-1..GE-8 的产品闭环。
 
 **退出条件**：增强能力在稳定基线上可重建、可替换、有评测证据。
@@ -440,5 +445,6 @@ concision: 4.00   continuity: 4.33
 ```
 
 证据边界：这是 absolute baseline，非 A/B；不证明策略优越。最明显质量风险：AI 味（2.67）、语言自然度（3.33）。
-新的付费质量实验继续暂缓，直到 GE-3..GE-7 真实纵向链路形成后启动（每 case ≥2 候选、baseline vs new pipeline、
-≥2 名独立评分者、增加题材覆盖、计算评分者间一致性）。
+GE-3..GE-8 纵向链路已形成，下一轮付费实验按 `docs/development/ai-writing-quality.md` 启动：每 case ≥2 候选、
+baseline vs new pipeline、≥2 名独立评分者、增加题材覆盖、计算评分者间一致性。自动回归与真实模型门禁先行，
+不得把单次主观阅读写成质量提升结论。
