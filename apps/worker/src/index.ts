@@ -2023,6 +2023,9 @@ async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
       case 'manuscript.getWorkspace':
       case 'manuscript.getChapter':
       case 'manuscript.saveChapter':
+      case 'manuscript.saveDraft':
+      case 'manuscript.getDraft':
+      case 'manuscript.discardDraft':
       case 'manuscript.listVersions':
       case 'manuscript.restoreVersion':
       case 'manuscript.export': {

@@ -283,9 +283,11 @@ export type {
   CreateManuscriptInput,
   CreateChapterInput,
   CreateChapterVersionInput,
+  ChapterDraftData,
   ManuscriptRepositoryPort,
   ChapterRepositoryPort,
   ChapterVersionRepositoryPort,
+  ChapterDraftRepositoryPort,
   ManuscriptTransactionRepositories,
   ManuscriptTransactionPort,
   GetOrCreateManuscriptCommand,
@@ -302,6 +304,9 @@ export type {
   ArchiveChapterCommand,
   RestoreChapterCommand,
   UpdateManuscriptTitleCommand,
+  SaveChapterDraftCommand,
+  GetChapterDraftCommand,
+  DiscardChapterDraftCommand,
 } from './manuscript-types.js';
 
 export {
@@ -333,6 +338,9 @@ export {
   updateManuscriptTitle,
 } from './manuscript-mutations.js';
 export type { ManuscriptMutationDeps } from './manuscript-mutations.js';
+
+export { saveChapterDraft, getChapterDraft, discardChapterDraft } from './manuscript-drafts.js';
+export type { ChapterDraftQueryDeps } from './manuscript-drafts.js';
 
 export { rebalanceManuscript, computeTargetPosition } from './manuscript-position.js';
 export type { PositionContext } from './manuscript-position.js';

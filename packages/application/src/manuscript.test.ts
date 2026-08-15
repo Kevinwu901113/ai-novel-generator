@@ -35,6 +35,8 @@ import type {
   ManuscriptRepositoryPort,
   ChapterRepositoryPort,
   ChapterVersionRepositoryPort,
+  ChapterDraftRepositoryPort,
+  ChapterDraftData,
   ManuscriptTransactionPort,
   ManuscriptData,
   ChapterData,
@@ -62,6 +64,7 @@ class FakeStore {
   readonly manuscripts = new Map<string, ManuscriptData>();
   readonly chapters = new Map<string, ChapterData>();
   readonly versions = new Map<string, ChapterVersionData>();
+  readonly drafts = new Map<string, ChapterDraftData>();
 
   key(parts: readonly string[]): string {
     return parts.join(':');
@@ -232,10 +235,28 @@ class FakeChapterVersionRepo implements ChapterVersionRepositoryPort {
   }
 }
 
+class FakeChapterDraftRepo implements ChapterDraftRepositoryPort {
+  constructor(private readonly store: FakeStore) {}
+
+  upsert(data: ChapterDraftData): void {
+    this.store.drafts.set(this.store.key(['d', data.projectId, data.chapterId]), data);
+  }
+  getByChapter(projectId: string, chapterId: string): ChapterDraftData | null {
+    return this.store.drafts.get(this.store.key(['d', projectId, chapterId])) ?? null;
+  }
+  deleteByChapter(projectId: string, chapterId: string): boolean {
+    const key = this.store.key(['d', projectId, chapterId]);
+    const existed = this.store.drafts.has(key);
+    this.store.drafts.delete(key);
+    return existed;
+  }
+}
+
 interface FakeRepos {
   manuscriptRepo: ManuscriptRepositoryPort;
   chapterRepo: ChapterRepositoryPort;
   chapterVersionRepo: ChapterVersionRepositoryPort;
+  chapterDraftRepo: ChapterDraftRepositoryPort;
   projectExistsReadPort: { exists(projectId: string): boolean };
 }
 
@@ -246,6 +267,7 @@ class FakeTransactionPort implements ManuscriptTransactionPort {
       manuscriptRepo: new FakeManuscriptRepo(this.store),
       chapterRepo: new FakeChapterRepo(this.store),
       chapterVersionRepo: new FakeChapterVersionRepo(this.store),
+      chapterDraftRepo: new FakeChapterDraftRepo(this.store),
       projectExistsReadPort: { exists: (p) => this.store.projects.has(p) },
     });
   }

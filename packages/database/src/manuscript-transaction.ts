@@ -30,6 +30,7 @@ import {
   ChapterRepositoryImpl,
   ChapterVersionRepositoryImpl,
 } from './manuscript-repositories.js';
+import { ChapterDraftRepositoryImpl } from './chapter-draft-repositories.js';
 
 // ── 项目存在性读取端口 ─────────────────────────────────────────
 
@@ -95,6 +96,7 @@ export class ManuscriptTransactionPortImpl implements ManuscriptTransactionPort 
   private readonly manuscriptRepo: ManuscriptRepositoryImpl;
   private readonly chapterRepo: ChapterRepositoryImpl;
   private readonly chapterVersionRepo: ChapterVersionRepositoryImpl;
+  private readonly chapterDraftRepo: ChapterDraftRepositoryImpl;
   private readonly projectExistsPort: ProjectExistsReadPortImpl;
   private inTransaction = false;
 
@@ -102,6 +104,7 @@ export class ManuscriptTransactionPortImpl implements ManuscriptTransactionPort 
     this.manuscriptRepo = new ManuscriptRepositoryImpl(db);
     this.chapterRepo = new ChapterRepositoryImpl(db);
     this.chapterVersionRepo = new ChapterVersionRepositoryImpl(db);
+    this.chapterDraftRepo = new ChapterDraftRepositoryImpl(db);
     this.projectExistsPort = new ProjectExistsReadPortImpl(db);
   }
 
@@ -122,6 +125,7 @@ export class ManuscriptTransactionPortImpl implements ManuscriptTransactionPort 
       manuscriptRepo: this.manuscriptRepo,
       chapterRepo: this.chapterRepo,
       chapterVersionRepo: this.chapterVersionRepo,
+      chapterDraftRepo: this.chapterDraftRepo,
       projectExistsReadPort: this.projectExistsPort,
     };
 

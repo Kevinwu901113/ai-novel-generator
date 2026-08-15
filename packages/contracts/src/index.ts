@@ -387,6 +387,9 @@ export const IPC_CHANNELS = {
   MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
   MANUSCRIPT_LIST_VERSIONS: 'ipc:manuscript-list-versions',
   MANUSCRIPT_RESTORE_VERSION: 'ipc:manuscript-restore-version',
+  MANUSCRIPT_SAVE_DRAFT: 'ipc:manuscript-save-draft',
+  MANUSCRIPT_GET_DRAFT: 'ipc:manuscript-get-draft',
+  MANUSCRIPT_DISCARD_DRAFT: 'ipc:manuscript-discard-draft',
 } as const;
 
 // ── 桌面 API ──────────────────────────────────────────────────────
@@ -1616,10 +1619,101 @@ export function isValidRestoreManuscriptVersionInput(
   return obj.expectedCurrentVersionId === null || isBoundedTrimmedId(obj.expectedCurrentVersionId);
 }
 
+// ── 章节草稿（TD-033-3：编辑无自动保存的后端草稿层）────────────────
+// 草稿独立于版本链：autosave 只写 chapter_drafts，绝不产生版本、绝不推进
+// currentVersionId。显式保存（saveChapter）成功后同事务清草稿。
+
+/** 章节草稿公开数据。stale=true 表示当前版本已偏离草稿基线，上层自行决定。 */
+export interface ChapterDraftDto {
+  readonly chapterId: string;
+  readonly content: string;
+  readonly baseVersionId: string | null;
+  readonly currentVersionId: string | null;
+  readonly stale: boolean;
+  readonly updatedAt: string;
+}
+
+export function isValidChapterDraftDto(data: unknown): data is ChapterDraftDto {
+  if (typeof data !== 'object' || data === null) return false;
+  const obj = data as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, [
+      'chapterId',
+      'content',
+      'baseVersionId',
+      'currentVersionId',
+      'stale',
+      'updatedAt',
+    ]) &&
+    isBoundedTrimmedId(obj.chapterId) &&
+    typeof obj.content === 'string' &&
+    obj.content.length <= MAX_MANUSCRIPT_CONTENT_LENGTH &&
+    (obj.baseVersionId === null || isBoundedTrimmedId(obj.baseVersionId)) &&
+    (obj.currentVersionId === null || isBoundedTrimmedId(obj.currentVersionId)) &&
+    typeof obj.stale === 'boolean' &&
+    typeof obj.updatedAt === 'string' &&
+    obj.updatedAt.trim().length > 0
+  );
+}
+
+export interface SaveChapterDraftInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly content: string;
+  readonly baseVersionId: string | null;
+}
+
+export function isValidSaveChapterDraftInput(value: unknown): value is SaveChapterDraftInputDto {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  if (!hasContractExactKeys(obj, ['projectId', 'chapterId', 'content', 'baseVersionId'])) {
+    return false;
+  }
+  if (!isBoundedTrimmedId(obj.projectId) || !isBoundedTrimmedId(obj.chapterId)) return false;
+  if (typeof obj.content !== 'string') return false;
+  if (obj.content.length > MAX_MANUSCRIPT_CONTENT_LENGTH) return false;
+  return obj.baseVersionId === null || isBoundedTrimmedId(obj.baseVersionId);
+}
+
+export interface GetChapterDraftInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export function isValidGetChapterDraftInput(value: unknown): value is GetChapterDraftInputDto {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'chapterId']) &&
+    isBoundedTrimmedId(obj.projectId) &&
+    isBoundedTrimmedId(obj.chapterId)
+  );
+}
+
+export interface DiscardChapterDraftInputDto {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export function isValidDiscardChapterDraftInput(
+  value: unknown,
+): value is DiscardChapterDraftInputDto {
+  if (typeof value !== 'object' || value === null) return false;
+  const obj = value as Record<string, unknown>;
+  return (
+    hasContractExactKeys(obj, ['projectId', 'chapterId']) &&
+    isBoundedTrimmedId(obj.projectId) &&
+    isBoundedTrimmedId(obj.chapterId)
+  );
+}
+
 export interface ManuscriptAPI {
   getWorkspace(input: GetManuscriptWorkspaceInputDto): Promise<ManuscriptWorkspaceDto>;
   getChapter(input: GetManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto | null>;
   saveChapter(input: SaveManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto>;
+  saveDraft(input: SaveChapterDraftInputDto): Promise<void>;
+  getDraft(input: GetChapterDraftInputDto): Promise<ChapterDraftDto | null>;
+  discardDraft(input: DiscardChapterDraftInputDto): Promise<boolean>;
   exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto>;
   listVersions(
     input: ListManuscriptVersionsInputDto,

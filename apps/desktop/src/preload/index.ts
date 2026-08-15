@@ -81,6 +81,9 @@ const IPC_CHANNELS = {
   MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
   MANUSCRIPT_LIST_VERSIONS: 'ipc:manuscript-list-versions',
   MANUSCRIPT_RESTORE_VERSION: 'ipc:manuscript-restore-version',
+  MANUSCRIPT_SAVE_DRAFT: 'ipc:manuscript-save-draft',
+  MANUSCRIPT_GET_DRAFT: 'ipc:manuscript-get-draft',
+  MANUSCRIPT_DISCARD_DRAFT: 'ipc:manuscript-discard-draft',
 } as const;
 
 /**
@@ -177,6 +180,10 @@ import type {
   ListManuscriptVersionsInputDto,
   ManuscriptVersionSummaryDto,
   RestoreManuscriptVersionInputDto,
+  ChapterDraftDto,
+  SaveChapterDraftInputDto,
+  GetChapterDraftInputDto,
+  DiscardChapterDraftInputDto,
 } from '@ai-novel/contracts';
 
 /**
@@ -536,6 +543,15 @@ const desktopAPI: DesktopAPI = {
     },
     async saveChapter(input: SaveManuscriptChapterInputDto): Promise<ManuscriptChapterDetailDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_SAVE_CHAPTER, input);
+    },
+    async saveDraft(input: SaveChapterDraftInputDto): Promise<void> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_SAVE_DRAFT, input);
+    },
+    async getDraft(input: GetChapterDraftInputDto): Promise<ChapterDraftDto | null> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_GET_DRAFT, input);
+    },
+    async discardDraft(input: DiscardChapterDraftInputDto): Promise<boolean> {
+      return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_DISCARD_DRAFT, input);
     },
     async exportManuscript(input: ExportManuscriptInputDto): Promise<ExportManuscriptResultDto> {
       return ipcRenderer.invoke(IPC_CHANNELS.MANUSCRIPT_EXPORT, input);

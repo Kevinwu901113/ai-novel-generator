@@ -239,6 +239,8 @@ export interface ProjectDatabaseManager {
   getChapterRepository(): ChapterRepository;
   /** 获取章节版本仓库 */
   getChapterVersionRepository(): ChapterVersionRepository;
+  /** 获取章节草稿仓库（TD-033-3，autosave 独立层） */
+  getChapterDraftRepository(): ChapterDraftRepository;
   /** 获取 Graph run 仓库（GE-1） */
   getGraphRunRepository(): import('./graph-run-repositories.js').GraphRunRepositoryImpl;
   /** 获取 Graph run 幂等命令日志仓库（GE-1） */
@@ -677,12 +679,14 @@ import type {
   ChapterData,
   ChapterVersionData,
   ChapterVersionSummaryData,
+  ChapterDraftData,
   CreateManuscriptInput,
   CreateChapterInput,
   CreateChapterVersionInput,
   ManuscriptRepositoryPort,
   ChapterRepositoryPort,
   ChapterVersionRepositoryPort,
+  ChapterDraftRepositoryPort,
 } from '@ai-novel/application';
 
 export type DbProposalStatus = ProposalStatus;
@@ -708,7 +712,9 @@ export type CreateChapterData = CreateChapterInput;
 export type ChapterVersionRow = ChapterVersionData;
 export type ChapterVersionSummaryRow = ChapterVersionSummaryData;
 export type CreateChapterVersionData = CreateChapterVersionInput;
+export type ChapterDraftRow = ChapterDraftData;
 
 export type ManuscriptRepository = ManuscriptRepositoryPort;
 export type ChapterRepository = ChapterRepositoryPort;
 export type ChapterVersionRepository = ChapterVersionRepositoryPort;
+export type ChapterDraftRepository = ChapterDraftRepositoryPort;

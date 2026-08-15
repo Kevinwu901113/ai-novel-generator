@@ -14,9 +14,12 @@
 import {
   AppError,
   createChapterVersion,
+  discardChapterDraft,
+  getChapterDraft,
   listChapterVersions,
   listChapters,
   promoteChapterVersion,
+  saveChapterDraft,
 } from '@ai-novel/application';
 import type { ManuscriptQueryDeps } from '@ai-novel/application';
 import type { ChapterSummary } from '@ai-novel/contracts';
@@ -29,8 +32,12 @@ import {
   isValidListManuscriptVersionsInput,
   isValidRestoreManuscriptVersionInput,
   isValidSaveManuscriptChapterInput,
+  isValidSaveChapterDraftInput,
+  isValidGetChapterDraftInput,
+  isValidDiscardChapterDraftInput,
 } from '@ai-novel/contracts';
 import type {
+  ChapterDraftDto,
   ExportManuscriptInputDto,
   ManuscriptChapterDetailDto,
   ManuscriptChapterSummaryDto,
@@ -38,6 +45,9 @@ import type {
   ManuscriptWorkspaceDto,
   RestoreManuscriptVersionInputDto,
   SaveManuscriptChapterInputDto,
+  SaveChapterDraftInputDto,
+  GetChapterDraftInputDto,
+  DiscardChapterDraftInputDto,
 } from '@ai-novel/contracts';
 import { renderManuscript, suggestedExportFileName } from '@ai-novel/import-export';
 
@@ -85,6 +95,14 @@ function queryDeps(projDb: ProjectDatabase): ManuscriptQueryDeps {
     chapterRepo: projDb.getChapterRepository(),
     chapterVersionRepo: projDb.getChapterVersionRepository(),
   } as unknown as ManuscriptQueryDeps;
+}
+
+/** 草稿读依赖：只读章节当前指针 + 草稿表，不包写事务。 */
+function draftQueryDeps(projDb: ProjectDatabase) {
+  return {
+    chapterRepo: projDb.getChapterRepository(),
+    chapterDraftRepo: projDb.getChapterDraftRepository(),
+  };
 }
 
 /** 去掉空白后的字符数（中文按字计；用于"这一章写了多少字"的直觉展示） */
@@ -171,6 +189,7 @@ export function saveManuscriptChapter(
       content: input.content,
       expectedCurrentVersionId: input.expectedCurrentVersionId,
       sourceType: 'USER',
+      clearDraftOnSuccess: true,
       now: ctx.clock.now(),
     });
     const detail = getManuscriptChapterInternal(projDb, input.projectId, input.chapterId);
@@ -245,6 +264,48 @@ export function restoreManuscriptVersion(
   });
 }
 
+/** 保存草稿（TD-033-3）：只 upsert chapter_drafts，不产生版本。 */
+export function saveManuscriptDraft(
+  ctx: ManuscriptHandlerContext,
+  input: SaveChapterDraftInputDto,
+): void {
+  withDb(ctx, input.projectId, (projDb) => {
+    saveChapterDraft(mutationDeps(projDb), {
+      projectId: input.projectId,
+      chapterId: input.chapterId,
+      content: input.content,
+      baseVersionId: input.baseVersionId,
+      now: ctx.clock.now(),
+    });
+  });
+}
+
+/** 读取草稿。无草稿返回 null；有草稿但已 stale 时由上层决定处理方式。 */
+export function getManuscriptDraft(
+  ctx: ManuscriptHandlerContext,
+  input: GetChapterDraftInputDto,
+): ChapterDraftDto | null {
+  return withDb(ctx, input.projectId, (projDb) => {
+    return getChapterDraft(draftQueryDeps(projDb), {
+      projectId: input.projectId,
+      chapterId: input.chapterId,
+    });
+  });
+}
+
+/** 丢弃草稿。返回是否真的删掉了草稿。 */
+export function discardManuscriptDraft(
+  ctx: ManuscriptHandlerContext,
+  input: DiscardChapterDraftInputDto,
+): boolean {
+  return withDb(ctx, input.projectId, (projDb) => {
+    return discardChapterDraft(mutationDeps(projDb), {
+      projectId: input.projectId,
+      chapterId: input.chapterId,
+    });
+  });
+}
+
 /** 导出正文（落盘在 main；worker 只负责按稿件顺序渲染） */
 export function exportManuscript(
   ctx: ManuscriptHandlerContext,
@@ -300,6 +361,24 @@ export function dispatchManuscriptCommand(
         throw new AppError('VALIDATION_ERROR', '非法 manuscript.saveChapter 输入');
       }
       return saveManuscriptChapter(ctx, payload);
+    }
+    case 'manuscript.saveDraft': {
+      if (!isValidSaveChapterDraftInput(payload)) {
+        throw new AppError('VALIDATION_ERROR', '非法 manuscript.saveDraft 输入');
+      }
+      return saveManuscriptDraft(ctx, payload);
+    }
+    case 'manuscript.getDraft': {
+      if (!isValidGetChapterDraftInput(payload)) {
+        throw new AppError('VALIDATION_ERROR', '非法 manuscript.getDraft 输入');
+      }
+      return getManuscriptDraft(ctx, payload);
+    }
+    case 'manuscript.discardDraft': {
+      if (!isValidDiscardChapterDraftInput(payload)) {
+        throw new AppError('VALIDATION_ERROR', '非法 manuscript.discardDraft 输入');
+      }
+      return discardManuscriptDraft(ctx, payload);
     }
     case 'manuscript.listVersions': {
       if (!isValidListManuscriptVersionsInput(payload)) {

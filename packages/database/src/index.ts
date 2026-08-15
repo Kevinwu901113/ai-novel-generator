@@ -80,6 +80,8 @@ export type {
   ChapterVersionSummaryRow,
   CreateChapterVersionData,
   ChapterVersionRepository,
+  ChapterDraftRow,
+  ChapterDraftRepository,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
@@ -94,6 +96,7 @@ export {
   ChapterRepositoryImpl,
   ChapterVersionRepositoryImpl,
 } from './manuscript-repositories.js';
+export { ChapterDraftRepositoryImpl } from './chapter-draft-repositories.js';
 export {
   GraphRunRepositoryImpl,
   GraphRunCommandLogRepositoryImpl,

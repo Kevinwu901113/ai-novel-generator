@@ -25,6 +25,7 @@ import {
   ChapterRepositoryImpl,
   ChapterVersionRepositoryImpl,
 } from './manuscript-repositories.js';
+import { ChapterDraftRepositoryImpl } from './chapter-draft-repositories.js';
 import {
   GraphRunRepositoryImpl,
   GraphRunCommandLogRepositoryImpl,
@@ -1338,6 +1339,30 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON manuscript_chapter_links(project_id, chapter_id);
     `,
   },
+  {
+    version: 20,
+    sql: `
+      -- ── TD-033-3：章节编辑草稿层（autosave 独立层）───────────────
+      -- 草稿绝不进入版本链：保存草稿只 upsert 本表，不 INSERT chapter_versions、
+      -- 不推进 chapters.current_version_id。显式保存成功后由应用用例在同一
+      -- 事务内 DELETE 对应草稿；恢复版本只报告 stale，不自动套用/删除。
+      CREATE TABLE IF NOT EXISTS chapter_drafts (
+        project_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        content TEXT NOT NULL CHECK (length(content) <= 1000000),
+        base_version_id TEXT,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, chapter_id),
+        FOREIGN KEY (project_id, chapter_id)
+          REFERENCES chapters(project_id, id),
+        FOREIGN KEY (project_id, chapter_id, base_version_id)
+          REFERENCES chapter_versions(project_id, chapter_id, id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_chapter_drafts_project_updated
+        ON chapter_drafts(project_id, updated_at DESC);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1814,6 +1839,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly manuscriptRepo: ManuscriptRepositoryImpl;
   private readonly chapterRepo: ChapterRepositoryImpl;
   private readonly chapterVersionRepo: ChapterVersionRepositoryImpl;
+  private readonly chapterDraftRepo: ChapterDraftRepositoryImpl;
   private readonly graphRunRepo: GraphRunRepositoryImpl;
   private readonly graphRunCommandLogRepo: GraphRunCommandLogRepositoryImpl;
   private readonly graphRunTransaction: GraphRunTransactionPortImpl;
@@ -1856,6 +1882,7 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.manuscriptRepo = new ManuscriptRepositoryImpl(this.db);
     this.chapterRepo = new ChapterRepositoryImpl(this.db);
     this.chapterVersionRepo = new ChapterVersionRepositoryImpl(this.db);
+    this.chapterDraftRepo = new ChapterDraftRepositoryImpl(this.db);
     this.graphRunRepo = new GraphRunRepositoryImpl(this.db);
     this.graphRunCommandLogRepo = new GraphRunCommandLogRepositoryImpl(this.db);
     this.graphRunTransaction = new GraphRunTransactionPortImpl(this.db);
@@ -1934,6 +1961,10 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getChapterVersionRepository(): ChapterVersionRepository {
     return this.chapterVersionRepo;
+  }
+
+  getChapterDraftRepository(): ChapterDraftRepositoryImpl {
+    return this.chapterDraftRepo;
   }
 
   getGraphRunRepository(): GraphRunRepositoryImpl {

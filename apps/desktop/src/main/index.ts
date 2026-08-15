@@ -72,6 +72,9 @@ import {
   isValidExportManuscriptInput,
   isValidListManuscriptVersionsInput,
   isValidRestoreManuscriptVersionInput,
+  isValidSaveChapterDraftInput,
+  isValidGetChapterDraftInput,
+  isValidDiscardChapterDraftInput,
   encodeErrorCode,
   type SpecInvalidationResultDto,
   type SearchKeyStateDto,
@@ -85,6 +88,7 @@ import {
   type ManuscriptChapterDetailDto,
   type ExportManuscriptResultDto,
   type ManuscriptVersionSummaryDto,
+  type ChapterDraftDto,
   type HealthCheckResponse,
   type CreateProjectResult,
   type ListProjectsResult,
@@ -1285,6 +1289,51 @@ ipcMain.handle(
       command: 'manuscript.saveChapter',
       payload: input,
     })) as ManuscriptChapterDetailDto;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_SAVE_DRAFT,
+  async (_event, input: unknown): Promise<void> => {
+    if (!isValidSaveChapterDraftInput(input)) {
+      throw Object.assign(new Error('无效的草稿保存输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    await forwardToWorker({
+      requestId,
+      command: 'manuscript.saveDraft',
+      payload: input,
+    });
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_GET_DRAFT,
+  async (_event, input: unknown): Promise<ChapterDraftDto | null> => {
+    if (!isValidGetChapterDraftInput(input)) {
+      throw Object.assign(new Error('无效的草稿查询输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.getDraft',
+      payload: input,
+    })) as ChapterDraftDto | null;
+  },
+);
+
+ipcMain.handle(
+  IPC_CHANNELS.MANUSCRIPT_DISCARD_DRAFT,
+  async (_event, input: unknown): Promise<boolean> => {
+    if (!isValidDiscardChapterDraftInput(input)) {
+      throw Object.assign(new Error('无效的草稿丢弃输入'), { code: 'VALIDATION_ERROR' });
+    }
+    const requestId = crypto.randomUUID();
+    return (await forwardToWorker({
+      requestId,
+      command: 'manuscript.discardDraft',
+      payload: input,
+    })) as boolean;
   },
 );
 

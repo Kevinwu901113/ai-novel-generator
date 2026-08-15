@@ -171,12 +171,30 @@ export interface ChapterVersionRepositoryPort {
   countByChapter(projectId: string, chapterId: string): number;
 }
 
+/** 章节草稿数据（TD-033-3：autosave 独立层，绝不进入版本链） */
+export interface ChapterDraftData {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly content: string;
+  readonly baseVersionId: string | null;
+  readonly updatedAt: string;
+}
+
+export interface ChapterDraftRepositoryPort {
+  /** 每章至多一份草稿：INSERT … ON CONFLICT 更新正文/基线/更新时间 */
+  upsert(data: ChapterDraftData): void;
+  getByChapter(projectId: string, chapterId: string): ChapterDraftData | null;
+  /** 返回是否真的删掉了草稿（affected == 1） */
+  deleteByChapter(projectId: string, chapterId: string): boolean;
+}
+
 // ── 事务端口 ──────────────────────────────────────────────────
 
 export interface ManuscriptTransactionRepositories {
   readonly manuscriptRepo: ManuscriptRepositoryPort;
   readonly chapterRepo: ChapterRepositoryPort;
   readonly chapterVersionRepo: ChapterVersionRepositoryPort;
+  readonly chapterDraftRepo: ChapterDraftRepositoryPort;
   readonly projectExistsReadPort: ProjectExistsReadPort;
 }
 
@@ -257,6 +275,8 @@ export interface CreateChapterVersionCommand {
   readonly sourceType?: ChapterVersionSourceType;
   readonly createdByTaskId?: string | null;
   readonly invocationId?: string | null;
+  /** 仅显式用户保存（manuscript.saveChapter）传 true：成功后同事务清草稿 */
+  readonly clearDraftOnSuccess?: boolean;
 }
 
 export interface PromoteChapterVersionCommand {
@@ -300,4 +320,23 @@ export interface UpdateManuscriptTitleCommand {
   readonly expectedUpdatedAt: string;
   /** Worker 注入 */
   readonly now: string;
+}
+
+export interface SaveChapterDraftCommand {
+  readonly projectId: string;
+  readonly chapterId: string;
+  readonly content: string;
+  readonly baseVersionId: string | null;
+  /** Worker 注入 */
+  readonly now: string;
+}
+
+export interface GetChapterDraftCommand {
+  readonly projectId: string;
+  readonly chapterId: string;
+}
+
+export interface DiscardChapterDraftCommand {
+  readonly projectId: string;
+  readonly chapterId: string;
 }

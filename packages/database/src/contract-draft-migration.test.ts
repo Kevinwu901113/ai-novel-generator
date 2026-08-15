@@ -200,7 +200,7 @@ describe('migration v6: CREATION_CONTRACT_DRAFT', () => {
       const version = db.database
         .prepare('SELECT MAX(version) as v FROM schema_migrations')
         .get() as { v: number };
-      expect(version.v).toBe(19);
+      expect(version.v).toBe(20);
 
       const tasks = db.getTaskRepository().listByProject('p1');
       const types = tasks.map((t) => t.taskType).sort();
@@ -460,7 +460,7 @@ describe('migration v6: CREATION_CONTRACT_DRAFT', () => {
       const version = db2.database
         .prepare('SELECT MAX(version) as v FROM schema_migrations')
         .get() as { v: number };
-      expect(version.v).toBe(19);
+      expect(version.v).toBe(20);
       db2.getTaskRepository().create({
         id: 't-fresh',
         projectId: 'p1',

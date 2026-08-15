@@ -325,7 +325,13 @@ export function createChapterVersion(
       throw new ManuscriptVersionConflictError('current pointer CAS 二重保护失败');
     }
 
-    // 8. 更新 timestamps
+    // 8. 仅显式用户保存（manuscript.saveChapter）成功后清草稿（TD-033-3 规则 B）。
+    //    AI commit / restore 不自动删草稿：current 偏离 base 时由读取端报 stale。
+    if (input.clearDraftOnSuccess === true) {
+      repos.chapterDraftRepo.deleteByChapter(projectId, chapterId);
+    }
+
+    // 9. 更新 timestamps
     repos.manuscriptRepo.touch(projectId, chapter.manuscriptId, now);
 
     return chapterVersionToPublicData({
