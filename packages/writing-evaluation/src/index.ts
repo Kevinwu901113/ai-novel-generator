@@ -101,4 +101,4 @@ export {
 } from './generator-port.js';
 
 // ── 固定评测 fixtures ─────────────────────────────────────────────
-export { getBaselineSuite } from './fixtures.js';
+export { GENRE_COVERAGE_SUITE, getBaselineSuite } from './fixtures.js';

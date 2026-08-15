@@ -361,3 +361,506 @@ const BASELINE_SUITE = {
 export function getBaselineSuite(): WritingEvaluationSuiteV1 {
   return validateSuite(BASELINE_SUITE);
 }
+
+const GQ2_PLACEHOLDER_TEXT =
+  '占位候选：本 case 仅作为 gq2 生成源存在；此正文不参与真实生成，也不会被 suite-io 复制进 output suite。';
+
+function gq2PlaceholderCandidate(caseId: string) {
+  return {
+    candidateId: `placeholder-${caseId}`,
+    strategyId: 'gq2-source-placeholder-v1',
+    modelId: 'not-used',
+    promptVersion: 'gq2-source-v1',
+    generationParameters: { temperature: null, maxTokens: null, seed: null },
+    text: GQ2_PLACEHOLDER_TEXT,
+  };
+}
+
+/**
+ * GQ2 题材覆盖压力测试套件。
+ *
+ * 与 gq1 的分辨力用途不同：gq2 是生成源套件，candidates 为 schema 占位，
+ * 不参与真实生成，也不复制进 output suite（见 writing-experiment-runner/suite-io.ts）。
+ * 压力点设计见各 case 的 mustAvoid / forbiddenFacts / manual-criterion。
+ */
+export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
+  schemaVersion: 1,
+  suiteId: 'gq2-genre-coverage-v1',
+  title: 'GQ2 题材覆盖压力测试套件 v1',
+  description:
+    '修正 gq1 的系统性覆盖偏差：覆盖 4 种视角、3 种时态、克制与浓烈两端语气，以及当代都市、悬疑、日常、古言、幻想、志怪、动作、现代情感等题材。',
+  locale: 'zh-CN',
+  cases: [
+    BASELINE_SUITE.cases[0],
+    BASELINE_SUITE.cases[1],
+    BASELINE_SUITE.cases[2],
+    {
+      caseId: 'palace-farewell',
+      title: '宫门落钥',
+      description: '第一人称古代宫廷言情：旧誓藏在还回的玉佩里，语域不得滑向直陈情绪或现代词。',
+      contract: {
+        premise:
+          '前朝女官在宫门落钥前最后一次送别即将远赴边关的将军，两人守着旧誓却不越礼，借还回旧物完成告别。',
+        genre: ['古代宫廷', '言情'],
+        tone: ['克制', '典雅', '怅然'],
+        themes: ['离别', '君臣之礼', '旧誓'],
+        targetAudience: '成人向网文读者',
+        narrativePov: 'FIRST',
+        tense: 'PAST',
+        protagonist: {
+          characterKey: 'jiang-ci',
+          name: '江慈',
+          role: '女官',
+          motivation: '在落钥前了结旧约',
+          arc: '从执念到松手',
+          traits: ['守礼', '清醒', '念旧'],
+        },
+        supportingCharacters: [
+          {
+            characterKey: 'wei-heng',
+            name: '卫衡',
+            role: '边关将领',
+            relationship: '曾有婚约',
+          },
+        ],
+        relationships: [
+          {
+            relationshipKey: 'jiang-wei-betrothal',
+            fromCharacterKey: 'jiang-ci',
+            toCharacterKey: 'wei-heng',
+            type: '旧约',
+            dynamic: '君臣礼法下的未成婚约',
+          },
+        ],
+        worldRules: ['宫门戌时落钥', '禁军巡夜不许私会', '边关军报不得留京过夜'],
+        mustInclude: ['宫门', '旧玉佩', '落钥钟声', '具体动作'],
+        mustAvoid: ['现代词汇', '翻译腔', '直接说出情绪名词'],
+      },
+      sceneBrief: {
+        sceneGoal: '第一人称内省保持语域统一，情绪借旧物与礼数外显',
+        participants: ['江慈', '卫衡'],
+        location: '皇宫西侧门甬道',
+        entryState: ['卫衡天亮随军开拔', '江慈偷出值房', '宫门将落钥'],
+        exitState: ['江慈收回旧玉佩', '卫衡离开', '宫门关闭'],
+        conflict: '两人都想交代旧约，却只能以君臣之礼遮住私情',
+        requiredFacts: ['一枚旧玉佩', '落钥钟声', '卫衡还回旧物', '江慈行礼'],
+        forbiddenFacts: [
+          '出现手机、OK、情绪管理之类的现代词',
+          '翻译腔句式',
+          '直陈“我很难过”之类情绪',
+        ],
+        targetLength: { minCodePoints: 200, maxCodePoints: 420 },
+      },
+      constraints: [
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-palace-gate',
+          phrase: '宫门',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-direct-sadness',
+          phrase: '我很难过',
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-modern-word',
+          phrase: '情绪',
+        },
+        {
+          kind: 'text-length-range',
+          constraintId: 'constraint.length',
+          minCodePoints: 200,
+          maxCodePoints: 420,
+        },
+        {
+          kind: 'manual-criterion',
+          constraintId: 'constraint.manual-register',
+          title: '语域是否稳定在古言',
+          rubric:
+            '第一人称内省是否滑向直陈情绪；是否出现现代词汇、网络语或翻译腔；称谓与礼数是否自洽。',
+        },
+      ],
+      candidates: [gq2PlaceholderCandidate('palace-farewell')],
+    },
+    {
+      caseId: 'frontier-ledger',
+      title: '边镇霜晶',
+      description: '异世界幻想第三人称限知现在时：入城税规则必须从动作与对白中透出。',
+      contract: {
+        premise:
+          '内地账房第一次来到异世界边镇，必须在日落前缴清入城税；她很快发现税官称量的不是银钱。',
+        genre: ['幻想', '异世界'],
+        tone: ['冷峻', '克制', '异质感'],
+        themes: ['陌生世界的规则', '以物易物', '身份'],
+        targetAudience: '成人向网文读者',
+        narrativePov: 'THIRD_LIMITED',
+        tense: 'PRESENT',
+        protagonist: {
+          characterKey: 'luo-xian',
+          name: '洛弦',
+          role: '随行账房',
+          motivation: '在日落前缴清入城税',
+          arc: '从照搬旧法到学会本地规则',
+          traits: ['谨慎', '善算', '寡言'],
+        },
+        supportingCharacters: [
+          {
+            characterKey: 'zhuo-yan',
+            name: '卓岩',
+            role: '商队领队',
+            relationship: '雇佣关系',
+          },
+          {
+            characterKey: 'lin-kui',
+            name: '林葵',
+            role: '税官',
+            relationship: '素不相识',
+          },
+        ],
+        relationships: [
+          {
+            relationshipKey: 'luo-zhuo-employment',
+            fromCharacterKey: 'luo-xian',
+            toCharacterKey: 'zhuo-yan',
+            type: '雇佣',
+            dynamic: '洛弦随队记账',
+          },
+          {
+            relationshipKey: 'luo-lin-encounter',
+            fromCharacterKey: 'luo-xian',
+            toCharacterKey: 'lin-kui',
+            type: '交涉',
+            dynamic: '在税棚第一次照面',
+          },
+        ],
+        worldRules: ['入城税用霜晶支付', '霜晶遇体温会雾化', '边镇日落前关城门', '记忆可被称重'],
+        mustInclude: ['霜晶', '动作中的设定细节', '至少两句对白解释规则'],
+        mustAvoid: ['清单式环境陈列', '信息倾倒', '百科式设定说明'],
+      },
+      sceneBrief: {
+        sceneGoal: '通过动作与对白让异世界规则自然露出，不进行清单式环境陈列',
+        participants: ['洛弦', '卓岩', '林葵'],
+        location: '边镇城门外的临时税棚',
+        entryState: ['商队被拦在门外', '洛弦第一次来到此镇', '日落前必须进城'],
+        exitState: ['洛弦交出包在帕子里的霜晶', '税官放行', '城门在身后合上'],
+        conflict: '洛弦想照旧用银钱缴税，本地规则却完全不认银钱',
+        requiredFacts: ['霜晶', '称量记忆的天平', '城门关闭时限'],
+        forbiddenFacts: ['一段连续三句以上的环境介绍', '“这个世界分为……”式背景说明'],
+        targetLength: { minCodePoints: 200, maxCodePoints: 420 },
+      },
+      constraints: [
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-frost-crystal',
+          phrase: '霜晶',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-world-info-dump',
+          phrase: '这个世界',
+        },
+        {
+          kind: 'text-length-range',
+          constraintId: 'constraint.length',
+          minCodePoints: 200,
+          maxCodePoints: 420,
+        },
+        {
+          kind: 'manual-criterion',
+          constraintId: 'constraint.manual-setting',
+          title: '设定是否由动作与对白承载',
+          rubric: '是否出现清单式环境陈列或连续背景介绍；规则是否在人物选择与对话中显现。',
+        },
+      ],
+      candidates: [gq2PlaceholderCandidate('frontier-ledger')],
+    },
+    {
+      caseId: 'folk-night-rite',
+      title: '七月十四水灯',
+      description: '民俗志怪第三人称全知过去时：年代与地方质感靠油纸、竹篾与旧称承载。',
+      contract: {
+        premise:
+          '民国二十三年七月十四，沿江小镇照例在渡口放水灯野祭；守渡老人发现今年多出一盏没有名字的灯。',
+        genre: ['民俗志怪', '年代'],
+        tone: ['幽微', '克制', '乡土'],
+        themes: ['野祭', '亡魂', '守渡'],
+        targetAudience: '成人向网文读者',
+        narrativePov: 'THIRD_OMNISCIENT',
+        tense: 'PAST',
+        protagonist: {
+          characterKey: 'yan-shan',
+          name: '严三',
+          role: '守渡老人',
+          motivation: '在天亮前按旧例收回水灯',
+          arc: '从避讳到认出那盏灯',
+          traits: ['信俗', '寡言', '守旧'],
+        },
+        supportingCharacters: [
+          {
+            characterKey: 'xiu-lan',
+            name: '秀兰',
+            role: '摆渡妇',
+            relationship: '乡邻',
+          },
+        ],
+        relationships: [
+          {
+            relationshipKey: 'yan-xiu-neighbor',
+            fromCharacterKey: 'yan-shan',
+            toCharacterKey: 'xiu-lan',
+            type: '乡邻',
+            dynamic: '渡口互相帮衬',
+          },
+        ],
+        worldRules: [
+          '水灯用油纸与竹篾扎成',
+          '野祭不立庙碑',
+          '鸡鸣前要收回所有灯',
+          '江上雾大会遮对岸',
+        ],
+        mustInclude: ['油纸水灯', '竹篾', '一盏具体的灯名', '方言或旧称'],
+        mustAvoid: ['现代白话套话', '官方普通话报告腔', '直说鬼怪存在'],
+      },
+      sceneBrief: {
+        sceneGoal: '以具体物件承载年代与地方质感，语言保持非现代语域',
+        participants: ['严三', '秀兰'],
+        location: '雾江渡口与河滩',
+        entryState: ['七月十四夜', '江边摆满水灯', '严三按例守夜'],
+        exitState: ['严三捞起那盏无名灯', '灯内没有名字', '鸡叫头遍'],
+        conflict: '多出来的水灯没有名字，捞与不捞都犯忌讳',
+        requiredFacts: ['油纸水灯', '竹篾', '河滩', '鸡叫'],
+        forbiddenFacts: ['明确解释鬼怪来源', '现代新闻腔', '手机、手电筒等现代物件'],
+        targetLength: { minCodePoints: 200, maxCodePoints: 420 },
+      },
+      constraints: [
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-water-lamp',
+          phrase: '水灯',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-oil-paper',
+          phrase: '油纸',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-modern-object',
+          phrase: '手机',
+        },
+        {
+          kind: 'text-length-range',
+          constraintId: 'constraint.length',
+          minCodePoints: 200,
+          maxCodePoints: 420,
+        },
+        {
+          kind: 'manual-criterion',
+          constraintId: 'constraint.manual-period-voice',
+          title: '语言是否有年代与地方质感',
+          rubric:
+            '是否出现现代白话套话、普通话报告腔或现代物件；年代感是否靠油纸、竹篾等具体物件承载。',
+        },
+      ],
+      candidates: [gq2PlaceholderCandidate('folk-night-rite')],
+    },
+    {
+      caseId: 'duel-on-ice',
+      title: '野冰内道',
+      description: '动作对决第三人称限知混合时态：身体动作与时序必须清楚，不许用模糊拐杖词。',
+      contract: {
+        premise:
+          '两名同门短道速滑手在停训后的野冰场上做最后一次非正式对决，谁先让出内道谁就退出选拔。',
+        genre: ['动作', '竞技'],
+        tone: ['紧绷', '克制', '利落'],
+        themes: ['同门竞争', '内道', '最后的公平'],
+        targetAudience: '成人向网文读者',
+        narrativePov: 'THIRD_LIMITED',
+        tense: 'MIXED',
+        protagonist: {
+          characterKey: 'chi-jing',
+          name: '迟竞',
+          role: '短道速滑手',
+          motivation: '赢下内道，也逼对手全力一次',
+          arc: '从求胜到承认对手',
+          traits: ['好胜', '克制', '爆发力强'],
+        },
+        supportingCharacters: [
+          {
+            characterKey: 'duan-ge',
+            name: '段戈',
+            role: '同门对手',
+            relationship: '同门竞争对手',
+          },
+        ],
+        relationships: [
+          {
+            relationshipKey: 'chi-duan-rivalry',
+            fromCharacterKey: 'chi-jing',
+            toCharacterKey: 'duan-ge',
+            type: '同门对手',
+            dynamic: '互相较劲又彼此默契',
+          },
+        ],
+        worldRules: [
+          '野冰场在旧河道上',
+          '冰刀触冰有声',
+          '弯道处冰面有暗裂',
+          '先让出内道者退出选拔',
+        ],
+        mustInclude: ['连续三个身体动作', '冰刀与冰面的声音', '明确先后顺序'],
+        mustAvoid: ['模糊拐杖词', '动作结果一笔带过', '慢镜头式抽象形容'],
+      },
+      sceneBrief: {
+        sceneGoal: '动作调度与时序清楚，每个身体动作有先后与后果',
+        participants: ['迟竞', '段戈'],
+        location: '旧河道野冰场',
+        entryState: ['两人停训后私下来到野冰场', '各自系好冰刀', '约定三圈定胜负'],
+        exitState: ['迟竞让出内道', '段戈冲过终点后摔倒', '两人躺在冰上'],
+        conflict: '迟竞想赢，却也知道对手只会为一个公平的内道拼到最后',
+        requiredFacts: ['起跑', '一次内道争夺', '一次摔倒', '终圈顺序'],
+        forbiddenFacts: ['“不知怎么”这类模糊衔接', '“然后”连续堆叠', '用抽象形容替代具体动作'],
+        targetLength: { minCodePoints: 200, maxCodePoints: 420 },
+      },
+      constraints: [
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-skate-blade',
+          phrase: '冰刀',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-vague-link',
+          phrase: '不知怎么',
+        },
+        {
+          kind: 'phrase-max-count',
+          constraintId: 'constraint.max-then',
+          phrase: '然后',
+          maxOccurrences: 1,
+        },
+        {
+          kind: 'text-length-range',
+          constraintId: 'constraint.length',
+          minCodePoints: 200,
+          maxCodePoints: 420,
+        },
+        {
+          kind: 'manual-criterion',
+          constraintId: 'constraint.manual-action-order',
+          title: '身体动作时序是否清楚',
+          rubric: '每个身体动作是否有明确的先后与后果；是否用模糊拐杖词或抽象形容糊过关键动作。',
+        },
+      ],
+      candidates: [gq2PlaceholderCandidate('duel-on-ice')],
+    },
+    {
+      caseId: 'letters-unsent',
+      title: '旧字典里的信',
+      description:
+        '现代情感第二人称过去时：高情绪浓度下必须用具体细节承载，禁止直陈情绪与结尾升华。',
+      contract: {
+        premise:
+          '你搬离两人同住的旧公寓后，在夜里把没寄出的信一封封重读，写的却始终只是那些不会改变的小事。',
+        genre: ['现代情感', '书信体'],
+        tone: ['浓烈', '内敛', '拒绝升华'],
+        themes: ['失去', '未寄出的信', '日常的不可逆'],
+        targetAudience: '成人向网文读者',
+        narrativePov: 'SECOND',
+        tense: 'PAST',
+        protagonist: {
+          characterKey: 'letter-you',
+          name: '你',
+          role: '收信人',
+          motivation: '在旧信里找到一句没说出口的话',
+          arc: '从回避到承认',
+          traits: ['隐忍', '怕告别', '念旧'],
+        },
+        supportingCharacters: [
+          {
+            characterKey: 'zhao-yin',
+            name: '赵因',
+            role: '写信人',
+            relationship: '已经离开的同居者',
+          },
+        ],
+        relationships: [
+          {
+            relationshipKey: 'zhao-you-partnership',
+            fromCharacterKey: 'zhao-yin',
+            toCharacterKey: 'letter-you',
+            type: '同居恋人',
+            dynamic: '已分开但旧物未清',
+          },
+        ],
+        worldRules: [
+          '信都藏在旧字典里',
+          '公寓水槽龙头会滴到第八下停',
+          '凌晨一点后没有末班车',
+          '旧公寓已经退租',
+        ],
+        mustInclude: ['一个反复出现的旧物细节', '一件没做完的家务', '信纸的物理细节'],
+        mustAvoid: ['直接说出情绪名词', '空泛套话', '结尾强行升华'],
+      },
+      sceneBrief: {
+        sceneGoal: '第二人称以具体细节承载强烈情绪，禁止直陈情绪与结尾升华',
+        participants: ['你', '赵因（不在场）'],
+        location: '退租前一晚的旧公寓',
+        entryState: ['你回来取最后一只纸箱', '旧字典里掉出未寄出的信', '水槽还在滴水'],
+        exitState: ['你关灯离开', '信留在门边没带走', '没有写回信'],
+        conflict: '你想把信带走或扔掉，最后却把它留在原地',
+        requiredFacts: ['旧字典', '一沓未寄出的信', '滴水声', '关灯动作'],
+        forbiddenFacts: ['直接说出“悲伤、痛苦、后悔”等情绪名词', '“人生”式感悟', '结尾和解或升华'],
+        targetLength: { minCodePoints: 200, maxCodePoints: 420 },
+      },
+      constraints: [
+        {
+          kind: 'required-phrase',
+          constraintId: 'constraint.req-dictionary',
+          phrase: '字典',
+          minOccurrences: 1,
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-sadness',
+          phrase: '悲伤',
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-pain',
+          phrase: '痛苦',
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-regret',
+          phrase: '遗憾',
+        },
+        {
+          kind: 'forbidden-phrase',
+          constraintId: 'constraint.no-life-lesson',
+          phrase: '人生',
+        },
+        {
+          kind: 'text-length-range',
+          constraintId: 'constraint.length',
+          minCodePoints: 200,
+          maxCodePoints: 420,
+        },
+        {
+          kind: 'manual-criterion',
+          constraintId: 'constraint.manual-concrete-emotion',
+          title: '情绪是否由具体细节承载',
+          rubric:
+            '是否直接使用情绪名词、空泛套话或结尾强行升华；情绪是否附着在旧物、信纸与动作上。',
+        },
+      ],
+      candidates: [gq2PlaceholderCandidate('letters-unsent')],
+    },
+  ],
+});
