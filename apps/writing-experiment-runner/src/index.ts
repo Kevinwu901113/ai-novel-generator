@@ -52,8 +52,13 @@ export { buildDryRunPreview, type DryRunPreview, type DryRunCasePreview } from '
 export {
   readSourceSuite,
   buildOutputSuite,
+  mergeOutputSuites,
+  parseOutputSuiteId,
   outputSuiteHash,
   type SourceSuiteRef,
+  type OutputSuiteIdParts,
+  type MergedSuiteCandidateOrigin,
+  type MergeOutputSuitesResult,
 } from './suite-io.js';
 export {
   serializeManifest,
