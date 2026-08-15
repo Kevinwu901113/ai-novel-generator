@@ -6,7 +6,7 @@
   "main": "./dist/main/index.js",
   "scripts": {
     "dev": "vite",
-    "build:deps": "pnpm --filter @ai-novel/contracts build && pnpm --filter @ai-novel/domain build && pnpm --filter @ai-novel/research-engine build && pnpm --filter @ai-novel/application build && pnpm --filter @ai-novel/model-gateway build && pnpm --filter @ai-novel/task-engine build && pnpm --filter @ai-novel/database build && pnpm --filter @ai-novel/secret-store build && pnpm --filter @ai-novel/worker build",
+    "build:deps": "pnpm --filter \"@ai-novel/worker...\" build",
     "build:app": "vite build && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete && rm -rf dist/worker && cp -r ../worker/dist ./dist/worker",
     "build": "pnpm build:deps && pnpm build:app",
     "package": "pnpm build && electron-packager . --platform=darwin --arch=arm64 --out=out --overwrite --name='AI 小说创作代理' --executable-name=ai-novel-generator --no-prune --ignore='src/' --ignore='scripts/' --ignore='\\.(map)$'",
