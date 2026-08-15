@@ -15,14 +15,31 @@ const EXPECTED_BASELINE_CASE_IDS = [
   'two-voice-dialogue',
 ];
 
+const EXPECTED_BASELINE_TARGET_LENGTHS: Readonly<Record<string, readonly [number, number]>> = {
+  'restrained-reunion': [200, 400],
+  'suspense-corridor': [200, 400],
+  'two-voice-dialogue': [250, 450],
+};
+
+const MIN_GQ2_REQUIRED_FACTS = 6;
+
 describe('GQ2 genre coverage suite', () => {
-  it('gq1-baseline-v1 保持冻结：仍为 3 个 case 且 caseId 集合不变', () => {
+  it('gq1-baseline-v1 保持冻结：仍为 3 个 case、caseId 集合与 targetLength 原值不变', () => {
     const baseline = getBaselineSuite();
     expect(baseline.suiteId).toBe('gq1-baseline-v1');
     expect(baseline.cases).toHaveLength(3);
     expect(baseline.cases.map((c) => c.caseId).sort()).toEqual(
       [...EXPECTED_BASELINE_CASE_IDS].sort(),
     );
+
+    for (const c of baseline.cases) {
+      const expected = EXPECTED_BASELINE_TARGET_LENGTHS[c.caseId];
+      expect(expected).toBeDefined();
+      expect([
+        c.sceneBrief.targetLength.minCodePoints,
+        c.sceneBrief.targetLength.maxCodePoints,
+      ]).toEqual(expected);
+    }
   });
 
   it('新套件通过 validateSuite，且 suiteId 与 case 数正确', () => {
@@ -34,6 +51,19 @@ describe('GQ2 genre coverage suite', () => {
   it('8 个 case 的 caseId 唯一', () => {
     const ids = GENRE_COVERAGE_SUITE.cases.map((c) => c.caseId);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('8 个 case 的 targetLength 全部落在 1200–1500 code points', () => {
+    for (const c of GENRE_COVERAGE_SUITE.cases) {
+      expect(c.sceneBrief.targetLength.minCodePoints).toBeGreaterThanOrEqual(1200);
+      expect(c.sceneBrief.targetLength.maxCodePoints).toBeLessThanOrEqual(1500);
+    }
+  });
+
+  it('每个 gq2 case 都补足了可验证事实点', () => {
+    for (const c of GENRE_COVERAGE_SUITE.cases) {
+      expect(c.sceneBrief.requiredFacts.length).toBeGreaterThanOrEqual(MIN_GQ2_REQUIRED_FACTS);
+    }
   });
 
   it('覆盖矩阵：4 种视角、3 种时态、去重题材至少 8 类', () => {
