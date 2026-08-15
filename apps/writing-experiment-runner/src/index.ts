@@ -34,6 +34,11 @@ export {
   type AntislopEvidence,
 } from './strategies/antislop-v1.js';
 export {
+  ANTISLOP_V2_STRATEGY,
+  ANTISLOP_V2_STYLE_RULES,
+  buildAntislopV2Prompt,
+} from './strategies/antislop-v2.js';
+export {
   STRATEGY_REGISTRY,
   listStrategyIds,
   resolveStrategy,

@@ -22,12 +22,18 @@ import {
   computePromptHash,
   type BuiltPrompt,
 } from '../strategies/baseline-one-shot-v1.js';
+import { ANTISLOP_STRATEGY_ID } from '../strategies/antislop-v1.js';
+import { ANTISLOP_V2_STRATEGY_ID } from '../strategies/antislop-v2.js';
 import {
-  ANTISLOP_STRATEGY_ID,
   buildAntislopRevisionPrompt,
   collectAntislopEvidence,
-} from '../strategies/antislop-v1.js';
+} from '../strategies/antislop-shared.js';
 import { resolveStrategy, type StrategyDefinition } from '../strategies/strategy-registry.js';
+
+const ANTISLOP_STRATEGY_IDS: ReadonlySet<string> = new Set([
+  ANTISLOP_STRATEGY_ID,
+  ANTISLOP_V2_STRATEGY_ID,
+]);
 
 export interface ExperimentCaseAudit {
   readonly promptHash: string;
@@ -150,7 +156,7 @@ export class ModelGatewayWritingCandidateGenerator implements ExperimentCaseGene
     params: GenerateCaseParams,
   ): Promise<ExperimentCaseResult> {
     const prompt = this.strategy.buildPrompt(input);
-    if (this.strategy.strategyId === ANTISLOP_STRATEGY_ID) {
+    if (ANTISLOP_STRATEGY_IDS.has(this.strategy.strategyId)) {
       return this.generateAntislopCase(input, params, prompt);
     }
     return this.generateSinglePassCase(input, params, prompt);

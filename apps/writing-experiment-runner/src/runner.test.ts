@@ -116,7 +116,7 @@ describe('策略注册表接入 runner', () => {
     const suite = makeSourceSuite(['restrained-reunion']);
     const { invoke, run } = makeHarness(suite, [okOutput('正文A')]);
     await expect(run({ strategy: 'unknown-v9' })).rejects.toThrow(
-      /未知 strategy "unknown-v9"；可用: baseline-one-shot-v1, antislop-v1/,
+      /未知 strategy "unknown-v9"；可用: baseline-one-shot-v1, antislop-v1, antislop-v2/,
     );
     expect(invoke.calls).toHaveLength(0);
   });

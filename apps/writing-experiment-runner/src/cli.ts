@@ -349,11 +349,11 @@ const HELP_TEXT = `writing-experiment CLI
   writing-experiment help
   writing-experiment generate \\
     --suite <source-suite.json> --output <dir> \\
-    [--strategy baseline-one-shot-v1|antislop-v1] [--provider-id mimo-token-plan-cn] \\
+    [--strategy baseline-one-shot-v1|antislop-v1|antislop-v2] [--provider-id mimo-token-plan-cn] \\
     [--temperature <n>] [--max-tokens <n>] [--max-cases <n>] [--force] [--dry-run] [--clock <iso>]
   writing-experiment run \\
     --suite <source-suite.json> --output <dir> --seed <seed> \\
-    [--strategy baseline-one-shot-v1|antislop-v1] [--provider-id mimo-token-plan-cn] \\
+    [--strategy baseline-one-shot-v1|antislop-v1|antislop-v2] [--provider-id mimo-token-plan-cn] \\
     [--temperature <n>] [--max-tokens <n>] [--force] [--clock <iso>]
 
 说明:

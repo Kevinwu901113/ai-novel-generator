@@ -15,6 +15,11 @@ import {
   type BuiltPrompt,
 } from './baseline-one-shot-v1.js';
 import { ANTISLOP_STRATEGY_ID, ANTISLOP_V1_STRATEGY } from './antislop-v1.js';
+import {
+  ANTISLOP_V2_STRATEGY,
+  ANTISLOP_V2_STRATEGY_ID,
+  buildAntislopV2Prompt,
+} from './antislop-v2.js';
 
 export interface StrategyDefinition {
   readonly strategyId: string;
@@ -36,6 +41,11 @@ export const STRATEGY_REGISTRY: Readonly<Record<string, StrategyDefinition>> = {
     ...ANTISLOP_V1_STRATEGY,
     // antislop 第一趟与 baseline 同 prompt；第二趟由检测器定位出的证据驱动。
     buildPrompt: buildBaselineOneShotPrompt,
+  },
+  [ANTISLOP_V2_STRATEGY_ID]: {
+    ...ANTISLOP_V2_STRATEGY,
+    // v2 第一趟在 baseline prompt 上追加反 AI 味文风规则；第二趟与 v1 共用。
+    buildPrompt: buildAntislopV2Prompt,
   },
 };
 
