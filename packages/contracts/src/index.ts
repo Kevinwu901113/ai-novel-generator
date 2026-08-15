@@ -1626,6 +1626,7 @@ export function isValidRestoreManuscriptVersionInput(
 /** 章节草稿公开数据。stale=true 表示当前版本已偏离草稿基线，上层自行决定。 */
 export interface ChapterDraftDto {
   readonly chapterId: string;
+  readonly title: string | null;
   readonly content: string;
   readonly baseVersionId: string | null;
   readonly currentVersionId: string | null;
@@ -1639,6 +1640,7 @@ export function isValidChapterDraftDto(data: unknown): data is ChapterDraftDto {
   return (
     hasContractExactKeys(obj, [
       'chapterId',
+      'title',
       'content',
       'baseVersionId',
       'currentVersionId',
@@ -1646,6 +1648,7 @@ export function isValidChapterDraftDto(data: unknown): data is ChapterDraftDto {
       'updatedAt',
     ]) &&
     isBoundedTrimmedId(obj.chapterId) &&
+    (obj.title === null || (typeof obj.title === 'string' && obj.title.length <= 200)) &&
     typeof obj.content === 'string' &&
     obj.content.length <= MAX_MANUSCRIPT_CONTENT_LENGTH &&
     (obj.baseVersionId === null || isBoundedTrimmedId(obj.baseVersionId)) &&
@@ -1659,6 +1662,7 @@ export function isValidChapterDraftDto(data: unknown): data is ChapterDraftDto {
 export interface SaveChapterDraftInputDto {
   readonly projectId: string;
   readonly chapterId: string;
+  readonly title: string | null;
   readonly content: string;
   readonly baseVersionId: string | null;
 }
@@ -1666,10 +1670,11 @@ export interface SaveChapterDraftInputDto {
 export function isValidSaveChapterDraftInput(value: unknown): value is SaveChapterDraftInputDto {
   if (typeof value !== 'object' || value === null) return false;
   const obj = value as Record<string, unknown>;
-  if (!hasContractExactKeys(obj, ['projectId', 'chapterId', 'content', 'baseVersionId'])) {
+  if (!hasContractExactKeys(obj, ['projectId', 'chapterId', 'title', 'content', 'baseVersionId'])) {
     return false;
   }
   if (!isBoundedTrimmedId(obj.projectId) || !isBoundedTrimmedId(obj.chapterId)) return false;
+  if (obj.title !== null && (typeof obj.title !== 'string' || obj.title.length > 200)) return false;
   if (typeof obj.content !== 'string') return false;
   if (obj.content.length > MAX_MANUSCRIPT_CONTENT_LENGTH) return false;
   return obj.baseVersionId === null || isBoundedTrimmedId(obj.baseVersionId);

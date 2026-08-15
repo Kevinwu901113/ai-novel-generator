@@ -5,9 +5,10 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type {
+  ChapterDraftDto,
   DesktopAPI,
   ManuscriptChapterDetailDto,
   ManuscriptWorkspaceDto,
@@ -46,11 +47,27 @@ function detail(overrides: Partial<ManuscriptChapterDetailDto> = {}): Manuscript
   };
 }
 
+function draftDto(overrides: Partial<ChapterDraftDto> = {}): ChapterDraftDto {
+  return {
+    chapterId: 'ch-1',
+    title: '草稿标题',
+    content: '草稿正文',
+    baseVersionId: 'ver-1',
+    currentVersionId: 'ver-1',
+    stale: false,
+    updatedAt: '2026-08-13T00:05:00.000Z',
+    ...overrides,
+  };
+}
+
 function setupDesktop(overrides: Record<string, unknown> = {}) {
   const manuscript = {
     getWorkspace: vi.fn().mockResolvedValue(workspace()),
     getChapter: vi.fn().mockResolvedValue(detail()),
     saveChapter: vi.fn().mockResolvedValue(detail({ versionNumber: 2, versionCount: 2 })),
+    saveDraft: vi.fn().mockResolvedValue(undefined),
+    getDraft: vi.fn().mockResolvedValue(null),
+    discardDraft: vi.fn().mockResolvedValue(true),
     listVersions: vi.fn().mockResolvedValue([
       {
         versionId: 'ver-2',
@@ -92,6 +109,7 @@ async function renderPanel() {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -196,5 +214,273 @@ describe('ManuscriptPanel', () => {
         expectedCurrentVersionId: 'ver-1',
       });
     });
+  });
+
+  it('自动保存：连续输入只在停止 2000ms 后发一次 saveDraft', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = setupDesktop();
+      await act(async () => {
+        render(<ManuscriptPanel projectId={PROJECT_ID} />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const textarea = screen.getByLabelText('正文') as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。1' } });
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。12' } });
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。123' } });
+        await vi.advanceTimersByTimeAsync(1999);
+      });
+
+      expect(api.saveDraft).not.toHaveBeenCalled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(api.saveDraft).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('显式保存进行中（saving=true）不触发自动保存', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSave: ((value: ManuscriptChapterDetailDto) => void) | null = null;
+      const api = setupDesktop({
+        saveChapter: vi.fn().mockImplementation(
+          () =>
+            new Promise<ManuscriptChapterDetailDto>((resolve) => {
+              resolveSave = resolve;
+            }),
+        ),
+      });
+      await act(async () => {
+        render(<ManuscriptPanel projectId={PROJECT_ID} />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const textarea = screen.getByLabelText('正文') as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。手动保存' } });
+        await vi.advanceTimersByTimeAsync(1999);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '保存为新版本' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole('button', { name: '保存中…' })).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2500);
+      });
+      expect(api.saveDraft).not.toHaveBeenCalled();
+
+      await act(async () => {
+        resolveSave?.(detail({ versionNumber: 2, versionCount: 2 }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('切换章节会取消挂起的自动保存', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = setupDesktop({
+        getWorkspace: vi.fn().mockResolvedValue(
+          workspace({
+            chapters: [
+              {
+                chapterId: 'ch-1',
+                title: '第一章 远客',
+                position: 1000,
+                currentVersionId: 'ver-1',
+                wordCount: 12,
+                blueprintChapterId: 'bp-ch-1',
+              },
+              {
+                chapterId: 'ch-2',
+                title: '第二章 来客',
+                position: 2000,
+                currentVersionId: 'ver-2',
+                wordCount: 12,
+                blueprintChapterId: 'bp-ch-2',
+              },
+            ],
+          }),
+        ),
+        getChapter: vi.fn().mockImplementation(({ chapterId }: { chapterId: string }) =>
+          Promise.resolve(
+            detail({
+              chapterId,
+              title: chapterId === 'ch-1' ? '第一章 远客' : '第二章 来客',
+            }),
+          ),
+        ),
+      });
+      await act(async () => {
+        render(<ManuscriptPanel projectId={PROJECT_ID} />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: '编辑' })[0]);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const textarea = screen.getByLabelText('正文') as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。A 章修改' } });
+        await vi.advanceTimersByTimeAsync(1000);
+      });
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByLabelText('正文')).toBeTruthy();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2500);
+      });
+      expect(api.saveDraft).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('打开章节有草稿 → 显示横幅，但编辑器仍是权威正文', async () => {
+    setupDesktop({
+      getDraft: vi.fn().mockResolvedValue(draftDto({ content: '草稿正文' })),
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+
+    await waitFor(() => expect(screen.getByText(/有一份未保存的草稿/)).toBeTruthy());
+    expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toBe('雨砸在屋檐上。');
+    expect((screen.getByLabelText('章节标题') as HTMLInputElement).value).toBe('第一章 远客');
+  });
+
+  it('stale 草稿 → 横幅额外说明正文已被更新', async () => {
+    setupDesktop({
+      getDraft: vi.fn().mockResolvedValue(
+        draftDto({
+          content: '草稿正文',
+          stale: true,
+          baseVersionId: 'ver-1',
+          currentVersionId: 'ver-2',
+        }),
+      ),
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/正文在此期间已被更新（AI 写入或版本恢复），这份草稿基于更早的版本。/),
+      ).toBeTruthy(),
+    );
+  });
+
+  it('点「恢复到草稿」后，编辑器才变成草稿内容', async () => {
+    setupDesktop({
+      getDraft: vi.fn().mockResolvedValue(draftDto({ content: '草稿正文' })),
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    await waitFor(() => expect(screen.getByText(/有一份未保存的草稿/)).toBeTruthy());
+
+    expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toBe('雨砸在屋檐上。');
+    await user.click(screen.getByRole('button', { name: '恢复到草稿' }));
+
+    await waitFor(() =>
+      expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toBe('草稿正文'),
+    );
+  });
+
+  it('点「丢弃草稿」调用 discardDraft 并清横幅', async () => {
+    const api = setupDesktop({
+      getDraft: vi.fn().mockResolvedValue(draftDto({ content: '草稿正文' })),
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    await waitFor(() => expect(screen.getByText(/有一份未保存的草稿/)).toBeTruthy());
+
+    await user.click(screen.getByRole('button', { name: '丢弃草稿' }));
+
+    await waitFor(() =>
+      expect(api.discardDraft).toHaveBeenCalledWith({
+        projectId: PROJECT_ID,
+        chapterId: 'ch-1',
+      }),
+    );
+    await waitFor(() => expect(screen.queryByText(/有一份未保存的草稿/)).toBeNull());
+  });
+
+  it('显式保存成功后，本地持久化草稿横幅消失', async () => {
+    setupDesktop({
+      getDraft: vi.fn().mockResolvedValue(draftDto({ content: '草稿正文' })),
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    await waitFor(() => expect(screen.getByText(/有一份未保存的草稿/)).toBeTruthy());
+
+    await user.type(screen.getByLabelText('正文'), '新的正文');
+    await user.click(screen.getByRole('button', { name: '保存为新版本' }));
+
+    await waitFor(() => expect(screen.queryByText(/有一份未保存的草稿/)).toBeNull());
+  });
+
+  it('自动保存失败 → 显示失败提示，保留用户输入且不阻塞显式保存', async () => {
+    vi.useFakeTimers();
+    try {
+      const api = setupDesktop({
+        saveDraft: vi.fn().mockRejectedValue(new Error('disk full')),
+      });
+      await act(async () => {
+        render(<ManuscriptPanel projectId={PROJECT_ID} />);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '编辑' }));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const textarea = screen.getByLabelText('正文') as HTMLTextAreaElement;
+      await act(async () => {
+        fireEvent.change(textarea, { target: { value: '雨砸在屋檐上。不能丢' } });
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(screen.getByText(/自动保存失败：disk full/)).toBeTruthy();
+      expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toBe(
+        '雨砸在屋檐上。不能丢',
+      );
+      expect(screen.getByRole('button', { name: '保存为新版本' })).not.toBeDisabled();
+      expect(api.saveChapter).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -16,7 +16,7 @@ import type {
   SaveChapterDraftCommand,
 } from './manuscript-types.js';
 import type { ManuscriptMutationDeps } from './manuscript-mutations.js';
-import { ChapterNotFoundError } from './errors.js';
+import { ChapterNotFoundError, ValidationError } from './errors.js';
 import {
   requireContent,
   requireIsoTimestamp,
@@ -29,9 +29,18 @@ export interface ChapterDraftQueryDeps {
   readonly chapterDraftRepo: ChapterDraftRepositoryPort;
 }
 
+function requireNullableDraftTitle(value: unknown, label: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== 'string' || value.length > 200) {
+    throw new ValidationError(`${label} 必须是 null 或不超过 200 字的字符串`);
+  }
+  return value;
+}
+
 function validateSaveCommand(input: SaveChapterDraftCommand): void {
   requireNonEmptyString(input.projectId, 'projectId');
   requireNonEmptyString(input.chapterId, 'chapterId');
+  requireNullableDraftTitle(input.title, 'title');
   requireContent(input.content, 'content');
   requireNullableId(input.baseVersionId, 'baseVersionId');
   requireIsoTimestamp(input.now, 'now');
@@ -63,6 +72,7 @@ export function saveChapterDraft(
     repos.chapterDraftRepo.upsert({
       projectId: input.projectId,
       chapterId: input.chapterId,
+      title: input.title,
       content: input.content,
       baseVersionId: input.baseVersionId,
       updatedAt: input.now,
@@ -86,6 +96,7 @@ export function getChapterDraft(
   }
   return {
     chapterId: draft.chapterId,
+    title: draft.title,
     content: draft.content,
     baseVersionId: draft.baseVersionId,
     currentVersionId: chapter.currentVersionId,

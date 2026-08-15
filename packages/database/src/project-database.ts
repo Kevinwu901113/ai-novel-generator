@@ -1363,6 +1363,15 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON chapter_drafts(project_id, updated_at DESC);
     `,
   },
+  {
+    version: 21,
+    sql: `
+      -- ── TD-033-3 第二批：草稿也需要记住标题 ─────────────────────
+      -- chapter_drafts 在 v20 刚建、尚未被 UI 消费，直接补可空 title 列。
+      -- 旧草稿（如果存在）的 title 保持 NULL，读取端以当前版本标题兜底。
+      ALTER TABLE chapter_drafts ADD COLUMN title TEXT;
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────

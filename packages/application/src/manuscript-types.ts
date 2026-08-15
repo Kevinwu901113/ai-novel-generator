@@ -175,13 +175,14 @@ export interface ChapterVersionRepositoryPort {
 export interface ChapterDraftData {
   readonly projectId: string;
   readonly chapterId: string;
+  readonly title: string | null;
   readonly content: string;
   readonly baseVersionId: string | null;
   readonly updatedAt: string;
 }
 
 export interface ChapterDraftRepositoryPort {
-  /** 每章至多一份草稿：INSERT … ON CONFLICT 更新正文/基线/更新时间 */
+  /** 每章至多一份草稿：INSERT … ON CONFLICT 更新标题/正文/基线/更新时间 */
   upsert(data: ChapterDraftData): void;
   getByChapter(projectId: string, chapterId: string): ChapterDraftData | null;
   /** 返回是否真的删掉了草稿（affected == 1） */
@@ -325,6 +326,7 @@ export interface UpdateManuscriptTitleCommand {
 export interface SaveChapterDraftCommand {
   readonly projectId: string;
   readonly chapterId: string;
+  readonly title: string | null;
   readonly content: string;
   readonly baseVersionId: string | null;
   /** Worker 注入 */

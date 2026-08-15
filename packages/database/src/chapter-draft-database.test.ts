@@ -122,6 +122,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '自动保存的草稿正文',
       baseVersionId: 'v1',
       now: '2026-01-01T00:05:00.000Z',
@@ -141,6 +142,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '草稿正文',
       baseVersionId: 'v1',
       now: NOW,
@@ -164,6 +166,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '第二份草稿',
       baseVersionId: 'v2',
       now: NOW,
@@ -192,6 +195,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '草稿-v1',
       baseVersionId: 'v1',
       now: NOW,
@@ -215,6 +219,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '草稿-v2',
       baseVersionId: 'v2',
       now: NOW,
@@ -249,6 +254,7 @@ describe('chapter_drafts 后端草稿层', () => {
     saveChapterDraft(ctx.mutationDeps, {
       projectId: 'p1',
       chapterId: 'c1',
+      title: '草稿标题',
       content: '待丢弃草稿',
       baseVersionId: 'v1',
       now: NOW,

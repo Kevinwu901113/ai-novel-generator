@@ -273,6 +273,7 @@ export function saveManuscriptDraft(
     saveChapterDraft(mutationDeps(projDb), {
       projectId: input.projectId,
       chapterId: input.chapterId,
+      title: input.title,
       content: input.content,
       baseVersionId: input.baseVersionId,
       now: ctx.clock.now(),

@@ -28,6 +28,15 @@ function versionSourceLabel(source: ManuscriptVersionSummaryDto['source']): stri
   }
 }
 
+/** 自动保存时间只显示 HH:MM，避免长 ISO 串挤坏编辑器操作区 */
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mm = String(date.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
 export interface ManuscriptPanelProps {
   readonly projectId: string;
 }
@@ -45,6 +54,8 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
     saveError,
     exportNotice,
     versions,
+    persistedDraft,
+    autosaveStatus,
     actions,
   } = useManuscript(projectId);
 
@@ -121,6 +132,23 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
             ))}
           </ul>
 
+          {chapter !== null && persistedDraft !== null && (
+            <div className="manuscript-draft-banner" role="status" aria-live="polite">
+              <p>有一份未保存的草稿（{new Date(persistedDraft.updatedAt).toLocaleString()}）</p>
+              {persistedDraft.stale && (
+                <p>正文在此期间已被更新（AI 写入或版本恢复），这份草稿基于更早的版本。</p>
+              )}
+              <div className="manuscript-draft-banner-actions">
+                <button type="button" onClick={() => actions.restoreDraft()}>
+                  恢复到草稿
+                </button>
+                <button type="button" onClick={() => void actions.discardDraft()}>
+                  丢弃草稿
+                </button>
+              </div>
+            </div>
+          )}
+
           {chapter !== null && draft !== null && (
             <section className="manuscript-editor" aria-label="章节正文编辑">
               <label className="candidate-feedback-label" htmlFor="manuscript-title">
@@ -146,6 +174,13 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
                 onChange={(e) => actions.edit({ ...draft, content: e.target.value })}
                 disabled={saving}
               />
+
+              <div className="manuscript-autosave-status" role="status" aria-live="polite">
+                {autosaveStatus?.kind === 'saving' && '正在自动保存…'}
+                {autosaveStatus?.kind === 'saved' &&
+                  `已自动保存于 ${formatTime(autosaveStatus.at)}`}
+                {autosaveStatus?.kind === 'error' && `自动保存失败：${autosaveStatus.message}`}
+              </div>
 
               {saveError && (
                 <div className="chapter-error" role="alert">

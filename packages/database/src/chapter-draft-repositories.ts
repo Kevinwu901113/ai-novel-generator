@@ -16,20 +16,28 @@ export class ChapterDraftRepositoryImpl implements ChapterDraftRepositoryPort {
     this.db
       .prepare(
         `INSERT INTO chapter_drafts
-           (project_id, chapter_id, content, base_version_id, updated_at)
-         VALUES (?, ?, ?, ?, ?)
+           (project_id, chapter_id, title, content, base_version_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(project_id, chapter_id) DO UPDATE SET
+           title = excluded.title,
            content = excluded.content,
            base_version_id = excluded.base_version_id,
            updated_at = excluded.updated_at`,
       )
-      .run(data.projectId, data.chapterId, data.content, data.baseVersionId, data.updatedAt);
+      .run(
+        data.projectId,
+        data.chapterId,
+        data.title,
+        data.content,
+        data.baseVersionId,
+        data.updatedAt,
+      );
   }
 
   getByChapter(projectId: string, chapterId: string): ChapterDraftData | null {
     const row = this.db
       .prepare(
-        `SELECT project_id, chapter_id, content, base_version_id, updated_at
+        `SELECT project_id, chapter_id, title, content, base_version_id, updated_at
          FROM chapter_drafts WHERE project_id = ? AND chapter_id = ?`,
       )
       .get(projectId, chapterId) as Record<string, unknown> | undefined;
@@ -48,6 +56,7 @@ export class ChapterDraftRepositoryImpl implements ChapterDraftRepositoryPort {
     return {
       projectId: requireString(row, 'project_id', ctx),
       chapterId: requireString(row, 'chapter_id', ctx),
+      title: optionalString(row, 'title'),
       content: requireString(row, 'content', ctx),
       baseVersionId: optionalString(row, 'base_version_id'),
       updatedAt: requireString(row, 'updated_at', ctx),
