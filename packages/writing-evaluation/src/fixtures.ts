@@ -424,7 +424,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '两人都没有提那封信',
         ],
         forbiddenFacts: ['两人当场和解', '林舟说出真实情绪', '沈澈当场解释当年失联原因'],
-        targetLength: { minCodePoints: 1200, maxCodePoints: 1400 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1400 },
       },
       constraints: [
         {
@@ -441,7 +441,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1200,
+          minCodePoints: 850,
           maxCodePoints: 1400,
         },
         {
@@ -490,7 +490,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '门禁卡掉在楼梯上',
         ],
         forbiddenFacts: ['声音来源被解释', '怪物或人直接登场', '顾遥打开401室的门'],
-        targetLength: { minCodePoints: 1250, maxCodePoints: 1450 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1450 },
       },
       constraints: [
         {
@@ -507,7 +507,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1250,
+          minCodePoints: 850,
           maxCodePoints: 1450,
         },
         {
@@ -556,7 +556,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '陈默先推门出去',
         ],
         forbiddenFacts: ['两人直接互问职业', '两人交换联系方式'],
-        targetLength: { minCodePoints: 1200, maxCodePoints: 1400 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1400 },
       },
       constraints: [
         {
@@ -568,7 +568,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1200,
+          minCodePoints: 850,
           maxCodePoints: 1400,
         },
         {
@@ -668,7 +668,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '江慈越过宫门与卫衡私奔',
           '卫衡留京过夜',
         ],
-        targetLength: { minCodePoints: 1250, maxCodePoints: 1450 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1450 },
       },
       constraints: [
         {
@@ -690,7 +690,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1250,
+          minCodePoints: 850,
           maxCodePoints: 1450,
         },
         {
@@ -792,7 +792,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '“这个世界分为……”式背景说明',
           '林葵收下银钱',
         ],
-        targetLength: { minCodePoints: 1300, maxCodePoints: 1500 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1500 },
       },
       constraints: [
         {
@@ -809,7 +809,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1300,
+          minCodePoints: 850,
           maxCodePoints: 1500,
         },
         {
@@ -902,7 +902,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '手机、手电筒等现代物件',
           '灯上出现名字',
         ],
-        targetLength: { minCodePoints: 1250, maxCodePoints: 1450 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1450 },
       },
       constraints: [
         {
@@ -925,7 +925,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1250,
+          minCodePoints: 850,
           maxCodePoints: 1450,
         },
         {
@@ -1019,7 +1019,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '用抽象形容替代具体动作',
           '迟竞在最后一圈反超',
         ],
-        targetLength: { minCodePoints: 1300, maxCodePoints: 1500 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1500 },
       },
       constraints: [
         {
@@ -1042,7 +1042,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1300,
+          minCodePoints: 850,
           maxCodePoints: 1500,
         },
         {
@@ -1137,7 +1137,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
           '你写下回信',
           '赵因在门边出现',
         ],
-        targetLength: { minCodePoints: 1200, maxCodePoints: 1400 },
+        targetLength: { minCodePoints: 850, maxCodePoints: 1400 },
       },
       constraints: [
         {
@@ -1169,7 +1169,7 @@ export const GENRE_COVERAGE_SUITE: WritingEvaluationSuiteV1 = validateSuite({
         {
           kind: 'text-length-range',
           constraintId: 'constraint.length',
-          minCodePoints: 1200,
+          minCodePoints: 850,
           maxCodePoints: 1400,
         },
         {

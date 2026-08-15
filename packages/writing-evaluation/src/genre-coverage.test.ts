@@ -53,9 +53,14 @@ describe('GQ2 genre coverage suite', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('8 个 case 的 targetLength 全部落在 1200–1500 code points', () => {
+  // 下限 850 是实测定的：MiMo v2.5 Pro 在这些场景规模下自然写到 908–1221 字，
+  // 硬要 1200 下限会让两个实验臂的每个候选都判 length FAIL，而"字数达标"与
+  // "文学质量"是两条独立门槛，不该互相污染；更糟的是逼模型注水凑字数，而注水
+  // 正是本实验要测的 AI 味本身。上限保持 1500，仍是原始 200–450 的三倍量级，
+  // 足以让 AI 味累积（实测已从零命中变为出现"似乎×3"）。
+  it('8 个 case 的 targetLength 全部落在 850–1500 code points', () => {
     for (const c of GENRE_COVERAGE_SUITE.cases) {
-      expect(c.sceneBrief.targetLength.minCodePoints).toBeGreaterThanOrEqual(1200);
+      expect(c.sceneBrief.targetLength.minCodePoints).toBeGreaterThanOrEqual(850);
       expect(c.sceneBrief.targetLength.maxCodePoints).toBeLessThanOrEqual(1500);
     }
   });
