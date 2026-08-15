@@ -27,6 +27,7 @@ import {
 } from './schema.js';
 import type { Clock } from './clock.js';
 import { codePointCompare } from '@ai-novel/domain';
+import { computeRatingAgreement } from './agreement.js';
 
 const RATING_SCORE_MIN = 1;
 const RATING_SCORE_MAX = 5;
@@ -393,6 +394,9 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
     );
   }
 
+  const { agreement, warnings: agreementWarnings } = computeRatingAgreement(ratings);
+  warnings.push(...agreementWarnings);
+
   return {
     schemaVersion: 1,
     suiteId: packet.suiteId,
@@ -401,6 +405,7 @@ export function aggregateRatings(options: AggregateRatingsOptions): RatingAggreg
     candidateAggregates,
     pairwiseWins,
     raterCount,
+    agreement,
     missingRatingCoverage,
     warnings,
   };

@@ -450,6 +450,55 @@ export interface PairwiseWin {
   readonly ties: number;
 }
 
+// ── 评分者间一致性 ────────────────────────────────────────────────
+
+export interface DimensionAgreement {
+  /**
+   * 该维度的 Krippendorff's alpha（ordinal difference）。
+   * 评分者少于 2 位，或该维度没有任何 (case, candidate) 被至少 2 位评分者共同评分时为 null。
+   */
+  readonly alpha: number | null;
+  /** 完全一致率：可成对比较的两两评分中，两位评分者给出同一分的比例。 */
+  readonly exactAgreementRate: number | null;
+  /** ±1 内一致率：可成对比较的两两评分中，两位评分者分差 ≤ 1 的比例。 */
+  readonly withinOneAgreementRate: number | null;
+  /** 参与该维度计算的可比较评分对数量（同一 (case, candidate) 内的两两评分对）。 */
+  readonly comparablePairCount: number;
+  /** 参与该维度计算的 rating 条数。 */
+  readonly ratingCount: number;
+  /** 参与该维度计算的评分者数。 */
+  readonly raterCount: number;
+  /** 参与该维度计算的 case 数。 */
+  readonly caseCount: number;
+  /** 参与该维度计算的候选数（(case, candidate) 单元数）。 */
+  readonly candidateCount: number;
+}
+
+export interface RatingAgreementSample {
+  /** 参与一致性计算的 rating 条数（被至少 2 位评分者共同覆盖的 (case, candidate) 内的评分）。 */
+  readonly ratingCount: number;
+  readonly raterCount: number;
+  readonly caseCount: number;
+  readonly candidateCount: number;
+  /** 同一 (case, candidate) 内可比较的评分者对数量（不按 8 个维度重复计算）。 */
+  readonly comparablePairCount: number;
+  /** 未参与一致性计算的 rating 条数（所在 (case, candidate) 只有 1 位评分者）。 */
+  readonly excludedRatingCount: number;
+  readonly excludedRaterCount: number;
+  readonly excludedCaseCount: number;
+  readonly excludedCandidateCount: number;
+}
+
+export interface RatingAgreementBlock {
+  readonly method: 'krippendorff-alpha';
+  readonly metric: 'ordinal';
+  /** 为什么选用该指标；报告中必须可读。 */
+  readonly rationale: string;
+  readonly overallAlpha: number | null;
+  readonly dimensions: Record<HumanRatingDimension, DimensionAgreement>;
+  readonly sample: RatingAgreementSample;
+}
+
 export interface RatingAggregationReport {
   readonly schemaVersion: 1;
   readonly suiteId: string;
@@ -458,6 +507,7 @@ export interface RatingAggregationReport {
   readonly candidateAggregates: readonly CandidateRatingAggregate[];
   readonly pairwiseWins: readonly PairwiseWin[];
   readonly raterCount: number;
+  readonly agreement: RatingAgreementBlock;
   /**
    * 某 (case, rater) 未覆盖该 case 内全部 alias 的记录（格式 "caseId/raterId"）。
    * 每个 rating 都强制包含全部 8 个维度，因此这里表达的是“评分覆盖不完整”，

@@ -349,6 +349,139 @@ describe('aggregateRatings', () => {
     expect(agg.warnings.some((w) => w.includes('示例'))).toBe(true);
   });
 
+  function ratingsForHandAlpha(
+    packet: BlindPacketV1,
+    continueReadingScores: readonly (readonly [number, number])[],
+  ): HumanRatingV1[] {
+    return packet.cases.slice(0, continueReadingScores.length).flatMap((c, index) => {
+      const alias = [...c.candidates].map((cand) => cand.alias).sort()[0];
+      const [r1Score, r2Score] = continueReadingScores[index];
+      return [
+        makeRating(packet, {
+          caseId: c.caseId,
+          candidateAlias: alias,
+          raterId: 'r1',
+          preferredRank: 1,
+          continueReading: r1Score,
+        }),
+        makeRating(packet, {
+          caseId: c.caseId,
+          candidateAlias: alias,
+          raterId: 'r2',
+          preferredRank: 1,
+          continueReading: r2Score,
+        }),
+      ];
+    });
+  }
+
+  it('Krippendorff alpha 手算数据：continueReading 为 113/198', () => {
+    const packet = makePacket();
+    // 三个 (case, candidate) 单元，两个评分者，continueReading 分数：
+    // unit1: r1=1, r2=2 -> δ(1,2)
+    // unit2: r1=2, r2=3 -> δ(2,3)
+    // unit3: r1=3, r2=4 -> δ(3,4)
+    // 参与计算的值频数：n1=1, n2=2, n3=2, n4=1，n=6。
+    // ordinal δ(c,k) = ((n_c+n_k)/2 + 中间频数)^2：
+    // δ12=(1+2)/2=1.5 -> 2.25；δ23=(2+2)/2=2 -> 4；δ34=(2+1)/2=1.5 -> 2.25。
+    // 观测不一致 Do = (2.25 + 4 + 2.25) / 3 = 17/6。
+    // 期望不一致 De：Σ_{c<k} n_c n_k δ 有
+    // 1*2*2.25=4.5, 1*2*12.25=24.5, 1*1*25=25,
+    // 2*2*4=16, 2*1*12.25=24.5, 2*1*2.25=4.5，合计 99；
+    // 有序对求和 = 2*99=198，De = 198/(6*5) = 33/5。
+    // alpha = 1 - (17/6)/(33/5) = 1 - 85/198 = 113/198。
+    const agg = aggregateRatings({
+      packet,
+      ratings: ratingsForHandAlpha(packet, [
+        [1, 2],
+        [2, 3],
+        [3, 4],
+      ]),
+      mapping: null,
+      clock: CLOCK,
+    });
+    const agreement = agg.agreement.dimensions.continueReading;
+    expect(agreement.alpha).toBeCloseTo(113 / 198, 10);
+    expect(agreement.exactAgreementRate).toBe(0);
+    expect(agreement.withinOneAgreementRate).toBe(1);
+    expect(agreement.comparablePairCount).toBe(3);
+    expect(agreement.ratingCount).toBe(6);
+    expect(agreement.raterCount).toBe(2);
+    expect(agreement.caseCount).toBe(3);
+    expect(agreement.candidateCount).toBe(3);
+  });
+
+  it('完全一致的评分 -> alpha 恰好为 1', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const ratings = [
+      makeRating(packet, { candidateAlias: a, raterId: 'r1', preferredRank: 1 }),
+      makeRating(packet, { candidateAlias: a, raterId: 'r2', preferredRank: 1 }),
+    ];
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    expect(agg.agreement.overallAlpha).toBe(1);
+    for (const dim of Object.values(agg.agreement.dimensions)) {
+      expect(dim.alpha).toBe(1);
+      expect(dim.exactAgreementRate).toBe(1);
+      expect(dim.withinOneAgreementRate).toBe(1);
+    }
+  });
+
+  it('只有 1 个评分者 -> alpha 为 null 且不是 0/1', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const agg = aggregateRatings({
+      packet,
+      ratings: [makeRating(packet, { candidateAlias: a, raterId: 'r1', preferredRank: 1 })],
+      mapping: null,
+      clock: CLOCK,
+    });
+    expect(agg.agreement.overallAlpha).toBeNull();
+    expect(agg.agreement.overallAlpha).not.toBe(0);
+    expect(agg.agreement.overallAlpha).not.toBe(1);
+    expect(agg.agreement.dimensions.continueReading.alpha).toBeNull();
+    expect(agg.agreement.dimensions.continueReading.exactAgreementRate).toBeNull();
+    expect(agg.agreement.dimensions.continueReading.withinOneAgreementRate).toBeNull();
+    expect(agg.warnings.some((w) => w.includes('至少 2 位评分者'))).toBe(true);
+  });
+
+  it('系统性极端分歧 -> alpha ≤ 0', () => {
+    const packet = makePacket();
+    const agg = aggregateRatings({
+      packet,
+      ratings: ratingsForHandAlpha(packet, [
+        [1, 5],
+        [5, 1],
+      ]),
+      mapping: null,
+      clock: CLOCK,
+    });
+    expect(agg.agreement.dimensions.continueReading.alpha).toBeLessThanOrEqual(0);
+  });
+
+  it('维度级降级：只有不可比维度为 null', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const r1 = {
+      ...makeRating(packet, { candidateAlias: a, raterId: 'r1', preferredRank: 1 }),
+    } as unknown as Record<string, unknown>;
+    const r2 = {
+      ...makeRating(packet, { candidateAlias: a, raterId: 'r2', preferredRank: 1 }),
+    } as unknown as Record<string, unknown>;
+    delete r1.continuity;
+    delete r2.continuity;
+    const agg = aggregateRatings({
+      packet,
+      ratings: [r1, r2] as unknown as HumanRatingV1[],
+      mapping: null,
+      clock: CLOCK,
+    });
+    expect(agg.agreement.dimensions.continuity.alpha).toBeNull();
+    expect(agg.agreement.dimensions.continuity.exactAgreementRate).toBeNull();
+    expect(agg.agreement.dimensions.continuity.withinOneAgreementRate).toBeNull();
+    expect(agg.agreement.dimensions.continueReading.alpha).toBe(1);
+  });
+
   it('稳定输出：相同输入两次一致', () => {
     const packet = makePacket();
     const a = JSON.stringify(

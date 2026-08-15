@@ -85,6 +85,7 @@ export {
   type ValidateRatingsOptions,
   type AggregateRatingsOptions,
 } from './rating.js';
+export { computeRatingAgreement, type RatingAgreementResult } from './agreement.js';
 
 // ── Markdown ──────────────────────────────────────────────────────
 export { renderMarkdownReport, renderMarkdownRatingAggregation } from './markdown.js';
