@@ -2,20 +2,20 @@
 
 > 本文档是仓库**唯一**项目状态文档：以合并后的 `main` 为事实来源，描述当前代码真实能力、用户旅程、可复用资产、
 > 权威 Graph 基线、当前推进位置与验证基线。
-> 状态文档版本：8（2026-08-13）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
+> 状态文档版本：9（2026-08-15）。本文档由项目负责人维护，仅在目标状态、能力矩阵或推进位置发生实质变化时更新。
 > 路线与验收标准见 `docs/development/graph-engineering-roadmap.md`。
 
 ---
 
 ## 0. Snapshot Metadata
 
-| 项              | 值                                                                                                                            |
-| --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| 状态文档版本    | 8                                                                                                                             |
-| 更新日期        | 2026-08-11                                                                                                                    |
-| 基线 main SHA   | `b6220ae`（PR #49 合并后，含 B7 GE-5 蓝图 wiring/accept 原子闭环；本版随 B8 PR #50 提交，合并后 main 含 B8 GE-5 蓝图产品 UI） |
-| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v16、CI             |
-| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，PR #43–#49 合并 commit CI 全绿     |
+| 项              | 值                                                                                                                        |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| 状态文档版本    | 9                                                                                                                         |
+| 更新日期        | 2026-08-15                                                                                                                |
+| 基线 main SHA   | `2814f8d`（已推送，origin/main 与本地一致；含 build:deps 漏建 import-export 的 CI 修复）                                  |
+| 代码核验范围    | apps/desktop、apps/worker、apps/writing-experiment-runner、packages（含 graph 模块）、数据库 migration v1–v19、CI         |
+| CI/本地验证状态 | §10（`pnpm check`、`git diff --check`、CI）；GitHub Actions 曾于 08-05~08-07 停摆，已恢复，PR #43–#49 合并 commit CI 全绿 |
 
 ## 1. 权威层级
 
@@ -54,14 +54,14 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 ### PARTIAL / STUB
 
-| 能力                          | 状态                           | 说明                                                                                                                                                               |
-| ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Manuscript transport/renderer | DONE（GE-7）                   | manuscript.* 四通道 + 稿件工作区（列表/编辑/CAS 保存/导出）；PR #25 未移植——直接接既有 manuscript 后端                                                             |
-| Web Research 产品 UI          | DONE（B6 + D-B6-10 复查修复）  | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate；B6 独立复查曾判 REWORK（frontier 常同快照推进到 blueprint 导致内容永不可达），已修复见上表 |
-| StoryBlueprint                | DONE（B7 wiring + B8 产品 UI） | 蓝图 executor + accept 原子闭环 + 三终态 E2E（B7）；蓝图查看/确认/升级 UI + 阶段派生上提 App（B8，独立对抗复查 REWORK→修复→核验 ACCEPT）                           |
-| Chapter Generation            | WIRING DONE（B9）；UI 待 B10   | 六节点真实 executor + 四类章节任务（v17：候选修订链/场景计划/审查结论三表）+ 章节终态 executor（销 TD-029-4）+ 全链 E2E 到 CANDIDATE_GATE；产品 UI 属 B10          |
-| Export                        | DONE（GE-7）                   | `packages/import-export` TXT/Markdown 纯函数；worker 渲染、main 落盘（渲染进程不碰文件系统）                                                                       |
-| PlotPilot                     | PARTIAL                        | 可选 adapter foundation；不进入关键路径                                                                                                                            |
+| 能力                          | 状态                            | 说明                                                                                                                                                                          |
+| ----------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Manuscript transport/renderer | DONE（GE-7）                    | manuscript.* 四通道 + 稿件工作区（列表/编辑/CAS 保存/导出）；PR #25 未移植——直接接既有 manuscript 后端                                                                        |
+| Web Research 产品 UI          | DONE（B6 + D-B6-10 复查修复）   | 调研态展示 + 资料包查看 + 来源排除（v15）+ Tavily key 录入 + 升级 Gate；B6 独立复查曾判 REWORK（frontier 常同快照推进到 blueprint 导致内容永不可达），已修复见上表            |
+| StoryBlueprint                | DONE（B7 wiring + B8 产品 UI）  | 蓝图 executor + accept 原子闭环 + 三终态 E2E（B7）；蓝图查看/确认/升级 UI + 阶段派生上提 App（B8，独立对抗复查 REWORK→修复→核验 ACCEPT）                                      |
+| Chapter Generation            | DONE（B9 wiring + B10 产品 UI） | 六节点真实 executor + 四类章节任务（v17：候选修订链/场景计划/审查结论三表）+ 章节终态 executor（销 TD-029-4）+ 全链 E2E；B10 交付成稿阶段 ChapterRegion 与 `chapter.*` 四通道 |
+| Export                        | DONE（GE-7）                    | `packages/import-export` TXT/Markdown 纯函数；worker 渲染、main 落盘（渲染进程不碰文件系统）                                                                                  |
+| PlotPilot                     | PARTIAL                         | 可选 adapter foundation；不进入关键路径                                                                                                                                       |
 
 ### 已知死链
 
@@ -70,31 +70,21 @@ L4  docs/development/*                          graph-engineering-roadmap / 本�
 
 ## 3. Current User Journey
 
-打包应用当前实际走到（`apps/desktop/src/renderer/App.tsx`，B4 起）：
+打包应用当前实际走到（`apps/desktop/src/renderer/App.tsx`，2026-08-14 创作台布局重设计后）：
 
 ```text
-启动 → 健康检查 → 项目列表 → 新建项目（名称 + 初始想法）→ 打开
-→ 有项目：四阶段旅程（想法/调研/蓝图/成稿导航）+ 对话式创作访谈（IntakeRegion）
-   ├─ 自动创建 project run → 追问 → 回答/跳过/我说完了（answer receipt 契约）
-   ├─ SPEC_EXTRACT 整理中提示 / 升级 Gate 四选项 / 失败一键重建（TD-022）
-   └─ CreationSpec 展示与编辑（CAS + 显式失效级联）
-→ 右栏：状态面板（ProviderRegion / TaskCenter）
+未打开项目 → 独立首页：新建项目入口（模糊想法 + 项目名称），最近项目以卡片式「继续创作」呈现，默认模型与联网搜索只显示紧凑就绪状态。
+
+打开项目 → 独立工作台：四阶段旅程导航（想法/调研/蓝图/成稿）保留 App 级真实进度与回看语义，创作 Region 放在居中宽主画布。
+  ├─ 想法：对话式创作访谈（IntakeRegion）→ SPEC_EXTRACT 整理/升级 Gate/失败重建 → CreationSpec 展示与编辑（CAS + 显式失效级联）。
+  ├─ 调研：ResearchRegion 十态相位 + 资料包查看（问题/来源/长笔记折叠/结论/版本链）+ 来源排除 + Tavily key 录入（录入后自动重驱动）+ 人工升级 Gate。
+  ├─ 蓝图：BlueprintRegion 十相位（查看/确认/改写/升级四选项/就绪/三终态回看）+ 终态按 artifact 推导 + 失效蓝图禁用接受。
+  └─ 成稿：ChapterRegion（章节列表 → 发起生成 → 作者语言进度 → 候选正文与自查意见 → 候选确认三选项/升级四选项）；采用后如实停在 MANUSCRIPT_COMMIT，GE-7 已接稿件工作区（列表/编辑/CAS 保存/导出 TXT/Markdown）。
+
+模型提供商、Tavily、SQLite/版本信息收进可关闭的「创作服务设置」抽屉，模型调用统计与任务列表收进项目级「任务活动」抽屉；两抽屉支持 Escape、焦点恢复与 Tab 循环。
 ```
 
-旅程在 **调研之后停止**（蓝图/成稿阶段尚无真实 executor、尚无 Region）：B5 接线
-四节点、B6 补齐调研阶段 UI，spec 完成后可走完 DECISION/PLAN/EXECUTE/VALIDATE
-并在界面查看资料包、排除来源、处理人工升级——**这一句在 B6 独立复查中曾被证伪**：
-Graph 的 sync 节点会在同一状态快照内连推（deep 全链调研成功后，
-`RESEARCH_VALIDATE` 已 succeeded、`BLUEPRINT_GENERATE` 已 active，两者从未在
-同一次 poll 中分开出现），旧版 App 中栏按 journeyStage 互斥挂载 Region，
-调研刚有结果的那一刻 frontier 往往已经在 blueprint，ResearchRegion 立即被
-卸载换回 IntakeRegion 占位文案——ResearchBundleView、来源排除、作废横幅等
-本批交付的核心内容事实上永不可达。已修复（D-B6-10，展示阶段 viewStage 与
-推进阶段 frontierStage 分离，`apps/desktop/src/renderer/journey/journey-logic.ts`；
-详见 `b6-research-ui-design.md`）：frontier 推进到蓝图/成稿后，只要调研已有
-结果，中栏默认继续展示调研内容（顶部有"蓝图阶段开发中"提示），JourneyNav
-也补上了对已到达阶段的点击回看。蓝图/成稿阶段本身仍显示占位（尚无 Region）。
-旧 Grill 工作台已移出默认入口（代码保留）。其余是 GE-5..GE-7（B7..B10）的目标。
+GE-5/6/7/8 已全部 COMPLETE，完整纵向链路已具备。旧 Grill 工作台已移出默认入口（代码保留）。
 
 ## 4. Canonical Assets（复用路线）
 
@@ -280,8 +270,7 @@ Tavily、SQLite/版本信息移入可关闭的"创作服务设置"抽屉，模�
 项目级"任务活动"抽屉；两抽屉支持 Escape、焦点恢复与 Tab 循环。新增 App 级回归锁定
 首页入口、最近项目、设置按需挂载及原有阶段可达性。
 
-下一步：**GE-7**（MANUSCRIPT_COMMIT + 稿件工作区 + TXT/Markdown 导出）——
-D9 的前置条件（GE-6 原退出条件通过）已满足。
+下一步：**GE-9 质量与长篇增强**——路线图 GE-0..GE-8 已全部 COMPLETE；GE-9 是否启动取决于负责人是否愿意投入付费质量实验与人工盲评时间。
 批次定义见 `docs/development/takeover-plan-2026-08-05.md`。
 
 详见 `docs/development/graph-engineering-roadmap.md` §5–§15 与 `docs/development/post-merge-acceptance.md`。
@@ -301,12 +290,12 @@ apps/desktop（main/preload/renderer）     → GE-3 起按阶段接管
 
 与 CI 相同的验证，本地实际执行结果（未设置 `WRITING_EXPERIMENT_LIVE`）：
 
-| 项                  | 命令                                                          | 结果                                                                            |
-| ------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-14 于 main + 创作台布局重设计工作树实测）                 |
-| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-14 同上）                                                 |
-| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁（未本地实测）                                             |
-| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 161 passed / 3 skipped（164）；Tests 3470 passed / 8 skipped（3478） |
-| GitHub Actions      | main 分支 CI                                                  | PR #49 合并 commit `b6220ae` success；PR #50 分支 CI 全绿                       |
+| 项                  | 命令                                                          | 结果                                                                                                                                                                                                                                                                                                      |
+| ------------------- | ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm check`        | `format:check && lint && build && typecheck && test`          | PASS（exit 0，2026-08-15 于 main `2814f8d` 实测：Test Files 163 passed / 3 skipped（166）；Tests 3491 passed / 8 skipped（3499））                                                                                                                                                                        |
+| `git diff --check`  | —                                                             | PASS（exit 0，2026-08-14 同上）                                                                                                                                                                                                                                                                           |
+| macOS package smoke | `pnpm package` + `pnpm --filter @ai-novel/desktop smoke-test` | CI macos-package 门禁（未本地实测）                                                                                                                                                                                                                                                                       |
+| 测试 passed/skipped | `pnpm test` 输出                                              | Test Files 163 passed / 3 skipped（166）；Tests 3491 passed / 8 skipped（3499）                                                                                                                                                                                                                           |
+| GitHub Actions      | main 分支 CI                                                  | Quality gates 持续绿色；macos-package 自 `6b1f06b` 起连续 4 次失败（TS2307 找不到 `@ai-novel/import-export`），根因是 apps/desktop 的 build:deps 手抄链漏建该包，已由 `2814f8d` 修复并推送，该 commit 的 CI 两个 job 均 success（macos-package 48s / Quality gates 2m2s），红色区间为 `6b1f06b`–`797cd91` |
 
 测试通过 ≠ 产品验收通过（GE-8 才是验收）。
