@@ -14,16 +14,24 @@ import type {
   WritingCandidateV1,
   WritingGenerationExperimentInput,
 } from '@ai-novel/writing-evaluation';
-import { hasSubstantiveContent, normalizeText, sha256Hex } from '@ai-novel/writing-evaluation';
+import { hasSubstantiveContent, normalizeText } from '@ai-novel/writing-evaluation';
 import type { ModelInvocationInput, ModelInvocationOutput } from '@ai-novel/model-gateway';
 import type { ProviderEntry } from '../providers.js';
 import {
   BASELINE_ONE_SHOT_STRATEGY,
-  buildBaselineOneShotPrompt,
+  computePromptHash,
+  type BuiltPrompt,
 } from '../strategies/baseline-one-shot-v1.js';
+import {
+  ANTISLOP_STRATEGY_ID,
+  buildAntislopRevisionPrompt,
+  collectAntislopEvidence,
+} from '../strategies/antislop-v1.js';
+import { resolveStrategy, type StrategyDefinition } from '../strategies/strategy-registry.js';
 
 export interface ExperimentCaseAudit {
   readonly promptHash: string;
+  readonly modelCallCount: number;
   readonly finishReason: string | null;
   readonly usage: {
     readonly inputTokens: number | null;
@@ -112,17 +120,47 @@ export function validateModelText(text: unknown): ModelTextValidation {
   return { ok: true, text: normalized };
 }
 
+type Usage = ExperimentCaseAudit['usage'];
+
+function addNullable(a: number | null, b: number | null): number | null {
+  if (a === null && b === null) return null;
+  return (a ?? 0) + (b ?? 0);
+}
+
+function mergeUsage(first: Usage, second: Usage): Usage {
+  return {
+    inputTokens: addNullable(first.inputTokens, second.inputTokens),
+    outputTokens: addNullable(first.outputTokens, second.outputTokens),
+    cacheReadTokens: addNullable(first.cacheReadTokens, second.cacheReadTokens),
+    cacheWriteTokens: addNullable(first.cacheWriteTokens, second.cacheWriteTokens),
+    totalTokens: addNullable(first.totalTokens, second.totalTokens),
+  };
+}
+
 export class ModelGatewayWritingCandidateGenerator implements ExperimentCaseGeneratorPort {
-  constructor(private readonly deps: ModelGatewayGeneratorDeps) {}
+  constructor(
+    private readonly deps: ModelGatewayGeneratorDeps,
+    private readonly strategy: StrategyDefinition = resolveStrategy(
+      BASELINE_ONE_SHOT_STRATEGY.strategyId,
+    ),
+  ) {}
 
   async generateCase(
     input: WritingGenerationExperimentInput,
     params: GenerateCaseParams,
   ): Promise<ExperimentCaseResult> {
-    const prompt = buildBaselineOneShotPrompt(input);
-    const promptHash = sha256Hex(`${prompt.system}\n\n${prompt.user}`);
+    const prompt = this.strategy.buildPrompt(input);
+    if (this.strategy.strategyId === ANTISLOP_STRATEGY_ID) {
+      return this.generateAntislopCase(input, params, prompt);
+    }
+    return this.generateSinglePassCase(input, params, prompt);
+  }
 
-    const output = await this.deps.invoke({
+  private async invokePrompt(
+    params: GenerateCaseParams,
+    prompt: BuiltPrompt,
+  ): Promise<ModelInvocationOutput> {
+    return this.deps.invoke({
       baseUrl: params.provider.baseUrl,
       model: params.provider.modelId,
       apiKey: params.apiKey,
@@ -131,9 +169,16 @@ export class ModelGatewayWritingCandidateGenerator implements ExperimentCaseGene
       maxTokens: params.maxTokens,
       temperature: params.temperature,
     });
+  }
 
-    const audit: ExperimentCaseAudit = {
+  private auditFromOutput(
+    output: ModelInvocationOutput,
+    promptHash: string,
+    modelCallCount: number,
+  ): ExperimentCaseAudit {
+    return {
       promptHash,
+      modelCallCount,
       finishReason: output.finishReason,
       usage: {
         inputTokens: output.usage.inputTokens,
@@ -146,6 +191,34 @@ export class ModelGatewayWritingCandidateGenerator implements ExperimentCaseGene
       providerRequestId: output.providerRequestId,
       safeErrorCode: output.errorCode,
     };
+  }
+
+  private buildCandidate(
+    input: WritingGenerationExperimentInput,
+    params: GenerateCaseParams,
+    text: string,
+  ): WritingCandidateV1 {
+    return {
+      candidateId: `${this.strategy.strategyId}.${input.caseId}.${this.deps.idGenerator()}`,
+      strategyId: this.strategy.strategyId,
+      modelId: params.provider.modelId,
+      promptVersion: this.strategy.promptVersion,
+      generationParameters: {
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
+        seed: null,
+      },
+      text,
+    };
+  }
+
+  private async generateSinglePassCase(
+    input: WritingGenerationExperimentInput,
+    params: GenerateCaseParams,
+    prompt: BuiltPrompt,
+  ): Promise<ExperimentCaseResult> {
+    const output = await this.invokePrompt(params, prompt);
+    const audit = this.auditFromOutput(output, computePromptHash(prompt), 1);
 
     if (output.errorCode !== null) {
       return { caseId: input.caseId, status: 'FAILED', candidate: null, audit };
@@ -161,19 +234,79 @@ export class ModelGatewayWritingCandidateGenerator implements ExperimentCaseGene
       };
     }
 
-    const candidate: WritingCandidateV1 = {
-      candidateId: `${BASELINE_ONE_SHOT_STRATEGY.strategyId}.${input.caseId}.${this.deps.idGenerator()}`,
-      strategyId: BASELINE_ONE_SHOT_STRATEGY.strategyId,
-      modelId: params.provider.modelId,
-      promptVersion: BASELINE_ONE_SHOT_STRATEGY.promptVersion,
-      generationParameters: {
-        temperature: params.temperature,
-        maxTokens: params.maxTokens,
-        seed: null,
-      },
-      text: validated.text,
+    return {
+      caseId: input.caseId,
+      status: 'SUCCEEDED',
+      candidate: this.buildCandidate(input, params, validated.text),
+      audit,
+    };
+  }
+
+  private async generateAntislopCase(
+    input: WritingGenerationExperimentInput,
+    params: GenerateCaseParams,
+    firstPassPrompt: BuiltPrompt,
+  ): Promise<ExperimentCaseResult> {
+    const firstOutput = await this.invokePrompt(params, firstPassPrompt);
+    const firstAudit = this.auditFromOutput(firstOutput, computePromptHash(firstPassPrompt), 1);
+
+    if (firstOutput.errorCode !== null) {
+      return { caseId: input.caseId, status: 'FAILED', candidate: null, audit: firstAudit };
+    }
+
+    const firstValidated = validateModelText(firstOutput.text);
+    if (!firstValidated.ok) {
+      return {
+        caseId: input.caseId,
+        status: 'FAILED',
+        candidate: null,
+        audit: { ...firstAudit, safeErrorCode: firstValidated.safeErrorCode },
+      };
+    }
+
+    const evidence = collectAntislopEvidence(firstValidated.text);
+    if (evidence.length === 0) {
+      return {
+        caseId: input.caseId,
+        status: 'SUCCEEDED',
+        candidate: this.buildCandidate(input, params, firstValidated.text),
+        audit: firstAudit,
+      };
+    }
+
+    const revisionPrompt = buildAntislopRevisionPrompt(firstValidated.text, evidence);
+    const secondOutput = await this.invokePrompt(params, revisionPrompt);
+    const secondAudit = this.auditFromOutput(secondOutput, computePromptHash(revisionPrompt), 1);
+
+    const audit: ExperimentCaseAudit = {
+      promptHash: secondAudit.promptHash,
+      modelCallCount: 2,
+      finishReason: secondAudit.finishReason,
+      usage: mergeUsage(firstAudit.usage, secondAudit.usage),
+      latencyMs: firstAudit.latencyMs + secondAudit.latencyMs,
+      providerRequestId: secondAudit.providerRequestId,
+      safeErrorCode: secondAudit.safeErrorCode,
     };
 
-    return { caseId: input.caseId, status: 'SUCCEEDED', candidate, audit };
+    if (secondOutput.errorCode !== null) {
+      return { caseId: input.caseId, status: 'FAILED', candidate: null, audit };
+    }
+
+    const secondValidated = validateModelText(secondOutput.text);
+    if (!secondValidated.ok) {
+      return {
+        caseId: input.caseId,
+        status: 'FAILED',
+        candidate: null,
+        audit: { ...audit, safeErrorCode: secondValidated.safeErrorCode },
+      };
+    }
+
+    return {
+      caseId: input.caseId,
+      status: 'SUCCEEDED',
+      candidate: this.buildCandidate(input, params, secondValidated.text),
+      audit,
+    };
   }
 }

@@ -23,10 +23,7 @@ import {
   type WritingGenerationExperimentInput,
 } from '@ai-novel/writing-evaluation';
 import type { ModelInvocationInput, ModelInvocationOutput } from '@ai-novel/model-gateway';
-import {
-  BASELINE_ONE_SHOT_STRATEGY,
-  BASELINE_STRATEGY_ID,
-} from './strategies/baseline-one-shot-v1.js';
+import { resolveStrategy } from './strategies/strategy-registry.js';
 import {
   ModelGatewayWritingCandidateGenerator,
   type ExperimentCaseResult,
@@ -142,6 +139,7 @@ function toManifestCaseEntry(result: ExperimentCaseResult): ManifestCaseEntry {
     status: result.status,
     candidateId: result.candidate?.candidateId ?? null,
     promptHash: result.audit.promptHash,
+    modelCallCount: result.audit.modelCallCount,
     textHash: result.candidate ? sha256Hex(result.candidate.text) : null,
     finishReason: result.audit.finishReason,
     usage: { ...result.audit.usage },
@@ -166,9 +164,8 @@ function exitCodeFor(runStatus: ExperimentRunStatus): number {
 }
 
 export async function runExperiment(deps: RunnerDeps, options: RunOptions): Promise<RunOutcome> {
-  if (options.strategy !== BASELINE_STRATEGY_ID) {
-    throw new CliUsageError(`未知 strategy "${options.strategy}"；可用: ${BASELINE_STRATEGY_ID}`);
-  }
+  // strategy 前置拒绝（任何 IO / 网络 / 生成之前）
+  const strategy = resolveStrategy(options.strategy);
 
   // provider 前置拒绝（任何 IO / 网络 / 生成之前）
   const provider = resolveProvider(options.providerId);
@@ -198,6 +195,7 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
     const preview = buildDryRunPreview({
       source,
       provider,
+      strategy,
       temperature: options.temperature,
       maxTokens: options.maxTokens,
       selectionMode,
@@ -266,11 +264,14 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
   preflightPublish(publishDeps, { finalDir, stagingDir, backupDir, force: options.force });
   deps.mkdir(stagingDir);
 
-  const generator = new ModelGatewayWritingCandidateGenerator({
-    invoke: deps.invoke,
-    clock: deps.clock,
-    idGenerator: deps.idGenerator,
-  });
+  const generator = new ModelGatewayWritingCandidateGenerator(
+    {
+      invoke: deps.invoke,
+      clock: deps.clock,
+      idGenerator: deps.idGenerator,
+    },
+    strategy,
+  );
   const caseById = new Map(source.suite.cases.map((c) => [c.caseId, c]));
   const caseResults: ExperimentCaseResult[] = [];
   let aborted = false;
@@ -335,7 +336,7 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
       source.suite,
       candidatesByCase,
       experimentId,
-      BASELINE_STRATEGY_ID,
+      strategy.strategyId,
     );
   }
   const outputSuiteInfo: { suiteId: string; suiteHash: string } | null = outputSuite
@@ -352,6 +353,7 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
       status: r.status,
       candidateId: r.candidate?.candidateId ?? null,
       promptHash: r.audit.promptHash,
+      modelCallCount: r.audit.modelCallCount,
       textHash: r.candidate ? sha256Hex(r.candidate.text) : null,
       finishReason: r.audit.finishReason,
       usage: { ...r.audit.usage },
@@ -371,6 +373,7 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
         status: r.status,
         safeErrorCode: r.audit.safeErrorCode,
         promptHash: r.audit.promptHash,
+        modelCallCount: r.audit.modelCallCount,
         textHash: r.candidate ? sha256Hex(r.candidate.text) : null,
         latencyMs: r.audit.latencyMs,
         inputTokens: r.audit.usage.inputTokens,
@@ -420,9 +423,9 @@ export async function runExperiment(deps: RunnerDeps, options: RunOptions): Prom
     toolVersion: TOOL_VERSION,
     command: options.command,
     strategy: {
-      strategyId: BASELINE_STRATEGY_ID,
-      strategyVersion: BASELINE_ONE_SHOT_STRATEGY.strategyVersion,
-      promptVersion: BASELINE_ONE_SHOT_STRATEGY.promptVersion,
+      strategyId: strategy.strategyId,
+      strategyVersion: strategy.strategyVersion,
+      promptVersion: strategy.promptVersion,
     },
     provider: { providerId: provider.providerId, modelId: provider.modelId },
     generationParameters: {

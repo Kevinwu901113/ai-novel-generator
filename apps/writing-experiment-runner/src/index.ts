@@ -28,6 +28,18 @@ export {
   type BuiltPrompt,
 } from './strategies/baseline-one-shot-v1.js';
 export {
+  ANTISLOP_V1_STRATEGY,
+  buildAntislopRevisionPrompt,
+  collectAntislopEvidence,
+  type AntislopEvidence,
+} from './strategies/antislop-v1.js';
+export {
+  STRATEGY_REGISTRY,
+  listStrategyIds,
+  resolveStrategy,
+  type StrategyDefinition,
+} from './strategies/strategy-registry.js';
+export {
   ModelGatewayWritingCandidateGenerator,
   validateModelText,
   type ExperimentCaseGeneratorPort,

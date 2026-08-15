@@ -35,6 +35,7 @@ export interface ManifestCaseEntry {
   readonly status: CaseStatus;
   readonly candidateId: string | null;
   readonly promptHash: string;
+  readonly modelCallCount: number;
   readonly textHash: string | null;
   readonly finishReason: string | null;
   readonly usage: ManifestUsage;

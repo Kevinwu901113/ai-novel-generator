@@ -9,11 +9,8 @@ import {
 } from '@ai-novel/writing-evaluation';
 import type { SourceSuiteRef } from './suite-io.js';
 import type { ProviderEntry } from './providers.js';
-import {
-  BASELINE_ONE_SHOT_STRATEGY,
-  buildBaselineOneShotPrompt,
-  computePromptHash,
-} from './strategies/baseline-one-shot-v1.js';
+import { computePromptHash } from './strategies/baseline-one-shot-v1.js';
+import type { StrategyDefinition } from './strategies/strategy-registry.js';
 import type { SelectionMode } from './manifest.js';
 
 export interface DryRunCasePreview {
@@ -44,6 +41,7 @@ export interface DryRunPreview {
 export interface DryRunInput {
   readonly source: SourceSuiteRef;
   readonly provider: ProviderEntry;
+  readonly strategy: StrategyDefinition;
   readonly temperature: number;
   readonly maxTokens: number;
   readonly selectionMode: SelectionMode;
@@ -72,7 +70,7 @@ export function buildDryRunPreview(input: DryRunInput): DryRunPreview {
       contract: c.contract,
       constraints: c.constraints,
     };
-    const prompt = buildBaselineOneShotPrompt(experimentInput);
+    const prompt = input.strategy.buildPrompt(experimentInput);
     const promptHash = computePromptHash(prompt);
     const estimatedTokens = estimateTokens(prompt.system) + estimateTokens(prompt.user);
     estimatedTotalTokens += estimatedTokens;
@@ -86,9 +84,9 @@ export function buildDryRunPreview(input: DryRunInput): DryRunPreview {
     suiteHash: input.source.suiteHash,
     provider: { providerId: input.provider.providerId, modelId: input.provider.modelId },
     strategy: {
-      strategyId: BASELINE_ONE_SHOT_STRATEGY.strategyId,
-      strategyVersion: BASELINE_ONE_SHOT_STRATEGY.strategyVersion,
-      promptVersion: BASELINE_ONE_SHOT_STRATEGY.promptVersion,
+      strategyId: input.strategy.strategyId,
+      strategyVersion: input.strategy.strategyVersion,
+      promptVersion: input.strategy.promptVersion,
     },
     generationParameters: {
       temperature: input.temperature,

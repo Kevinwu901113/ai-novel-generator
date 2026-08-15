@@ -92,6 +92,36 @@ function makeHarness(
   return { fs, invoke, deps, run };
 }
 
+describe('策略注册表接入 runner', () => {
+  it('antislop-v1 从注册表选中并写入 manifest / output suite', async () => {
+    const suite = makeSourceSuite(['restrained-reunion']);
+    const { fs, invoke, run } = makeHarness(suite, [okOutput('深夜站台，雨落了下来。')], {
+      idSequence: ['exp-antislop', 'run-1', 'tok-a'],
+    });
+    const outcome = await run({ strategy: 'antislop-v1' });
+
+    expect(outcome.runStatus).toBe('COMPLETE');
+    expect(outcome.outputSuite?.suiteId).toBe('gq1-baseline-v1--antislop-v1--exp-antislop');
+    expect(invoke.calls).toHaveLength(1);
+    const manifest = JSON.parse(fs.readFile('/out/exp1/manifest.private.json'));
+    expect(manifest.strategy).toEqual({
+      strategyId: 'antislop-v1',
+      strategyVersion: '1',
+      promptVersion: 'antislop-v1.p1',
+    });
+    expect(manifest.cases[0].modelCallCount).toBe(1);
+  });
+
+  it('未知 strategy 前置拒绝且列出所有可用 id', async () => {
+    const suite = makeSourceSuite(['restrained-reunion']);
+    const { invoke, run } = makeHarness(suite, [okOutput('正文A')]);
+    await expect(run({ strategy: 'unknown-v9' })).rejects.toThrow(
+      /未知 strategy "unknown-v9"；可用: baseline-one-shot-v1, antislop-v1/,
+    );
+    expect(invoke.calls).toHaveLength(0);
+  });
+});
+
 describe('FULL_SELECTION 全成功（generate）', () => {
   it('3 case 串行生成：COMPLETE / satisfiesQ1 / output suite / 无 evaluate-blind / 聚合正确', async () => {
     const suite = makeSourceSuite([
