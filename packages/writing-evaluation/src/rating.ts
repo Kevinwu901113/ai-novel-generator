@@ -1,7 +1,7 @@
 /**
  * 人工评分数据模型与聚合。
  *
- * - 八个 1–5 整数维度；
+ * - 八个 1–5 整数维度；未评可用缺失字段或 null 表示，validate 统一规范化为 null；
  * - alias 必须存在于 blind packet；
  * - 同 rater/case/alias 不得重复；
  * - preferredRank 在 case 内（同 rater）无重复；
@@ -44,7 +44,7 @@ export class RatingValidationError extends Error {
   }
 }
 
-const RATING_KEYS = new Set([
+const REQUIRED_RATING_KEYS = new Set([
   'schemaVersion',
   'suiteId',
   'caseId',
@@ -52,8 +52,9 @@ const RATING_KEYS = new Set([
   'raterId',
   'preferredRank',
   'notes',
-  ...HUMAN_RATING_DIMENSIONS,
 ]);
+
+const RATING_KEYS = new Set([...REQUIRED_RATING_KEYS, ...HUMAN_RATING_DIMENSIONS]);
 
 interface CaseAliasIndex {
   readonly validAliases: ReadonlySet<string>;
@@ -89,7 +90,7 @@ function validateSingleRating(
   for (const key of own) {
     if (!RATING_KEYS.has(key)) throw new RatingValidationError(`${path}.${key}`, '未知字段');
   }
-  for (const key of RATING_KEYS) {
+  for (const key of REQUIRED_RATING_KEYS) {
     if (!ownSet.has(key)) throw new RatingValidationError(path, `缺少必需字段 "${key}"`);
   }
 
@@ -147,12 +148,16 @@ function validateSingleRating(
     );
   }
 
-  const dimensions: Record<HumanRatingDimension, number> = {} as Record<
+  const dimensions: Record<HumanRatingDimension, number | null> = {} as Record<
     HumanRatingDimension,
-    number
+    number | null
   >;
   for (const dim of HUMAN_RATING_DIMENSIONS) {
     const score = obj[dim];
+    if (score === undefined || score === null) {
+      dimensions[dim] = null;
+      continue;
+    }
     if (
       typeof score !== 'number' ||
       !Number.isSafeInteger(score) ||
@@ -161,7 +166,7 @@ function validateSingleRating(
     ) {
       throw new RatingValidationError(
         `${path}.${dim}`,
-        `必须是 [${RATING_SCORE_MIN}, ${RATING_SCORE_MAX}] 的整数`,
+        `必须是 [${RATING_SCORE_MIN}, ${RATING_SCORE_MAX}] 的整数，或 null/缺省表示未评`,
       );
     }
     dimensions[dim] = score;
@@ -261,8 +266,9 @@ function medianOf(values: number[]): number | null {
   return (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-function dimensionAggregate(values: number[]): DimensionAggregate {
-  return { count: values.length, mean: meanOf(values), median: medianOf(values) };
+function dimensionAggregate(values: readonly (number | null)[]): DimensionAggregate {
+  const rated = values.filter((value): value is number => value !== null && value !== undefined);
+  return { count: rated.length, mean: meanOf(rated), median: medianOf(rated) };
 }
 
 /**

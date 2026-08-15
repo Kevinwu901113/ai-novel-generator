@@ -7,7 +7,7 @@ import { aggregateRatings, validateRatings, RatingValidationError } from './rati
 import { generateBlindPacket } from './blind.js';
 import { getBaselineSuite } from './fixtures.js';
 import { fixedClockIso } from './test-util.js';
-import type { BlindPacketV1, HumanRatingV1 } from './schema.js';
+import { HUMAN_RATING_DIMENSIONS, type BlindPacketV1, type HumanRatingV1 } from './schema.js';
 
 const CLOCK = { now: () => fixedClockIso() };
 
@@ -59,6 +59,28 @@ describe('validateRatings — 合法输入', () => {
     ];
     const validated = validateRatings(ratings, { packet });
     expect(validated).toHaveLength(2);
+  });
+
+  it('接受显式 null 作为未评维度', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const r = makeRating(packet, {
+      candidateAlias: a,
+      preferredRank: 1,
+      continueReading: null,
+      expectationFit: null,
+      characterCredibility: null,
+      languageNaturalness: null,
+      aiSmellAbsence: null,
+      plotProgression: null,
+      concision: null,
+      continuity: null,
+    });
+    const validated = validateRatings([r], { packet });
+    expect(validated[0].continueReading).toBeNull();
+    expect(validated[0].languageNaturalness).toBeNull();
+    expect(validated[0].aiSmellAbsence).toBeNull();
+    expect(validated[0].preferredRank).toBe(1);
   });
 });
 
@@ -127,7 +149,7 @@ describe('validateRatings — 非法输入', () => {
     expectRatingError([r1, r2], packet, /preferredRank .* 重复/);
   });
 
-  it('拒绝缺失维度字段', () => {
+  it('接受缺失维度字段并规范化为 null', () => {
     const packet = makePacket();
     const [a] = aliasesOf(packet, 'restrained-reunion');
     const r = makeRating(packet, { candidateAlias: a, preferredRank: 1 }) as unknown as Record<
@@ -135,7 +157,8 @@ describe('validateRatings — 非法输入', () => {
       unknown
     >;
     delete r.concision;
-    expectRatingError([r], packet, /concision/);
+    const validated = validateRatings([r], { packet });
+    expect(validated[0].concision).toBeNull();
   });
 
   it('拒绝 extra key', () => {
@@ -232,6 +255,153 @@ describe('aggregateRatings', () => {
     expect(ca!.dimensions.continueReading.median).toBe(4.5);
     expect(ca!.dimensions.continueReading.count).toBe(2);
     expect(ca!.raterCount).toBe(2);
+  });
+
+  it('未评维度不会被当成 0：一个 5 分、一个未评 -> 均值为 5', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const input = [
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r1',
+        preferredRank: 1,
+        continueReading: 5,
+      }),
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r2',
+        preferredRank: 1,
+        continueReading: null,
+      }),
+    ];
+    const ratings = validateRatings(input, { packet });
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    const ca = agg.candidateAggregates.find(
+      (x) => x.caseId === 'restrained-reunion' && x.alias === 'A',
+    );
+    expect(ca!.dimensions.continueReading.mean).toBe(5);
+    expect(ca!.dimensions.continueReading.median).toBe(5);
+    expect(ca!.dimensions.continueReading.count).toBe(1);
+    expect(ca!.dimensions.continueReading.mean).not.toBe(2.5);
+  });
+
+  it('某维度全部未评 -> 聚合为 null、alpha 为 null 且不是 0', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const input = [
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r1',
+        preferredRank: 1,
+        continueReading: 5,
+        expectationFit: null,
+      }),
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r2',
+        preferredRank: 1,
+        continueReading: 4,
+        expectationFit: null,
+      }),
+    ];
+    const ratings = validateRatings(input, { packet });
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    const ca = agg.candidateAggregates.find(
+      (x) => x.caseId === 'restrained-reunion' && x.alias === 'A',
+    );
+    expect(ca!.dimensions.expectationFit.mean).toBeNull();
+    expect(ca!.dimensions.expectationFit.median).toBeNull();
+    expect(ca!.dimensions.expectationFit.count).toBe(0);
+    expect(ca!.dimensions.expectationFit.mean).not.toBe(0);
+    expect(agg.agreement.dimensions.expectationFit.alpha).toBeNull();
+    expect(agg.agreement.dimensions.expectationFit.alpha).not.toBe(0);
+    expect(
+      agg.warnings.some((w) => w.includes('维度 "expectationFit"') && w.includes('alpha')),
+    ).toBe(true);
+  });
+
+  it('混合评分（三维已评、五维未评）完整走通且每维 count 正确', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const input = [
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r1',
+        preferredRank: 1,
+        continueReading: 5,
+        languageNaturalness: 4,
+        aiSmellAbsence: 3,
+        expectationFit: null,
+        characterCredibility: null,
+        plotProgression: null,
+        concision: null,
+        continuity: null,
+      }),
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r2',
+        preferredRank: 1,
+        continueReading: 4,
+        languageNaturalness: 5,
+        aiSmellAbsence: 4,
+        expectationFit: null,
+        characterCredibility: null,
+        plotProgression: null,
+        concision: null,
+        continuity: null,
+      }),
+    ];
+    const ratings = validateRatings(input, { packet });
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    const ca = agg.candidateAggregates.find(
+      (x) => x.caseId === 'restrained-reunion' && x.alias === 'A',
+    );
+    expect(ca!.dimensions.continueReading.count).toBe(2);
+    expect(ca!.dimensions.languageNaturalness.count).toBe(2);
+    expect(ca!.dimensions.aiSmellAbsence.count).toBe(2);
+    for (const dim of [
+      'expectationFit',
+      'characterCredibility',
+      'plotProgression',
+      'concision',
+      'continuity',
+    ] as const) {
+      expect(ca!.dimensions[dim].count).toBe(0);
+      expect(ca!.dimensions[dim].mean).toBeNull();
+    }
+    expect(agg.agreement.dimensions.continueReading.alpha).not.toBeNull();
+    expect(agg.agreement.dimensions.expectationFit.alpha).toBeNull();
+  });
+
+  it('现有全 8 维评分聚合与一致性行为保持回归', () => {
+    const packet = makePacket();
+    const [a] = aliasesOf(packet, 'restrained-reunion');
+    const ratings = [
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r1',
+        preferredRank: 1,
+        continueReading: 5,
+        languageNaturalness: 4,
+      }),
+      makeRating(packet, {
+        candidateAlias: a,
+        raterId: 'r2',
+        preferredRank: 1,
+        continueReading: 4,
+        languageNaturalness: 5,
+      }),
+    ];
+    const agg = aggregateRatings({ packet, ratings, mapping: null, clock: CLOCK });
+    const ca = agg.candidateAggregates.find(
+      (x) => x.caseId === 'restrained-reunion' && x.alias === 'A',
+    );
+    for (const dim of HUMAN_RATING_DIMENSIONS) {
+      expect(ca!.dimensions[dim].count).toBe(2);
+      expect(ca!.dimensions[dim].mean).not.toBeNull();
+    }
+    expect(ca!.dimensions.continueReading.mean).toBe(4.5);
+    expect(agg.agreement.overallAlpha).not.toBeNull();
   });
 
   it('rater count 汇总', () => {

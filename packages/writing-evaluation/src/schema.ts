@@ -411,17 +411,22 @@ export interface HumanRatingV1 {
   readonly raterId: string;
   readonly preferredRank: number;
   readonly notes: string;
-  readonly continueReading: number;
-  readonly expectationFit: number;
-  readonly characterCredibility: number;
-  readonly languageNaturalness: number;
-  readonly aiSmellAbsence: number;
-  readonly plotProgression: number;
-  readonly concision: number;
-  readonly continuity: number;
+  /**
+   * 8 个质量维度：1–5 整数表示已评；null 表示未评。
+   * validateRatings 接受字段缺失或显式 null，并统一规范化为 null。
+   */
+  readonly continueReading: number | null;
+  readonly expectationFit: number | null;
+  readonly characterCredibility: number | null;
+  readonly languageNaturalness: number | null;
+  readonly aiSmellAbsence: number | null;
+  readonly plotProgression: number | null;
+  readonly concision: number | null;
+  readonly continuity: number | null;
 }
 
 export interface DimensionAggregate {
+  /** 已评条数：null（未评）不参与 mean/median，也不计入 count。 */
   readonly count: number;
   readonly mean: number | null;
   readonly median: number | null;
@@ -455,7 +460,7 @@ export interface PairwiseWin {
 export interface DimensionAgreement {
   /**
    * 该维度的 Krippendorff's alpha（ordinal difference）。
-   * 评分者少于 2 位，或该维度没有任何 (case, candidate) 被至少 2 位评分者共同评分时为 null。
+   * 评分者少于 2 位，或该维度没有任何 (case, candidate) 被至少 2 位评分者共同给出该维度评分时为 null。
    */
   readonly alpha: number | null;
   /** 完全一致率：可成对比较的两两评分中，两位评分者给出同一分的比例。 */
@@ -510,8 +515,8 @@ export interface RatingAggregationReport {
   readonly agreement: RatingAgreementBlock;
   /**
    * 某 (case, rater) 未覆盖该 case 内全部 alias 的记录（格式 "caseId/raterId"）。
-   * 每个 rating 都强制包含全部 8 个维度，因此这里表达的是“评分覆盖不完整”，
-   * 而不是“维度缺失”。
+   * 维度级未评通过各 dimension 的 count/null 与 agreement 暴露，
+   * 不属于 missingRatingCoverage。
    */
   readonly missingRatingCoverage: readonly string[];
   readonly warnings: readonly string[];
