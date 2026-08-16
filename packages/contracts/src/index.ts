@@ -110,6 +110,10 @@ export interface AppError {
 // （Electron 43.2.0 实测确认。）因此 main 侧改为把 code 编进 message 文本
 // 传输，renderer 侧用固定格式的正则解码。编码/解码格式集中定义于此，
 // main 与 renderer 共用同一份运行时实现，避免两处字面量各自维护而漂移。
+//
+// B13 注：Electron 已退役。HTTP 信封 {error:{code,message}} 结构化携带 code，
+// desktop-client 把 code 直挂 Error.code，safe-error 优先读 .code——本编码层
+// 只剩 message 兜底解码在用，整层清理登记为 TD-036。
 
 /** 编码段格式：`[CODE:XXX_YYY]`，仅允许大写字母、数字、下划线。 */
 const ERROR_CODE_PATTERN = /\[CODE:([A-Z0-9_]+)\]/;
@@ -307,92 +311,7 @@ export interface TaskStatsPublicData {
   readonly totalLatencyMs: number;
 }
 
-// ── IPC 频道 ──────────────────────────────────────────────────────
-
-/** IPC 频道定义 */
-export const IPC_CHANNELS = {
-  HEALTH_CHECK: 'ipc:health-check',
-  PROJECT_CREATE: 'ipc:project-create',
-  PROJECT_LIST: 'ipc:project-list',
-  PROJECT_OPEN: 'ipc:project-open',
-  PROVIDER_LIST: 'ipc:provider-list',
-  PROVIDER_CREATE: 'ipc:provider-create',
-  PROVIDER_UPDATE: 'ipc:provider-update',
-  PROVIDER_DELETE: 'ipc:provider-delete',
-  PROVIDER_SET_DEFAULT: 'ipc:provider-set-default',
-  PROVIDER_SAVE_API_KEY: 'ipc:provider-save-api-key',
-  PROVIDER_DELETE_API_KEY: 'ipc:provider-delete-api-key',
-  PROVIDER_TEST_CONNECTION: 'ipc:provider-test-connection',
-  TASK_CREATE_MODEL_INVOCATION_TEST: 'ipc:task-create-model-invocation-test',
-  TASK_GET: 'ipc:task-get',
-  TASK_LIST: 'ipc:task-list',
-  TASK_GET_STATS: 'ipc:task-get-stats',
-  GRILL_CREATE_SESSION: 'ipc:grill-create-session',
-  GRILL_GET_SESSION: 'ipc:grill-get-session',
-  GRILL_LIST_SESSIONS: 'ipc:grill-list-sessions',
-  GRILL_LIST_QUESTIONS: 'ipc:grill-list-questions',
-  GRILL_START_SESSION: 'ipc:grill-start-session',
-  GRILL_PAUSE_SESSION: 'ipc:grill-pause-session',
-  GRILL_RESUME_SESSION: 'ipc:grill-resume-session',
-  GRILL_COMPLETE_SESSION: 'ipc:grill-complete-session',
-  GRILL_ABANDON_SESSION: 'ipc:grill-abandon-session',
-  GRILL_ADD_QUESTIONS: 'ipc:grill-add-questions',
-  GRILL_MARK_QUESTION_ASKED: 'ipc:grill-mark-question-asked',
-  GRILL_ANSWER_QUESTION: 'ipc:grill-answer-question',
-  GRILL_SKIP_QUESTION: 'ipc:grill-skip-question',
-  GRILL_SUPERSEDE_QUESTION: 'ipc:grill-supersede-question',
-  GRILL_GET_CURRENT_ANSWERS: 'ipc:grill-get-current-answers',
-  GRILL_LIST_ANSWER_HISTORY: 'ipc:grill-list-answer-history',
-  GRILL_CREATE_PROPOSAL: 'ipc:grill-create-proposal',
-  GRILL_REVIEW_PROPOSAL: 'ipc:grill-review-proposal',
-  GRILL_LIST_PROPOSALS: 'ipc:grill-list-proposals',
-  GRILL_REQUEST_QUESTION_PLAN: 'ipc:grill-request-question-plan',
-  GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'ipc:grill-accept-question-plan-proposal',
-  GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'ipc:grill-list-question-plan-proposals',
-  GRILL_GET_QUESTION_PLAN_PROPOSAL: 'ipc:grill-get-question-plan-proposal',
-  CONTRACT_GET_CURRENT: 'ipc:contract-get-current',
-  CONTRACT_LIST_VERSIONS: 'ipc:contract-list-versions',
-  CONTRACT_GET_PROPOSAL: 'ipc:contract-get-proposal',
-  CONTRACT_LIST_PROPOSALS: 'ipc:contract-list-proposals',
-  CONTRACT_REQUEST_DRAFT: 'ipc:contract-request-draft',
-  CONTRACT_ACCEPT_PROPOSAL: 'ipc:contract-accept-proposal',
-  CONTRACT_REJECT_PROPOSAL: 'ipc:contract-reject-proposal',
-  CONTRACT_UPDATE_BY_USER: 'ipc:contract-update-by-user',
-  CONTRACT_LOCK_FIELD: 'ipc:contract-lock-field',
-  CONTRACT_UNLOCK_FIELD: 'ipc:contract-unlock-field',
-  GRAPH_CREATE_PROJECT_RUN: 'ipc:graph-create-project-run',
-  GRAPH_CREATE_CHAPTER_RUN: 'ipc:graph-create-chapter-run',
-  GRAPH_GET_RUN_PROGRESS: 'ipc:graph-get-run-progress',
-  GRAPH_APPLY_HUMAN_DECISION: 'ipc:graph-apply-human-decision',
-  GRAPH_LIST_RUNS: 'ipc:graph-list-runs',
-  INTAKE_GET_ACTIVE_SESSION: 'ipc:intake-get-active-session',
-  INTAKE_PROPAGATE_SPEC_INVALIDATION: 'ipc:intake-propagate-spec-invalidation',
-  SEARCH_SAVE_API_KEY: 'ipc:search-save-api-key',
-  SEARCH_DELETE_API_KEY: 'ipc:search-delete-api-key',
-  SEARCH_HAS_API_KEY: 'ipc:search-has-api-key',
-  RESEARCH_GET_RESEARCH_STATE: 'ipc:research-get-research-state',
-  RESEARCH_GET_BUNDLE: 'ipc:research-get-bundle',
-  RESEARCH_LIST_BUNDLES: 'ipc:research-list-bundles',
-  RESEARCH_SET_SOURCE_EXCLUSION: 'ipc:research-set-source-exclusion',
-  RESEARCH_LIST_SOURCE_EXCLUSIONS: 'ipc:research-list-source-exclusions',
-  BLUEPRINT_GET_STATE: 'ipc:blueprint-get-state',
-  BLUEPRINT_GET_BLUEPRINT: 'ipc:blueprint-get-blueprint',
-  CHAPTER_GET_OVERVIEW: 'ipc:chapter-get-overview',
-  CHAPTER_START_RUN: 'ipc:chapter-start-run',
-  CHAPTER_GET_RUN_STATE: 'ipc:chapter-get-run-state',
-  CHAPTER_SUBMIT_DECISION: 'ipc:chapter-submit-decision',
-  MANUSCRIPT_GET_WORKSPACE: 'ipc:manuscript-get-workspace',
-  MANUSCRIPT_GET_CHAPTER: 'ipc:manuscript-get-chapter',
-  MANUSCRIPT_SAVE_CHAPTER: 'ipc:manuscript-save-chapter',
-  MANUSCRIPT_EXPORT: 'ipc:manuscript-export',
-  MANUSCRIPT_LIST_VERSIONS: 'ipc:manuscript-list-versions',
-  MANUSCRIPT_RESTORE_VERSION: 'ipc:manuscript-restore-version',
-  MANUSCRIPT_SAVE_DRAFT: 'ipc:manuscript-save-draft',
-  MANUSCRIPT_GET_DRAFT: 'ipc:manuscript-get-draft',
-  MANUSCRIPT_DISCARD_DRAFT: 'ipc:manuscript-discard-draft',
-} as const;
-
-// ── 桌面 API ──────────────────────────────────────────────────────
+// ── 桌面 API ──（B13：IPC_CHANNELS 已随 Electron 退役，命令面见 RPC_COMMANDS）
 
 /** 任务 API */
 export interface TasksAPI {
@@ -475,7 +394,7 @@ export interface DataServiceStatusResponse {
   readonly status: DataServiceStatus;
 }
 
-/** 创作契约 API —— 通过 contextBridge 暴露给 Renderer */
+/** 创作契约 API（客户端经 window.desktop 调用，B12 起为 HTTP 实现） */
 export interface ContractAPI {
   getCurrent(input: GetCurrentCreationContractInput): Promise<ContractVersionPublicData | null>;
   listVersions(
@@ -710,7 +629,7 @@ export interface GraphRunSummaryDto {
   readonly createdAt: string;
 }
 
-/** Graph Run API —— 通过 contextBridge 暴露给 Renderer（GE-1） */
+/** Graph Run API（GE-1；客户端经 window.desktop 调用） */
 export interface GraphAPI {
   createProjectRun(input: CreateProjectRunInputDto): Promise<GraphProgressProjectionDto>;
   createChapterRun(input: CreateChapterRunInputDto): Promise<GraphProgressProjectionDto>;
@@ -1039,7 +958,7 @@ export function isValidListSourceExclusionsInput(
   return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
 }
 
-/** Research API —— 通过 contextBridge 暴露给 Renderer（GE-4/B6） */
+/** Research API（GE-4/B6；客户端经 window.desktop 调用） */
 export interface ResearchAPI {
   getResearchState(input: GetResearchStateInputDto): Promise<ResearchStateDto>;
   getBundle(input: GetResearchBundleInputDto): Promise<ResearchBundleDto | null>;
@@ -1224,7 +1143,7 @@ export function isValidGetBlueprintInput(value: unknown): value is GetBlueprintI
   return isBoundedTrimmedId(obj.projectId) && isBoundedTrimmedId(obj.blueprintId);
 }
 
-/** Blueprint API —— 通过 contextBridge 暴露给 Renderer（GE-5/B7 读通道 D-B7-10；B8 扩 getBlueprint） */
+/** Blueprint API（GE-5/B7 读通道 D-B7-10；B8 扩 getBlueprint；客户端经 window.desktop 调用） */
 export interface BlueprintAPI {
   getState(input: GetBlueprintStateInputDto): Promise<BlueprintStateDto>;
   getBlueprint(input: GetBlueprintInputDto): Promise<StoryBlueprintDto | null>;
@@ -1725,7 +1644,7 @@ export interface ManuscriptAPI {
   restoreVersion(input: RestoreManuscriptVersionInputDto): Promise<ManuscriptChapterDetailDto>;
 }
 
-/** 桌面 API 接口 —— 通过 contextBridge 暴露给 Renderer */
+/** 客户端 API 接口（历史名 DesktopAPI 保留）：浏览器端 window.desktop 的完整类型面，B12 起由 HTTP 客户端实现 */
 export interface DesktopAPI {
   healthCheck(): Promise<HealthCheckResponse>;
   getDataServiceStatus(): Promise<DataServiceStatusResponse>;

@@ -9,23 +9,32 @@
 
 ## 路径 A：在应用里跑（真人视角，推荐先走这条）
 
+安装依赖后二选一：
+
+**开发模式（两个终端）**：
+
 ```bash
-pnpm install
+pnpm dev:server   # 终端 A：apps/server，默认监听 127.0.0.1:4870
+```
+
+```bash
+pnpm dev          # 终端 B：apps/web，Vite 5173，/api 代理到 4870
+```
+
+浏览器打开 `http://127.0.0.1:5173/`。
+
+**生产模式**：
+
+```bash
 pnpm build
+pnpm start        # apps/server 托管 apps/web 构建产物，默认 127.0.0.1:4870
 ```
 
-开两个终端：
+浏览器打开 `http://127.0.0.1:4870/`。
 
-```bash
-pnpm dev
-```
-
-```bash
-pnpm --filter @ai-novel/desktop start
-```
-
-（未打包时渲染层由 Vite 提供，所以 `pnpm dev` 必须开着。想要单窗口体验就
-`pnpm package`，产物在 `apps/desktop/out/`。）
+不管走哪条路径，服务启动日志都会打印**访问令牌**（形如
+`[server] 访问令牌（页面首次打开时录入）：...`）；浏览器首次访问会被 TokenGate 拦下，
+把这个令牌粘贴进去即可，同一浏览器之后无需重复录入（存在 `localStorage`）。
 
 应用里的顺序：
 
@@ -36,7 +45,7 @@ pnpm --filter @ai-novel/desktop start
    `无需调研`，历史/现实题材则会停在调研阶段等 key；
 3. 新建项目 → 填名称与初始想法 → 按界面走：访谈（追问/回答）→ 创作要求 → 调研 →
    蓝图（接受）→ 成稿·生成（选一章开始生成）→ 候选确认（采用 / 按意见改写 / 重写）→
-   成稿·稿件（编辑正文、查看版本历史、导出 TXT/Markdown）。
+   成稿·稿件（编辑正文、查看版本历史、导出 TXT/Markdown，经浏览器下载）。
 
 ## 路径 B：一条命令跑完整链（无界面，出诊断）
 

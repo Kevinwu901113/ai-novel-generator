@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  IPC_CHANNELS,
+  RPC_COMMANDS,
   isValidRequestContractDraftInput,
   isValidGetCurrentCreationContractInput,
   isValidListCreationContractVersionsInput,
@@ -363,21 +363,21 @@ describe('DesktopAPI type parity', () => {
     assertShape({} as DesktopAPI);
   });
 
-  it('IPC 频道包含全部 contract 命令', () => {
-    const channels = Object.values(IPC_CHANNELS);
-    for (const ch of [
-      'ipc:contract-get-current',
-      'ipc:contract-list-versions',
-      'ipc:contract-get-proposal',
-      'ipc:contract-list-proposals',
-      'ipc:contract-request-draft',
-      'ipc:contract-accept-proposal',
-      'ipc:contract-reject-proposal',
-      'ipc:contract-update-by-user',
-      'ipc:contract-lock-field',
-      'ipc:contract-unlock-field',
+  it('RPC 命令面包含全部 contract 命令（B13：IPC 频道随 Electron 退役）', () => {
+    const commands = Object.values(RPC_COMMANDS);
+    for (const command of [
+      'contract.getCurrent',
+      'contract.listVersions',
+      'contract.getProposal',
+      'contract.listProposals',
+      'contract.requestDraft',
+      'contract.acceptProposal',
+      'contract.rejectProposal',
+      'contract.updateByUser',
+      'contract.lockField',
+      'contract.unlockField',
     ]) {
-      expect(channels).toContain(ch);
+      expect(commands).toContain(command);
     }
   });
 });

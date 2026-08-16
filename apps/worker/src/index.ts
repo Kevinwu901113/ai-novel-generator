@@ -1,19 +1,14 @@
 /**
  * @ai-novel/worker
  *
- * Utility Process 入口。
+ * 数据服务层（B13 起为纯库，宿主是 apps/server）。
  *
  * 职责：
- * - 初始化 app.sqlite
- * - 接收来自 Main Process 的 RPC 请求
- * - 分发到 application 层用例
- * - 返回结果
+ * - initialize()：数据根准备、app.sqlite、SecretStore、启动一致性恢复（全部完成才算 ready）
+ * - dispatchCommand()：81 个业务命令的唯一分发入口，分发到 application 层用例
  *
- * 通信协议：
- * - 启动后发送 { type: 'ready' }
- * - 接收 { requestId, command, payload }
- * - 返回 { requestId, success, data?, error? }
- * - 关闭时接收 { type: 'shutdown' }
+ * 信封：入 { requestId, command, payload }，出 { requestId, success, data?, error? }。
+ * 普通 import 零副作用（不初始化真实用户数据库、不注册生命周期、不 process.exit）。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -155,7 +150,7 @@ import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/resear
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
-// B11：导出给 apps/server 进程内直调使用（信封语义与 Utility Process RPC 完全一致）。
+// B11：导出给 apps/server 进程内直调使用（信封语义沿用原 Utility Process RPC）。
 
 export interface RPCRequest {
   readonly requestId: string;
@@ -170,18 +165,6 @@ export interface RPCResponse {
   readonly error?: AppErrorType;
 }
 
-interface ReadyMessage {
-  readonly type: 'ready';
-}
-
-// Electron Utility Process 的 process.parentPort 类型声明
-declare const process: NodeJS.Process & {
-  parentPort?: {
-    on(event: 'message', listener: (event: { data: unknown }) => void): void;
-    postMessage(message: unknown): void;
-  };
-};
-
 // ── 全局状态 ──────────────────────────────────────────────────────
 
 let appDb: AppDatabase | null = null;
@@ -194,7 +177,7 @@ function getDataRoot(): string {
   if (override) return override;
 
   // 默认使用当前工作目录下的 data 目录
-  // 实际生产环境由 Main Process 通过 app.getPath("userData") 设置
+  // 实际生产环境由 apps/server 在 initialize() 之前解析并设置（见 server 的 data-root.ts）
   return join(process.cwd(), 'data');
 }
 
@@ -835,7 +818,7 @@ function reconcile(dataRoot: string): void {
  */
 export async function initialize(): Promise<void> {
   // B11 重入语义（apps/server 的 app.dataServiceRetry）：先关旧连接再重建，
-  // 避免重试路径泄漏 SQLite 句柄。Utility Process 路径只调用一次，行为不变。
+  // 避免重试路径泄漏 SQLite 句柄。正常启动路径只调用一次，行为不变。
   if (appDb) {
     appDb.close();
     appDb = null;
@@ -2068,86 +2051,8 @@ export async function dispatchCommand(request: RPCRequest): Promise<RPCResponse>
   }
 }
 
-// ── 通信 ──────────────────────────────────────────────────────────
-
-function sendToParent(message: unknown): void {
-  // Electron Utility Process 使用 process.parentPort
-  // Node.js Worker 使用 parentPort
-  if (typeof process.parentPort !== 'undefined') {
-    process.parentPort.postMessage(message);
-  }
-}
-
-function handleMessage(data: unknown): void {
-  // 检查关闭消息
-  if (
-    typeof data === 'object' &&
-    data !== null &&
-    'type' in data &&
-    (data as { type: string }).type === 'shutdown'
-  ) {
-    shutdown();
-    return;
-  }
-
-  // 处理 RPC 请求
-  const request = data as RPCRequest;
-  if (!request.requestId || !request.command) {
-    return; // 忽略无效消息
-  }
-
-  // dispatchCommand 可能是 async 的（如 provider.testConnection）
-  void dispatchCommand(request).then(
-    (response) => sendToParent(response),
-    (_err) => {
-      // 不泄露内部错误细节
-      sendToParent({
-        requestId: request.requestId,
-        success: false,
-        error: { code: 'INTERNAL_ERROR' as ErrorCode, message: '操作失败' },
-      });
-    },
-  );
-}
-
-// ── 生命周期 ──────────────────────────────────────────────────────
-
-function shutdown(): void {
-  if (appDb) {
-    appDb.close();
-    appDb = null;
-  }
-  process.exit(0);
-}
-
 // ── 启动 ──────────────────────────────────────────────────────────
-
-// 只有 Electron Utility Process 才有 parentPort。该模块还导出数据库适配器供集成测试
-// 与其它 worker 模块复用；普通 Node/Vitest import 绝不能顺带初始化真实用户数据库、注册
-// 生命周期或在失败时 process.exit(1)。这类 import-time 副作用会让并行测试随机整进程失败。
-const utilityParentPort = process.parentPort;
-if (typeof utilityParentPort !== 'undefined') {
-  void (async () => {
-    try {
-      // RW-1-R5：await 全部恢复（含 recoverGraphRuns）后才发布 READY / 接受 RPC
-      await initialize();
-
-      // 监听来自 Main Process 的消息
-      utilityParentPort.on('message', (event: { data: unknown }) => {
-        handleMessage(event.data);
-      });
-
-      // 发送就绪信号
-      sendToParent({ type: 'ready' } satisfies ReadyMessage);
-    } catch (err) {
-      // 初始化失败，发送错误信号
-      const message = err instanceof Error ? err.message : 'Worker 初始化失败';
-      sendToParent({ type: 'error', message });
-      process.exit(1);
-    }
-  })();
-
-  // 处理 Utility Process 退出；普通 import 不污染宿主进程的信号处理器。
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
-}
+// B13：Electron Utility Process 通信段（parentPort/sendToParent/handleMessage/shutdown）
+// 已随桌面壳删除。本模块现在是纯库：宿主（apps/server）import dispatchCommand/initialize
+// 进程内直调。普通 Node/Vitest import 依旧零副作用（不初始化真实用户数据库、不注册
+// 生命周期、不 process.exit）。

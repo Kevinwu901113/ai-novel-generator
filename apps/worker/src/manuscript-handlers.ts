@@ -4,7 +4,7 @@
  * - `manuscript.getWorkspace`：稿件标题 + 章节列表（含字数与蓝图章节归属）；
  * - `manuscript.getChapter`：单章正文 + **CAS 基线**（currentVersionId）；
  * - `manuscript.saveChapter`：追加新版本（sourceType=USER）+ CAS 拒绝覆盖；
- * - `manuscript.export`：按稿件顺序渲染 TXT / Markdown 正文（落盘在 main）。
+ * - `manuscript.export`：按稿件顺序渲染 TXT / Markdown 正文（B12 起由浏览器端下载落盘）。
  *
  * 纪律：稿件写入只有两条路——MANUSCRIPT_COMMIT（AI 产出，经用户接受）与本文件的
  * `saveChapter`（用户手写）。两条都走 `createChapterVersion` 的 CAS + append-only，
@@ -57,7 +57,7 @@ export interface ManuscriptHandlerContext {
   clock: { now(): string };
 }
 
-/** 内部：worker 内部使用的导出结果（main 负责落盘） */
+/** 导出结果（与 contracts ExportManuscriptResultDto 同形；浏览器端负责下载落盘） */
 export interface ManuscriptExportPayload {
   readonly fileName: string;
   readonly content: string;
@@ -307,7 +307,7 @@ export function discardManuscriptDraft(
   });
 }
 
-/** 导出正文（落盘在 main；worker 只负责按稿件顺序渲染） */
+/** 导出正文（worker 只负责按稿件顺序渲染；浏览器端触发下载落盘） */
 export function exportManuscript(
   ctx: ManuscriptHandlerContext,
   input: ExportManuscriptInputDto,

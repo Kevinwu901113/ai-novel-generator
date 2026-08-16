@@ -2,6 +2,6 @@ packages:
   - 'apps/*'
   - 'packages/*'
 allowBuilds:
-  electron: true
+  # esbuild 是 vite 的传递依赖（B13 起不再直接依赖；electron 已随桌面壳退役移除）
   esbuild: true
-onlyBuiltDependencies: '["electron", "esbuild"]'
+onlyBuiltDependencies: '["esbuild"]'

@@ -2,22 +2,24 @@
 
 ## 产品定位
 
-中文优先、本地优先、BYOK 的桌面 AI 小说创作代理，面向成人向同人网文创作。
+中文优先、本地优先、BYOK 的 AI 小说创作代理：服务跑在自己的 Mac 上，浏览器访问，面向
+成人向同人网文创作。
 
 ## 当前技术栈
 
-- Electron 43.2.0 + React + TypeScript + Vite
+- apps/server：hand-rolled `node:http`（零外部依赖，单一 `POST /api/rpc` 端点 + 静态托管）
+- apps/web：React + TypeScript + Vite（浏览器运行）
 - Node.js 24 + pnpm 11 workspace
 - SQLite（node:sqlite 内置模块，本地优先）
 - Vitest + ESLint + Prettier
-- @electron/packager（打包）
+- 访问令牌 + Host 白名单认证（局域网访问经 `AI_NOVEL_HOST=0.0.0.0` 显式放开）
 
 ## 数据库架构
 
-- `app.sqlite`：应用级项目索引和提供商配置（`<userData>/app.sqlite`）
-- `project.sqlite`：单个项目正式数据（`<userData>/projects/<id>/project.sqlite`）
+- `app.sqlite`：应用级项目索引和提供商配置（`<数据根>/app.sqlite`）
+- `project.sqlite`：单个项目正式数据（`<数据根>/projects/<id>/project.sqlite`）
 - node:sqlite 封装在 `packages/database`，领域层和应用层不直接导入
-- Utility Process 是数据库唯一写入者
+- 服务进程（`@ai-novel/worker` 库，由 apps/server 进程内直调）是数据库唯一写入者
 - 所有时间使用 UTC ISO 8601
 
 ## 模型配置
@@ -36,16 +38,21 @@
 
 - `packages/domain`：纯领域模型，无外部依赖
 - `packages/application`：用例层，不依赖 UI
-- `packages/contracts`：IPC 类型，所有进程共享
-- `apps/desktop`：Electron 应用（main/preload/renderer）
+- `packages/contracts`：RPC 类型（RPC_COMMANDS / RPC_COMMAND_VALIDATORS / SERVER_COMMANDS），
+  server 与 web 共享
+- `apps/server`：Web 服务端（hand-rolled node:http），只做传输/认证/托管
+- `apps/web`：前端（浏览器运行）
+- `apps/worker`：`@ai-novel/worker` 库，`dispatchCommand`/`initialize` 供 server 进程内直调
 - 其他 packages：独立功能模块
 
 ## 安全规则
 
-- Electron 必须 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`
-- Renderer 不得直接访问 Node.js、数据库、文件系统、API Key
-- Preload 只暴露最小 API，不暴露 `ipcRenderer`
-- API Key 不进入项目备份
+- apps/web 只依赖 `@ai-novel/contracts`，只经 `window.desktop`（HTTP 客户端）与
+  `POST /api/rpc` 通信；不得直接访问 Node.js、数据库、文件系统、API Key
+- apps/server 只做传输/认证/静态托管/按 command 校验，禁止业务逻辑；业务命令一律经
+  `dispatchCommand` 转发
+- 所有 `/api/rpc` 请求需要 `Authorization: Bearer <token>`（localhost 不豁免）+ Host 白名单
+- API Key 不进入项目备份，仍存 macOS Keychain
 
 ## 常用命令
 
@@ -63,7 +70,7 @@ pnpm typecheck    # 类型检查
 - 不使用 `any` 类型掩盖问题
 - 不删除测试让检查通过
 - 不关闭 ESLint 规则
-- 不在 Renderer 中直接调用 Node.js API
+- 不在 apps/web 中直接调用 Node.js API
 - 不安装无直接用途的依赖
 
 ## 完成定义

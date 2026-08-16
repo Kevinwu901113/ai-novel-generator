@@ -665,6 +665,46 @@ run 终态 failed 且按不变量不可复活。
 
 ---
 
+### 2026-08-17 D11 桌面壳退役，全面转为 WebUI（本机服务 + 浏览器访问）
+
+**背景**：负责人决定放弃 Electron 桌面架构，动机是多端适配（手机/iPad 也能用）与前端选择
+空间。可行性经代码盘点确认：packages/ 15 个包零 Electron/React 依赖（boundary 测试锁死）；
+全部 81 个 RPC command 纯 request/response 零推送；renderer 只经 `window.desktop`
+（DesktopAPI）通信；唯一的 Electron 业务渗漏是导出落盘对话框。
+
+**决策**：分三批（B11 server / B12 前端迁移 / B13 Electron 删除）完成迁移，目标形态：
+浏览器（本机 + 局域网多设备）→ apps/server（hand-rolled node:http）→ @ai-novel/worker
+（进程内直调）→ packages/*（零改动）。子决策：
+
+- **worker 库化而非子进程**：export dispatchCommand/initialize 进程内直调；单用户无隔离
+  收益，消除 RPC 序列化与生命周期整层（D-B11 系列）。
+- **单 RPC 端点** `POST /api/rpc`（复用 worker `{command,payload}` 信封），不做 81 条
+  REST；业务错误一律 HTTP 200 + 信封。
+- **hand-rolled node:http**：生产运行时保持零外部依赖；要推送（SSE/WS）时另记决策。
+- **校验层搬进 contracts 由服务端强制**（RPC_COMMAND_VALIDATORS，parity 守卫钉死全覆盖）
+  ——原 main 进程 82 个 handler 的前置校验是真实安全边界（research 域 handler 内部零校验）。
+- **认证**：文件 token（`${dataRoot}/auth-token`，0600）+ Bearer 头（免 CSRF）+
+  timingSafeEqual + Host 白名单防 DNS rebinding；**localhost 不豁免**。默认绑定
+  127.0.0.1:4870，`AI_NOVEL_HOST=0.0.0.0` 显式放开局域网。
+- **不做 TLS**：局域网明文风险显式接受并披露（TD-034）；API key 录入建议在本机完成。
+- **数据根**：env 优先 → 探测老 Electron userData（双候选按 app.sqlite 存在性 + mtime）
+  → 全新目录；只读原位绝不自动搬迁。API key 继续 macOS Keychain（服务端跑在 Mac 上）。
+- **导出** = worker 渲染 + 浏览器 Blob 下载；`saved`/`filePath` 原生对话框语义删除。
+- **前端零重写**：renderer 整体 git mv 至 apps/web，`window.desktop` 改由 HTTP 客户端
+  注入（95 个调用点与 19 个测试零改动）；TokenGate 包在 App 外。
+
+**理由**：业务层与 UI 边界干净且被测试强制，换传输层是低风险路径；重写前端会重蹈
+可达性缺陷老坑。单用户本地优先形态不变，BYOK 与 Keychain 语义不变。
+
+**影响**：apps/desktop 删除（macos-package CI 随之删除，web 冒烟接替进 ubuntu）；
+IPC_CHANNELS 从 contracts 移除（命令面 RPC_COMMANDS）；TD-001/002/004 销账、TD-005 改写、
+新增 TD-034/035/036。多客户端并发（Mac + iPad 同开）依赖既有 CAS/版本冲突路径兜底。
+详见 `b11-web-server-design.md` / `b12-web-frontend-design.md` / `b13-electron-removal-design.md`。
+
+**状态**：已确认
+
+---
+
 ## 待确认决策
 
 [待确认的决策记录]

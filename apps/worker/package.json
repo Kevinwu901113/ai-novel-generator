@@ -13,7 +13,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "tsc && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete && node scripts/bundle.mjs"
+    "build": "tsc && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete"
   },
   "dependencies": {
     "@ai-novel/application": "workspace:*",
@@ -27,7 +27,6 @@
     "@ai-novel/task-engine": "workspace:*"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0",
     "typescript": "^5.8.0"
   }
 }

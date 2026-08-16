@@ -20,8 +20,9 @@
 
 ## TD-001: `--no-prune` 导致打包产物膨胀
 
-**状态**: OPEN
-**优先级**: 打包分发前必须解决
+**状态**: RESOLVED（2026-08-17，B13）——Electron 打包链路随桌面壳退役整体删除
+（D11），`@electron/packager` 与 asar 产物不复存在，问题失去载体。
+**优先级**: ~~打包分发前必须解决~~
 **最后核验基线**: 5cefd6e
 **历史别名**: TD-006（内容重复，已合并为本条目）
 
@@ -49,7 +50,8 @@
 
 ## TD-002: Worker 类型声明不完整
 
-**状态**: OPEN
+**状态**: RESOLVED（2026-08-17，B13）——`process.parentPort` 的 `declare const process`
+类型 hack 随 Utility Process 通信段一并删除；worker 现为纯库（apps/server 进程内直调）。
 **优先级**: 低
 **最后核验基线**: 5cefd6e
 
@@ -92,8 +94,9 @@
 
 ## TD-004: Electron 42+ 二进制动态下载
 
-**状态**: OPEN
-**优先级**: CI 前
+**状态**: RESOLVED（2026-08-17，B13）——Electron 依赖与 macos-package CI 已删除（D11），
+`ELECTRON_MIRROR` 不再需要。
+**优先级**: ~~CI 前~~
 **最后核验基线**: 5cefd6e
 
 ### 问题
@@ -112,26 +115,28 @@ Electron 42+ 改为在首次运行时动态下载二进制文件，不再在 `po
 
 ---
 
-## TD-005: Windows/Linux SecretStore 尚未实现
+## TD-005: SecretStore 锁定 macOS 宿主（原：Windows/Linux SecretStore 尚未实现）
 
-**状态**: OPEN
-**优先级**: 跨平台分发前
-**最后核验基线**: 5cefd6e
+**状态**: OPEN（2026-08-17 随 D11 改写：跨平台**客户端**需求消失——客户端现在是浏览器；
+约束转为**服务端宿主**锁定 macOS）
+**优先级**: 换服务端宿主（NAS/Linux/上云）前
+**最后核验基线**: 3fe9c7e
 
 ### 问题
 
-macOS Keychain 实现已完成，但 Windows（Credential Manager）和 Linux（Secret Service）尚未实现。
+`packages/secret-store` 唯一实现是 macOS Keychain（`/usr/bin/security`）。WebUI 形态下
+apps/server 只能跑在 Mac 上；部署到 Linux/NAS/云需要替代实现。另：Keychain 依赖 GUI
+会话，launchd/ssh 常驻场景可能遇 keychain 锁定（README 运行须知已披露）。
 
 ### 影响
 
-- 应用只能在 macOS 上完整运行
-- 需要实现 SecretStore 接口的跨平台适配
+- 服务端宿主只能是 macOS
+- 上云/换宿主前需按 `SecretStore` 端口（`packages/application/src/types.ts`）写新 adapter
+  （如加密文件 + 主密钥、或云 KMS），并重新评估 BYOK 威胁模型
 
 ### 后续动作
 
-- 实现 Windows Credential Manager 适配
-- 实现 Linux Secret Service（libsecret）适配
-- 跨平台集成测试
+- 需要换宿主时：实现替代 SecretStore adapter + darwin 门控之外的集成测试
 
 ---
 
@@ -828,3 +833,64 @@ UA 后状态码不变），**不做浏览器伪装**（属绕过机器人检测�
    他看不见的草稿。原文如下：**TD-033-3：编辑无自动保存**：roadmap §12 提到 autosave，
    本批次只做显式保存（按钮 + 未保存提示）。自动保存要与 CAS 基线协同（每次自动保存
    都会推进 currentVersionId），需要单独设计防抖与版本膨胀策略，故未做。
+
+---
+
+## TD-034: 局域网访问是明文 HTTP（无 TLS）
+
+**状态**: OPEN（D11 显式接受的风险，本条为披露与缓解记录）
+**优先级**: 外网/不可信网络访问前必须解决
+**登记批次**: B13（2026-08-17）
+
+### 问题
+
+`AI_NOVEL_HOST=0.0.0.0` 放开局域网后，token、稿件内容、以及录入 provider API key 的
+请求体都以明文在局域网传输，同一网络内的其他设备理论上可嗅探。
+
+### 缓解（现状）
+
+- 默认只绑定 127.0.0.1；放开 0.0.0.0 只在可信家庭 Wi-Fi 使用
+- API key 录入建议在 Mac 本机 localhost 完成
+- token 走 Authorization 头不进 URL；静态壳（JS/HTML）不含任何用户数据
+
+### 后续动作
+
+- 外网访问需求出现时：Tailscale（推荐，零证书管理）或反代 TLS；届时记 decision-log
+
+---
+
+## TD-035: 移动端响应式未系统审计
+
+**状态**: OPEN
+**优先级**: 移动端体验成为主要使用方式前
+**登记批次**: B13（2026-08-17）
+
+### 问题
+
+App.css（5500+ 行）按桌面版设计。B12 本机验收发现窄视口（~400px）下主要流程可用，
+但未对 iPhone/iPad 真机做系统性审计（触控目标尺寸、抽屉交互、iOS Safari 的
+Blob 下载面板、软键盘遮挡等）。
+
+### 后续动作
+
+- 负责人移动端真机走查一轮，按发现登记具体条目
+- iPad Safari 下载交互若不可用，兜底 data URL 方案（见 b12 设计 §5）
+
+---
+
+## TD-036: 错误码 message 编码层遗留（encodeErrorCode/decodeErrorCode）
+
+**状态**: OPEN
+**优先级**: 低（纯清理，无行为风险）
+**登记批次**: B13（2026-08-17）
+
+### 问题
+
+`encodeErrorCode`/`decodeErrorCode` 是为 Electron IPC 丢失 Error 自定义属性打的补丁
+（contracts 源码有原始注释）。HTTP 信封 `{error:{code,message}}` 结构化携带 code，
+desktop-client 已把 code 直挂 `.code`，safe-error 优先读 `.code`——message 编码层
+只剩兜底解码路径在用。
+
+### 后续动作
+
+- 择机删除 encode/decode 与 safe-error 的 message 解码兜底，并同步清理相关测试

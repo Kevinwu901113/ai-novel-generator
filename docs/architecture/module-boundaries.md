@@ -10,7 +10,7 @@
 任何 Graph 状态变化只能经已合并的 Domain transition
 （applyNodeSuccess / applyNodeFailure / requestHumanDecision / applyHumanDecision / applyArtifactChange）。
 
-Renderer / Worker / Task Engine / Model Gateway / Research / Import-Export 均不得直接拼装或修改 Graph state。
+apps/web / apps/server / Task Engine / Model Gateway / Research / Import-Export 均不得直接拼装或修改 Graph state。
 WorkflowStage 是派生 UI 投影，永不作为权威状态；下一个可执行节点以 possibleNextNodes 为准。
 ```
 
@@ -19,7 +19,7 @@ WorkflowStage 是派生 UI 投影，永不作为权威状态；下一个可执�
 ```
 ┌─────────────────────────────────────────────────┐
 │                    UI 层                         │
-│  apps/desktop/src/renderer                      │
+│  apps/web/src                                   │
 │  - React 组件（Idea / Research / Blueprint /    │
 │    Manuscript 产品页）                          │
 │  - 只提交 intent + expectedVersion + idempotencyKey
@@ -60,28 +60,30 @@ WorkflowStage 是派生 UI 投影，永不作为权威状态；下一个可执�
 
 ## 2. 安全边界与进程模型
 
+> 单进程形态（D11，2026-08-17）：浏览器与服务进程之间只有一跳 HTTP；服务进程内部到
+> 业务逻辑是一次直接函数调用（worker 当库用，不 fork 子进程）。
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Renderer（沙箱）                                                │
-│  - contextIsolation: true, nodeIntegration: false, sandbox: true │
-│  - 只能调用 window.desktop.* (typed DesktopAPI)                  │
+│  浏览器（apps/web，本机 + 局域网多设备）                          │
+│  - 只能调用 window.desktop.*（desktop-client.ts，HTTP 客户端）    │
 │  - 无 Node.js、文件系统、SQLite、secret 权限                     │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                        contextBridge
-                        (preload/index.ts)
+              POST /api/rpc {command, payload}
+              Authorization: Bearer <token>
                               │
 ┌─────────────────────────────────────────────────────────────────┐
-│  Main Process                                                    │
-│  - 窗口管理、IPC broker、进程生命周期                             │
-│  - ipcMain.handle → forwardToWorker                              │
-│  - 不直接执行业务命令                                             │
+│  apps/server（hand-rolled node:http）                            │
+│  - 认证（token + Host 白名单，localhost 不豁免）                  │
+│  - 按 command 校验（RPC_COMMAND_VALIDATORS）+ 静态托管 apps/web   │
+│  - 不直接执行业务命令，只做传输/认证/校验/托管                    │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                     Worker / Utility Process RPC
+                        进程内直调
                               │
 ┌─────────────────────────────────────────────────────────────────┐
-│  Worker / Utility Process                                        │
+│  @ai-novel/worker（库：dispatchCommand / initialize）              │
 │  - SQLite 同步访问的唯一位置（database 唯一写入者）                │
 │  - 业务命令执行（dispatch：project.* / provider.* / task.* /      │
 │    grill.* / contract.* / graph.*）                               │
@@ -90,9 +92,9 @@ WorkflowStage 是派生 UI 投影，永不作为权威状态；下一个可执�
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-**关键约束**：Utility Process 是数据库唯一写入者；application 通过 `GraphRunTransactionPort` 在单个
-`BEGIN IMMEDIATE` 事务内执行"transition + 持久化"；执行器（Task Engine）先落库再调用模型，结果经
-GraphRunService 的 `advanceNode`/`failNode` 进入 Domain transition。
+**关键约束**：服务进程（worker 库）是数据库唯一写入者；application 通过 `GraphRunTransactionPort`
+在单个 `BEGIN IMMEDIATE` 事务内执行"transition + 持久化"；执行器（Task Engine）先落库再调用模型，
+结果经 GraphRunService 的 `advanceNode`/`failNode` 进入 Domain transition。
 
 ## 3. 模块职责
 
@@ -115,25 +117,45 @@ GraphRunService 的 `advanceNode`/`failNode` 进入 Domain transition。
 - **约束**：不依赖 Electron/React/node:sqlite；不直接写 Graph state。
 - **导出**：graph-run 用例、既有 project / provider / grill / contract / manuscript 用例。
 
-### `packages/contracts`（共享 IPC 面）
+### `packages/contracts`（共享 RPC 面）
 
-- `IPC_CHANNELS`、`DesktopAPI`（projects / provider / tasks / grill / contract / graph（GE-1+））、ErrorCode、
+- `RPC_COMMANDS`（81 command 常量表）、`RPC_COMMAND_VALIDATORS`（command → 校验函数 | null，
+  parity 测试钉死全覆盖）、`SERVER_COMMANDS`（三个 readiness 命令）、`DesktopAPI`
+  （projects / provider / tasks / grill / contract / graph（GE-1+））、ErrorCode、
   手写校验器、graph DTO（GraphIdentityDto / GraphProgressProjectionDto / HumanDecisionInputDto / RunTerminalStateDto）。
-- **约束**：所有进程共享；只包含类型与验证；不复制 domain 执行器；不依赖 domain 包。
+- **约束**：apps/server 与 apps/web 共享；只包含类型与验证；不复制 domain 执行器；不依赖 domain 包。
 - 注意：`WorkflowStage` 是 contracts 中的派生 UI 类型，不是权威状态。
+
+### `apps/server`（Web 服务端，传输层）
+
+- hand-rolled `node:http`：单一 `POST /api/rpc` 端点（信封 `{command, payload}`）+ 静态托管
+  apps/web 构建产物 + 安全响应头。
+- 认证（文件 token + `Authorization: Bearer` + Host 白名单，localhost 不豁免）、按
+  `RPC_COMMAND_VALIDATORS` 做 payload 校验、readiness 语义（`SERVER_COMMANDS`：
+  healthCheck / dataServiceStatus / dataServiceRetry，本地处理不转发）。
+- **约束**：只做传输/认证/静态托管/按 command 校验，**禁止业务逻辑**；校验通过的命令
+  原样转发给 `@ai-novel/worker` 的 `dispatchCommand()`。
+
+### `apps/web`（浏览器前端）
+
+- React UI + `desktop-client.ts`（`DesktopAPI` 的 HTTP 实现，`window.desktop` 全局注入）+
+  `TokenGate`（访问令牌录入门，包在 App 外）。
+- **约束**：只依赖 `@ai-novel/contracts`；不直接访问 Node.js、数据库、文件系统、secret；
+  只经 `window.desktop` 调用 `/api/rpc`。
 
 ### `packages/database`（持久化 adapter）
 
 - `AppDatabase`（app.sqlite，v1–v4）、`ProjectDatabase`（project.sqlite，v1–v7；GE-1 追加 v8 graph_runs +
   graph_run_commands）。
 - `SQLiteMigrator`、STRICT 表、WAL、BEGIN IMMEDIATE 事务、`GraphRunTransactionPortImpl`（GE-1）。
-- **约束**：node:sqlite；只在 Worker/Utility Process 运行；不暴露给 Renderer。
+- **约束**：node:sqlite；只在服务进程（apps/server 进程内的 `@ai-novel/worker` 库）运行；
+  不暴露给浏览器（apps/web）。
 - **导出**：migration 注册表、既有 repo 实现 + graph-run repo（GE-1）。
 
 ### `packages/model-gateway`
 
 - `testConnection` / `invokeModel`（Anthropic 兼容，非流式，120s 超时，错误码映射，usage 提取）。
-- **约束**：固定 MiMo V2.5 Pro；不接受 Renderer URL；不直接推进 Graph。
+- **约束**：固定 MiMo V2.5 Pro；不接受 apps/web 传入的 URL；不直接推进 Graph。
 
 ### `packages/task-engine`（执行器底座）
 
@@ -154,14 +176,13 @@ GraphRunService 的 `advanceNode`/`failNode` 进入 Domain transition。
 ## 4. Graph 数据流（GE-1 起）
 
 ```
-Renderer（Idea / Research / Blueprint / Manuscript 产品页）
-  → window.desktop.graph.* (preload contextBridge)
-    → ipcMain.handle (main)
-      → forwardToWorker (worker RPC)
-        → dispatchGraphCommand (worker)
-          → GraphRunService use cases（load → validate → 纯 domain transition → validate）
-            → GraphRunTransactionPort（BEGIN IMMEDIATE + CAS 原子持久化）
-              → domain transition + database（graph_runs / graph_run_commands / grill_answers）
+apps/web（Idea / Research / Blueprint / Manuscript 产品页）
+  → window.desktop.graph.*（desktop-client.ts，HTTP 客户端）
+    → POST /api/rpc（apps/server：认证 + Host 白名单 + 按 command 校验）
+      → dispatchCommand（worker 库，进程内直调）→ dispatchGraphCommand
+        → GraphRunService use cases（load → validate → 纯 domain transition → validate）
+          → GraphRunTransactionPort（BEGIN IMMEDIATE + CAS 原子持久化）
+            → domain transition + database（graph_runs / graph_run_commands / grill_answers）
 ```
 
 执行器（Task Engine / Model Gateway / Research）：
@@ -171,9 +192,9 @@ Renderer（Idea / Research / Blueprint / Manuscript 产品页）
   → domain transition 校验 → CAS 原子提交
 ```
 
-## 5. Renderer Mutation Rule
+## 5. Web 前端 Mutation Rule
 
-1. Renderer 不组装正式领域对象：只提交 intent + expectedVersion + idempotencyKey。
+1. Web 前端不组装正式领域对象：只提交 intent + expectedVersion + idempotencyKey。
 2. 后端返回值是事实来源：mutation 成功后用返回的完整对象更新 UI。
 3. AI 输出始终是 proposal：用户显式接受前无权威性。
 4. 用户显式 accept 才创建权威版本：人工 Gate 处没有自动接受路径。
