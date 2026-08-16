@@ -1,0 +1,20 @@
+{
+  "name": "@ai-novel/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc && find dist -name '*.map' -delete && find dist -name '*.test.*' -delete",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@ai-novel/contracts": "workspace:*",
+    "@ai-novel/worker": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}

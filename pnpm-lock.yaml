@@ -79,6 +79,22 @@ importers:
         specifier: ^7.0.0
         version: 7.3.6(@types/node@24.13.3)
 
+  apps/server:
+    dependencies:
+      '@ai-novel/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@ai-novel/worker':
+        specifier: workspace:*
+        version: link:../worker
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
   apps/worker:
     dependencies:
       '@ai-novel/application':

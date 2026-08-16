@@ -155,14 +155,15 @@ import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/resear
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
 // ── RPC 类型 ──────────────────────────────────────────────────────
+// B11：导出给 apps/server 进程内直调使用（信封语义与 Utility Process RPC 完全一致）。
 
-interface RPCRequest {
+export interface RPCRequest {
   readonly requestId: string;
   readonly command: string;
   readonly payload: unknown;
 }
 
-interface RPCResponse {
+export interface RPCResponse {
   readonly requestId: string;
   readonly success: boolean;
   readonly data?: unknown;
@@ -832,7 +833,14 @@ function reconcile(dataRoot: string): void {
  * 全部数据一致性恢复 + **await recoverGraphRuns** 完成后才返回 —— 调用方在返回后才
  * 发布 Worker READY / 接受 RPC，保证启动恢复先行。
  */
-async function initialize(): Promise<void> {
+export async function initialize(): Promise<void> {
+  // B11 重入语义（apps/server 的 app.dataServiceRetry）：先关旧连接再重建，
+  // 避免重试路径泄漏 SQLite 句柄。Utility Process 路径只调用一次，行为不变。
+  if (appDb) {
+    appDb.close();
+    appDb = null;
+  }
+
   const dataRoot = getDataRoot();
   projectsDir = join(dataRoot, 'projects');
 
@@ -1806,7 +1814,7 @@ function handleGetTaskStats(payload: unknown): TaskStatsPublicData {
 
 // ── 命令分发 ──────────────────────────────────────────────────────
 
-async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
+export async function dispatchCommand(request: RPCRequest): Promise<RPCResponse> {
   try {
     let data: unknown;
 

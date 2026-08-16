@@ -4335,3 +4335,297 @@ export function isValidChapterPublicData(data: unknown): data is ChapterPublicDa
 // ── Idea-to-Novel Graph 跨进程契约 ─────────────────────────────────
 
 export * from './idea-to-novel-graph.js';
+
+// ── B11：Web RPC 命令面（apps/server HTTP 传输用）──────────────────
+//
+// 背景：Electron IPC → HTTP RPC 迁移。worker 的 dispatchCommand（apps/worker/src/index.ts）
+// 接受 `{ requestId, command, payload }` 信封，81 个命令。此前全部输入校验挂在
+// apps/desktop/src/main/index.ts 的 82 个 ipcMain.handle 里（renderer→main 边界）；
+// HTTP 化后 main 这层不存在了，校验必须搬到这里供 apps/server 复用——否则部分
+// handler（如 research 域）内部对 payload 零校验，会把不设防的入口直接暴露给
+// 公网请求（安全关键）。
+//
+// 校验器语义：校验的是 worker dispatchCommand **收到的 payload**（即 main 转发时
+// 组装后的形状），不是 renderer 的原始参数——绝大多数命令两者相同（main 校验完
+// 原样转发 `input`），只有 project.open 这类命令 main 会先把裸参数包装成对象
+// 再转发，但因为其校验函数本身接受的就是包装后的对象形状，直接复用即可。
+
+/** worker dispatchCommand 接受的全部命令（与 apps/worker/src/index.ts 的 switch 一一对应） */
+export const RPC_COMMANDS = {
+  // 项目
+  PROJECT_CREATE: 'project.create',
+  PROJECT_LIST: 'project.list',
+  PROJECT_OPEN: 'project.open',
+  // 提供商
+  PROVIDER_LIST: 'provider.list',
+  PROVIDER_CREATE: 'provider.create',
+  PROVIDER_UPDATE: 'provider.update',
+  PROVIDER_DELETE: 'provider.delete',
+  PROVIDER_SET_DEFAULT: 'provider.setDefault',
+  PROVIDER_SAVE_API_KEY: 'provider.saveApiKey',
+  PROVIDER_DELETE_API_KEY: 'provider.deleteApiKey',
+  PROVIDER_TEST_CONNECTION: 'provider.testConnection',
+  // 搜索 key（Tavily；B5/D-B5-6）
+  SEARCH_SAVE_API_KEY: 'search.saveApiKey',
+  SEARCH_DELETE_API_KEY: 'search.deleteApiKey',
+  SEARCH_HAS_API_KEY: 'search.hasApiKey',
+  // 任务
+  TASK_CREATE_MODEL_INVOCATION_TEST: 'task.createModelInvocationTest',
+  TASK_GET: 'task.get',
+  TASK_LIST: 'task.list',
+  TASK_GET_STATS: 'task.getStats',
+  // Grill-me
+  GRILL_CREATE_SESSION: 'grill.createSession',
+  GRILL_GET_SESSION: 'grill.getSession',
+  GRILL_LIST_SESSIONS: 'grill.listSessions',
+  GRILL_LIST_QUESTIONS: 'grill.listQuestions',
+  GRILL_START_SESSION: 'grill.startSession',
+  GRILL_PAUSE_SESSION: 'grill.pauseSession',
+  GRILL_RESUME_SESSION: 'grill.resumeSession',
+  GRILL_COMPLETE_SESSION: 'grill.completeSession',
+  GRILL_ABANDON_SESSION: 'grill.abandonSession',
+  GRILL_ADD_QUESTIONS: 'grill.addQuestions',
+  GRILL_MARK_QUESTION_ASKED: 'grill.markQuestionAsked',
+  GRILL_ANSWER_QUESTION: 'grill.answerQuestion',
+  GRILL_SKIP_QUESTION: 'grill.skipQuestion',
+  GRILL_SUPERSEDE_QUESTION: 'grill.supersedeQuestion',
+  GRILL_GET_CURRENT_ANSWERS: 'grill.getCurrentAnswers',
+  GRILL_LIST_ANSWER_HISTORY: 'grill.listAnswerHistory',
+  GRILL_CREATE_PROPOSAL: 'grill.createProposal',
+  GRILL_REVIEW_PROPOSAL: 'grill.reviewProposal',
+  GRILL_LIST_PROPOSALS: 'grill.listProposals',
+  GRILL_REQUEST_QUESTION_PLAN: 'grill.requestQuestionPlan',
+  GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL: 'grill.acceptQuestionPlanProposal',
+  GRILL_LIST_QUESTION_PLAN_PROPOSALS: 'grill.listQuestionPlanProposals',
+  GRILL_GET_QUESTION_PLAN_PROPOSAL: 'grill.getQuestionPlanProposal',
+  // 创作契约
+  CONTRACT_GET_CURRENT: 'contract.getCurrent',
+  CONTRACT_LIST_VERSIONS: 'contract.listVersions',
+  CONTRACT_GET_PROPOSAL: 'contract.getProposal',
+  CONTRACT_LIST_PROPOSALS: 'contract.listProposals',
+  CONTRACT_REQUEST_DRAFT: 'contract.requestDraft',
+  CONTRACT_ACCEPT_PROPOSAL: 'contract.acceptProposal',
+  CONTRACT_REJECT_PROPOSAL: 'contract.rejectProposal',
+  CONTRACT_UPDATE_BY_USER: 'contract.updateByUser',
+  CONTRACT_LOCK_FIELD: 'contract.lockField',
+  CONTRACT_UNLOCK_FIELD: 'contract.unlockField',
+  // Graph run（GE-1）。仅 renderer 安全命令：advanceNode/failNode/requestHumanDecision
+  // 不在 RPC 面上（见 apps/worker/src/index.ts dispatchCommand 顶部说明）。
+  GRAPH_CREATE_PROJECT_RUN: 'graph.createProjectRun',
+  GRAPH_CREATE_CHAPTER_RUN: 'graph.createChapterRun',
+  GRAPH_GET_RUN_PROGRESS: 'graph.getRunProgress',
+  GRAPH_APPLY_HUMAN_DECISION: 'graph.applyHumanDecision',
+  GRAPH_LIST_RUNS: 'graph.listRuns',
+  // Idea Intake（GE-3）。INTAKE_CREATE_SESSION 在 worker switch 里存在，但
+  // apps/desktop/src/main/index.ts 从未为它开过 IPC 通道（初始 idea 播种目前只在
+  // 内部流程中触发）。
+  INTAKE_CREATE_SESSION: 'intake.createIntakeSession',
+  INTAKE_GET_ACTIVE_SESSION: 'intake.getActiveIntakeSession',
+  INTAKE_PROPAGATE_SPEC_INVALIDATION: 'intake.propagateSpecInvalidation',
+  // Web Research（GE-4/B6）。RESEARCH_EXECUTE 同样在 worker switch 里存在，
+  // 但 main 从未开通道（当前只有只读态/Bundle/来源排除五个通道对外）。
+  RESEARCH_EXECUTE: 'research.execute',
+  RESEARCH_GET_RESEARCH_STATE: 'research.getResearchState',
+  RESEARCH_GET_BUNDLE: 'research.getBundle',
+  RESEARCH_LIST_BUNDLES: 'research.listBundles',
+  RESEARCH_SET_SOURCE_EXCLUSION: 'research.setSourceExclusion',
+  RESEARCH_LIST_SOURCE_EXCLUSIONS: 'research.listSourceExclusions',
+  // Story Blueprint（GE-5/B7/B8）。BLUEPRINT_LIST_CHAPTERS 同样在 worker switch
+  // 里存在，但 main 从未开通道。
+  BLUEPRINT_GET_STATE: 'blueprint.getState',
+  BLUEPRINT_GET_BLUEPRINT: 'blueprint.getBlueprint',
+  BLUEPRINT_LIST_CHAPTERS: 'blueprint.listChapters',
+  // 章节生成（GE-6）
+  CHAPTER_GET_OVERVIEW: 'chapter.getOverview',
+  CHAPTER_START_RUN: 'chapter.startRun',
+  CHAPTER_GET_RUN_STATE: 'chapter.getRunState',
+  CHAPTER_SUBMIT_DECISION: 'chapter.submitDecision',
+  // 稿件工作区与导出（GE-7）
+  MANUSCRIPT_GET_WORKSPACE: 'manuscript.getWorkspace',
+  MANUSCRIPT_GET_CHAPTER: 'manuscript.getChapter',
+  MANUSCRIPT_SAVE_CHAPTER: 'manuscript.saveChapter',
+  MANUSCRIPT_SAVE_DRAFT: 'manuscript.saveDraft',
+  MANUSCRIPT_GET_DRAFT: 'manuscript.getDraft',
+  MANUSCRIPT_DISCARD_DRAFT: 'manuscript.discardDraft',
+  MANUSCRIPT_LIST_VERSIONS: 'manuscript.listVersions',
+  MANUSCRIPT_RESTORE_VERSION: 'manuscript.restoreVersion',
+  MANUSCRIPT_EXPORT: 'manuscript.export',
+} as const;
+
+export type RpcCommand = (typeof RPC_COMMANDS)[keyof typeof RPC_COMMANDS];
+
+/** 服务端本地命令（不进 worker dispatch；apps/server 自己处理） */
+export const SERVER_COMMANDS = {
+  HEALTH_CHECK: 'app.healthCheck',
+  DATA_SERVICE_STATUS: 'app.dataServiceStatus',
+  DATA_SERVICE_RETRY: 'app.dataServiceRetry',
+} as const;
+
+export type ServerCommand = (typeof SERVER_COMMANDS)[keyof typeof SERVER_COMMANDS];
+
+/** RPC payload 校验器：true = 放行。null = 该命令无 payload（服务端要求 payload 为 undefined/null）。 */
+export type RpcValidator = (payload: unknown) => boolean;
+
+// —— 以下四个命令 main 历来转发 null/`{}`，worker 侧 handler 完全不读 payload
+// （project.list / provider.list 直接忽略；search.deleteApiKey / search.hasApiKey
+// 的 handler 签名根本不接收 payload 参数）：按"无 payload"处理，apps/server 应
+// 要求 payload 为 undefined/null，不接受任意形状蒙混过关。
+
+// —— 以下四个命令 apps/desktop/src/main/index.ts 从未校验（payload 原样透传给
+// forwardToWorker），但 worker 侧确有形状要求：
+//   task.get/task.list/task.getStats —— apps/worker/src/index.ts 的
+//     handleGetTask/handleListTasks/handleGetTaskStats 内联校验；
+//   grill.listSessions —— apps/worker/src/grill-handlers.ts 的 handleListSessions。
+// 校验器按 worker 实际读取的字段手写，语义不弱于 worker 现状。
+
+/** task.get 的 RPC payload 形状：{ projectId, taskId } 均为字符串 */
+function isValidTaskGetRpcPayload(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const obj = payload as Record<string, unknown>;
+  return typeof obj.projectId === 'string' && typeof obj.taskId === 'string';
+}
+
+/**
+ * 仅含 projectId 的 RPC payload 形状：{ projectId: string }。
+ * task.list / task.getStats / grill.listSessions 三个命令共用同一最小形状。
+ */
+function isValidProjectIdOnlyRpcPayload(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const obj = payload as Record<string, unknown>;
+  return typeof obj.projectId === 'string';
+}
+
+// —— 以下三个命令在 worker 的 dispatchCommand switch 里存在，但
+// apps/desktop/src/main/index.ts 从未为它们开过 IPC 通道，因此没有既有校验器可
+// 复用。校验器依据 worker 侧 intake-handlers.ts（assertStringField）/
+// research-handlers.ts（assertStringField + assertDepth）/ blueprint-handlers.ts
+// （assertStringField）的实际解析逻辑手写。
+
+/** intake.createIntakeSession 的 RPC payload 形状：{ projectId, initialIdea } 均为非空 trimmed 字符串 */
+function isValidIntakeCreateSessionRpcPayload(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const obj = payload as Record<string, unknown>;
+  return (
+    typeof obj.projectId === 'string' &&
+    obj.projectId.trim().length > 0 &&
+    typeof obj.initialIdea === 'string' &&
+    obj.initialIdea.trim().length > 0
+  );
+}
+
+/**
+ * research.execute 的 RPC payload 形状：{ projectId, idea, depth, questions? }。
+ * worker 侧 questions 缺失/形状不对时会静默降级为 []（不抛错），因此这里只在
+ * questions 存在时才要求它是字符串数组——不比 worker 现状更严格。
+ */
+function isValidResearchExecuteRpcPayload(payload: unknown): boolean {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const obj = payload as Record<string, unknown>;
+  if (typeof obj.projectId !== 'string' || obj.projectId.trim().length === 0) return false;
+  if (typeof obj.idea !== 'string' || obj.idea.trim().length === 0) return false;
+  if (obj.depth !== 'none' && obj.depth !== 'light' && obj.depth !== 'deep') return false;
+  if (obj.questions !== undefined) {
+    if (!Array.isArray(obj.questions) || !obj.questions.every((q) => typeof q === 'string')) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** RPC 命令 → payload 校验器的完整映射（TS 穷尽性检查：漏声明任何一个命令即编译失败） */
+export const RPC_COMMAND_VALIDATORS: Readonly<Record<RpcCommand, RpcValidator | null>> = {
+  [RPC_COMMANDS.PROJECT_CREATE]: isValidCreateProjectInput,
+  [RPC_COMMANDS.PROJECT_LIST]: null,
+  [RPC_COMMANDS.PROJECT_OPEN]: isValidOpenProjectInput,
+
+  [RPC_COMMANDS.PROVIDER_LIST]: null,
+  [RPC_COMMANDS.PROVIDER_CREATE]: isValidCreateProviderProfileInput,
+  [RPC_COMMANDS.PROVIDER_UPDATE]: isValidUpdateProviderProfileInput,
+  [RPC_COMMANDS.PROVIDER_DELETE]: isValidProviderProfileIdInput,
+  [RPC_COMMANDS.PROVIDER_SET_DEFAULT]: isValidProviderProfileIdInput,
+  [RPC_COMMANDS.PROVIDER_SAVE_API_KEY]: isValidSaveApiKeyInput,
+  [RPC_COMMANDS.PROVIDER_DELETE_API_KEY]: isValidProviderProfileIdInput,
+  [RPC_COMMANDS.PROVIDER_TEST_CONNECTION]: isValidProviderProfileIdInput,
+
+  [RPC_COMMANDS.SEARCH_SAVE_API_KEY]: isValidSaveSearchApiKeyInput,
+  [RPC_COMMANDS.SEARCH_DELETE_API_KEY]: null,
+  [RPC_COMMANDS.SEARCH_HAS_API_KEY]: null,
+
+  [RPC_COMMANDS.TASK_CREATE_MODEL_INVOCATION_TEST]: isValidCreateModelInvocationTestInput,
+  [RPC_COMMANDS.TASK_GET]: isValidTaskGetRpcPayload,
+  [RPC_COMMANDS.TASK_LIST]: isValidProjectIdOnlyRpcPayload,
+  [RPC_COMMANDS.TASK_GET_STATS]: isValidProjectIdOnlyRpcPayload,
+
+  [RPC_COMMANDS.GRILL_CREATE_SESSION]: isValidGrillCreateSessionInput,
+  [RPC_COMMANDS.GRILL_GET_SESSION]: isValidGrillSessionIdInput,
+  [RPC_COMMANDS.GRILL_LIST_SESSIONS]: isValidProjectIdOnlyRpcPayload,
+  [RPC_COMMANDS.GRILL_LIST_QUESTIONS]: isValidGrillListQuestionsInput,
+  [RPC_COMMANDS.GRILL_START_SESSION]: isValidGrillSessionVersionInput,
+  [RPC_COMMANDS.GRILL_PAUSE_SESSION]: isValidGrillSessionVersionInput,
+  [RPC_COMMANDS.GRILL_RESUME_SESSION]: isValidGrillSessionVersionInput,
+  [RPC_COMMANDS.GRILL_COMPLETE_SESSION]: isValidGrillSessionVersionInput,
+  [RPC_COMMANDS.GRILL_ABANDON_SESSION]: isValidGrillSessionVersionInput,
+  [RPC_COMMANDS.GRILL_ADD_QUESTIONS]: isValidGrillAddQuestionsInput,
+  [RPC_COMMANDS.GRILL_MARK_QUESTION_ASKED]: isValidGrillQuestionActionInput,
+  [RPC_COMMANDS.GRILL_ANSWER_QUESTION]: isValidGrillAnswerQuestionInput,
+  [RPC_COMMANDS.GRILL_SKIP_QUESTION]: isValidGrillQuestionActionInput,
+  [RPC_COMMANDS.GRILL_SUPERSEDE_QUESTION]: isValidGrillQuestionActionInput,
+  [RPC_COMMANDS.GRILL_GET_CURRENT_ANSWERS]: isValidGrillSessionIdInput,
+  [RPC_COMMANDS.GRILL_LIST_ANSWER_HISTORY]: isValidGrillListAnswerHistoryInput,
+  [RPC_COMMANDS.GRILL_CREATE_PROPOSAL]: isValidGrillCreateProposalInput,
+  [RPC_COMMANDS.GRILL_REVIEW_PROPOSAL]: isValidGrillReviewProposalInput,
+  [RPC_COMMANDS.GRILL_LIST_PROPOSALS]: isValidGrillListProposalsInput,
+  [RPC_COMMANDS.GRILL_REQUEST_QUESTION_PLAN]: isValidGrillRequestQuestionPlanInput,
+  [RPC_COMMANDS.GRILL_ACCEPT_QUESTION_PLAN_PROPOSAL]: isValidGrillAcceptQuestionPlanProposalInput,
+  [RPC_COMMANDS.GRILL_LIST_QUESTION_PLAN_PROPOSALS]: isValidGrillListQuestionPlanProposalsInput,
+  [RPC_COMMANDS.GRILL_GET_QUESTION_PLAN_PROPOSAL]: isValidGrillQuestionPlanProposalIdInput,
+
+  [RPC_COMMANDS.CONTRACT_GET_CURRENT]: isValidGetCurrentCreationContractInput,
+  [RPC_COMMANDS.CONTRACT_LIST_VERSIONS]: isValidListCreationContractVersionsInput,
+  [RPC_COMMANDS.CONTRACT_GET_PROPOSAL]: isValidGetCreationContractProposalInput,
+  [RPC_COMMANDS.CONTRACT_LIST_PROPOSALS]: isValidListCreationContractProposalsInput,
+  [RPC_COMMANDS.CONTRACT_REQUEST_DRAFT]: isValidRequestContractDraftInput,
+  [RPC_COMMANDS.CONTRACT_ACCEPT_PROPOSAL]: isValidAcceptContractProposalInput,
+  [RPC_COMMANDS.CONTRACT_REJECT_PROPOSAL]: isValidRejectContractProposalInput,
+  [RPC_COMMANDS.CONTRACT_UPDATE_BY_USER]: isValidUpdateContractByUserInput,
+  [RPC_COMMANDS.CONTRACT_LOCK_FIELD]: isValidLockContractFieldInput,
+  [RPC_COMMANDS.CONTRACT_UNLOCK_FIELD]: isValidUnlockContractFieldInput,
+
+  [RPC_COMMANDS.GRAPH_CREATE_PROJECT_RUN]: isValidCreateProjectRunInput,
+  [RPC_COMMANDS.GRAPH_CREATE_CHAPTER_RUN]: isValidCreateChapterRunInput,
+  [RPC_COMMANDS.GRAPH_GET_RUN_PROGRESS]: isValidGetRunProgressInput,
+  [RPC_COMMANDS.GRAPH_APPLY_HUMAN_DECISION]: isValidApplyHumanDecisionInput,
+  [RPC_COMMANDS.GRAPH_LIST_RUNS]: isValidListRunsInput,
+
+  [RPC_COMMANDS.INTAKE_CREATE_SESSION]: isValidIntakeCreateSessionRpcPayload,
+  [RPC_COMMANDS.INTAKE_GET_ACTIVE_SESSION]: isValidGetActiveIntakeSessionInput,
+  [RPC_COMMANDS.INTAKE_PROPAGATE_SPEC_INVALIDATION]: isValidPropagateSpecInvalidationInput,
+
+  [RPC_COMMANDS.RESEARCH_EXECUTE]: isValidResearchExecuteRpcPayload,
+  [RPC_COMMANDS.RESEARCH_GET_RESEARCH_STATE]: isValidGetResearchStateInput,
+  [RPC_COMMANDS.RESEARCH_GET_BUNDLE]: isValidGetResearchBundleInput,
+  [RPC_COMMANDS.RESEARCH_LIST_BUNDLES]: isValidListResearchBundlesInput,
+  [RPC_COMMANDS.RESEARCH_SET_SOURCE_EXCLUSION]: isValidSetSourceExclusionInput,
+  [RPC_COMMANDS.RESEARCH_LIST_SOURCE_EXCLUSIONS]: isValidListSourceExclusionsInput,
+
+  [RPC_COMMANDS.BLUEPRINT_GET_STATE]: isValidGetBlueprintStateInput,
+  [RPC_COMMANDS.BLUEPRINT_GET_BLUEPRINT]: isValidGetBlueprintInput,
+  // blueprint.listChapters 与 blueprint.getBlueprint 的 worker 端解析形状完全相同
+  // （{ projectId, blueprintId }，见 blueprint-handlers.ts），直接复用。
+  [RPC_COMMANDS.BLUEPRINT_LIST_CHAPTERS]: isValidGetBlueprintInput,
+
+  [RPC_COMMANDS.CHAPTER_GET_OVERVIEW]: isValidGetChapterOverviewInput,
+  [RPC_COMMANDS.CHAPTER_START_RUN]: isValidStartChapterRunInput,
+  [RPC_COMMANDS.CHAPTER_GET_RUN_STATE]: isValidGetChapterRunStateInput,
+  [RPC_COMMANDS.CHAPTER_SUBMIT_DECISION]: isValidSubmitChapterDecisionInput,
+
+  [RPC_COMMANDS.MANUSCRIPT_GET_WORKSPACE]: isValidGetManuscriptWorkspaceInput,
+  [RPC_COMMANDS.MANUSCRIPT_GET_CHAPTER]: isValidGetManuscriptChapterInput,
+  [RPC_COMMANDS.MANUSCRIPT_SAVE_CHAPTER]: isValidSaveManuscriptChapterInput,
+  [RPC_COMMANDS.MANUSCRIPT_SAVE_DRAFT]: isValidSaveChapterDraftInput,
+  [RPC_COMMANDS.MANUSCRIPT_GET_DRAFT]: isValidGetChapterDraftInput,
+  [RPC_COMMANDS.MANUSCRIPT_DISCARD_DRAFT]: isValidDiscardChapterDraftInput,
+  [RPC_COMMANDS.MANUSCRIPT_LIST_VERSIONS]: isValidListManuscriptVersionsInput,
+  [RPC_COMMANDS.MANUSCRIPT_RESTORE_VERSION]: isValidRestoreManuscriptVersionInput,
+  [RPC_COMMANDS.MANUSCRIPT_EXPORT]: isValidExportManuscriptInput,
+};
