@@ -3,10 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
-    />
+    <!-- CSP 由 apps/server 以响应 header 下发（vite dev 环境无 CSP，属正常） -->
     <title>AI 小说创作代理</title>
   </head>
   <body>

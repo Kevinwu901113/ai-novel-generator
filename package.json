@@ -9,9 +9,10 @@
     "node": ">=24.0.0 <25"
   },
   "scripts": {
-    "dev": "pnpm --filter @ai-novel/desktop dev",
+    "dev": "pnpm --filter @ai-novel/web dev",
+    "dev:server": "pnpm --filter @ai-novel/server dev",
     "build": "pnpm -r build",
-    "package": "pnpm --filter @ai-novel/desktop package",
+    "start": "node apps/server/dist/index.js",
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",

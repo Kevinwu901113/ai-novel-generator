@@ -5485,3 +5485,51 @@ body {
     width: min(520px, calc(100vw - 64px));
   }
 }
+
+/* ── Token Gate（B12：Web 形态访问令牌录入）───────────────────── */
+
+.token-gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--color-canvas);
+}
+
+.token-gate-card {
+  width: min(100%, 400px);
+  padding: 32px;
+  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+  border-radius: 20px;
+  background: var(--color-surface-raised);
+  box-shadow: 0 24px 70px var(--color-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.token-gate-title {
+  font-family: 'Songti SC', STSong, 'Noto Serif CJK SC', serif;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--color-text);
+}
+
+.token-gate-description {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin-bottom: 12px;
+}
+
+.token-gate-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.token-gate-form .btn-create {
+  align-self: stretch;
+  text-align: center;
+}

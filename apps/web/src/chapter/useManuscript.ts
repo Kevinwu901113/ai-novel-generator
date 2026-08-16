@@ -19,6 +19,7 @@ import type {
   ManuscriptWorkspaceDto,
 } from '@ai-novel/contracts';
 import { toSafeUserError } from '../safety/safe-error';
+import { downloadTextFile } from './download-file';
 
 export interface ManuscriptDraft {
   readonly title: string;
@@ -284,11 +285,9 @@ export function useManuscript(projectId: string): UseManuscriptReturn {
       setError(null);
       try {
         const result = await window.desktop.manuscript.exportManuscript({ projectId, format });
-        setExportNotice(
-          result.saved
-            ? `已导出 ${String(result.chapterCount)} 章到 ${result.filePath ?? result.fileName}`
-            : '已取消导出',
-        );
+        // B12：worker 只渲染内容，落盘改为浏览器下载（原生保存对话框随 Electron 退役）
+        downloadTextFile(result.fileName, result.content, format);
+        setExportNotice(`已导出 ${String(result.chapterCount)} 章（${result.fileName}）`);
       } catch (err) {
         setError(toSafeUserError(err, '导出失败').message);
       }

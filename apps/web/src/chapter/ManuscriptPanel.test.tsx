@@ -14,6 +14,10 @@ import type {
   ManuscriptWorkspaceDto,
 } from '@ai-novel/contracts';
 import { ManuscriptPanel } from './ManuscriptPanel';
+import { downloadTextFile } from './download-file';
+
+// jsdom 没有 URL.createObjectURL，真实下载行为无法在测试环境执行；mock 后断言调用契约
+vi.mock('./download-file', () => ({ downloadTextFile: vi.fn() }));
 
 const PROJECT_ID = 'proj-1';
 
@@ -88,9 +92,8 @@ function setupDesktop(overrides: Record<string, unknown> = {}) {
     ]),
     restoreVersion: vi.fn().mockResolvedValue(detail({ currentVersionId: 'ver-1' })),
     exportManuscript: vi.fn().mockResolvedValue({
-      saved: true,
       fileName: '位面客栈.txt',
-      filePath: '/tmp/位面客栈.txt',
+      content: '第一章 远客\n\n正文内容',
       chapterCount: 1,
     }),
     ...overrides,
@@ -169,7 +172,7 @@ describe('ManuscriptPanel', () => {
     expect(screen.getByRole('button', { name: '放弃本地修改并重新加载' })).toBeTruthy();
   });
 
-  it('导出成功 → 明确告知存到哪；取消导出不报错', async () => {
+  it('导出成功 → 触发浏览器下载并告知文件名；导出失败给出错误', async () => {
     const api = setupDesktop();
     const user = userEvent.setup();
     await renderPanel();
@@ -177,19 +180,15 @@ describe('ManuscriptPanel', () => {
 
     await user.click(screen.getByRole('button', { name: '导出 TXT' }));
     await waitFor(() => {
-      expect(screen.getByText(/已导出 1 章到 \/tmp\/位面客栈.txt/)).toBeTruthy();
+      expect(screen.getByText(/已导出 1 章（位面客栈.txt）/)).toBeTruthy();
     });
     expect(api.exportManuscript).toHaveBeenCalledWith({ projectId: PROJECT_ID, format: 'txt' });
+    // B12：落盘从原生对话框改为浏览器下载——内容必须真的交给下载助手
+    expect(downloadTextFile).toHaveBeenCalledWith('位面客栈.txt', '第一章 远客\n\n正文内容', 'txt');
 
-    api.exportManuscript.mockResolvedValueOnce({
-      saved: false,
-      fileName: '位面客栈.md',
-      filePath: null,
-      chapterCount: 1,
-    });
+    api.exportManuscript.mockRejectedValueOnce(new Error('导出渲染失败'));
     await user.click(screen.getByRole('button', { name: '导出 Markdown' }));
-    await waitFor(() => expect(screen.getByText('已取消导出')).toBeTruthy());
-    expect(screen.queryByRole('alert')).toBeNull();
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
   });
 
   it('版本历史：展开可见来源标注；恢复带 CAS 基线且说明不会删除任何版本', async () => {

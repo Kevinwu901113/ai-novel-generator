@@ -1553,13 +1553,12 @@ export function isValidExportManuscriptInput(value: unknown): value is ExportMan
 }
 
 /**
- * 导出结果。`saved=false` 表示用户在保存对话框里取消——这不是错误，界面不应报错。
- * 不回传正文内容：渲染进程不需要它，落盘由 main 完成（渲染进程不碰文件系统）。
+ * 导出结果（B12 起）：worker 只负责按稿件顺序渲染出内容，落盘由浏览器端触发下载。
+ * 原 `saved` / `filePath` 属原生保存对话框语义，随 Electron 退役删除。
  */
 export interface ExportManuscriptResultDto {
-  readonly saved: boolean;
   readonly fileName: string;
-  readonly filePath: string | null;
+  readonly content: string;
   readonly chapterCount: number;
 }
 

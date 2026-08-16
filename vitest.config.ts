@@ -8,8 +8,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      react: path.resolve(__dirname, 'apps/desktop/node_modules/react'),
-      'react-dom': path.resolve(__dirname, 'apps/desktop/node_modules/react-dom'),
+      react: path.resolve(__dirname, 'apps/web/node_modules/react'),
+      'react-dom': path.resolve(__dirname, 'apps/web/node_modules/react-dom'),
     },
   },
   test: {

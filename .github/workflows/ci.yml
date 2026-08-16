@@ -54,33 +54,7 @@ jobs:
       - name: Test
         run: pnpm test
 
-  macos-package:
-    name: macOS package smoke test
-    runs-on: macos-14
-    timeout-minutes: 20
-    env:
-      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11.17.0
-          run_install: false
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Package application
-        run: pnpm package
-
-      - name: Run packaged smoke test
-        run: pnpm --filter @ai-novel/desktop smoke-test
+      # B12：构建产物真启动冒烟（替代原 macOS 打包冒烟——Electron 退役，见 D11）：
+      # 真启动 apps/server，验证 index.html 与其引用的 assets 可服务、RPC 认证生效
+      - name: Web smoke test
+        run: node apps/server/scripts/smoke.mjs
