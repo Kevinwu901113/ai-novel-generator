@@ -8,7 +8,6 @@ import type {
   CreateProviderProfileInput,
 } from '@ai-novel/contracts';
 import { isValidHealthCheckResponse } from '@ai-novel/contracts';
-// B4：旧 Grill 工作台从默认入口移除（代码保留，见 grill/GrillWorkbench.tsx）
 import { IntakeRegion } from './intake/IntakeRegion';
 import { JourneyNav } from './journey/JourneyNav';
 import { JOURNEY_STAGES, type JourneyStage } from './intake/intake-logic';
@@ -360,7 +359,7 @@ export function App() {
     : null;
 
   return (
-    <div className="app app-shell">
+    <div className="app-shell">
       <AppRail
         isHome={!currentProject}
         onHome={handleHome}
