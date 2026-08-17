@@ -15,18 +15,19 @@ export interface ResearchEscalationPanelProps {
 
 export function ResearchEscalationPanel({ busy, onChoose }: ResearchEscalationPanelProps) {
   return (
-    <div className="research-escalation">
+    <div className="max-w-[760px]">
       <p>调研遇到了需要你决定的情况，接下来想怎么做？</p>
-      <div className="research-escalation-options">
+      <div className="mt-2 flex flex-col gap-2">
         {RESEARCH_ESCALATION_OPTIONS.map((opt) => (
           <button
             key={opt.outcome}
-            className="research-escalation-option"
+            type="button"
+            className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-3 py-2.5 text-left font-[inherit] text-foreground hover:border-primary disabled:cursor-not-allowed disabled:opacity-55"
             onClick={() => void onChoose(opt.outcome)}
             disabled={busy}
           >
             <strong>{opt.label}</strong>
-            <span>{opt.description}</span>
+            <span className="text-xs text-muted-foreground">{opt.description}</span>
           </button>
         ))}
       </div>

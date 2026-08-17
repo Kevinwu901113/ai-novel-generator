@@ -24,6 +24,8 @@
 import { useResearch } from './useResearch';
 import { ResearchBundleView } from './ResearchBundleView';
 import { ResearchEscalationPanel } from './ResearchEscalationPanel';
+import { InlineError } from '@/components/InlineError';
+import { Spinner } from '@/components/Spinner';
 
 export interface ResearchRegionProps {
   readonly projectId: string;
@@ -53,80 +55,95 @@ export function ResearchRegion({
   const initialLoading = research.loading && research.state === null;
 
   return (
-    <div className="research-region">
-      <div className="research-header">
-        <h2 id="research-heading">资料调研</h2>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+      <div>
+        <h2 id="research-heading" className="text-lg">
+          资料调研
+        </h2>
       </div>
 
       {showBeyondResearchNotice && (
-        <div className="research-info-card" role="status">
+        <div
+          className="max-w-[760px] rounded-lg border border-border bg-secondary px-4 py-3"
+          role="status"
+        >
           <p>创作旅程已进入后续阶段。以下是本项目当前的调研结果。</p>
         </div>
       )}
 
-      {research.error && (
-        <div className="research-error" role="alert">
-          {research.error}
-        </div>
-      )}
+      {research.error && <InlineError className="max-w-[760px]">{research.error}</InlineError>}
 
       {initialLoading ? (
-        <div className="research-status" role="status" aria-live="polite">
-          <span className="intake-spinner" aria-hidden="true">
-            ⟳
-          </span>
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+          aria-live="polite"
+        >
+          <Spinner label={null} size={14} />
           正在加载调研状态…
         </div>
       ) : (
         <>
           {phase.kind === 'no-run' && (
-            <div className="research-status" role="status">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
               调研还没有开始。
             </div>
           )}
 
           {phase.kind === 'not-started' && (
-            <div className="research-status" role="status">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
               尚未开始调研。
             </div>
           )}
 
           {phase.kind === 'unsettled' && (
-            <div className="research-status" role="status" aria-live="polite">
-              <span className="intake-spinner" aria-hidden="true">
-                ⟳
-              </span>
+            <div
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner label={null} size={14} />
               调研状态更新中…
             </div>
           )}
 
           {phase.kind === 'skipped-none' && (
-            <div className="research-info-card" role="status">
+            <div
+              className="max-w-[760px] rounded-lg border border-border bg-secondary px-4 py-3"
+              role="status"
+            >
               <p>本项目无需调研，将直接进入蓝图阶段。</p>
             </div>
           )}
 
           {phase.kind === 'key-missing' && (
-            <div className="research-key-missing" role="alert">
+            <div
+              className="max-w-[760px] space-y-1 rounded-lg border border-status-attention/30 bg-status-attention/10 px-4 py-3 text-status-attention"
+              role="alert"
+            >
               <p>调研任务正在等待中，但还没有配置搜索服务 API Key。</p>
               <p>请在右侧「搜索服务」中配置 Tavily API Key，配置后调研会自动继续。</p>
             </div>
           )}
 
           {phase.kind === 'running' && (
-            <div className="research-status" role="status" aria-live="polite">
-              <span className="intake-spinner" aria-hidden="true">
-                ⟳
-              </span>
+            <div
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner label={null} size={14} />
               正在调研中…
             </div>
           )}
 
           {phase.kind === 'invalid-retrying' && (
-            <div className="research-status" role="status" aria-live="polite">
-              <span className="intake-spinner" aria-hidden="true">
-                ⟳
-              </span>
+            <div
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner label={null} size={14} />
               调研结果未通过校验，正在自动重试
               {research.state && research.state.researchRetryUsed > 0
                 ? `（已重试 ${research.state.researchRetryUsed} 次）`
@@ -146,7 +163,10 @@ export function ResearchRegion({
             (research.bundle ? (
               <>
                 {phase.kind === 'stale' && (
-                  <div className="research-stale-banner" role="status">
+                  <div
+                    className="max-w-[760px] rounded-md border border-status-attention/30 bg-status-attention/10 px-3.5 py-2.5 text-sm font-semibold text-status-attention"
+                    role="status"
+                  >
                     此资料包已作废（创作要求已变更），将重新调研
                   </div>
                 )}
@@ -160,7 +180,7 @@ export function ResearchRegion({
                 />
               </>
             ) : (
-              <div className="research-status" role="status">
+              <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
                 资料包暂时不可用。
               </div>
             ))}

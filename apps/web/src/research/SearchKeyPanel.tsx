@@ -19,6 +19,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DataServiceStatus } from '@ai-novel/contracts';
 import { toSafeUserError } from '../safety/safe-error';
+import { InlineError } from '@/components/InlineError';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 
 export interface SearchKeyPanelProps {
   readonly dataServiceStatus: DataServiceStatus;
@@ -152,26 +156,23 @@ export function SearchKeyPanel({ dataServiceStatus, onStatusChange }: SearchKeyP
   );
 
   return (
-    <div className="search-key-panel">
+    <div className="mt-1">
       {error && (
-        <div className="search-key-error" role="alert" aria-live="assertive">
-          <span>{error}</span>
-          <button onClick={() => setError(null)} aria-label="关闭错误提示">
-            ✕
-          </button>
-        </div>
+        <InlineError className="mb-2" onDismiss={() => setError(null)}>
+          {error}
+        </InlineError>
       )}
 
       {!isReady || hasApiKey === null ? (
-        <p className="search-key-loading" role="status">
+        <p className="text-[13px] text-muted-foreground" role="status">
           正在读取搜索服务配置…
         </p>
       ) : !hasApiKey ? (
-        <div className="search-key-input">
-          <label htmlFor="search-api-key" className="sr-only">
+        <div className="flex gap-2">
+          <Label htmlFor="search-api-key" className="sr-only">
             搜索服务 API Key
-          </label>
-          <input
+          </Label>
+          <Input
             ref={apiKeyInputRef}
             id="search-api-key"
             type="password"
@@ -183,58 +184,68 @@ export function SearchKeyPanel({ dataServiceStatus, onStatusChange }: SearchKeyP
             placeholder="输入 Tavily API Key"
             disabled={isSavingKey || !isReady}
             maxLength={8192}
+            className="h-8 flex-1 text-xs"
           />
-          <button
+          <Button
+            size="sm"
             onClick={() => void handleSave()}
             disabled={isSavingKey || !apiKeyInput.trim() || !isReady}
             aria-busy={isSavingKey}
             aria-label={isSavingKey ? '保存中' : '保存搜索服务 API Key'}
           >
             {isSavingKey ? '保存中…' : '保存'}
-          </button>
+          </Button>
         </div>
       ) : (
-        <div className="search-key-actions">
+        <div className="flex items-center gap-2 text-[13px]">
           <span role="status" aria-live="polite">
             已配置
           </span>
           {!deleteConfirmVisible ? (
-            <button
+            <Button
               ref={deleteBtnRef}
-              className="btn-danger"
+              variant="destructive"
+              size="sm"
               onClick={handleDeleteClick}
               disabled={!isReady}
               aria-label="删除搜索服务 API Key"
             >
               删除密钥
-            </button>
+            </Button>
           ) : (
             <div
-              className="delete-confirm"
+              className="flex items-center gap-2 text-xs"
               role="group"
               aria-label="确认删除搜索服务 API Key"
               onKeyDown={handleDeleteKeyDown}
             >
               <span>确认删除？</span>
-              <button
+              <Button
                 ref={confirmDeleteBtnRef}
-                className="btn-danger"
+                variant="destructive"
+                size="sm"
                 onClick={() => void handleDeleteConfirm()}
                 disabled={isDeletingKey}
                 aria-label="确认删除搜索服务 API Key"
               >
                 {isDeletingKey ? '删除中…' : '确认'}
-              </button>
-              <button onClick={handleDeleteCancel} disabled={isDeletingKey} aria-label="取消删除">
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDeleteCancel}
+                disabled={isDeletingKey}
+                aria-label="取消删除"
+              >
                 取消
-              </button>
+              </Button>
             </div>
           )}
         </div>
       )}
 
       {savedNotice && (
-        <p className="search-key-saved-notice" role="status">
+        <p className="mt-1.5 text-xs text-status-ready" role="status">
           已保存，等待中的调研任务将自动继续
         </p>
       )}

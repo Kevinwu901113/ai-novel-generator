@@ -15,6 +15,7 @@
  */
 
 import { useState } from 'react';
+import { HelpCircle, Link2, NotebookPen } from 'lucide-react';
 import type {
   FactNoteDto,
   ResearchBundleDto,
@@ -22,6 +23,9 @@ import type {
   ResearchSourceRecordDto,
 } from '@ai-novel/contracts';
 import { depthLabel, orderBundleChain } from './research-logic';
+import { EmptyState } from '@/components/EmptyState';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export interface ResearchBundleViewProps {
   readonly bundle: ResearchBundleDto;
@@ -61,17 +65,24 @@ export function ResearchBundleView({
 
   return (
     <div
-      className={`research-bundle-view${stale ? ' research-bundle-view-stale' : ''}`}
+      className={cn(
+        'flex w-full max-w-[820px] flex-col gap-4',
+        stale &&
+          'research-bundle-view-stale rounded-lg border border-dashed border-status-attention/40 p-3',
+      )}
       data-testid="research-bundle-view"
     >
-      <div className="research-bundle-header">
+      <div className="flex items-center gap-2.5">
         {/* 复查随行修复：强度徽标必须跟随正在查看的版本（displayed），而不是
             始终锁定当前 bundle——否则切到历史版本时，版本号/问题/笔记/结论都
             换了，唯独强度徽标原地不动，造成"这版是什么强度"的错误印象。 */}
-        <span className="research-depth-badge" data-depth={displayed.depth}>
+        <span
+          className="inline-flex items-center rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold text-primary-foreground"
+          data-depth={displayed.depth}
+        >
           {depthLabel(displayed.depth)}
         </span>
-        <span className="research-bundle-version">
+        <span className="text-xs text-muted-foreground">
           版本 v{displayed.version}
           {hasDuplicateVersion(displayed.version) &&
             ` · ${formatBundleTimestamp(displayed.createdAt)}`}
@@ -80,13 +91,16 @@ export function ResearchBundleView({
       </div>
 
       {chain.length > 1 && (
-        <nav className="research-version-chain" aria-label="资料包版本历史">
-          <ul>
+        <nav aria-label="资料包版本历史">
+          <ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
             {chain.map((b) => (
               <li key={b.id}>
                 <button
                   type="button"
-                  className={`research-version-btn${b.id === displayed.id ? ' current' : ''}`}
+                  className={cn(
+                    'rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground',
+                    b.id === displayed.id && 'border-primary bg-primary text-primary-foreground',
+                  )}
                   aria-current={b.id === displayed.id ? 'true' : undefined}
                   onClick={() => setViewingId(b.id === bundle.id ? null : b.id)}
                 >
@@ -100,14 +114,14 @@ export function ResearchBundleView({
       )}
 
       {!isViewingCurrent && (
-        <p className="research-version-notice" role="status">
+        <p className="flex items-center gap-1.5 text-xs text-muted-foreground" role="status">
           正在查看历史版本 v{displayed.version}
           {hasDuplicateVersion(displayed.version) &&
             ` · ${formatBundleTimestamp(displayed.createdAt)}`}
           。
           <button
             type="button"
-            className="research-version-back"
+            className="border-none bg-transparent p-0 font-[inherit] text-primary underline"
             onClick={() => setViewingId(null)}
           >
             回到当前版本 v{bundle.version}
@@ -116,11 +130,18 @@ export function ResearchBundleView({
       )}
 
       <section aria-labelledby="research-questions-heading">
-        <h3 id="research-questions-heading">调研问题</h3>
+        <h3 id="research-questions-heading" className="mb-1.5 text-sm">
+          调研问题
+        </h3>
         {displayed.questions.length === 0 ? (
-          <p className="research-empty-hint">暂无调研问题</p>
+          <EmptyState
+            icon={HelpCircle}
+            message="暂无调研问题"
+            hint="调研完成后会显示在这里。"
+            className="items-start py-4 text-left"
+          />
         ) : (
-          <ul className="research-question-list">
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {displayed.questions.map((q) => (
               <QuestionItem
                 key={q.id}
@@ -135,11 +156,18 @@ export function ResearchBundleView({
       </section>
 
       <section aria-labelledby="research-fact-notes-heading">
-        <h3 id="research-fact-notes-heading">事实笔记</h3>
+        <h3 id="research-fact-notes-heading" className="mb-1.5 text-sm">
+          事实笔记
+        </h3>
         {displayed.factNotes.length === 0 ? (
-          <p className="research-empty-hint">暂无事实笔记</p>
+          <EmptyState
+            icon={NotebookPen}
+            message="暂无事实笔记"
+            hint="调研完成后会显示在这里。"
+            className="items-start py-4 text-left"
+          />
         ) : (
-          <ul className="research-fact-note-list">
+          <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
             {displayed.factNotes.map((note) => (
               <FactNoteItem key={note.id} note={note} />
             ))}
@@ -148,8 +176,10 @@ export function ResearchBundleView({
       </section>
 
       <section aria-labelledby="research-conclusion-heading">
-        <h3 id="research-conclusion-heading">结论</h3>
-        <p className="research-conclusion">{displayed.conclusion || '暂无结论'}</p>
+        <h3 id="research-conclusion-heading" className="mb-1.5 text-sm">
+          结论
+        </h3>
+        <p className="leading-relaxed whitespace-pre-wrap">{displayed.conclusion || '暂无结论'}</p>
       </section>
     </div>
   );
@@ -168,20 +198,20 @@ function QuestionItem({ question, exclusionSet, busy, onToggleExclusion }: Quest
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <li className="research-question">
-      <p className="research-question-text">{question.text}</p>
+    <li className="rounded-lg border border-border bg-card p-3">
+      <p className="mb-1.5 font-medium">{question.text}</p>
       <button
         type="button"
-        className="research-question-toggle"
+        className="rounded border border-border bg-transparent px-2 py-0.5 text-xs text-foreground hover:border-primary"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
       >
         {expanded ? '收起来源' : `展开来源（${question.sources.length}）`}
       </button>
       {expanded && (
-        <ul className="research-source-list">
+        <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0">
           {question.sources.length === 0 ? (
-            <li className="research-empty-hint">暂无来源</li>
+            <EmptyState icon={Link2} message="暂无来源" className="items-start py-2 text-left" />
           ) : (
             question.sources.map((source) => (
               <SourceItem
@@ -210,28 +240,38 @@ interface SourceItemProps {
 
 function SourceItem({ source, excluded, busy, onToggleExclusion }: SourceItemProps) {
   return (
-    <li className={`research-source${excluded ? ' research-source-excluded' : ''}`}>
-      <div className="research-source-info">
-        <p className="research-source-title">
+    <li
+      className={cn(
+        'flex items-start justify-between gap-2.5 rounded-md border border-border bg-background p-2.5',
+        excluded && 'opacity-65',
+      )}
+    >
+      <div className="min-w-0">
+        <p className="flex flex-wrap items-center gap-1.5 text-[13px] font-medium">
           {source.title || source.url}
           {excluded && (
-            <span className="research-source-excluded-badge" role="status">
+            <span
+              role="status"
+              className="rounded-full bg-destructive px-1.5 py-px text-[11px] text-destructive-foreground"
+            >
               已排除
             </span>
           )}
         </p>
-        <p className="research-source-url">{source.url}</p>
-        {source.excerpt && <p className="research-source-excerpt">{source.excerpt}</p>}
+        <p className="mt-0.5 text-xs break-all text-muted-foreground">{source.url}</p>
+        {source.excerpt && <p className="mt-1 text-xs text-muted-foreground">{source.excerpt}</p>}
       </div>
-      <button
+      <Button
         type="button"
-        className="research-source-exclude-btn"
+        size="sm"
+        variant={excluded ? 'destructive' : 'outline'}
+        className="shrink-0"
         aria-pressed={excluded}
         disabled={busy}
         onClick={() => void onToggleExclusion(source.url, !excluded)}
       >
         {excluded ? '取消排除' : '排除此来源'}
-      </button>
+      </Button>
     </li>
   );
 }
@@ -245,20 +285,20 @@ function FactNoteItem({ note }: { note: FactNoteDto }) {
     expanded || !isLong ? note.text : `${note.text.slice(0, FACT_NOTE_TRUNCATE_LENGTH)}…`;
 
   return (
-    <li className="research-fact-note">
-      <p className="research-fact-note-text">{displayText}</p>
+    <li className="rounded-lg border border-border bg-card p-3">
+      <p className="mb-1.5 whitespace-pre-wrap">{displayText}</p>
       {isLong && (
         <button
           type="button"
-          className="research-fact-note-toggle"
-          aria-expanded={expanded}
+          className="rounded border border-border bg-transparent px-2 py-0.5 text-xs text-foreground hover:border-primary"
           onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
         >
           {expanded ? '收起' : '展开全文'}
         </button>
       )}
       {note.sourceUrls.length > 0 && (
-        <p className="research-fact-note-sources">来源：{note.sourceUrls.join('、')}</p>
+        <p className="mt-1.5 text-xs text-muted-foreground">来源：{note.sourceUrls.join('、')}</p>
       )}
     </li>
   );
