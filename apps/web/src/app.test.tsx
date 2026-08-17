@@ -170,12 +170,13 @@ function getCreateProjectButton() {
   return screen.getByRole('button', { name: '开始整理想法' });
 }
 
-async function openSettingsDrawer() {
+// B19：设置从抽屉改独立页面（D-B19-1），打开断言从 role=dialog 改为页面标题。
+async function openSettingsPage() {
   await act(async () => {
     screen.getByRole('button', { name: '打开设置' }).click();
   });
   await waitFor(() => {
-    expect(screen.getByRole('dialog', { name: '创作服务设置' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument();
   });
 }
 
@@ -687,7 +688,8 @@ describe('App 级别测试', () => {
     });
     expect(screen.getByRole('button', { name: /测试项目一/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '开始整理想法' })).toBeInTheDocument();
-    expect(screen.queryByRole('dialog', { name: '创作服务设置' })).not.toBeInTheDocument();
+    // B19：设置改独立页面——默认不挂载，服务配置仍不占用主界面
+    expect(screen.queryByRole('heading', { name: '设置' })).not.toBeInTheDocument();
     expect(screen.queryByRole('form', { name: '新增模型服务' })).not.toBeInTheDocument();
   });
 
@@ -710,18 +712,44 @@ describe('App 级别测试', () => {
 
     const settingsButton = screen.getByRole('button', { name: '打开设置' });
     settingsButton.focus();
-    await openSettingsDrawer();
+    await openSettingsPage();
+
+    // B19：设置页打开时「设置」入口呈 active（aria-current=page）
+    expect(settingsButton).toHaveAttribute('aria-current', 'page');
 
     await act(async () => {
-      screen.getByRole('button', { name: '关闭创作服务设置' }).click();
+      screen.getByRole('button', { name: '返回' }).click();
     });
-    expect(screen.queryByRole('dialog', { name: '创作服务设置' })).not.toBeInTheDocument();
-    // B15：抽屉关闭态迁 Radix Dialog（Sheet）后，焦点归还由 FocusScope 的
-    // onUnmountAutoFocus 承接；该归还包在真实 setTimeout(0) 宏任务里（非
-    // React 调度、非微任务），act() 不会替它推进时间，断言需要 waitFor。
+    expect(screen.queryByRole('heading', { name: '设置' })).not.toBeInTheDocument();
+    // B19：焦点归还在 App.handleCloseSettings 的 setTimeout(0) 宏任务里
+    //（触发按钮可能随 active 态重渲染），断言需要 waitFor（同 B15 时代
+    // Radix FocusScope 的时序备注）。
     await waitFor(() => {
       expect(settingsButton).toHaveFocus();
     });
+  });
+
+  // B19（D-B19-2）：设置页三分区可达，返回后恢复原视图
+  it('设置页三分区可达，返回后恢复首页', async () => {
+    setupDesktop();
+    await act(async () => {
+      render(<App />);
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: '今天想写什么？' })).toBeInTheDocument();
+    });
+
+    await openSettingsPage();
+    expect(screen.getByRole('heading', { name: '模型提供商' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '联网搜索' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '本地运行' })).toBeInTheDocument();
+    // 首页内容不再挂载（设置页占据 main）
+    expect(screen.queryByRole('heading', { name: '今天想写什么？' })).not.toBeInTheDocument();
+
+    await act(async () => {
+      screen.getByRole('button', { name: '返回' }).click();
+    });
+    expect(screen.getByRole('heading', { name: '今天想写什么？' })).toBeInTheDocument();
   });
 
   // 3. 实际 App DOM 不存在重复关键 id
@@ -1006,7 +1034,7 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
-    await openSettingsDrawer();
+    await openSettingsPage();
 
     await waitFor(
       () => {
@@ -1109,7 +1137,7 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
-    await openSettingsDrawer();
+    await openSettingsPage();
 
     // 等待 App 完成初始渲染
     await waitFor(
@@ -1228,7 +1256,7 @@ describe('App 级别测试', () => {
       render(<App />);
     });
 
-    await openSettingsDrawer();
+    await openSettingsPage();
 
     // 等待 App 完成初始渲染
     await waitFor(
@@ -1415,11 +1443,11 @@ describe('App：移动端导航收纳（B18，D-B18-3）', () => {
       expect(screen.getAllByRole('button', { name: '新建项目' })).toHaveLength(1);
       expect(screen.getAllByRole('button', { name: '打开设置' })).toHaveLength(1);
 
-      // 底部导航的设置入口要真的能打开抽屉（不是只有视觉存在）
+      // 底部导航的设置入口要真的能打开设置页（不是只有视觉存在）
       await act(async () => {
         screen.getByRole('button', { name: '打开设置' }).click();
       });
-      expect(await screen.findByText('创作服务设置')).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
     } finally {
       restore();
     }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ChevronRight, Activity, Settings, Sparkles, Database, Search } from 'lucide-react';
+import { ChevronRight, Activity, Settings } from 'lucide-react';
 import type {
   HealthCheckResponse,
   ProjectListItem,
@@ -24,10 +24,10 @@ import { ChapterRegion } from './chapter/ChapterRegion';
 import { hasActiveBlueprintGenerate } from './blueprint/blueprint-logic';
 import { TaskCenter } from './task-center/TaskCenter';
 import { ResearchRegion } from './research/ResearchRegion';
-import { SearchKeyPanel } from './research/SearchKeyPanel';
 import { RendererErrorBoundary } from './safety/RendererErrorBoundary';
 import { toSafeUserError } from './safety/safe-error';
-import { ProjectStatusRegion, ProviderRegion } from './regions';
+import { ProjectStatusRegion } from './regions';
+import { SettingsPage } from './settings/SettingsPage';
 import { HomePage } from './home/HomePage';
 import { AppDrawer } from './shell/AppDrawer';
 import { AppBottomNav, AppRail } from './shell/AppRail';
@@ -48,6 +48,11 @@ const GLOBAL_ERROR_TOAST_ID = 'app-global-error';
 export function App() {
   const [health, setHealth] = useState<HealthCheckResponse | null>(null);
   const [openDrawer, setOpenDrawer] = useState<DrawerId | null>(null);
+
+  // B19（D-B19-1）：设置是页面不是抽屉。打开一刻捕获触发元素，返回时归还焦点
+  //（抽屉时代由 Radix FocusScope 承接的语义，页面形态手动接管）。
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
 
   // B18（D-B18-3）：<768px 时导航从左栏换底部横条。条件渲染保证同名控件在
   // 可访问性树里只有一份（CSS 断点类只管视觉，见 use-media-query 注释）。
@@ -284,6 +289,7 @@ export function App() {
   // 新建项目按钮
   const handleNewProject = useCallback(() => {
     setCurrentProject(null);
+    setSettingsOpen(false);
     dismissToast(GLOBAL_ERROR_TOAST_ID);
     // 切换到新建项目时焦点进入名称输入框
     setShouldFocusCreate(true);
@@ -291,11 +297,22 @@ export function App() {
 
   const handleHome = useCallback(() => {
     setCurrentProject(null);
+    setSettingsOpen(false);
     dismissToast(GLOBAL_ERROR_TOAST_ID);
   }, []);
 
   const handleOpenSettings = useCallback(() => {
-    setOpenDrawer('settings');
+    settingsReturnFocusRef.current = document.activeElement as HTMLElement | null;
+    setSettingsOpen(true);
+  }, []);
+
+  const handleCloseSettings = useCallback(() => {
+    setSettingsOpen(false);
+    const target = settingsReturnFocusRef.current;
+    settingsReturnFocusRef.current = null;
+    // 触发按钮可能随 active 态重渲染，归还放到下一个宏任务（同 AppDrawer
+    // 注释记载的 Radix FocusScope 时序）。
+    setTimeout(() => target?.focus(), 0);
   }, []);
 
   const handleOpenTasks = useCallback(() => {
@@ -383,7 +400,8 @@ export function App() {
       <div className="grid h-dvh grid-cols-[minmax(0,1fr)] overflow-hidden bg-canvas md:grid-cols-[76px_minmax(0,1fr)]">
         {!isMobileNav && (
           <AppRail
-            isHome={!currentProject}
+            isHome={!currentProject && !settingsOpen}
+            isSettings={settingsOpen}
             onHome={handleHome}
             onNewProject={handleNewProject}
             onOpenSettings={handleOpenSettings}
@@ -396,7 +414,11 @@ export function App() {
             role="banner"
           >
             <div className="flex min-w-0 items-center gap-2.5">
-              {currentProject ? (
+              {settingsOpen ? (
+                // B19：设置页打开时 header 只标示当前位置——底下的项目/首页
+                // 状态都还在，返回即恢复，不在 header 里保留误导性的旧面包屑。
+                <span className="text-[15px] font-semibold">设置</span>
+              ) : currentProject ? (
                 <>
                   <button
                     type="button"
@@ -490,7 +512,23 @@ export function App() {
           </header>
 
           <main className="relative min-h-0 flex-1 overflow-hidden bg-canvas">
-            {currentProject ? (
+            {settingsOpen ? (
+              <RendererErrorBoundary label="设置">
+                <SettingsPage
+                  providers={providers}
+                  dataServiceStatus={dataServiceStatus}
+                  health={health}
+                  onBack={handleCloseSettings}
+                  onSearchStatusChange={setSearchConfigured}
+                  onCreateProvider={handleCreateProvider}
+                  onSetDefaultProvider={handleSetDefaultProvider}
+                  onRemoveProvider={handleRemoveProvider}
+                  onSaveApiKey={handleSaveApiKey}
+                  onDeleteApiKey={handleDeleteApiKey}
+                  onTestConnection={handleTestConnection}
+                />
+              </RendererErrorBoundary>
+            ) : currentProject ? (
               <section
                 ref={grillSectionRef}
                 className="flex h-full min-h-0 flex-col bg-canvas"
@@ -567,7 +605,8 @@ export function App() {
 
           {isMobileNav && (
             <AppBottomNav
-              isHome={!currentProject}
+              isHome={!currentProject && !settingsOpen}
+              isSettings={settingsOpen}
               onHome={handleHome}
               onNewProject={handleNewProject}
               onOpenSettings={handleOpenSettings}
@@ -594,92 +633,6 @@ export function App() {
               </RendererErrorBoundary>
             </details>
           )}
-        </AppDrawer>
-
-        <AppDrawer
-          open={openDrawer === 'settings'}
-          title="创作服务设置"
-          description="配置生成模型、联网搜索与本地运行状态"
-          onClose={handleCloseDrawer}
-        >
-          <section aria-labelledby="provider-heading">
-            <div className="mb-4 flex items-start gap-2.5">
-              <Sparkles size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
-              <div>
-                <h3 id="provider-heading" className="text-sm">
-                  模型提供商
-                </h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  正文、蓝图和创作要求都使用这里的默认模型。
-                </p>
-              </div>
-            </div>
-            <RendererErrorBoundary label="模型服务">
-              <ProviderRegion
-                providers={providers}
-                dataServiceStatus={dataServiceStatus}
-                onCreate={handleCreateProvider}
-                onSetDefault={handleSetDefaultProvider}
-                onRemove={handleRemoveProvider}
-                onSaveApiKey={handleSaveApiKey}
-                onDeleteApiKey={handleDeleteApiKey}
-                onTestConnection={handleTestConnection}
-              />
-            </RendererErrorBoundary>
-          </section>
-
-          <section
-            className="mt-7 border-t border-border pt-6"
-            aria-labelledby="search-key-heading"
-          >
-            <div className="mb-4 flex items-start gap-2.5">
-              <Search size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
-              <div>
-                <h3 id="search-key-heading" className="text-sm">
-                  联网搜索
-                </h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  可选。需要历史或现实资料时，使用 Tavily 完成调研。
-                </p>
-              </div>
-            </div>
-            <RendererErrorBoundary label="搜索服务">
-              <SearchKeyPanel
-                dataServiceStatus={dataServiceStatus}
-                onStatusChange={setSearchConfigured}
-              />
-            </RendererErrorBoundary>
-          </section>
-
-          <section className="mt-7 border-t border-border pt-6" aria-labelledby="system-heading">
-            <div className="mb-4 flex items-start gap-2.5">
-              <Database size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
-              <div>
-                <h3 id="system-heading" className="text-sm">
-                  本地运行
-                </h3>
-                <p className="mt-0.5 text-xs text-muted-foreground">项目和稿件只保存在这台电脑。</p>
-              </div>
-            </div>
-            <dl className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg border border-border bg-secondary p-2.5">
-                <dt className="text-[11px] text-muted-foreground">数据服务</dt>
-                <dd className="mt-0.5 text-xs font-semibold">
-                  {isDataServiceReady ? 'SQLite 已就绪' : '暂不可用'}
-                </dd>
-              </div>
-              <div className="rounded-lg border border-border bg-secondary p-2.5">
-                <dt className="text-[11px] text-muted-foreground">桌面服务</dt>
-                <dd className="mt-0.5 text-xs font-semibold">{health?.ok ? '正常' : '检查中'}</dd>
-              </div>
-              {health && (
-                <div className="rounded-lg border border-border bg-secondary p-2.5">
-                  <dt className="text-[11px] text-muted-foreground">版本</dt>
-                  <dd className="mt-0.5 text-xs font-semibold">{health.version}</dd>
-                </div>
-              )}
-            </dl>
-          </section>
         </AppDrawer>
       </div>
       <Toaster />

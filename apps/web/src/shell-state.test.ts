@@ -11,28 +11,12 @@ describe('创作台抽屉状态', () => {
     expect(INITIAL_DRAWER_STATE).toBeNull();
   });
 
-  it('可以打开设置抽屉', () => {
-    expect(openAppDrawer('settings')).toBe('settings');
-  });
-
   it('可以打开任务抽屉', () => {
     expect(openAppDrawer('tasks')).toBe('tasks');
   });
 
-  it('打开设置时设置抽屉为真', () => {
-    expect(isAppDrawerOpen('settings', 'settings')).toBe(true);
-  });
-
-  it('打开设置时任务抽屉为假', () => {
-    expect(isAppDrawerOpen('settings', 'tasks')).toBe(false);
-  });
-
   it('打开任务时任务抽屉为真', () => {
     expect(isAppDrawerOpen('tasks', 'tasks')).toBe(true);
-  });
-
-  it('无抽屉时设置抽屉为假', () => {
-    expect(isAppDrawerOpen(null, 'settings')).toBe(false);
   });
 
   it('无抽屉时任务抽屉为假', () => {

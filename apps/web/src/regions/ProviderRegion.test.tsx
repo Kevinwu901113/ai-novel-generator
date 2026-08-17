@@ -106,6 +106,8 @@ describe('ProviderRegion 新增流程', () => {
     const user = userEvent.setup();
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(<ProviderRegion {...makeProps({ onCreate })} />);
+    // B19（D-B19-3）：有已配置服务时新增表单默认收起，先点开
+    await user.click(screen.getByRole('button', { name: '添加模型服务' }));
 
     await user.type(screen.getByLabelText('名称'), '新服务');
     // B16：裸 <select> 换 shadcn Select（Radix），jsdom 下不再是原生 select
@@ -132,6 +134,8 @@ describe('ProviderRegion 新增流程', () => {
     const user = userEvent.setup();
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(<ProviderRegion {...makeProps({ onCreate })} />);
+    // B19（D-B19-3）：有已配置服务时新增表单默认收起，先点开
+    await user.click(screen.getByRole('button', { name: '添加模型服务' }));
 
     await user.type(screen.getByLabelText('服务地址'), 'https://api.example.com/v1');
     await user.type(screen.getByLabelText('模型标识'), 'example-model');
@@ -144,6 +148,8 @@ describe('ProviderRegion 新增流程', () => {
     const user = userEvent.setup();
     const onCreate = vi.fn().mockResolvedValue(undefined);
     render(<ProviderRegion {...makeProps({ onCreate })} />);
+    // B19（D-B19-3）：有已配置服务时新增表单默认收起，先点开
+    await user.click(screen.getByRole('button', { name: '添加模型服务' }));
 
     await user.type(screen.getByLabelText('名称'), '新服务');
     await user.type(screen.getByLabelText('服务地址'), 'ftp://not-http.example.com');

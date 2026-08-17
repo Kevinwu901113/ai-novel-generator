@@ -1,10 +1,11 @@
 /**
  * 创作台按需抽屉状态。
  *
- * 抽屉互斥：任一时刻至多打开设置或任务活动中的一个。
+ * B19（D-B19-1）：设置改独立页面（App.settingsOpen），抽屉只剩任务活动——
+ * DrawerId 收窄为 'tasks'，结构保留（后续新增伴随型抽屉时按需扩展联合类型）。
  */
 
-export type DrawerId = 'settings' | 'tasks';
+export type DrawerId = 'tasks';
 export type DrawerState = DrawerId | null;
 
 export const INITIAL_DRAWER_STATE: DrawerState = null;

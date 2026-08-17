@@ -3,6 +3,8 @@ import { cn } from '@/lib/utils';
 
 interface AppRailProps {
   readonly isHome: boolean;
+  /** B19：设置页打开时「设置」入口呈 active（设置从抽屉改页面后有了驻留态）。 */
+  readonly isSettings?: boolean;
   readonly onHome: () => void;
   readonly onNewProject: () => void;
   readonly onOpenSettings: () => void;
@@ -55,7 +57,13 @@ function RailButton({
  * 遮挡），左/上/下三边補 `env(safe-area-inset-*)`——用 `max(原值, env(...))`
  * 保证非刘海设备上 env() 恒为 0、结果等于原值，桌面/常规设备视觉不变。
  */
-export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRailProps) {
+export function AppRail({
+  isHome,
+  isSettings = false,
+  onHome,
+  onNewProject,
+  onOpenSettings,
+}: AppRailProps) {
   return (
     <nav
       className="hidden flex-col items-center gap-[22px] border-r border-white/[0.06] bg-rail pt-[max(18px,env(safe-area-inset-top))] pr-2.5 pb-[max(14px,env(safe-area-inset-bottom))] pl-[max(10px,env(safe-area-inset-left))] text-rail-foreground md:flex"
@@ -84,6 +92,8 @@ export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRai
         icon={Settings}
         label="设置"
         ariaLabel="打开设置"
+        ariaCurrent={isSettings ? 'page' : undefined}
+        active={isSettings}
         onClick={onOpenSettings}
         className="mt-auto"
       />
@@ -98,7 +108,13 @@ export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRai
  * 每项 min-h 48px 触控目标，底边补 safe-area。桌面（≥768px）整体隐藏，与
  * AppRail 互斥，同一可访问名称不会同时出现两份。
  */
-export function AppBottomNav({ isHome, onHome, onNewProject, onOpenSettings }: AppRailProps) {
+export function AppBottomNav({
+  isHome,
+  isSettings = false,
+  onHome,
+  onNewProject,
+  onOpenSettings,
+}: AppRailProps) {
   return (
     <nav
       className="flex shrink-0 items-stretch justify-around border-t border-white/[0.06] bg-rail px-2 pt-1 pb-[max(6px,env(safe-area-inset-bottom))] text-rail-foreground md:hidden"
@@ -124,6 +140,8 @@ export function AppBottomNav({ isHome, onHome, onNewProject, onOpenSettings }: A
         icon={Settings}
         label="设置"
         ariaLabel="打开设置"
+        ariaCurrent={isSettings ? 'page' : undefined}
+        active={isSettings}
         onClick={onOpenSettings}
         className="min-h-[48px] max-w-[120px]"
       />

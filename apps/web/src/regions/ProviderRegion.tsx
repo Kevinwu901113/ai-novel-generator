@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Cpu } from 'lucide-react';
+import { Cpu, Plus } from 'lucide-react';
 import type {
   ConnectionTestResult,
   CreateProviderProfileInput,
@@ -88,11 +88,14 @@ export function ProviderRegion({
   onTestConnection,
 }: ProviderRegionProps) {
   const isReady = dataServiceStatus === 'ready';
+  // B19（D-B19-3）：已配置服务列表在前，新增表单收进「添加模型服务」按钮——
+  // 配置完成后的常态是"看一眼状态"，不是"再添加一个"。无服务时表单直接展开
+  //（此时添加就是首要任务）。
+  const [createOpen, setCreateOpen] = useState(false);
+  const showCreateForm = createOpen || providers.length === 0;
 
   return (
     <div className="flex flex-col gap-5">
-      <ProviderCreateForm isReady={isReady} onCreate={onCreate} />
-
       <ul className="flex flex-col gap-3" aria-label="模型服务列表">
         {providers.length === 0 && (
           <li role="status">
@@ -112,6 +115,30 @@ export function ProviderRegion({
           />
         ))}
       </ul>
+
+      {showCreateForm ? (
+        <div className="rounded-xl border border-border p-3.5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <h4 className="text-[13px] font-semibold">新增模型服务</h4>
+            {providers.length > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setCreateOpen(false)}>
+                收起
+              </Button>
+            )}
+          </div>
+          <ProviderCreateForm isReady={isReady} onCreate={onCreate} />
+        </div>
+      ) : (
+        <Button
+          variant="outline"
+          className="self-start"
+          onClick={() => setCreateOpen(true)}
+          aria-expanded={false}
+        >
+          <Plus size={16} aria-hidden="true" />
+          添加模型服务
+        </Button>
+      )}
     </div>
   );
 }
@@ -559,9 +586,12 @@ function ProviderRow({
         )}
       </div>
 
+      {/* B19（D-B19-3）：常规操作在左（API Key 录入/测试连接/设为默认），破坏性
+          操作（删除密钥/删除服务）ml-auto 右移分组——原布局红色「删除密钥」占
+          按钮行首位。二次确认/焦点管理/Escape 行为不变。 */}
       <div className="mt-2.5 flex flex-wrap items-start gap-2">
-        {/* API Key 编辑 */}
-        {!provider.hasApiKey ? (
+        {/* API Key 录入（未配置时） */}
+        {!provider.hasApiKey && (
           <div className="flex items-center gap-2">
             <Label htmlFor={`provider-api-key-${provider.id}`} className="sr-only">
               API Key
@@ -587,45 +617,6 @@ function ProviderRow({
               {isSavingKey ? '保存中…' : '保存'}
             </Button>
           </div>
-        ) : !deleteKeyConfirmVisible ? (
-          <Button
-            ref={deleteKeyBtnRef}
-            variant="destructive"
-            size="sm"
-            onClick={handleDeleteKeyClick}
-            disabled={!isReady}
-            aria-label="删除 API Key"
-          >
-            删除密钥
-          </Button>
-        ) : (
-          <div
-            className="flex items-center gap-2 text-xs"
-            role="group"
-            aria-label="确认删除 API Key"
-            onKeyDown={handleDeleteKeyKeyDown}
-          >
-            <span>确认删除？</span>
-            <Button
-              ref={confirmDeleteKeyBtnRef}
-              variant="destructive"
-              size="sm"
-              onClick={handleDeleteKeyConfirm}
-              disabled={isDeletingKey}
-              aria-label="确认删除 API Key"
-            >
-              {isDeletingKey ? '删除中…' : '确认'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleDeleteKeyCancel}
-              disabled={isDeletingKey}
-              aria-label="取消删除"
-            >
-              取消
-            </Button>
-          </div>
         )}
 
         {/* 连接测试 */}
@@ -641,7 +632,7 @@ function ProviderRow({
           {isTestingConnection ? '正在连接…' : '测试连接'}
         </Button>
 
-        {/* 设为默认 / 删除模型服务 */}
+        {/* 设为默认 */}
         <Button
           variant="outline"
           size="sm"
@@ -652,46 +643,92 @@ function ProviderRow({
           {provider.isDefault ? '默认服务' : '设为默认'}
         </Button>
 
-        {!removeConfirmVisible ? (
-          <Button
-            ref={removeBtnRef}
-            variant="destructive"
-            size="sm"
-            onClick={handleRemoveClick}
-            disabled={!isReady || isRemoving}
-            aria-label="删除模型服务"
-          >
-            删除
-          </Button>
-        ) : (
-          <div
-            className="flex items-center gap-2 text-xs"
-            role="group"
-            aria-label="确认删除模型服务"
-            onKeyDown={handleRemoveKeyDown}
-          >
-            <span>确认删除该模型服务？</span>
+        <div className="ml-auto flex flex-wrap items-start gap-2">
+          {/* 删除 API Key（已配置时） */}
+          {provider.hasApiKey &&
+            (!deleteKeyConfirmVisible ? (
+              <Button
+                ref={deleteKeyBtnRef}
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteKeyClick}
+                disabled={!isReady}
+                aria-label="删除 API Key"
+              >
+                删除密钥
+              </Button>
+            ) : (
+              <div
+                className="flex items-center gap-2 text-xs"
+                role="group"
+                aria-label="确认删除 API Key"
+                onKeyDown={handleDeleteKeyKeyDown}
+              >
+                <span>确认删除？</span>
+                <Button
+                  ref={confirmDeleteKeyBtnRef}
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleDeleteKeyConfirm}
+                  disabled={isDeletingKey}
+                  aria-label="确认删除 API Key"
+                >
+                  {isDeletingKey ? '删除中…' : '确认'}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDeleteKeyCancel}
+                  disabled={isDeletingKey}
+                  aria-label="取消删除"
+                >
+                  取消
+                </Button>
+              </div>
+            ))}
+
+          {/* 删除模型服务 */}
+          {!removeConfirmVisible ? (
             <Button
-              ref={confirmRemoveBtnRef}
+              ref={removeBtnRef}
               variant="destructive"
               size="sm"
-              onClick={handleRemoveConfirm}
-              disabled={isRemoving}
+              onClick={handleRemoveClick}
+              disabled={!isReady || isRemoving}
+              aria-label="删除模型服务"
+            >
+              删除
+            </Button>
+          ) : (
+            <div
+              className="flex items-center gap-2 text-xs"
+              role="group"
               aria-label="确认删除模型服务"
+              onKeyDown={handleRemoveKeyDown}
             >
-              {isRemoving ? '删除中…' : '确认'}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleRemoveCancel}
-              disabled={isRemoving}
-              aria-label="取消删除"
-            >
-              取消
-            </Button>
-          </div>
-        )}
+              <span>确认删除该模型服务？</span>
+              <Button
+                ref={confirmRemoveBtnRef}
+                variant="destructive"
+                size="sm"
+                onClick={handleRemoveConfirm}
+                disabled={isRemoving}
+                aria-label="确认删除模型服务"
+              >
+                {isRemoving ? '删除中…' : '确认'}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleRemoveCancel}
+                disabled={isRemoving}
+                aria-label="取消删除"
+              >
+                取消
+              </Button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 错误信息 */}
