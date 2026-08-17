@@ -54,7 +54,11 @@ export function HomePage({
     <div className="h-full overflow-y-auto px-[clamp(34px,6vw,92px)] pt-[62px] pb-[72px]">
       <section
         ref={createSectionRef}
-        className="mx-auto grid w-full max-w-[1080px] grid-cols-[minmax(0,1fr)_minmax(420px,1.25fr)] items-center gap-x-[clamp(44px,7vw,96px)] gap-y-[22px]"
+        // B17（1b，768px 断点）：第二列 minmax(420px,…) 的硬下限在 <420px 窄
+        // 视口会撑破容器（实测坐实：390px 视口下整节内容横向溢出、左列文字
+        // 挤成逐字换行）。md（768px）以下先单列堆叠，md 起恢复原两列布局，
+        // 桌面视觉不变。
+        className="mx-auto grid w-full max-w-[1080px] grid-cols-1 items-center gap-x-[clamp(44px,7vw,96px)] gap-y-[22px] md:grid-cols-[minmax(0,1fr)_minmax(420px,1.25fr)]"
         aria-labelledby="home-title"
       >
         <div>
@@ -81,7 +85,7 @@ export function HomePage({
           />
         </Card>
 
-        <div className="col-start-2 grid grid-cols-2 gap-2.5" aria-label="创作服务状态">
+        <div className="grid grid-cols-2 gap-2.5 md:col-start-2" aria-label="创作服务状态">
           <button
             type="button"
             className="flex min-w-0 items-center gap-2.5 rounded-[10px] border border-border bg-panel/72 px-3 py-2.5 text-left text-[11px] text-muted-foreground hover:border-primary/50"

@@ -373,7 +373,7 @@ export function App() {
 
   return (
     <>
-      <div className="grid h-screen grid-cols-[76px_minmax(0,1fr)] overflow-hidden bg-canvas">
+      <div className="grid h-dvh grid-cols-[76px_minmax(0,1fr)] overflow-hidden bg-canvas">
         <AppRail
           isHome={!currentProject}
           onHome={handleHome}
@@ -392,22 +392,35 @@ export function App() {
                   <button
                     type="button"
                     onClick={handleHome}
-                    className="text-sm text-muted-foreground hover:text-primary"
+                    className="shrink-0 text-sm text-muted-foreground hover:text-primary"
                   >
                     项目
                   </button>
-                  <ChevronRight size={15} aria-hidden="true" className="text-muted-foreground" />
+                  <ChevronRight
+                    size={15}
+                    aria-hidden="true"
+                    className="shrink-0 text-muted-foreground"
+                  />
                   <h1 className="max-w-[min(42vw,560px)] truncate text-[15px] font-semibold">
                     {currentProject.name}
                   </h1>
-                  <span className="inline-flex items-center whitespace-nowrap rounded-full bg-accent px-2.5 py-0.5 text-[11px] text-accent-foreground">
+                  <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-accent px-2.5 py-0.5 text-[11px] text-accent-foreground">
                     {currentStageLabel}
                   </span>
                 </>
               ) : (
+                // B17（1b，768px 断点）：窄视口下（<390px 实测坐实）两个 span 无
+                // 截断处理时会按字符换行，撑破 62px 定高 header（文字上下被
+                // 裁切）。title 补 truncate（单行省略号，标题短，正常宽度下永
+                // 不触发）；副标题在真正拥挤时（<sm，640px）整体隐藏，让位给
+                // 右侧设置按钮，桌面（≥640px）不受影响。
                 <>
-                  <span className="text-[15px] font-semibold">AI 小说创作代理</span>
-                  <span className="text-xs text-muted-foreground">本地优先创作台</span>
+                  <span className="min-w-0 truncate text-[15px] font-semibold">
+                    AI 小说创作代理
+                  </span>
+                  <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">
+                    本地优先创作台
+                  </span>
                 </>
               )}
             </div>
@@ -416,7 +429,7 @@ export function App() {
               {!isDataServiceReady && (
                 <span
                   className={cn(
-                    'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px]',
+                    'inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px]',
                     isDataServiceStarting
                       ? 'bg-accent text-accent-foreground'
                       : 'bg-destructive/10 text-destructive',
@@ -437,11 +450,26 @@ export function App() {
                   下曾贴着视口右缘裁切——按钮本身不限宽 + whitespace-nowrap，
                   长服务名称把 header 撑出视口。这里给按钮 min-w-0（允许在
                   flex 行里收窄）、给文字套一层 max-width + truncate（超出省略号
-                  收尾，完整名称仍在 DOM 里，可通过 title 悬停查看，语义不丢）。 */}
-              <Button variant="outline" size="sm" onClick={handleOpenSettings} className="min-w-0">
+                  收尾，完整名称仍在 DOM 里，可通过 title 悬停查看，语义不丢）。
+                  B17（1b）：单独 min-w-0 在窄视口下不够——shadcn Button 基础
+                  变体自带 shrink-0（多数场景下按钮不该被压缩是对的默认值），
+                  这里显式补 shrink 覆盖，按钮才能在空间不足时真正收窄；内部
+                  文字 span 同样需要 min-w-0（flex 子项的隐式 min-width:auto
+                  会让 max-w+truncate 在被压缩前不生效，是 flex 布局的已知
+                  行为），两者缺一都无法在 390px 实测下把 pill 收进视口。
+                  实测坐实：项目工作区状态下（面包屑+阶段徽标+任务活动按钮
+                  已占大半宽度）文字会被压缩至 0，只剩图标——可访问名称不受
+                  影响（span 文案仍在 DOM，只是视觉裁剪），但图标独木按钮本身
+                  只有 32px 高，补 after: 伪元素命中区到 44px（同关闭钮手法）。 */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleOpenSettings}
+                className="relative min-w-0 shrink after:absolute after:-inset-1.5 after:content-['']"
+              >
                 <Settings size={16} aria-hidden="true" className="shrink-0" />
                 <span
-                  className="max-w-[200px] truncate"
+                  className="min-w-0 max-w-[200px] truncate"
                   title={defaultProvider?.hasApiKey ? defaultProvider.label : undefined}
                 >
                   {defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}
@@ -457,7 +485,13 @@ export function App() {
                 className="flex h-full min-h-0 flex-col bg-canvas"
                 aria-label="创作旅程"
               >
-                <div className="flex shrink-0 justify-center border-b border-border bg-card px-6">
+                {/* B17（1b，768px 断点）：390px 实测坐实——四阶段一行放不下时，
+                    浏览器默认让 flex 子项收缩，中文标签被挤到逐字换行（"调"/
+                    "研" 上下堆叠），不可读。overflow-x-auto 兜底（JourneyNav
+                    内部标签补 whitespace-nowrap），保证极窄视口下四阶段横向
+                    可滚动查看而不是文字断行；≥768px 及桌面宽度下内容本就一行
+                    放得下，overflow-x-auto 不触发滚动，视觉不变。 */}
+                <div className="flex shrink-0 justify-center overflow-x-auto border-b border-border bg-card px-6">
                   <JourneyNav
                     frontierStage={frontierStage}
                     viewStage={viewStage}

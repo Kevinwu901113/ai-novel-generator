@@ -30,6 +30,18 @@ const Toaster = ({ ...props }: ToasterProps) => {
           '--border-radius': 'var(--radius)',
         } as React.CSSProperties
       }
+      // B17（1b）：默认右下角位置（D-B15-3）贴视口边缘，可能被 Home indicator
+      // 遮挡。sonner 内置 24px（桌面）/16px（<600px 视口）边距常量原样保留，
+      // 叠加 env(safe-area-inset-*)——非刘海设备 env() 恒为 0，数值与迁移前
+      // 完全一致。
+      offset={{
+        bottom: 'calc(24px + env(safe-area-inset-bottom))',
+        right: 'calc(24px + env(safe-area-inset-right))',
+      }}
+      mobileOffset={{
+        bottom: 'calc(16px + env(safe-area-inset-bottom))',
+        right: 'calc(16px + env(safe-area-inset-right))',
+      }}
       {...props}
     />
   );

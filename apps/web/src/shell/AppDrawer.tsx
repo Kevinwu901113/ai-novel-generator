@@ -68,7 +68,10 @@ export function AppDrawer({ open, title, description, onClose, children }: AppDr
     >
       <SheetContent
         showCloseButton={false}
-        className="flex w-full flex-col gap-0 sm:max-w-[520px]"
+        // B17（1b）：抽屉贴视口右边缘且纵向撑满（inset-y-0 right-0 h-full，
+        // 来自 sheet.tsx 的 side="right" 默认），补三边 safe-area，
+        // env() 在非刘海设备恒为 0、视觉不变。
+        className="flex w-full flex-col gap-0 pt-[env(safe-area-inset-top)] pr-[env(safe-area-inset-right)] pb-[env(safe-area-inset-bottom)] sm:max-w-[520px]"
         onCloseAutoFocus={(event) => {
           event.preventDefault();
           triggerRef.current?.focus();
@@ -81,7 +84,15 @@ export function AppDrawer({ open, title, description, onClose, children }: AppDr
               <SheetDescription className="mt-1 text-xs">{description}</SheetDescription>
             )}
           </div>
-          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label={`关闭${title}`}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={onClose}
+            aria-label={`关闭${title}`}
+            // B17（1b）：icon-sm 视觉 32px 不变（shadcn 共享尺寸变体，別处仍按
+            // 32px 使用）；`after:` 伪元素补足到 44px 命中区，同 JourneyNav 手法。
+            className="relative after:absolute after:-inset-1.5 after:content-['']"
+          >
             <X size={18} aria-hidden="true" />
           </Button>
         </SheetHeader>

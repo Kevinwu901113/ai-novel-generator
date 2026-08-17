@@ -351,7 +351,10 @@ export function TaskList({
                 aria-selected={isActive ? 'true' : 'false'}
                 aria-label={buildTaskAriaLabel(task)}
                 className={cn(
-                  'flex cursor-pointer flex-col rounded border border-transparent px-2.5 py-2',
+                  // B17（1b）：min-h-11（44px）只是地板值——三行内容实际渲染高度
+                  // 已超过 44px，桌面视觉不变，只在极端场景（大号系统字体等）
+                  // 兜底触控目标下限。
+                  'flex min-h-11 cursor-pointer flex-col justify-center rounded border border-transparent px-2.5 py-2',
                   isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary',
                 )}
                 onClick={() => handleOptionClick(task.id)}

@@ -44,11 +44,20 @@ export function JourneyNav({
           const isViewed = stage.id === viewStage;
           const isDone = i < frontierIndex;
           return (
-            <li key={stage.id} className="flex">
+            <li key={stage.id} className="flex shrink-0">
               <button
                 type="button"
                 className={cn(
-                  'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-muted-foreground disabled:cursor-default',
+                  // B17（1b）：可见的胶囊尺寸（px-1.5 py-1，约 27px 高）维持桌面
+                  // 视觉密度不变；`relative` + `after:` 伪元素在其上下各扩 10px
+                  // 无形命中区，触控目标达到 ≥44px（D-B17-2：只扩命中面，不改
+                  // 视觉），伪元素无背景/边框，鼠标操作无感知。
+                  //
+                  // shrink-0 + whitespace-nowrap：390px 实测坐实——不加时浏览器
+                  // 会把中文标签挤到逐字换行（"调"/"研" 上下堆叠），可读性
+                  // 明显变差；改为固定尺寸单行显示，放不下时交给外层容器
+                  // （App.tsx 旅程条）横向滚动兜底，不在这层截断/换行。
+                  'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-1.5 py-1 text-[13px] text-muted-foreground after:absolute after:inset-x-0 after:-top-2.5 after:-bottom-2.5 after:content-[""] disabled:cursor-default',
                   reached && 'cursor-pointer hover:bg-secondary',
                   isFrontier && 'font-semibold text-foreground',
                   isViewed && 'bg-secondary outline outline-1 outline-primary',

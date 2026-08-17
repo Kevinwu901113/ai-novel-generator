@@ -89,7 +89,10 @@ export function ProjectListRegion({
       className={cn(
         'list-none',
         variant === 'cards'
-          ? 'grid grid-cols-3 gap-3.5 max-[1080px]:grid-cols-2'
+          ? // B17（1b，768px 断点）：既有 1080px 断点（3→2 列）之外补 md 以下
+            // 单列——2 列在 <768px 视口下卡片会挤到 ~150px 宽，标题/元信息
+            // 难以阅读；≥768px 桌面视觉不变。
+            'grid grid-cols-3 gap-3.5 max-[1080px]:grid-cols-2 max-md:grid-cols-1'
           : 'flex flex-col gap-0.5',
       )}
       role="list"

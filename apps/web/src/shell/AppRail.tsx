@@ -50,11 +50,15 @@ function RailButton({
 /**
  * 全局导航侧栏（B15：图标从手写 AppIcon 换 lucide-react，aria-label/
  * aria-current 语义逐个保留）。
+ *
+ * B17（1b 移动端最小集）：rail 贴着视口物理左边缘（横屏时可能被刘海/圆角
+ * 遮挡），左/上/下三边補 `env(safe-area-inset-*)`——用 `max(原值, env(...))`
+ * 保证非刘海设备上 env() 恒为 0、结果等于原值，桌面/常规设备视觉不变。
  */
 export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRailProps) {
   return (
     <nav
-      className="flex flex-col items-center gap-[22px] border-r border-white/[0.06] bg-rail px-2.5 pt-[18px] pb-3.5 text-rail-foreground"
+      className="flex flex-col items-center gap-[22px] border-r border-white/[0.06] bg-rail pt-[max(18px,env(safe-area-inset-top))] pr-2.5 pb-[max(14px,env(safe-area-inset-bottom))] pl-[max(10px,env(safe-area-inset-left))] text-rail-foreground"
       aria-label="全局导航"
     >
       <div
