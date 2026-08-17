@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { TokenGate } from './auth/TokenGate';
 import { createDesktopClient } from './desktop-client';
+import './styles/tailwind.css';
 import './App.css';
 
 // B12：Web 形态下 window.desktop 不再由 Electron preload 的 contextBridge 注入，

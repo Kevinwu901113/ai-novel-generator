@@ -1,0 +1,135 @@
+/**
+ * Tailwind v4 + shadcn/ui 地基（B14，D-B14-1/D-B14-2）。
+ *
+ * 迁移期分层引入、跳过 preflight——preflight 的隐式默认值重置会立刻冲击
+ * 5535 行存量 App.css 的假设（见 decision-log D12、b14-ui-foundation-design.md）。
+ * B17 收口、App.css 退役时再补 `@import 'tailwindcss/preflight.css' layer(base)`。
+ */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+/* dark variant 绑定系统配色方案（不做 class 切换，暗色继续跟随系统）。 */
+@custom-variant dark (@media (prefers-color-scheme: dark));
+
+@theme {
+  /* 字体（明暗通用，抄自 App.css body/展示标题/等宽栈） */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-serif: 'Songti SC', STSong, 'Noto Serif CJK SC', serif;
+  --font-mono: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+
+  /* 圆角基准，对齐现有 16px 卡片（--radius: 1rem） */
+  --radius: 1rem;
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: calc(var(--radius) - 2px);
+  --radius-xl: var(--radius);
+
+  /*
+   * 靛蓝紫 primary 色阶（明暗通用，D12 拍板：logo #514cc9 家族统一为唯一 primary，
+   * 蓝 #2563eb 退役不进入新 token）。锚点直接取自现有视觉资产而非凭空生成：
+   * 100/300 = 现有 --color-accent-soft / 暗色 --color-accent-text，
+   * 400/600 = logo 渐变两端（.app-mark），700 = 现有 --color-accent-text，
+   * 900 = 暗色 --color-accent-soft；其余步进插值补齐。
+   */
+  --color-primary-50: #f8f8ff;
+  --color-primary-100: #eef2ff;
+  --color-primary-200: #d4d2fe;
+  --color-primary-300: #b9b8ff;
+  --color-primary-400: #7471ef;
+  --color-primary-500: #6460da;
+  --color-primary-600: #514cc9;
+  --color-primary-700: #4338ca;
+  --color-primary-800: #333088;
+  --color-primary-900: #292843;
+  --color-primary-950: #17162c;
+}
+
+/*
+ * 语义变量（运行时 CSS 变量，随 prefers-color-scheme 切换）——纸感视觉身份
+ * 保留：canvas 暖白画布、panel 纯白面板、rail 近黑侧栏；shadcn 语义变量
+ * （--background/--foreground/--primary/--muted/--destructive 等）全部指向
+ * 这套配色，不留 zinc 默认值。
+ */
+:root {
+  --canvas: #f4f3ef;
+  --panel: #ffffff;
+  --rail: #181817;
+  --foreground: #1f2937;
+
+  --background: var(--canvas);
+  --card: var(--panel);
+  --card-foreground: var(--foreground);
+  --popover: var(--panel);
+  --popover-foreground: var(--foreground);
+  --primary: var(--color-primary-600);
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f5;
+  --secondary-foreground: var(--foreground);
+  --muted: #f5f5f5;
+  --muted-foreground: #666666;
+  --accent: var(--color-primary-100);
+  --accent-foreground: var(--color-primary-700);
+  --destructive: #b91c1c;
+  --destructive-foreground: #ffffff;
+  --border: #e0e0e0;
+  --input: #e0e0e0;
+  --ring: var(--color-primary-600);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #151514;
+    --panel: #1d1d1b;
+    --rail: #181817;
+    --foreground: #e5e5e5;
+
+    --background: var(--canvas);
+    --card: var(--panel);
+    --card-foreground: var(--foreground);
+    --popover: var(--panel);
+    --popover-foreground: var(--foreground);
+    --primary: var(--color-primary-400);
+    --primary-foreground: #ffffff;
+    --secondary: #262626;
+    --secondary-foreground: var(--foreground);
+    --muted: #262626;
+    --muted-foreground: #a3a3a3;
+    --accent: #292843;
+    --accent-foreground: #b9b8ff;
+    --destructive: #fca5a5;
+    --destructive-foreground: #2d0a0a;
+    --border: #404040;
+    --input: #404040;
+    --ring: var(--color-primary-400);
+  }
+}
+
+/* 把运行时语义变量接入 Tailwind 的 color 命名空间，生成 bg-background/
+   text-foreground/bg-primary/border-border 等 utility（shadcn v4 标准接法）。 */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-rail: var(--rail);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+}

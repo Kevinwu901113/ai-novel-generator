@@ -1,22 +1,34 @@
-/* CSS 变量 —— 明暗模式基础 */
+/*
+ * CSS 变量 —— 明暗模式基础。
+ *
+ * B14：Tailwind v4 token（src/styles/tailwind.css）接入后，其中数值与本文件
+ * 完全相同的变量改为反向引用新 token（桥接，保证存量选择器不失效，D-B14-2）：
+ * --color-canvas/--color-surface/--color-border/--color-text-secondary/
+ * --color-accent-soft/--color-accent-text 六个。--color-primary 及
+ * --color-primary-hover 保持独立硬编码——蓝 #2563eb 按 D12 拍板不进入新 token
+ * 体系（新 primary 是靛蓝紫 #514cc9 家族），桥接会立即改变现有按钮/焦点环颜色，
+ * 与本批"视觉零变化"红线冲突，故意不桥接，留给 B15/B16 逐屏收敛三套强调色时
+ * 处理。--color-rail 同样不桥接：新 token 的 rail 明暗同值（近黑常量），而本文件
+ * 暗色下更深至 #0f0f0e，桥接会丢失这一级差异。
+ */
 :root {
   --color-bg: #ffffff;
   --color-bg-secondary: #f5f5f5;
   --color-bg-panel: #fafafa;
   --color-text: #1a1a1a;
-  --color-text-secondary: #666666;
-  --color-border: #e0e0e0;
+  --color-text-secondary: var(--muted-foreground);
+  --color-border: var(--border);
   --color-primary: #2563eb;
   --color-primary-hover: #1d4ed8;
   --color-dev-badge: #16a34a;
   --color-dev-badge-bg: #dcfce7;
   --color-status-ok: #16a34a;
   --color-empty-hint: #9ca3af;
-  --color-canvas: #f4f3ef;
-  --color-surface: #ffffff;
+  --color-canvas: var(--canvas);
+  --color-surface: var(--panel);
   --color-surface-raised: #ffffff;
-  --color-accent-soft: #eef2ff;
-  --color-accent-text: #4338ca;
+  --color-accent-soft: var(--accent);
+  --color-accent-text: var(--accent-foreground);
   --color-rail: #181817;
   --color-rail-text: #d6d3ce;
   --color-shadow: rgba(38, 35, 29, 0.1);
@@ -28,19 +40,19 @@
     --color-bg-secondary: #262626;
     --color-bg-panel: #222222;
     --color-text: #e5e5e5;
-    --color-text-secondary: #a3a3a3;
-    --color-border: #404040;
+    --color-text-secondary: var(--muted-foreground);
+    --color-border: var(--border);
     --color-primary: #3b82f6;
     --color-primary-hover: #60a5fa;
     --color-dev-badge: #22c55e;
     --color-dev-badge-bg: #052e16;
     --color-status-ok: #22c55e;
     --color-empty-hint: #6b7280;
-    --color-canvas: #151514;
-    --color-surface: #1d1d1b;
+    --color-canvas: var(--canvas);
+    --color-surface: var(--panel);
     --color-surface-raised: #242421;
-    --color-accent-soft: #292843;
-    --color-accent-text: #b9b8ff;
+    --color-accent-soft: var(--accent);
+    --color-accent-text: var(--accent-foreground);
     --color-rail: #0f0f0e;
     --color-rail-text: #d6d3ce;
     --color-shadow: rgba(0, 0, 0, 0.35);

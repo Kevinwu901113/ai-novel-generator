@@ -13,12 +13,18 @@
   },
   "devDependencies": {
     "@ai-novel/domain": "workspace:*",
+    "@tailwindcss/vite": "^4.3.3",
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^4.6.0",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.31.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.8.0",
     "vite": "^7.0.0"
   }
