@@ -30,19 +30,19 @@ export function BlueprintEscalationPanel({
   onChoose,
 }: BlueprintEscalationPanelProps) {
   return (
-    <div className="blueprint-escalation">
+    <div className="max-w-[640px]">
       <p>蓝图已经重新生成了几次仍未确认，接下来想怎么做？</p>
       {invalidated && (
-        <p className="blueprint-escalation-notice" role="status">
+        <p className="mt-1 text-[13px] text-status-attention" role="status">
           创作要求已变更，现有这版蓝图不能再被接受。
         </p>
       )}
       {!invalidated && contentUnavailable && (
-        <p className="blueprint-escalation-notice" role="status">
+        <p className="mt-1 text-[13px] text-status-attention" role="status">
           蓝图内容当前无法显示，暂不能直接接受这一版；可先重试加载，或选择其他选项。
         </p>
       )}
-      <div className="blueprint-escalation-options">
+      <div className="mt-2 flex flex-col gap-2">
         {BLUEPRINT_ESCALATION_OPTIONS.map((opt) => {
           const disabled =
             busy || ((invalidated || contentUnavailable) && opt.outcome === 'accept_current');
@@ -50,13 +50,13 @@ export function BlueprintEscalationPanel({
             <button
               key={opt.outcome}
               type="button"
-              className="blueprint-escalation-option"
+              className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-3 py-2.5 text-left font-[inherit] text-foreground hover:border-primary disabled:cursor-not-allowed disabled:opacity-55"
               onClick={() => void onChoose(opt.outcome)}
               disabled={disabled}
               aria-disabled={disabled}
             >
               <strong>{opt.label}</strong>
-              <span>{opt.description}</span>
+              <span className="text-xs text-muted-foreground">{opt.description}</span>
             </button>
           );
         })}

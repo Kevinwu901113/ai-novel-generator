@@ -19,6 +19,7 @@ import type {
   BlueprintChapterDto,
   StoryBlueprintDto,
 } from '@ai-novel/contracts';
+import { cn } from '@/lib/utils';
 
 export interface BlueprintViewProps {
   readonly blueprint: StoryBlueprintDto;
@@ -28,17 +29,19 @@ export interface BlueprintViewProps {
 /** 长文默认截断长度（与 B6 的事实笔记同量级） */
 const LONG_TEXT_TRUNCATE_LENGTH = 160;
 
+const toggleBtnClass = 'mt-1 border-none bg-transparent p-0 font-[inherit] text-xs text-primary';
+
 function LongText({ text, label }: { readonly text: string; readonly label: string }) {
   const [expanded, setExpanded] = useState(false);
   const needsTruncate = text.length > LONG_TEXT_TRUNCATE_LENGTH;
   const shown = expanded || !needsTruncate ? text : `${text.slice(0, LONG_TEXT_TRUNCATE_LENGTH)}…`;
   return (
     <>
-      <p className="blueprint-text">{shown}</p>
+      <p className="text-sm leading-relaxed whitespace-pre-wrap">{shown}</p>
       {needsTruncate && (
         <button
           type="button"
-          className="blueprint-toggle-btn"
+          className={toggleBtnClass}
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >
@@ -51,10 +54,10 @@ function LongText({ text, label }: { readonly text: string; readonly label: stri
 
 function CharacterItem({ character }: { readonly character: BlueprintCharacterDto }) {
   return (
-    <li className="blueprint-character">
-      <div className="blueprint-character-head">
-        <strong className="blueprint-character-name">{character.name}</strong>
-        <span className="blueprint-character-role">{character.role}</span>
+    <li className="rounded-md border border-border bg-card px-3 py-2">
+      <div className="flex items-baseline gap-2">
+        <strong>{character.name}</strong>
+        <span className="text-xs text-muted-foreground">{character.role}</span>
       </div>
       <LongText text={character.description} label="人物介绍" />
     </li>
@@ -70,23 +73,23 @@ function ChapterItem({
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <li className="blueprint-chapter">
+    <li>
       <button
         type="button"
-        className="blueprint-chapter-btn"
+        className="flex w-full items-center gap-2 rounded-md border border-transparent px-2.5 py-1.5 text-left text-[13px] text-foreground hover:border-border hover:bg-secondary"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        <span className="blueprint-chapter-index" aria-hidden="true">
+        <span className="min-w-6 text-xs text-muted-foreground" aria-hidden="true">
           {index + 1}
         </span>
-        <span className="blueprint-chapter-title">{chapter.title}</span>
+        <span>{chapter.title}</span>
       </button>
       {open && (
-        <div className="blueprint-chapter-detail">
-          <p className="blueprint-chapter-goal">{chapter.goal}</p>
+        <div className="py-1 pr-2.5 pl-[42px]">
+          <p className="text-[13px] leading-relaxed text-muted-foreground">{chapter.goal}</p>
           {/* GE-6 预留：从本章发起生成的入口位（B10 接线，本批次不放按钮） */}
-          <div className="blueprint-chapter-actions" data-reserved-for="GE-6" />
+          <div data-reserved-for="GE-6" />
         </div>
       )}
     </li>
@@ -98,24 +101,30 @@ export function BlueprintView({ blueprint, stale }: BlueprintViewProps) {
 
   return (
     <div
-      className={`blueprint-view${stale ? ' blueprint-view-stale' : ''}`}
+      className={cn('flex w-full max-w-[820px] flex-col gap-4', stale && 'opacity-75')}
       data-testid="blueprint-view"
     >
-      <div className="blueprint-header">
-        <span className="blueprint-version">版本 v{blueprint.version}</span>
+      <div className="flex items-center gap-2">
+        <span className="rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground">
+          版本 v{blueprint.version}
+        </span>
       </div>
 
-      <section className="blueprint-section" aria-labelledby="blueprint-premise-heading">
-        <h3 id="blueprint-premise-heading">故事前提</h3>
-        <p className="blueprint-text">{blueprint.premise}</p>
+      <section aria-labelledby="blueprint-premise-heading">
+        <h3 id="blueprint-premise-heading" className="mb-1.5 text-sm">
+          故事前提
+        </h3>
+        <p className="text-sm leading-relaxed whitespace-pre-wrap">{blueprint.premise}</p>
       </section>
 
-      <section className="blueprint-section" aria-labelledby="blueprint-characters-heading">
-        <h3 id="blueprint-characters-heading">人物（{blueprint.characters.length}）</h3>
+      <section aria-labelledby="blueprint-characters-heading">
+        <h3 id="blueprint-characters-heading" className="mb-1.5 text-sm">
+          人物（{blueprint.characters.length}）
+        </h3>
         {blueprint.characters.length === 0 ? (
-          <p className="blueprint-empty">这一版蓝图没有列出人物。</p>
+          <p className="text-[13px] text-muted-foreground">这一版蓝图没有列出人物。</p>
         ) : (
-          <ul className="blueprint-character-list">
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {blueprint.characters.map((c, i) => (
               <CharacterItem key={`${c.name}-${i}`} character={c} />
             ))}
@@ -123,51 +132,63 @@ export function BlueprintView({ blueprint, stale }: BlueprintViewProps) {
         )}
       </section>
 
-      <section className="blueprint-section" aria-labelledby="blueprint-relationships-heading">
-        <h3 id="blueprint-relationships-heading">人物关系</h3>
+      <section aria-labelledby="blueprint-relationships-heading">
+        <h3 id="blueprint-relationships-heading" className="mb-1.5 text-sm">
+          人物关系
+        </h3>
         {blueprint.relationships.length === 0 ? (
-          <p className="blueprint-empty">这一版蓝图没有列出人物关系。</p>
+          <p className="text-[13px] text-muted-foreground">这一版蓝图没有列出人物关系。</p>
         ) : (
-          <ul className="blueprint-relationship-list">
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {blueprint.relationships.map((r, i) => (
-              <li key={`${r}-${i}`}>{r}</li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      <section className="blueprint-section" aria-labelledby="blueprint-world-heading">
-        <h3 id="blueprint-world-heading">世界设定</h3>
-        <LongText text={blueprint.world} label="世界设定" />
-      </section>
-
-      <section className="blueprint-section" aria-labelledby="blueprint-conflict-heading">
-        <h3 id="blueprint-conflict-heading">核心冲突</h3>
-        <LongText text={blueprint.conflict} label="核心冲突" />
-      </section>
-
-      <section className="blueprint-section" aria-labelledby="blueprint-plotlines-heading">
-        <h3 id="blueprint-plotlines-heading">情节线（{blueprint.plotlines.length}）</h3>
-        {blueprint.plotlines.length === 0 ? (
-          <p className="blueprint-empty">这一版蓝图没有列出情节线。</p>
-        ) : (
-          <ul className="blueprint-plotline-list">
-            {blueprint.plotlines.map((p, i) => (
-              <li key={`${p.name}-${i}`}>
-                <strong className="blueprint-plotline-name">{p.name}</strong>
-                <span className="blueprint-plotline-summary">{p.summary}</span>
+              <li key={`${r}-${i}`} className="text-[13px] leading-relaxed">
+                {r}
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <section className="blueprint-section" aria-labelledby="blueprint-chapters-heading">
-        <h3 id="blueprint-chapters-heading">章节结构（{blueprint.chapters.length} 章）</h3>
-        {blueprint.chapters.length === 0 ? (
-          <p className="blueprint-empty">这一版蓝图没有章节结构。</p>
+      <section aria-labelledby="blueprint-world-heading">
+        <h3 id="blueprint-world-heading" className="mb-1.5 text-sm">
+          世界设定
+        </h3>
+        <LongText text={blueprint.world} label="世界设定" />
+      </section>
+
+      <section aria-labelledby="blueprint-conflict-heading">
+        <h3 id="blueprint-conflict-heading" className="mb-1.5 text-sm">
+          核心冲突
+        </h3>
+        <LongText text={blueprint.conflict} label="核心冲突" />
+      </section>
+
+      <section aria-labelledby="blueprint-plotlines-heading">
+        <h3 id="blueprint-plotlines-heading" className="mb-1.5 text-sm">
+          情节线（{blueprint.plotlines.length}）
+        </h3>
+        {blueprint.plotlines.length === 0 ? (
+          <p className="text-[13px] text-muted-foreground">这一版蓝图没有列出情节线。</p>
         ) : (
-          <ol className="blueprint-chapter-list">
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {blueprint.plotlines.map((p, i) => (
+              <li key={`${p.name}-${i}`} className="text-[13px] leading-relaxed">
+                <strong className="mr-2">{p.name}</strong>
+                <span className="text-muted-foreground">{p.summary}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section aria-labelledby="blueprint-chapters-heading">
+        <h3 id="blueprint-chapters-heading" className="mb-1.5 text-sm">
+          章节结构（{blueprint.chapters.length} 章）
+        </h3>
+        {blueprint.chapters.length === 0 ? (
+          <p className="text-[13px] text-muted-foreground">这一版蓝图没有章节结构。</p>
+        ) : (
+          <ol className="m-0 flex list-none flex-col gap-1 p-0">
             {blueprint.chapters.map((c, i) => (
               <ChapterItem key={c.id} chapter={c} index={i} />
             ))}
@@ -176,14 +197,16 @@ export function BlueprintView({ blueprint, stale }: BlueprintViewProps) {
       </section>
 
       {/* D-B8-8：结局方向默认折叠（剧透保护），需显式点开 */}
-      <section className="blueprint-section" aria-labelledby="blueprint-ending-heading">
-        <h3 id="blueprint-ending-heading">结局方向</h3>
+      <section aria-labelledby="blueprint-ending-heading">
+        <h3 id="blueprint-ending-heading" className="mb-1.5 text-sm">
+          结局方向
+        </h3>
         {endingRevealed ? (
           <>
-            <p className="blueprint-text">{blueprint.ending}</p>
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">{blueprint.ending}</p>
             <button
               type="button"
-              className="blueprint-toggle-btn"
+              className={toggleBtnClass}
               onClick={() => setEndingRevealed(false)}
               aria-expanded={true}
             >
@@ -192,10 +215,12 @@ export function BlueprintView({ blueprint, stale }: BlueprintViewProps) {
           </>
         ) : (
           <>
-            <p className="blueprint-ending-hidden">结局方向已折叠，点开会看到故事怎么收尾。</p>
+            <p className="text-[13px] text-muted-foreground italic">
+              结局方向已折叠，点开会看到故事怎么收尾。
+            </p>
             <button
               type="button"
-              className="blueprint-toggle-btn"
+              className={toggleBtnClass}
               onClick={() => setEndingRevealed(true)}
               aria-expanded={false}
             >

@@ -13,8 +13,11 @@ export interface ProjectReadyPanelProps {
 
 export function ProjectReadyPanel({ chapterCount }: ProjectReadyPanelProps) {
   return (
-    <div className="blueprint-ready" role="status">
-      <p className="blueprint-ready-title">✓ 蓝图已确认，项目就绪</p>
+    <div
+      className="max-w-[640px] space-y-1 rounded-lg border border-border bg-secondary px-4 py-3"
+      role="status"
+    >
+      <p className="font-semibold">✓ 蓝图已确认，项目就绪</p>
       <p>
         {chapterCount !== null && chapterCount > 0
           ? `蓝图规划了 ${chapterCount} 章。逐章生成正文的功能还在开发中，完成后可以从下面的章节结构直接开始写。`

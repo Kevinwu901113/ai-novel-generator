@@ -12,6 +12,7 @@
  */
 
 import { BLUEPRINT_GATE_OPTIONS, gateRewriteOptionCopy, rewriteRemaining } from './blueprint-logic';
+import { cn } from '@/lib/utils';
 
 export interface BlueprintGatePanelProps {
   readonly busy: boolean;
@@ -30,15 +31,15 @@ export function BlueprintGatePanel({
 }: BlueprintGatePanelProps) {
   const remaining = rewriteRemaining(rewriteUsed);
   return (
-    <div className="blueprint-gate">
-      <p className="blueprint-gate-prompt">
+    <div className="max-w-[640px]">
+      <p className="mb-2 text-sm">
         {invalidated
           ? remaining > 0
             ? '创作要求已变更，这份蓝图不能再被接受，请重新生成一版。'
             : '创作要求已变更，这份蓝图不能再被接受；重新生成次数已用完，请提交进入后续决策。'
           : '这份蓝图看下来可以吗？确认后项目就进入就绪状态。'}
       </p>
-      <div className="blueprint-gate-options">
+      <div className="mt-2 flex flex-col gap-2">
         {BLUEPRINT_GATE_OPTIONS.map((opt) => {
           const isAccept = opt.outcome === 'accept';
           const isRewrite = opt.outcome === 'request_rewrite';
@@ -52,15 +53,18 @@ export function BlueprintGatePanel({
             <button
               key={opt.outcome}
               type="button"
-              className={`blueprint-gate-option${isAccept ? ' primary' : ''}`}
+              className={cn(
+                'flex flex-col items-start gap-0.5 rounded-md border border-border bg-card px-3 py-2.5 text-left font-[inherit] text-foreground hover:border-primary disabled:cursor-not-allowed disabled:opacity-55',
+                isAccept && 'border-primary',
+              )}
               onClick={() => void onChoose(opt.outcome)}
               disabled={disabled}
               aria-disabled={disabled}
             >
               <strong>{copy.label}</strong>
-              <span>{copy.description}</span>
+              <span className="text-xs text-muted-foreground">{copy.description}</span>
               {isRewrite && (
-                <span className="blueprint-gate-budget">
+                <span className="mt-0.5 text-xs text-muted-foreground">
                   {remaining > 0 ? `还可以重新生成 ${remaining} 次` : '重新生成次数已用完'}
                 </span>
               )}

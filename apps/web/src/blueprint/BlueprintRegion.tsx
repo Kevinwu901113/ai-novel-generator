@@ -29,6 +29,9 @@ import {
   showsBlueprintContent,
   terminalStatusLabel,
 } from './blueprint-logic';
+import { InlineError } from '@/components/InlineError';
+import { Spinner } from '@/components/Spinner';
+import { Button } from '@/components/ui/button';
 
 export interface BlueprintRegionProps {
   readonly projectId: string;
@@ -64,60 +67,72 @@ export function BlueprintRegion({
   const stale = phase.kind === 'stale';
 
   return (
-    <div className="blueprint-region">
-      <div className="blueprint-region-header">
-        <h2 id="blueprint-heading">故事蓝图</h2>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+      <div>
+        <h2 id="blueprint-heading" className="text-lg">
+          故事蓝图
+        </h2>
       </div>
 
       {blueprint.error && (
-        <div className="blueprint-error" role="alert">
-          <span>{blueprint.error}</span>
-          {/* 正文只在 blueprintRef 变化时拉一次，瞬时故障后必须有重试入口——
-              否则 gate 确认按钮（藏在内容真值分支内）在当前屏永远不可达
-              （B8 独立复查）。 */}
-          <button
-            type="button"
-            className="btn-retry-inline"
-            onClick={blueprint.actions.retryFetch}
-            disabled={blueprint.loading}
-          >
-            重试
-          </button>
-        </div>
+        <InlineError className="max-w-[760px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{blueprint.error}</span>
+            {/* 正文只在 blueprintRef 变化时拉一次，瞬时故障后必须有重试入口——
+                否则 gate 确认按钮（藏在内容真值分支内）在当前屏永远不可达
+                （B8 独立复查）。 */}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={blueprint.actions.retryFetch}
+              disabled={blueprint.loading}
+            >
+              重试
+            </Button>
+          </div>
+        </InlineError>
       )}
 
       {initialLoading ? (
-        <div className="blueprint-status" role="status" aria-live="polite">
-          <span className="intake-spinner" aria-hidden="true">
-            ⟳
-          </span>
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+          aria-live="polite"
+        >
+          <Spinner label={null} size={14} />
           正在加载蓝图状态…
         </div>
       ) : (
         <>
           {phase.kind === 'no-run' && (
-            <div className="blueprint-status" role="status">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
               创作旅程还没有开始。
             </div>
           )}
 
           {phase.kind === 'not-started' && (
-            <div className="blueprint-status" role="status">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
               蓝图还没有生成，请先完成前面的阶段。
             </div>
           )}
 
           {phase.kind === 'generating' && (
-            <div className="blueprint-status" role="status" aria-live="polite">
-              <span className="intake-spinner" aria-hidden="true">
-                ⟳
-              </span>
+            <div
+              className="flex items-center gap-2 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner label={null} size={14} />
               正在生成故事蓝图…
             </div>
           )}
 
           {phase.kind === 'terminal' && (
-            <div className="blueprint-info-card" role="status">
+            <div
+              className="max-w-[760px] space-y-1 rounded-lg border border-border bg-secondary px-4 py-3"
+              role="status"
+            >
               <p>{terminalStatusLabel(phase.status)}</p>
               <p>
                 {phase.blueprintRef !== null
@@ -133,7 +148,10 @@ export function BlueprintRegion({
           )}
 
           {stale && (
-            <div className="blueprint-stale-banner" role="status">
+            <div
+              className="max-w-[760px] rounded-md border border-status-attention/30 bg-status-attention/10 px-3.5 py-2.5 text-sm font-semibold text-status-attention"
+              role="status"
+            >
               此蓝图已作废（创作要求已变更），需要重新生成后才能确认
             </div>
           )}
@@ -141,9 +159,7 @@ export function BlueprintRegion({
           {phase.kind === 'escalation' && (
             <>
               {blueprint.decisionError && (
-                <div className="blueprint-error" role="alert">
-                  {blueprint.decisionError}
-                </div>
+                <InlineError className="max-w-[760px]">{blueprint.decisionError}</InlineError>
               )}
               <BlueprintEscalationPanel
                 busy={blueprint.busy}
@@ -166,9 +182,7 @@ export function BlueprintRegion({
                 {state?.gateActive === true ? (
                   <>
                     {blueprint.decisionError && (
-                      <div className="blueprint-error" role="alert">
-                        {blueprint.decisionError}
-                      </div>
+                      <InlineError className="max-w-[760px]">{blueprint.decisionError}</InlineError>
                     )}
                     <BlueprintGatePanel
                       busy={blueprint.busy}
@@ -182,14 +196,22 @@ export function BlueprintRegion({
                     /* P9 兜底展示窗口（如 escalation 决策刚提交、后端在推进）：
                        没有决策按钮是正确的，但要说明现状，否则像死机
                        （B8 独立复查）。 */
-                    <div className="blueprint-status" role="status" aria-live="polite">
+                    <div
+                      className="flex items-center gap-2 text-sm text-muted-foreground"
+                      role="status"
+                      aria-live="polite"
+                    >
                       蓝图流程正在推进，稍候会自动更新。
                     </div>
                   )
                 )}
               </>
             ) : (
-              <div className="blueprint-status" role="status" aria-live="polite">
+              <div
+                className="flex items-center gap-2 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
                 {blueprint.loading ? '正在加载蓝图…' : '蓝图内容暂时不可用。'}
               </div>
             ))}
