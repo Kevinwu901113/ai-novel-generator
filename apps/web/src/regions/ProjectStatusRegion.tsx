@@ -11,6 +11,7 @@
  * 崩溃时不影响 TaskCenter。
  */
 
+import type { ReactNode } from 'react';
 import type { OpenProjectResult } from '@ai-novel/contracts';
 
 interface ProjectStatusRegionProps {
@@ -28,6 +29,17 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
 }
 
+function StatusSection({ heading, children }: { heading: string; children: ReactNode }) {
+  return (
+    <div className="mb-4">
+      <h3 className="mb-1 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+        {heading}
+      </h3>
+      <p className="text-sm text-foreground">{children}</p>
+    </div>
+  );
+}
+
 export function ProjectStatusRegion({ currentProject }: ProjectStatusRegionProps) {
   if (!currentProject) {
     return null;
@@ -35,22 +47,12 @@ export function ProjectStatusRegion({ currentProject }: ProjectStatusRegionProps
 
   return (
     <>
-      <div className="status-section">
-        <h3>项目 ID</h3>
-        <p className="mono">{shortId(currentProject.id)}</p>
-      </div>
-      <div className="status-section">
-        <h3>创建时间</h3>
-        <p>{formatTime(currentProject.createdAt)}</p>
-      </div>
-      <div className="status-section">
-        <h3>最近打开</h3>
-        <p>{formatTime(currentProject.lastOpenedAt)}</p>
-      </div>
-      <div className="status-section">
-        <h3>项目状态</h3>
-        <p>{currentProject.status}</p>
-      </div>
+      <StatusSection heading="项目 ID">
+        <span className="font-mono text-[13px]">{shortId(currentProject.id)}</span>
+      </StatusSection>
+      <StatusSection heading="创建时间">{formatTime(currentProject.createdAt)}</StatusSection>
+      <StatusSection heading="最近打开">{formatTime(currentProject.lastOpenedAt)}</StatusSection>
+      <StatusSection heading="项目状态">{currentProject.status}</StatusSection>
     </>
   );
 }

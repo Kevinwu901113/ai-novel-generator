@@ -643,31 +643,6 @@ body {
   color: var(--color-text);
 }
 
-/* ── 状态面板 ─────────────────────────────────────── */
-
-.status-section {
-  margin-bottom: 16px;
-}
-
-.status-section h3 {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 4px;
-}
-
-.status-section p {
-  font-size: 14px;
-  color: var(--color-text);
-}
-
-.mono {
-  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
-  font-size: 13px;
-}
-
 /* ── 提供商配置 ─────────────────────────────────────── */
 
 .provider-section {
