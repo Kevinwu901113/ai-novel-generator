@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { ChevronRight, Activity, Settings, Sparkles, Database, Search } from 'lucide-react';
 import type {
   HealthCheckResponse,
   ProjectListItem,
@@ -29,9 +30,19 @@ import { toSafeUserError } from './safety/safe-error';
 import { ProjectStatusRegion, ProviderRegion } from './regions';
 import { HomePage } from './home/HomePage';
 import { AppDrawer } from './shell/AppDrawer';
-import { AppIcon } from './shell/AppIcon';
 import { AppRail } from './shell/AppRail';
 import type { DrawerId } from './shell-state';
+import { Button } from '@/components/ui/button';
+import { Toaster } from '@/components/ui/sonner';
+import { cn } from '@/lib/utils';
+import { Spinner } from './components/Spinner';
+import { toastError, dismissToast } from './lib/toast';
+
+// B15：原 `error` state 驱动的顶部全局错误红条改 toast（D-B15 1d）。创建/打开
+// 项目共用同一个 toast id——原实现里两者共写同一个 `error` state 变量，同一
+// 时刻只有一条全局错误，新失败会替换旧的、任一操作重新发起会清空旧的；用固定
+// id 复刻这个"单槽位"语义（sonner 同 id 的 toast 原地更新，不会堆叠）。
+const GLOBAL_ERROR_TOAST_ID = 'app-global-error';
 
 export function App() {
   const [health, setHealth] = useState<HealthCheckResponse | null>(null);
@@ -44,7 +55,6 @@ export function App() {
   const [projects, setProjects] = useState<ReadonlyArray<ProjectListItem>>([]);
   const [currentProject, setCurrentProject] = useState<OpenProjectResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // 追踪是否已加载过项目列表
   const hasLoadedProjects = useRef(false);
@@ -167,7 +177,8 @@ export function App() {
       setProjects(list);
       hasLoadedProjects.current = true;
     } catch {
-      // 列表加载失败不阻塞
+      // B15：原静默吞错改 toast 报错，"不阻塞主流程"的行为保留（不 throw）
+      toastError('项目列表加载失败', 'load-projects');
     }
   }, []);
 
@@ -177,7 +188,8 @@ export function App() {
       const list = await window.desktop.provider.list();
       setProviders(list);
     } catch {
-      // 模型服务列表加载失败不阻塞
+      // B15：原静默吞错改 toast 报错，"不阻塞主流程"的行为保留（不 throw）
+      toastError('模型服务列表加载失败', 'load-providers');
     }
   }, []);
 
@@ -206,7 +218,7 @@ export function App() {
   // 创建项目
   const handleCreate = useCallback(
     async (name: string, idea: string): Promise<boolean> => {
-      setError(null);
+      dismissToast(GLOBAL_ERROR_TOAST_ID);
       try {
         const result = await window.desktop.projects.create({ name, initialIdea: idea });
         await loadProjects();
@@ -222,7 +234,7 @@ export function App() {
         return true;
       } catch (err) {
         const safe = toSafeUserError(err, '创建项目失败');
-        setError(safe.message);
+        toastError(safe.message, GLOBAL_ERROR_TOAST_ID);
         return false;
       }
     },
@@ -234,7 +246,7 @@ export function App() {
     async (projectId: string) => {
       if (isLoading || dataServiceStatus !== 'ready') return;
       setIsLoading(true);
-      setError(null);
+      dismissToast(GLOBAL_ERROR_TOAST_ID);
 
       try {
         const project = await window.desktop.projects.open(projectId);
@@ -246,7 +258,7 @@ export function App() {
         await loadProjects();
       } catch (err) {
         const safe = toSafeUserError(err, '打开项目失败');
-        setError(safe.message);
+        toastError(safe.message, GLOBAL_ERROR_TOAST_ID);
       } finally {
         setIsLoading(false);
       }
@@ -259,21 +271,22 @@ export function App() {
     try {
       await window.desktop.retryDataService();
     } catch {
-      // 忽略
+      // B15：原静默吞错改 toast 报错，"忽略"（不阻塞）的行为保留（不 throw）
+      toastError('重试数据服务失败', 'retry-data-service');
     }
   }, []);
 
   // 新建项目按钮
   const handleNewProject = useCallback(() => {
     setCurrentProject(null);
-    setError(null);
+    dismissToast(GLOBAL_ERROR_TOAST_ID);
     // 切换到新建项目时焦点进入名称输入框
     setShouldFocusCreate(true);
   }, []);
 
   const handleHome = useCallback(() => {
     setCurrentProject(null);
-    setError(null);
+    dismissToast(GLOBAL_ERROR_TOAST_ID);
   }, []);
 
   const handleOpenSettings = useCallback(() => {
@@ -359,127 +372,139 @@ export function App() {
     : null;
 
   return (
-    <div className="app-shell">
-      <AppRail
-        isHome={!currentProject}
-        onHome={handleHome}
-        onNewProject={handleNewProject}
-        onOpenSettings={handleOpenSettings}
-      />
+    <>
+      <div className="app-shell">
+        <AppRail
+          isHome={!currentProject}
+          onHome={handleHome}
+          onNewProject={handleNewProject}
+          onOpenSettings={handleOpenSettings}
+        />
 
-      <div className="app-surface">
-        <header className="app-header" role="banner">
-          <div className="header-identity">
-            {currentProject ? (
-              <>
-                <button className="header-home-link" type="button" onClick={handleHome}>
-                  项目
-                </button>
-                <AppIcon name="chevron" size={15} />
-                <h1>{currentProject.name}</h1>
-                <span className="stage-pill">{currentStageLabel}</span>
-              </>
-            ) : (
-              <>
-                <span className="header-product-name">AI 小说创作代理</span>
-                <span className="header-product-note">本地优先创作台</span>
-              </>
-            )}
-          </div>
-
-          <div className="header-actions">
-            {!isDataServiceReady && (
-              <span className={`service-status-pill ${dataServiceStatus}`} role="status">
-                {isDataServiceStarting ? '数据服务启动中' : '数据服务不可用'}
-              </span>
-            )}
-            {currentProject && (
-              <button className="header-button" type="button" onClick={handleOpenTasks}>
-                <AppIcon name="activity" size={18} />
-                <span>任务活动</span>
-              </button>
-            )}
-            <button className="header-button" type="button" onClick={handleOpenSettings}>
-              <AppIcon name="settings" size={18} />
-              <span>{defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}</span>
-            </button>
-          </div>
-        </header>
-
-        {error && (
-          <div className="global-error" role="alert" aria-live="assertive">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} aria-label="关闭错误提示">
-              ✕
-            </button>
-          </div>
-        )}
-
-        <main className="main-surface">
-          {currentProject ? (
-            <section ref={grillSectionRef} className="project-workspace" aria-label="创作旅程">
-              <div className="project-journey-bar">
-                <JourneyNav
-                  frontierStage={frontierStage}
-                  viewStage={viewStage}
-                  reachedStages={reachedStages}
-                  onSelectStage={handleSelectJourneyStage}
-                />
-              </div>
-              {journey.error && (
-                <div className="journey-probe-error" role="status" aria-live="polite">
-                  {journey.error}（正在自动重试）
-                </div>
+        <div className="app-surface">
+          <header
+            className="flex h-[62px] shrink-0 items-center justify-between gap-5 border-b border-border bg-card/95 px-6"
+            role="banner"
+          >
+            <div className="flex min-w-0 items-center gap-2.5">
+              {currentProject ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleHome}
+                    className="text-sm text-muted-foreground hover:text-primary"
+                  >
+                    项目
+                  </button>
+                  <ChevronRight size={15} aria-hidden="true" className="text-muted-foreground" />
+                  <h1 className="max-w-[min(42vw,560px)] truncate text-[15px] font-semibold">
+                    {currentProject.name}
+                  </h1>
+                  <span className="inline-flex items-center whitespace-nowrap rounded-full bg-accent px-2.5 py-0.5 text-[11px] text-accent-foreground">
+                    {currentStageLabel}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-[15px] font-semibold">AI 小说创作代理</span>
+                  <span className="text-xs text-muted-foreground">本地优先创作台</span>
+                </>
               )}
-              <div className="project-canvas">
-                <div className="project-canvas-inner">
-                  <RendererErrorBoundary label="创作旅程">
-                    {viewStage === 'manuscript' ? (
-                      <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
-                    ) : viewStage === 'blueprint' ? (
-                      <BlueprintRegion
-                        key={currentProject.id}
-                        projectId={currentProject.id}
-                        state={journey.blueprintState}
-                        terminalStatus={journey.run?.terminalStatus ?? null}
-                        generating={hasActiveBlueprintGenerate(journey.progress)}
-                        stateLoading={journey.loading}
-                        onRefresh={handleHumanDecisionSettled}
-                      />
-                    ) : viewStage === 'research' ? (
-                      <ResearchRegion
-                        key={currentProject.id}
-                        projectId={currentProject.id}
-                        showBeyondResearchNotice={showResearchBeyondNotice}
-                        onDecisionSettled={handleHumanDecisionSettled}
-                      />
-                    ) : (
-                      <IntakeRegion key={currentProject.id} projectId={currentProject.id} />
-                    )}
-                  </RendererErrorBoundary>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <RendererErrorBoundary label="首页">
-              <HomePage
-                dataServiceStatus={dataServiceStatus}
-                projects={projects}
-                defaultProvider={defaultProvider}
-                searchConfigured={searchConfigured}
-                createSectionRef={createSectionRef}
-                onRetry={handleRetry}
-                onCreate={handleCreate}
-                onOpenProject={handleOpenProject}
-                onOpenSettings={handleOpenSettings}
-              />
-            </RendererErrorBoundary>
-          )}
-        </main>
-      </div>
+            </div>
 
-      {openDrawer === 'tasks' && (
+            <div className="flex min-w-0 items-center gap-2.5">
+              {!isDataServiceReady && (
+                <span
+                  className={cn(
+                    'inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px]',
+                    isDataServiceStarting
+                      ? 'bg-accent text-accent-foreground'
+                      : 'bg-destructive/10 text-destructive',
+                  )}
+                  role="status"
+                >
+                  {isDataServiceStarting && <Spinner label={null} size={12} />}
+                  {isDataServiceStarting ? '数据服务启动中' : '数据服务不可用'}
+                </span>
+              )}
+              {currentProject && (
+                <Button variant="outline" size="sm" onClick={handleOpenTasks}>
+                  <Activity size={16} aria-hidden="true" />
+                  任务活动
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={handleOpenSettings}>
+                <Settings size={16} aria-hidden="true" />
+                {defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}
+              </Button>
+            </div>
+          </header>
+
+          <main className="main-surface">
+            {currentProject ? (
+              <section ref={grillSectionRef} className="project-workspace" aria-label="创作旅程">
+                <div className="project-journey-bar">
+                  <JourneyNav
+                    frontierStage={frontierStage}
+                    viewStage={viewStage}
+                    reachedStages={reachedStages}
+                    onSelectStage={handleSelectJourneyStage}
+                  />
+                </div>
+                {journey.error && (
+                  <div className="journey-probe-error" role="status" aria-live="polite">
+                    {journey.error}（正在自动重试）
+                  </div>
+                )}
+                <div className="project-canvas">
+                  <div className="project-canvas-inner">
+                    <RendererErrorBoundary label="创作旅程">
+                      {viewStage === 'manuscript' ? (
+                        <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
+                      ) : viewStage === 'blueprint' ? (
+                        <BlueprintRegion
+                          key={currentProject.id}
+                          projectId={currentProject.id}
+                          state={journey.blueprintState}
+                          terminalStatus={journey.run?.terminalStatus ?? null}
+                          generating={hasActiveBlueprintGenerate(journey.progress)}
+                          stateLoading={journey.loading}
+                          onRefresh={handleHumanDecisionSettled}
+                        />
+                      ) : viewStage === 'research' ? (
+                        <ResearchRegion
+                          key={currentProject.id}
+                          projectId={currentProject.id}
+                          showBeyondResearchNotice={showResearchBeyondNotice}
+                          onDecisionSettled={handleHumanDecisionSettled}
+                        />
+                      ) : (
+                        <IntakeRegion key={currentProject.id} projectId={currentProject.id} />
+                      )}
+                    </RendererErrorBoundary>
+                  </div>
+                </div>
+              </section>
+            ) : (
+              <RendererErrorBoundary label="首页">
+                <HomePage
+                  dataServiceStatus={dataServiceStatus}
+                  projects={projects}
+                  defaultProvider={defaultProvider}
+                  searchConfigured={searchConfigured}
+                  createSectionRef={createSectionRef}
+                  onRetry={handleRetry}
+                  onCreate={handleCreate}
+                  onOpenProject={handleOpenProject}
+                  onOpenSettings={handleOpenSettings}
+                />
+              </RendererErrorBoundary>
+            )}
+          </main>
+        </div>
+
         <AppDrawer
+          open={openDrawer === 'tasks'}
           title="任务活动"
           description={currentProject ? `${currentProject.name} 的模型调用与运行记录` : undefined}
           onClose={handleCloseDrawer}
@@ -496,17 +521,16 @@ export function App() {
             </details>
           )}
         </AppDrawer>
-      )}
 
-      {openDrawer === 'settings' && (
         <AppDrawer
+          open={openDrawer === 'settings'}
           title="创作服务设置"
           description="配置生成模型、联网搜索与本地运行状态"
           onClose={handleCloseDrawer}
         >
           <section className="drawer-section" aria-labelledby="provider-heading">
             <div className="drawer-section-heading">
-              <AppIcon name="sparkles" size={18} />
+              <Sparkles size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
                 <h3 id="provider-heading">模型提供商</h3>
                 <p>正文、蓝图和创作要求都使用这里的默认模型。</p>
@@ -528,7 +552,7 @@ export function App() {
 
           <section className="drawer-section" aria-labelledby="search-key-heading">
             <div className="drawer-section-heading">
-              <AppIcon name="search" size={18} />
+              <Search size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
                 <h3 id="search-key-heading">联网搜索</h3>
                 <p>可选。需要历史或现实资料时，使用 Tavily 完成调研。</p>
@@ -544,7 +568,7 @@ export function App() {
 
           <section className="drawer-section system-overview" aria-labelledby="system-heading">
             <div className="drawer-section-heading">
-              <AppIcon name="database" size={18} />
+              <Database size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
                 <h3 id="system-heading">本地运行</h3>
                 <p>项目和稿件只保存在这台电脑。</p>
@@ -568,7 +592,8 @@ export function App() {
             </dl>
           </section>
         </AppDrawer>
-      )}
-    </div>
+      </div>
+      <Toaster />
+    </>
   );
 }

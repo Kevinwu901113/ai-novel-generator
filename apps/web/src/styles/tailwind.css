@@ -8,6 +8,14 @@
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
+/*
+ * B15：shadcn 生成件（Sheet/Dialog/Select…）大量使用 `animate-in`/
+ * `slide-in-from-*`/`fade-out-0` 等类名，这些不是 Tailwind v4 核心内置
+ * utility，需要 tw-animate-css 注册对应 `@utility` 才会产生实际
+ * animation-name（否则弹层开合没有动效，直接瞬时切换）。B14 只搭地基未接
+ * 组件，当时没有这个依赖缺口；本批首次真正渲染 Sheet 才坐实。
+ */
+@import 'tw-animate-css';
 
 /*
  * D-B14-1 遗留代价的就地补齐（B15 引入首批 shadcn 组件时验证坐实）：跳过的
@@ -80,6 +88,18 @@
   --canvas: #f4f3ef;
   --panel: #ffffff;
   --rail: #181817;
+  /* B15：AppRail 迁 Tailwind 时从 App.css 搬入的 rail 专属色，明暗同值
+     （原 --color-rail-text/rail-button 硬编码，promote 成 token 而非留
+     Tailwind 任意值里的裸十六进制）。 */
+  --rail-foreground: #d6d3ce;
+  --rail-muted: #8f8d88;
+  --rail-active: #8f8cff;
+  /* B15：HomePage 服务就绪状态点（readiness-dot），明暗同值。不进 primary
+     色阶——"就绪/待处理"是独立于强调色的状态语义，硬塞进靛蓝紫家族反而
+     会让"完成度"读不出来。 */
+  --status-neutral: #a3a3a3;
+  --status-ready: #22a06b;
+  --status-attention: #d97706;
   --foreground: #1f2937;
 
   --background: var(--canvas);
@@ -107,6 +127,12 @@
     --canvas: #151514;
     --panel: #1d1d1b;
     --rail: #181817;
+    --rail-foreground: #d6d3ce;
+    --rail-muted: #8f8d88;
+    --rail-active: #8f8cff;
+    --status-neutral: #a3a3a3;
+    --status-ready: #22a06b;
+    --status-attention: #d97706;
     --foreground: #e5e5e5;
 
     --background: var(--canvas);
@@ -136,6 +162,12 @@
   --color-canvas: var(--canvas);
   --color-panel: var(--panel);
   --color-rail: var(--rail);
+  --color-rail-foreground: var(--rail-foreground);
+  --color-rail-muted: var(--rail-muted);
+  --color-rail-active: var(--rail-active);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-ready: var(--status-ready);
+  --color-status-attention: var(--status-attention);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);

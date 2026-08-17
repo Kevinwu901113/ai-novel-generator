@@ -2831,234 +2831,12 @@ body {
   flex-direction: column;
 }
 
-.app-rail {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 22px;
-  padding: 18px 10px 14px;
-  background: var(--color-rail);
-  color: var(--color-rail-text);
-  border-right: 1px solid rgba(255, 255, 255, 0.06);
-  z-index: 4;
-}
-
-.app-mark {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  color: #ffffff;
-  background: linear-gradient(145deg, #7471ef, #514cc9);
-  box-shadow: 0 8px 24px rgba(81, 76, 201, 0.35);
-  font-family: 'Songti SC', STSong, serif;
-  font-size: 19px;
-  font-weight: 700;
-}
-
-.rail-actions {
-  display: flex;
-  width: 100%;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.rail-button {
-  display: flex;
-  min-height: 52px;
-  width: 100%;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: #8f8d88;
-  font-family: inherit;
-  font-size: 10px;
-  cursor: pointer;
-  transition:
-    color 140ms ease,
-    background-color 140ms ease;
-}
-
-.rail-button:hover,
-.rail-button.active {
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.09);
-}
-
-.rail-button.active {
-  box-shadow: inset 3px 0 0 #8f8cff;
-}
-
-.rail-settings {
-  margin-top: auto;
-}
-
-.app-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  height: 62px;
-  padding: 0 24px;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--color-surface) 94%, transparent);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.header-identity,
-.header-actions {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 9px;
-}
-
-.header-identity h1 {
-  max-width: min(42vw, 560px);
-  overflow: hidden;
-  font-size: 15px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.header-product-name {
-  font-size: 15px;
-  font-weight: 650;
-}
-
-.header-product-note {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.header-home-link {
-  border: 0;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.header-home-link:hover {
-  color: var(--color-primary);
-}
-
-.stage-pill,
-.service-status-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 9px;
-  border-radius: 999px;
-  color: var(--color-accent-text);
-  background: var(--color-accent-soft);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.service-status-pill.failed,
-.service-status-pill.disconnected {
-  color: #b91c1c;
-  background: #fef2f2;
-}
-
-.header-button,
-.icon-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 34px;
-  padding: 0 11px;
-  border: 1px solid var(--color-border);
-  border-radius: 9px;
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition:
-    border-color 140ms ease,
-    background-color 140ms ease;
-}
-
-.header-button:hover,
-.icon-button:hover {
-  border-color: color-mix(in srgb, var(--color-primary) 55%, var(--color-border));
-  background: var(--color-accent-soft);
-}
-
-.icon-button {
-  width: 36px;
-  padding: 0;
-}
-
 .main-surface {
   position: relative;
   min-height: 0;
   flex: 1;
   overflow: hidden;
   background: var(--color-canvas);
-}
-
-.home-page {
-  height: 100%;
-  overflow-y: auto;
-  padding: 62px clamp(34px, 6vw, 92px) 72px;
-}
-
-.home-hero,
-.recent-projects {
-  width: min(100%, 1080px);
-  margin-inline: auto;
-}
-
-.home-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(420px, 1.25fr);
-  column-gap: clamp(44px, 7vw, 96px);
-  row-gap: 22px;
-  align-items: center;
-}
-
-.home-hero-copy h1 {
-  margin: 12px 0 14px;
-  font-family: 'Songti SC', STSong, 'Noto Serif CJK SC', serif;
-  font-size: clamp(34px, 4vw, 52px);
-  font-weight: 650;
-  letter-spacing: -0.035em;
-  line-height: 1.12;
-}
-
-.home-hero-copy > p {
-  max-width: 390px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-  line-height: 1.8;
-}
-
-.eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-accent-text);
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.08em;
-}
-
-.home-creation-card {
-  padding: 26px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  border-radius: 20px;
-  background: var(--color-surface-raised);
-  box-shadow: 0 24px 70px var(--color-shadow);
 }
 
 .home-create-content,
@@ -3092,92 +2870,6 @@ body {
   min-height: 44px;
   border-radius: 10px;
   font-size: 14px;
-}
-
-.service-readiness {
-  grid-column: 2;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.readiness-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
-  color: var(--color-text-secondary);
-  text-align: left;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.readiness-item:hover {
-  border-color: color-mix(in srgb, var(--color-primary) 50%, var(--color-border));
-}
-
-.readiness-item > span:last-child {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-}
-
-.readiness-item strong {
-  color: var(--color-text);
-  font-size: 11px;
-}
-
-.readiness-dot {
-  width: 8px;
-  height: 8px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #a3a3a3;
-  box-shadow: 0 0 0 4px rgba(163, 163, 163, 0.12);
-}
-
-.readiness-dot.ready {
-  background: #22a06b;
-  box-shadow: 0 0 0 4px rgba(34, 160, 107, 0.12);
-}
-
-.readiness-dot.attention {
-  background: #d97706;
-  box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.12);
-}
-
-.recent-projects {
-  margin-top: 48px;
-}
-
-.section-heading-row {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 18px;
-  margin-bottom: 18px;
-}
-
-.section-kicker {
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  letter-spacing: 0.1em;
-}
-
-.section-heading-row h2 {
-  margin-top: 3px;
-  font-family: 'Songti SC', STSong, serif;
-  font-size: 24px;
-}
-
-.project-count {
-  color: var(--color-text-secondary);
-  font-size: 12px;
 }
 
 .project-card-grid {
@@ -3348,73 +3040,15 @@ body {
 }
 
 /* ── 设置与任务抽屉 ─────────────────────────────────────────── */
-
-.drawer-layer {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  justify-content: flex-end;
-  z-index: 50;
-}
-
-.drawer-backdrop {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  border: 0;
-  background: rgba(8, 8, 8, 0.5);
-  backdrop-filter: blur(3px);
-  cursor: default;
-}
-
-.app-drawer {
-  position: relative;
-  display: flex;
-  width: min(520px, calc(100vw - 76px));
-  height: 100%;
-  flex-direction: column;
-  background: var(--color-surface);
-  border-left: 1px solid var(--color-border);
-  box-shadow: -24px 0 70px rgba(0, 0, 0, 0.22);
-  animation: drawer-enter 180ms ease-out;
-}
-
-@keyframes drawer-enter {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
-.drawer-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.drawer-header h2 {
-  font-size: 18px;
-}
-
-.drawer-header p {
-  margin-top: 3px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.drawer-content {
-  min-height: 0;
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px;
-}
+/*
+ * B15：抽屉外层机制（backdrop/frame/header 布局/开合动画）改 shadcn Sheet
+ * + Tailwind（见 shell/AppDrawer.tsx），原 .drawer-layer/.drawer-backdrop/
+ * .app-drawer/@keyframes drawer-enter/.drawer-header* 整段删除。
+ * .drawer-content 的自身版式（padding/flex/overflow）同理改直接写在
+ * AppDrawer.tsx 的 className 上；但 .drawer-content 这个类名本身仍然保留
+ * 在该 div 上——下面 .drawer-content .provider-* 等嵌套选择器要靠它认祖先，
+ * 这些是 ProviderRegion/TaskCenter（Region 内部）的既有样式，B16 才收编。
+ */
 
 .drawer-section + .drawer-section,
 .drawer-details {
@@ -3428,11 +3062,6 @@ body {
   align-items: flex-start;
   gap: 10px;
   margin-bottom: 16px;
-}
-
-.drawer-section-heading .app-icon {
-  margin-top: 2px;
-  color: var(--color-accent-text);
 }
 
 .drawer-section-heading h3 {
@@ -3586,54 +3215,29 @@ body {
   font-weight: 600;
 }
 
-@media (prefers-color-scheme: dark) {
-  .service-status-pill.failed,
-  .service-status-pill.disconnected {
-    color: #fca5a5;
-    background: #3f1d1d;
-  }
-}
+/*
+ * B15：.service-status-pill 随 app-header 迁 Tailwind 删除，这条暗色覆写
+ * 随之失去目标元素，一并删除（destructive 语义现由 tailwind.css 的
+ * --destructive token 承接，明暗两套值已在那边定义）。
+ */
 
 @media (max-width: 1080px) {
-  .home-page {
-    padding: 44px 34px 60px;
-  }
-
-  .home-hero {
-    grid-template-columns: minmax(0, 0.8fr) minmax(390px, 1.2fr);
-    column-gap: 38px;
-  }
-
   .project-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
+/*
+ * B15：本断点下 app-rail、home-hero、home-creation-card、service-readiness、
+ * header-button 这几个类名的响应式微调，随各自组件迁 Tailwind 一并删除——
+ * lucide 版 AppRail、Tailwind 版 HomePage 目前没有对应的窄屏样式，移动端
+ * 事项统一放 B17（decision-log D12 已定），本批不补（已知限制，见
+ * b15-shell-components-design.md 第 4 节）。app-shell、project-canvas 相关
+ * 规则仍是 App.tsx 直接使用的壳层/旅程画布类名，不在本批迁移范围，保留。
+ */
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 64px minmax(0, 1fr);
-  }
-
-  .app-rail {
-    padding-inline: 7px;
-  }
-
-  .home-hero {
-    grid-template-columns: 1fr;
-  }
-
-  .home-hero-copy,
-  .home-creation-card,
-  .service-readiness {
-    grid-column: 1;
-  }
-
-  .home-hero-copy > p {
-    max-width: 620px;
-  }
-
-  .header-button span {
-    display: none;
   }
 
   .project-canvas {
@@ -3643,56 +3247,4 @@ body {
   .project-canvas-inner {
     border-radius: 12px;
   }
-
-  .app-drawer {
-    width: min(520px, calc(100vw - 64px));
-  }
-}
-
-/* ── Token Gate（B12：Web 形态访问令牌录入）───────────────────── */
-
-.token-gate {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: var(--color-canvas);
-}
-
-.token-gate-card {
-  width: min(100%, 400px);
-  padding: 32px;
-  border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-  border-radius: 20px;
-  background: var(--color-surface-raised);
-  box-shadow: 0 24px 70px var(--color-shadow);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.token-gate-title {
-  font-family: 'Songti SC', STSong, 'Noto Serif CJK SC', serif;
-  font-size: 22px;
-  font-weight: 650;
-  color: var(--color-text);
-}
-
-.token-gate-description {
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-text-secondary);
-  margin-bottom: 12px;
-}
-
-.token-gate-form {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.token-gate-form .btn-create {
-  align-self: stretch;
-  text-align: center;
 }

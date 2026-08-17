@@ -179,6 +179,23 @@ async function openSettingsDrawer() {
   });
 }
 
+// B15：顶部全局错误红条（原 <div className="global-error" role="alert">）
+// 改 sonner toast（D-B15 1d）。sonner 不产生 role="alert"/role="status" 元素
+// ——它自己的无障碍机制是给 toast 列表容器套一个 aria-live="polite" 的
+// <section>（"role="alert" 语义由 sonner 的 aria 机制承接"，D-B15-1），逐条
+// toast 本身没有 role。以下两个 helper 取代原来的 screen.getByRole('alert')。
+function queryGlobalErrorToasts(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('[data-sonner-toast][data-type="error"]'),
+  );
+}
+
+function getGlobalErrorToastText(): string {
+  const toasts = queryGlobalErrorToasts();
+  if (toasts.length === 0) throw new Error('未找到错误 toast');
+  return toasts[0].querySelector('[data-title]')?.textContent ?? '';
+}
+
 // ── B6 REWORK 复查：展示阶段与推进阶段分离（D-B6-10）──────────────────
 //
 // 已坐实的 blocker：调研有结果的那一刻，Graph frontier 往往已经同快照推进到
@@ -699,7 +716,12 @@ describe('App 级别测试', () => {
       screen.getByRole('button', { name: '关闭创作服务设置' }).click();
     });
     expect(screen.queryByRole('dialog', { name: '创作服务设置' })).not.toBeInTheDocument();
-    expect(settingsButton).toHaveFocus();
+    // B15：抽屉关闭态迁 Radix Dialog（Sheet）后，焦点归还由 FocusScope 的
+    // onUnmountAutoFocus 承接；该归还包在真实 setTimeout(0) 宏任务里（非
+    // React 调度、非微任务），act() 不会替它推进时间，断言需要 waitFor。
+    await waitFor(() => {
+      expect(settingsButton).toHaveFocus();
+    });
   });
 
   // 3. 实际 App DOM 不存在重复关键 id
@@ -764,12 +786,10 @@ describe('App 级别测试', () => {
       createBtn.click();
     });
 
-    // global error 应该出现
+    // global error（toast）应该出现
     await waitFor(
       () => {
-        const errorAlert = screen.getByRole('alert');
-        expect(errorAlert).toBeInTheDocument();
-        expect(errorAlert.textContent).toContain('创建失败');
+        expect(getGlobalErrorToastText()).toContain('创建失败');
       },
       { timeout: 5000 },
     );
@@ -823,14 +843,14 @@ describe('App 级别测试', () => {
       createBtn.click();
     });
 
-    // global error 应该不包含敏感信息
+    // global error（toast）应该不包含敏感信息
     await waitFor(
       () => {
-        const errorAlert = screen.getByRole('alert');
-        expect(errorAlert.textContent).not.toContain('/Users/');
-        expect(errorAlert.textContent).not.toContain('Bearer');
-        expect(errorAlert.textContent).not.toContain('sk-');
-        expect(errorAlert.textContent).not.toContain('at createProject');
+        const text = getGlobalErrorToastText();
+        expect(text).not.toContain('/Users/');
+        expect(text).not.toContain('Bearer');
+        expect(text).not.toContain('sk-');
+        expect(text).not.toContain('at createProject');
       },
       { timeout: 5000 },
     );
@@ -938,10 +958,10 @@ describe('App 级别测试', () => {
       createBtn.click();
     });
 
-    // global error 出现
+    // global error（toast）出现
     await waitFor(
       () => {
-        expect(screen.getByRole('alert')).toBeInTheDocument();
+        expect(queryGlobalErrorToasts().length).toBe(1);
       },
       { timeout: 5000 },
     );
@@ -951,10 +971,10 @@ describe('App 级别测试', () => {
       createBtn.click();
     });
 
-    // global error 应该消失
+    // global error（toast）应该消失
     await waitFor(
       () => {
-        expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+        expect(queryGlobalErrorToasts().length).toBe(0);
       },
       { timeout: 5000 },
     );
@@ -1059,11 +1079,10 @@ describe('App 级别测试', () => {
       createBtn.click();
     });
 
-    // 只应该有一个 alert（global error）
+    // 只应该有一个 global error（toast）
     await waitFor(
       () => {
-        const alerts = screen.getAllByRole('alert');
-        expect(alerts.length).toBe(1);
+        expect(queryGlobalErrorToasts().length).toBe(1);
       },
       { timeout: 5000 },
     );

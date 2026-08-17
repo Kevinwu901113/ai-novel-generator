@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { AUTH_TOKEN_STORAGE_KEY, AUTH_REQUIRED_EVENT } from '../desktop-client';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Spinner } from '../components/Spinner';
 
 interface TokenGateProps {
   readonly children: ReactNode;
@@ -83,14 +88,16 @@ export function TokenGate({ children }: TokenGateProps) {
   }
 
   return (
-    <div className="token-gate">
-      <div className="token-gate-card">
-        <h1 className="token-gate-title">AI 小说创作代理</h1>
-        <p className="token-gate-description">请输入服务端启动日志中打印的访问令牌</p>
-        <form className="token-gate-form" onSubmit={handleSubmit}>
-          <div className="form-field">
-            <label htmlFor="token-gate-input">访问令牌</label>
-            <input
+    <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
+      <Card className="w-full max-w-[400px] gap-2 rounded-[20px] border-border/82 p-8 shadow-[0_24px_70px_var(--color-shadow)]">
+        <h1 className="font-serif text-[22px] font-semibold text-foreground">AI 小说创作代理</h1>
+        <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">
+          请输入服务端启动日志中打印的访问令牌
+        </p>
+        <form className="flex flex-col gap-3.5" onSubmit={handleSubmit}>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="token-gate-input">访问令牌</Label>
+            <Input
               id="token-gate-input"
               type="password"
               value={tokenInput}
@@ -103,20 +110,16 @@ export function TokenGate({ children }: TokenGateProps) {
             />
           </div>
           {error && (
-            <span className="form-error" id="token-gate-error" role="alert">
+            <span className="text-sm text-destructive" id="token-gate-error" role="alert">
               {error}
             </span>
           )}
-          <button
-            type="submit"
-            className="btn-create"
-            disabled={isVerifying}
-            aria-busy={isVerifying}
-          >
+          <Button type="submit" disabled={isVerifying} aria-busy={isVerifying} className="w-full">
+            {isVerifying && <Spinner label={null} size={14} />}
             {isVerifying ? '验证中…' : '进入'}
-          </button>
+          </Button>
         </form>
-      </div>
+      </Card>
     </div>
   );
 }
