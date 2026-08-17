@@ -9,7 +9,10 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@ai-novel/contracts": "workspace:*"
+    "@ai-novel/contracts": "workspace:*",
+    "next-themes": "^0.4.6",
+    "radix-ui": "^1.6.7",
+    "sonner": "^2.0.8"
   },
   "devDependencies": {
     "@ai-novel/domain": "workspace:*",

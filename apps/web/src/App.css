@@ -5,11 +5,19 @@
  * 完全相同的变量改为反向引用新 token（桥接，保证存量选择器不失效，D-B14-2）：
  * --color-canvas/--color-surface/--color-border/--color-text-secondary/
  * --color-accent-soft/--color-accent-text 六个。--color-primary 及
- * --color-primary-hover 保持独立硬编码——蓝 #2563eb 按 D12 拍板不进入新 token
- * 体系（新 primary 是靛蓝紫 #514cc9 家族），桥接会立即改变现有按钮/焦点环颜色，
- * 与本批"视觉零变化"红线冲突，故意不桥接，留给 B15/B16 逐屏收敛三套强调色时
- * 处理。--color-rail 同样不桥接：新 token 的 rail 明暗同值（近黑常量），而本文件
- * 暗色下更深至 #0f0f0e，桥接会丢失这一级差异。
+ * --color-primary-hover 当时保持独立硬编码——蓝 #2563eb 按 D12 拍板不进入新
+ * token 体系（新 primary 是靛蓝紫 #514cc9 家族），桥接会立即改变现有按钮/
+ * 焦点环颜色，与 B14"视觉零变化"红线冲突，故意搁置。
+ *
+ * B15（1b，全局第一个可见变化）：这两个变量现在桥接到新 primary 色阶——
+ * 亮色取 --color-primary-600（#514cc9，与 logo/`.app-mark` 同色）为基色、
+ * --color-primary-700（#4338ca）为 hover 深一档；暗色取 --color-primary-400
+ * （#7471ef，与 tailwind.css 语义 --primary 暗色同值）为基色、
+ * --color-primary-300（#b9b8ff，与暗色 --color-accent-text 同值）为 hover
+ * 浅一档——锚点均取自 B14 已建好的色阶，不新增硬编码色。存量 `.btn-primary`、
+ * 焦点环、链接色随之全局变色，一次到位。--color-rail 仍不桥接：新 token 的
+ * rail 明暗同值（近黑常量），而本文件暗色下更深至 #0f0f0e，桥接会丢失这一级
+ * 差异，与强调色收敛无关，留到 B17 一并处理。
  */
 :root {
   --color-bg: #ffffff;
@@ -18,8 +26,8 @@
   --color-text: #1a1a1a;
   --color-text-secondary: var(--muted-foreground);
   --color-border: var(--border);
-  --color-primary: #2563eb;
-  --color-primary-hover: #1d4ed8;
+  --color-primary: var(--color-primary-600);
+  --color-primary-hover: var(--color-primary-700);
   --color-dev-badge: #16a34a;
   --color-dev-badge-bg: #dcfce7;
   --color-status-ok: #16a34a;
@@ -42,8 +50,8 @@
     --color-text: #e5e5e5;
     --color-text-secondary: var(--muted-foreground);
     --color-border: var(--border);
-    --color-primary: #3b82f6;
-    --color-primary-hover: #60a5fa;
+    --color-primary: var(--color-primary-400);
+    --color-primary-hover: var(--color-primary-300);
     --color-dev-badge: #22c55e;
     --color-dev-badge-bg: #052e16;
     --color-status-ok: #22c55e;
@@ -90,11 +98,15 @@
  * 焦点可见样式。
  * 为所有可交互元素提供明确的焦点指示器。
  * 不使用 outline: none，除非提供同等或更明显替代。
+ *
+ * B15：排除 `[data-slot]` 标记的 shadcn 原语——它们自带 Tailwind 的
+ * focus-visible ring（`ring-ring/50` 接 tailwind.css 的 --ring token，
+ * 同一靛蓝紫），这条历史规则不排除的话会在 ring 之外再叠一圈 outline。
  */
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible,
+button:focus-visible:not([data-slot]),
+input:focus-visible:not([data-slot]),
+textarea:focus-visible:not([data-slot]),
+select:focus-visible:not([data-slot]),
 [role='option']:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--color-primary);

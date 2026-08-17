@@ -9,6 +9,30 @@
 @import 'tailwindcss/theme.css' layer(theme);
 @import 'tailwindcss/utilities.css' layer(utilities);
 
+/*
+ * D-B14-1 遗留代价的就地补齐（B15 引入首批 shadcn 组件时验证坐实）：跳过的
+ * preflight 里，浏览器表单控件的 UA 默认值重置（button 的 3D outset 边框、
+ * appearance、继承字体）从未被替换——shadcn 生成件假设这层重置存在。这里只
+ * 对 shadcn 原语（`data-slot` 标记）补一个最小子集，装进 base 层：utilities
+ * 层的 Tailwind 类（如 outline 变体的 border、size 变体的 padding）天然按
+ * 层序覆盖之，效果等价于局部 preflight，且不触及 App.css 的存量选择器。
+ */
+@layer base {
+  [data-slot='button'],
+  [data-slot='input'],
+  [data-slot='textarea'],
+  [data-slot='select-trigger'] {
+    appearance: none;
+    background-color: transparent;
+    border-width: 0;
+    border-style: solid;
+    margin: 0;
+    padding: 0;
+    font: inherit;
+    color: inherit;
+  }
+}
+
 /* dark variant 绑定系统配色方案（不做 class 切换，暗色继续跟随系统）。 */
 @custom-variant dark (@media (prefers-color-scheme: dark));
 
