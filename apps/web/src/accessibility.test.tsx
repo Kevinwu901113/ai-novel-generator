@@ -1341,7 +1341,9 @@ describe('六、Error Boundary 焦点', () => {
     const fallback = screen.getByRole('alert');
     expect(fallback).toHaveAttribute('tabindex', '-1');
     expect(fallback).toHaveAttribute('aria-label', '测试加载异常');
-    expect(fallback.className).toBe('error-boundary-fallback');
+    // B17：className 从字面量 `.error-boundary-fallback` 换成 Tailwind 类
+    // 组合（App.css 退役），断言改为检查错误态视觉锚点存在，语义不变。
+    expect(fallback.className).toContain('border-destructive');
 
     act(() => {
       vi.advanceTimersByTime(0);
@@ -1435,7 +1437,10 @@ describe('六、Error Boundary 焦点', () => {
       vi.advanceTimersByTime(0);
     });
 
-    const restoredContainer = document.querySelector<HTMLElement>('.restored-focus-container');
+    // B17：字面量类名 `.restored-focus-container` 随 App.css 退役消失，改用
+    // data-testid 定位（App.css 时代的 CSS 类选择器本就只是定位锚点，未承载
+    // role/aria 语义，只是测试选择器的实现细节）。
+    const restoredContainer = screen.getByTestId('restored-focus-container');
     expect(restoredContainer).not.toBeNull();
     expect(restoredContainer).toHaveFocus();
   });

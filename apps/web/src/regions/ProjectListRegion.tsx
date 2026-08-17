@@ -123,7 +123,7 @@ export function ProjectListRegion({
               </div>
             ) : variant === 'cards' ? (
               <button
-                className="group grid min-h-[142px] w-full grid-cols-[auto_minmax(0,1fr)] gap-[13px] rounded-2xl border border-border bg-panel p-[17px] text-left font-inherit text-foreground transition-[transform,border-color,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-primary/45 hover:shadow-[0_12px_32px_var(--color-shadow)]"
+                className="group grid min-h-[142px] w-full grid-cols-[auto_minmax(0,1fr)] gap-[13px] rounded-2xl border border-border bg-panel p-[17px] text-left font-inherit text-foreground transition-[transform,border-color,box-shadow] duration-150 hover:-translate-y-0.5 hover:border-primary/45 hover:shadow-[0_12px_32px_var(--shadow-color)]"
                 onClick={() => onOpenProject(p.id)}
                 aria-current={isActive ? 'page' : undefined}
                 aria-label={buildProjectAriaLabel(p)}

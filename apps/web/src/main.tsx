@@ -4,7 +4,6 @@ import { App } from './App';
 import { TokenGate } from './auth/TokenGate';
 import { createDesktopClient } from './desktop-client';
 import './styles/tailwind.css';
-import './App.css';
 
 // B12：Web 形态下 window.desktop 不再由 Electron preload 的 contextBridge 注入，
 // 改为浏览器端 HTTP 客户端（apps/web/src/desktop-client.ts）。必须在渲染 <App/>

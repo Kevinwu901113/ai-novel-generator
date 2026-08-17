@@ -19,10 +19,14 @@
  * - "重新加载此区域"按钮保持可键盘操作
  * - reset 后焦点进入重新挂载区域
  * - 不在普通 rerender 时重复抢焦点
- * - 焦点样式通过 CSS .restored-focus-container 提供可见替代
+ * - 焦点样式通过 `focus:outline-*` Tailwind 类提供可见替代——用
+ *   `focus:`（非 `focus-visible:`）变体，保证程序化 `.focus()` 调用后
+ *   一定可见，不依赖浏览器对"是否键盘触发"的启发式判断（B17，原
+ *   `.restored-focus-container:focus` 规则原样迁移）
  */
 
 import { Component, createRef, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 
 interface RendererErrorBoundaryProps {
   children: ReactNode;
@@ -134,17 +138,17 @@ export class RendererErrorBoundary extends Component<
       return (
         <div
           ref={this.fallbackRef}
-          className="error-boundary-fallback"
+          className="rounded-md border border-destructive/25 bg-destructive/10 p-4 text-center"
           role="alert"
           tabIndex={-1}
           aria-label={`${this.props.label}加载异常`}
         >
-          <div className="error-boundary-content">
-            <p className="error-boundary-title">{this.props.label}加载异常</p>
-            <p className="error-boundary-message">该区域暂时无法显示，请重新加载。</p>
-            <button className="error-boundary-reset-btn" onClick={this.handleReset} type="button">
+          <div className="flex flex-col items-center gap-2">
+            <p className="text-sm font-semibold text-destructive">{this.props.label}加载异常</p>
+            <p className="text-[13px] text-muted-foreground">该区域暂时无法显示，请重新加载。</p>
+            <Button type="button" size="sm" className="mt-1" onClick={this.handleReset}>
               重新加载此区域
-            </button>
+            </Button>
           </div>
         </div>
       );
@@ -152,20 +156,27 @@ export class RendererErrorBoundary extends Component<
 
     return (
       // 专项 A（负责人反馈，滚动行为回归修复）：这层 wrapper 此前没有高度
-      // 类——它夹在「有明确高度的祖先」（如 .project-canvas-inner 的
-      // h-full、HomePage 所在 main-surface 的 flex 计算高度）与「靠
-      // h-full + overflow-y-auto 撑滚动条的子内容」（各 Region 根节点、
-      // HomePage 根节点）之间。子节点的 h-full（=100%）本应对齐祖先的
-      // 定高，但 wrapper 自身是默认 auto 高度，百分比高度对着一个 auto
-      // 高度父级无法解析、退化为 auto——子节点因此收缩成"刚好等于自身内容
-      // 高度"，永远不会真正溢出，于是它的 overflow-y-auto 形同虚设；真正
-      // 溢出的内容被再外一层（project-canvas-inner 的 overflow-hidden）
-      // 悄悄裁掉，且没有任何滚动条可用（实测坐实：内容超出卡片时被截断，
-      // 无法滚动查看）。补 h-full min-h-0 让这层透明传递祖先的定高，
-      // 子节点的 overflow-y-auto 才能在真正需要时生效。祖先高度不确定的
-      // 场景（如抽屉里的 TaskCenter/ProviderRegion）h-full 解析为
-      // auto，等同不加，不引入新行为。
-      <div ref={this.restoredRef} tabIndex={-1} className="restored-focus-container h-full min-h-0">
+      // 类——它夹在「有明确高度的祖先」（如创作旅程外层容器、HomePage 所在
+      // main 容器的 flex 计算高度）与「靠 h-full + overflow-y-auto 撑滚动条
+      // 的子内容」（各 Region 根节点、HomePage 根节点）之间。子节点的
+      // h-full（=100%）本应对齐祖先的定高，但 wrapper 自身是默认 auto
+      // 高度，百分比高度对着一个 auto 高度父级无法解析、退化为 auto——子
+      // 节点因此收缩成"刚好等于自身内容高度"，永远不会真正溢出，于是它的
+      // overflow-y-auto 形同虚设；真正溢出的内容被再外一层容器的
+      // overflow-hidden 悄悄裁掉，且没有任何滚动条可用（实测坐实：内容
+      // 超出卡片时被截断，无法滚动查看）。补 h-full min-h-0 让这层透明
+      // 传递祖先的定高，子节点的 overflow-y-auto 才能在真正需要时生效。
+      // 祖先高度不确定的场景（如抽屉里的 TaskCenter/ProviderRegion）
+      // h-full 解析为 auto，等同不加，不引入新行为。
+      //
+      // focus:outline-* 三件套（非 focus-visible:）：reset 后此容器可能
+      // 被程序化 .focus()，需要无条件可见的焦点指示（见文件头注释）。
+      <div
+        ref={this.restoredRef}
+        tabIndex={-1}
+        data-testid="restored-focus-container"
+        className="h-full min-h-0 focus:outline focus:outline-2 focus:outline-offset-2 focus:outline-primary"
+      >
         <RendererErrorBoundaryInner key={this.state.resetCount}>
           {this.props.children}
         </RendererErrorBoundaryInner>

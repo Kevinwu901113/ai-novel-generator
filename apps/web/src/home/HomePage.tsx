@@ -72,7 +72,7 @@ export function HomePage({
           </p>
         </div>
 
-        <Card className="gap-0 rounded-[20px] p-[26px] shadow-[0_24px_70px_var(--color-shadow)]">
+        <Card className="gap-0 rounded-[20px] p-[26px] shadow-[0_24px_70px_var(--shadow-color)]">
           <CreateProjectRegion
             variant="home"
             dataServiceStatus={dataServiceStatus}

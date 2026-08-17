@@ -1,12 +1,21 @@
 /**
  * Tailwind v4 + shadcn/ui 地基（B14，D-B14-1/D-B14-2）。
  *
- * 迁移期分层引入、跳过 preflight——preflight 的隐式默认值重置会立刻冲击
- * 5535 行存量 App.css 的假设（见 decision-log D12、b14-ui-foundation-design.md）。
- * B17 收口、App.css 退役时再补 `@import 'tailwindcss/preflight.css' layer(base)`。
+ * B14/B15/B16 迁移期分层引入、跳过 preflight——preflight 的隐式默认值重置
+ * 会立刻冲击当时 5535 行存量 App.css 的假设（见 decision-log D12、
+ * b14-ui-foundation-design.md）。B15 引入首批 shadcn 组件时，为补齐跳过
+ * preflight 的代价（button 的 3D outset 边框、appearance、继承字体等 UA
+ * 默认值重置缺失），曾对 `data-slot` 标记的 shadcn 原语补过一个最小
+ * preflight 子集（`@layer base { [data-slot=...] {...} } }`）。
+ *
+ * B17：App.css 全部迁完退役，正式补官方 preflight（D-B17-1）；上述局部子集
+ * 与 App.css 自己的 `*,*::before,*::after` reset 一并删除——preflight.css
+ * 覆盖两者语义且更完整（含 `border: 0 solid`、`::backdrop`/
+ * `::file-selector-button` 等未覆盖的边界情形）。
  */
 @layer theme, base, components, utilities;
 @import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
 @import 'tailwindcss/utilities.css' layer(utilities);
 /*
  * B15：shadcn 生成件（Sheet/Dialog/Select…）大量使用 `animate-in`/
@@ -16,30 +25,6 @@
  * 组件，当时没有这个依赖缺口；本批首次真正渲染 Sheet 才坐实。
  */
 @import 'tw-animate-css';
-
-/*
- * D-B14-1 遗留代价的就地补齐（B15 引入首批 shadcn 组件时验证坐实）：跳过的
- * preflight 里，浏览器表单控件的 UA 默认值重置（button 的 3D outset 边框、
- * appearance、继承字体）从未被替换——shadcn 生成件假设这层重置存在。这里只
- * 对 shadcn 原语（`data-slot` 标记）补一个最小子集，装进 base 层：utilities
- * 层的 Tailwind 类（如 outline 变体的 border、size 变体的 padding）天然按
- * 层序覆盖之，效果等价于局部 preflight，且不触及 App.css 的存量选择器。
- */
-@layer base {
-  [data-slot='button'],
-  [data-slot='input'],
-  [data-slot='textarea'],
-  [data-slot='select-trigger'] {
-    appearance: none;
-    background-color: transparent;
-    border-width: 0;
-    border-style: solid;
-    margin: 0;
-    padding: 0;
-    font: inherit;
-    color: inherit;
-  }
-}
 
 /* dark variant 绑定系统配色方案（不做 class 切换，暗色继续跟随系统）。 */
 @custom-variant dark (@media (prefers-color-scheme: dark));
@@ -100,6 +85,9 @@
   --status-neutral: #a3a3a3;
   --status-ready: #22a06b;
   --status-attention: #d97706;
+  /* B17：原 App.css --color-shadow 桥接变量直接落地为运行时 token（不再
+     经桥接），供卡片/弹层等自定义阴影的 arbitrary value 消费。 */
+  --shadow-color: rgba(38, 35, 29, 0.1);
   --foreground: #1f2937;
 
   --background: var(--canvas);
@@ -133,6 +121,7 @@
     --status-neutral: #a3a3a3;
     --status-ready: #22a06b;
     --status-attention: #d97706;
+    --shadow-color: rgba(0, 0, 0, 0.35);
     --foreground: #e5e5e5;
 
     --background: var(--canvas);
@@ -202,4 +191,56 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+}
+
+/*
+ * ── 全局基础样式（B17，App.css 退役后并入，D-B17-1：原样搬迁，行为不变）───
+ *
+ * 三条规则原样从 App.css 搬来，不加 @layer——App.css 里它们本就是不加层的
+ * 普通声明，按 Cascade Layers 规则恒赢任何加层的 Tailwind utility；原样保留
+ * 这一特性（而不是随手包进 @layer base），避免引入任何新的层级覆盖行为。
+ * preflight 的 `html { font-family: --theme(--default-font-family, …) }`
+ * 已经消费本文件的 `--font-sans`（tailwindcss/theme.css 定义
+ * `--default-font-family: --theme(--font-sans, initial)`），body 不必再重复
+ * 声明字体/行高。
+ */
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  -webkit-font-smoothing: antialiased;
+}
+
+/**
+ * 焦点可见样式。
+ * 为所有可交互元素提供明确的焦点指示器。
+ * 不使用 outline: none，除非提供同等或更明显替代。
+ *
+ * 排除 `[data-slot]` 标记的 shadcn 原语——它们自带 Tailwind 的 focus-visible
+ * ring（`ring-ring/50` 接本文件的 --ring token，同一靛蓝紫），这条规则不
+ * 排除的话会在 ring 之外再叠一圈 outline（B15 起沿用至今）。
+ */
+button:focus-visible:not([data-slot]),
+input:focus-visible:not([data-slot]),
+textarea:focus-visible:not([data-slot]),
+select:focus-visible:not([data-slot]),
+[role='option']:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/**
+ * reduced-motion 支持。
+ * 关闭非必要的 transition/animation。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

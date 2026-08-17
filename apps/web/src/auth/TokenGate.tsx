@@ -89,7 +89,7 @@ export function TokenGate({ children }: TokenGateProps) {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-canvas p-6">
-      <Card className="w-full max-w-[400px] gap-2 rounded-[20px] border-border/82 p-8 shadow-[0_24px_70px_var(--color-shadow)]">
+      <Card className="w-full max-w-[400px] gap-2 rounded-[20px] border-border/82 p-8 shadow-[0_24px_70px_var(--shadow-color)]">
         <h1 className="font-serif text-[22px] font-semibold text-foreground">AI 小说创作代理</h1>
         <p className="mb-3 text-[13px] leading-relaxed text-muted-foreground">
           请输入服务端启动日志中打印的访问令牌

@@ -373,7 +373,7 @@ export function App() {
 
   return (
     <>
-      <div className="app-shell">
+      <div className="grid h-screen grid-cols-[76px_minmax(0,1fr)] overflow-hidden bg-canvas">
         <AppRail
           isHome={!currentProject}
           onHome={handleHome}
@@ -381,7 +381,7 @@ export function App() {
           onOpenSettings={handleOpenSettings}
         />
 
-        <div className="app-surface">
+        <div className="flex min-h-0 min-w-0 flex-col">
           <header
             className="flex h-[62px] shrink-0 items-center justify-between gap-5 border-b border-border bg-card/95 px-6"
             role="banner"
@@ -450,7 +450,7 @@ export function App() {
             </div>
           </header>
 
-          <main className="main-surface">
+          <main className="relative min-h-0 flex-1 overflow-hidden bg-canvas">
             {currentProject ? (
               <section
                 ref={grillSectionRef}
@@ -475,9 +475,7 @@ export function App() {
                   </div>
                 )}
                 <div className="min-h-0 flex-1 overflow-hidden px-7 pt-5 pb-7">
-                  {/* B16：project-canvas-inner 类名保留——仍是 research/blueprint/chapter
-                      Region（1b 待迁）内部排版的祖先选择器锚点，自身盒模型样式已迁 Tailwind。 */}
-                  <div className="project-canvas-inner mx-auto h-full w-full max-w-[1040px] overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_var(--color-shadow)]">
+                  <div className="mx-auto h-full w-full max-w-[1040px] overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_var(--shadow-color)]">
                     <RendererErrorBoundary label="创作旅程">
                       {viewStage === 'manuscript' ? (
                         <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
