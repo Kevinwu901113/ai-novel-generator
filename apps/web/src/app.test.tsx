@@ -729,8 +729,8 @@ describe('App 级别测试', () => {
     });
   });
 
-  // B19（D-B19-2）：设置页三分区可达，返回后恢复原视图
-  it('设置页三分区可达，返回后恢复首页', async () => {
+  // B19b（D-B19-5）：设置分区分页——桌面导航切换子页，三分区都可达，返回恢复原视图
+  it('设置页分区分页可达（默认模型服务、导航可切换），返回后恢复首页', async () => {
     setupDesktop();
     await act(async () => {
       render(<App />);
@@ -740,11 +740,23 @@ describe('App 级别测试', () => {
     });
 
     await openSettingsPage();
+    // 默认活动分区：模型服务；其余分区一次只渲染一个（分页，不再同屏）
     expect(screen.getByRole('heading', { name: '模型提供商' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '联网搜索' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '本地运行' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '联网搜索' })).not.toBeInTheDocument();
     // 首页内容不再挂载（设置页占据 main）
     expect(screen.queryByRole('heading', { name: '今天想写什么？' })).not.toBeInTheDocument();
+
+    const sectionNav = screen.getByRole('navigation', { name: '设置分区' });
+    await act(async () => {
+      within(sectionNav).getByRole('button', { name: '联网搜索' }).click();
+    });
+    expect(screen.getByRole('heading', { name: '联网搜索' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '模型提供商' })).not.toBeInTheDocument();
+
+    await act(async () => {
+      within(sectionNav).getByRole('button', { name: '本地运行' }).click();
+    });
+    expect(screen.getByRole('heading', { name: '本地运行' })).toBeInTheDocument();
 
     await act(async () => {
       screen.getByRole('button', { name: '返回' }).click();
@@ -1448,6 +1460,19 @@ describe('App：移动端导航收纳（B18，D-B18-3）', () => {
         screen.getByRole('button', { name: '打开设置' }).click();
       });
       expect(await screen.findByRole('heading', { name: '设置' })).toBeInTheDocument();
+
+      // B19b（D-B19-5）：移动端设置根页是分区列表，点入子页、「← 设置」回列表
+      await act(async () => {
+        screen.getByRole('button', { name: /^模型服务/ }).click();
+      });
+      expect(screen.getByRole('heading', { name: '模型提供商' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: '设置' })).not.toBeInTheDocument();
+
+      await act(async () => {
+        screen.getByRole('button', { name: '设置' }).click();
+      });
+      expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: '模型提供商' })).not.toBeInTheDocument();
     } finally {
       restore();
     }
