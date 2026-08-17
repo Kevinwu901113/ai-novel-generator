@@ -483,3 +483,46 @@ describe('ManuscriptPanel', () => {
     }
   });
 });
+
+// ── B20：读写分离（D-B20-1）────────────────────────────────────────────
+
+describe('ManuscriptPanel 阅读视图（B20）', () => {
+  it('点「阅读」→ 只读排版视图（权威正文、无编辑器），「编辑这一章」可切编辑态', async () => {
+    const user = userEvent.setup();
+    setupDesktop();
+    await renderPanel();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '阅读' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '阅读' }));
+
+    // 阅读视图：权威正文按段落渲染，无 textarea
+    await waitFor(() => {
+      expect(screen.getByLabelText('章节正文阅读')).toBeInTheDocument();
+    });
+    expect(screen.getByText('雨砸在屋檐上。')).toBeInTheDocument();
+    expect(screen.queryByLabelText('章节正文编辑')).not.toBeInTheDocument();
+
+    // 编辑是显式动作：切到编辑态后编辑器出现、阅读视图退场
+    await user.click(screen.getByRole('button', { name: '编辑这一章' }));
+    expect(screen.getByLabelText('章节正文编辑')).toBeInTheDocument();
+    expect(screen.queryByLabelText('章节正文阅读')).not.toBeInTheDocument();
+  });
+
+  it('点「编辑」直达编辑态（不经过阅读视图）；「收起」关闭章节', async () => {
+    const user = userEvent.setup();
+    setupDesktop();
+    await renderPanel();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: '编辑' })).toBeTruthy());
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('章节正文编辑')).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText('章节正文阅读')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '收起' }));
+    expect(screen.queryByLabelText('章节正文编辑')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '阅读' })).toBeInTheDocument();
+  });
+});

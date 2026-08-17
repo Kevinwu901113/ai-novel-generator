@@ -8,6 +8,7 @@
  * 卡片视觉——字号/行高/限宽等排版参数原值平移，只把颜色/边框换成 token。
  */
 
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { ManuscriptExportFormatDto, ManuscriptVersionSummaryDto } from '@ai-novel/contracts';
 import { useManuscript } from './useManuscript';
 import { InlineError } from '@/components/InlineError';
@@ -64,6 +65,27 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
     autosaveStatus,
     actions,
   } = useManuscript(projectId);
+
+  // B20（D-B20-1）：读写分离——章节默认动作是「阅读」（权威正文的只读排版视图），
+  // 编辑是显式意图。mode 是纯 UI 状态，选中章节时由入口按钮决定初值。
+  const [mode, setMode] = useState<'read' | 'edit'>('read');
+
+  // B20（D-B20-2）：编辑器高度自适应内容，页面只留一层滚动（原 rows=18 固定
+  // 高度 + 内滚动是评审坐实的双滚动条来源）。jsdom 下 scrollHeight 恒 0，
+  // 兜底交给 min-h。
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = el.scrollHeight;
+    if (next > 0) el.style.height = `${String(next)}px`;
+  }, [draft?.content, mode, selectedChapterId]);
+
+  const openChapter = (chapterId: string, nextMode: 'read' | 'edit') => {
+    setMode(nextMode);
+    actions.select(chapterId);
+  };
 
   const exportAs = (format: ManuscriptExportFormatDto) => () => {
     void actions.exportManuscript(format);
@@ -140,16 +162,35 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
                   <span className="font-semibold">{item.title}</span>
                   <span className="text-[13px] text-muted-foreground">{item.wordCount} 字</span>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    actions.select(selectedChapterId === item.chapterId ? null : item.chapterId)
-                  }
-                >
-                  {selectedChapterId === item.chapterId ? '收起' : '编辑'}
-                </Button>
+                {/* B20（D-B20-1）：阅读是默认动作、编辑是显式意图，两入口并列 */}
+                {selectedChapterId === item.chapterId ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => actions.select(null)}
+                  >
+                    收起
+                  </Button>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => openChapter(item.chapterId, 'read')}
+                    >
+                      阅读
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openChapter(item.chapterId, 'edit')}
+                    >
+                      编辑
+                    </Button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -180,7 +221,40 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
             </div>
           )}
 
-          {chapter !== null && draft !== null && (
+          {/* B20（D-B20-1）：阅读视图——权威正文（非编辑缓冲区）按 .reading-prose
+              排版，编辑是底部的显式动作。 */}
+          {chapter !== null && mode === 'read' && (
+            <section
+              className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3.5"
+              aria-label="章节正文阅读"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <h4 className="text-[15px]">{chapter.title}</h4>
+                <span className="text-xs text-muted-foreground">
+                  {workspace.chapters.find((c) => c.chapterId === chapter.chapterId)?.wordCount ??
+                    chapter.content.length}{' '}
+                  字
+                </span>
+              </div>
+              <div className="reading-prose">
+                {chapter.content
+                  .split('\n')
+                  .filter((line) => line.trim().length > 0)
+                  .map((paragraph, index) => (
+                    <p key={`${String(index)}-${paragraph.slice(0, 8)}`} className="mb-3">
+                      {paragraph}
+                    </p>
+                  ))}
+              </div>
+              <div>
+                <Button type="button" variant="outline" size="sm" onClick={() => setMode('edit')}>
+                  编辑这一章
+                </Button>
+              </div>
+            </section>
+          )}
+
+          {chapter !== null && draft !== null && mode === 'edit' && (
             <section
               className="flex flex-col gap-2 rounded-lg border border-border px-4 py-3.5"
               aria-label="章节正文编辑"
@@ -202,13 +276,14 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
               <Label className="text-[13px]" htmlFor="manuscript-content">
                 正文
               </Label>
-              {/* B18（D-B18-1）：编辑与阅读同规格（.reading-prose：17px/1.9/40em），
-                  字数直觉一致；w-full 保留，容器窄于 40em 时跟随容器。 */}
+              {/* B18（D-B18-1）：编辑与阅读同规格（.reading-prose：17px/1.9/40em）。
+                  B20（D-B20-2）：高度自适应内容（useLayoutEffect 按 scrollHeight），
+                  resize-none + min-h 兜底，长章节由页面滚动承载，无内层滚动条。 */}
               <textarea
+                ref={textareaRef}
                 id="manuscript-content"
-                className="reading-prose w-full resize-y rounded-md border border-border bg-transparent px-2 py-1.5 outline-none focus-visible:border-primary"
+                className="reading-prose min-h-64 w-full resize-none overflow-hidden rounded-md border border-border bg-transparent px-2 py-1.5 outline-none focus-visible:border-primary"
                 value={draft.content}
-                rows={18}
                 onChange={(e) => actions.edit({ ...draft, content: e.target.value })}
                 disabled={saving}
               />
