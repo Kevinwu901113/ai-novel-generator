@@ -121,19 +121,6 @@ select:focus-visible:not([data-slot]),
   box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.2);
 }
 
-.btn-new-project:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.2);
-}
-
-/* 项目列表按钮焦点样式 */
-.project-item:focus-visible {
-  outline: 2px solid var(--color-primary);
-  outline-offset: -2px;
-  box-shadow: inset 0 0 0 4px rgba(37, 99, 235, 0.1);
-}
-
 /* 任务列表选项焦点样式 */
 .task-item:focus-visible {
   outline: 2px solid var(--color-primary);
@@ -192,10 +179,6 @@ select:focus-visible:not([data-slot]),
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
-  }
-
-  .loading-indicator {
-    animation: none;
   }
 }
 
@@ -378,27 +361,6 @@ body {
   border-right: none;
 }
 
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-.panel-header h2 {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-text);
-}
-
-.panel-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
 /* 左栏 */
 .panel-left {
   width: 260px;
@@ -419,22 +381,7 @@ body {
   flex-shrink: 0;
 }
 
-/* 空状态 */
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 200px;
-  text-align: center;
-  color: var(--color-text-secondary);
-}
-
-.empty-state p {
-  font-size: 15px;
-}
-
+/* 空状态提示文案（EmptyState 组件的 hint，B15/B16 起容器本身走 Tailwind） */
 .empty-hint {
   margin-top: 8px;
   font-size: 13px;
@@ -512,22 +459,6 @@ body {
   }
 }
 
-/* ── 加载指示器 ─────────────────────────────────────── */
-
-.loading-indicator {
-  font-size: 28px;
-  animation: spin 1s linear infinite;
-}
-
-@keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ── 重试按钮 ───────────────────────────────────────── */
 
 .btn-retry {
@@ -591,104 +522,10 @@ body {
   padding: 2px 6px;
 }
 
-/* ── 新建项目按钮 ─────────────────────────────────── */
-
-.btn-new-project {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  background: var(--color-bg);
-  color: var(--color-text);
-  cursor: pointer;
-  font-size: 14px;
-  transition: background-color 0.15s;
-}
-
-.btn-new-project:hover {
-  background-color: var(--color-primary);
-  color: white;
-  border-color: var(--color-primary);
-}
-
-/* ── 项目列表 ─────────────────────────────────────── */
-
-.project-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.project-item {
-  display: flex;
-  flex-direction: column;
-  padding: 10px 12px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background-color 0.15s;
-  position: relative;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: none;
-  color: inherit;
-  font: inherit;
-}
-
-.project-item:hover {
-  background-color: var(--color-bg-secondary);
-}
-
-.project-item.active {
-  background-color: var(--color-primary);
-  color: white;
-}
-
-.project-item.active .project-item-time {
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.project-item.missing {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.project-item-name {
-  font-size: 14px;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.project-item-badge {
-  font-size: 11px;
-  color: #b91c1c;
-  background: #fef2f2;
-  padding: 1px 6px;
-  border-radius: 4px;
-  align-self: flex-start;
-  margin-top: 4px;
-}
-
-.project-item-time {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  margin-top: 2px;
-}
-
 /* ── 创建表单 ─────────────────────────────────────── */
-
-.create-form {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 600px;
-}
+/* B16：CreateProjectRegion 已迁 Tailwind，.create-form/.char-count/
+   .form-field-footer 随之删除；.form-field 本身仍被 ProviderRegion（下一个
+   commit）使用，暂留。 */
 
 .form-field {
   display: flex;
@@ -732,22 +569,9 @@ body {
   min-height: 150px;
 }
 
-.form-field-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  min-height: 20px;
-}
-
 .form-error {
   font-size: 12px;
   color: #b91c1c;
-}
-
-.char-count {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-left: auto;
 }
 
 .btn-create {
@@ -2740,127 +2564,6 @@ body {
   background: var(--color-canvas);
 }
 
-.home-create-content,
-.create-form-home {
-  width: 100%;
-}
-
-.create-form-home {
-  gap: 16px;
-  max-width: none;
-}
-
-.create-form-home .form-field label {
-  color: var(--color-text-secondary);
-  font-size: 12px;
-}
-
-.create-form-home .form-field input,
-.create-form-home .form-field textarea {
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--color-bg) 88%, var(--color-canvas));
-}
-
-.create-form-home .form-field textarea {
-  min-height: 128px;
-  line-height: 1.7;
-}
-
-.create-form-home .btn-create {
-  align-self: stretch;
-  min-height: 44px;
-  border-radius: 10px;
-  font-size: 14px;
-}
-
-.project-card-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.project-card {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 13px;
-  width: 100%;
-  min-height: 142px;
-  padding: 17px;
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-  transition:
-    transform 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
-}
-
-.project-card:hover:not(:disabled) {
-  transform: translateY(-2px);
-  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border));
-  box-shadow: 0 12px 32px var(--color-shadow);
-}
-
-.project-card-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 42px;
-  border-radius: 5px 9px 9px 5px;
-  color: var(--color-accent-text);
-  background: var(--color-accent-soft);
-  font-family: 'Songti SC', STSong, serif;
-  font-weight: 700;
-}
-
-.project-card-body {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.project-card .project-item-name {
-  font-size: 14px;
-  font-weight: 650;
-}
-
-.project-card .project-item-time {
-  margin: 0;
-  font-size: 11px;
-}
-
-.project-card-action {
-  grid-column: 1 / -1;
-  align-self: end;
-  color: var(--color-accent-text);
-  font-size: 12px;
-}
-
-.project-card-action span {
-  display: inline-block;
-  margin-left: 3px;
-  transition: transform 150ms ease;
-}
-
-.project-card:hover .project-card-action span {
-  transform: translateX(3px);
-}
-
-.project-empty-state {
-  min-height: 160px;
-  border: 1px dashed var(--color-border);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
-}
-
 /* ── 项目工作台 ─────────────────────────────────────────────── */
 /*
  * B16：project-workspace / project-journey-bar / project-canvas 自身盒模型
@@ -3022,15 +2725,11 @@ body {
  * --destructive token 承接，明暗两套值已在那边定义）。
  */
 
-@media (max-width: 1080px) {
-  .project-card-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 /*
- * B16：原 920px 断点下 .app-shell/.project-canvas/.project-canvas-inner 的
- * 响应式微调随 project-canvas 迁 Tailwind 一并删除——移动端事项统一放 B17
- * （decision-log D12 已定，b16-regions-design.md 第 4 节「已知限制」已预授权：
- * 删除旧 920/1080px 覆写时，桌面 ≥920px 视觉不受影响即可）。
+ * B16：原 1080px 断点下 .project-card-grid 的两列覆写、920px 断点下
+ * .app-shell/.project-canvas/.project-canvas-inner 的响应式微调，随
+ * ProjectListRegion/project-canvas 迁 Tailwind 一并删除（等效覆写已内联为
+ * ProjectListRegion.tsx 的 `max-[1080px]:grid-cols-2`）——移动端事项统一放
+ * B17（decision-log D12 已定，b16-regions-design.md 第 4 节「已知限制」已
+ * 预授权：删除旧 920/1080px 覆写时，桌面 ≥920px 视觉不受影响即可）。
  */

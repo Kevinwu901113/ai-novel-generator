@@ -20,7 +20,16 @@
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { AlertCircle } from 'lucide-react';
 import type { DataServiceStatus } from '@ai-novel/contracts';
+import { EmptyState } from '@/components/EmptyState';
+import { InlineError } from '@/components/InlineError';
+import { Spinner } from '@/components/Spinner';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 
 const MAX_NAME_LENGTH = 100;
 const MAX_IDEA_LENGTH = 20_000;
@@ -52,6 +61,7 @@ export function CreateProjectRegion({
   const ideaInputRef = useRef<HTMLTextAreaElement>(null);
 
   const isDataServiceStarting = dataServiceStatus === 'starting';
+  const isHome = variant === 'home';
 
   const validateForm = useCallback((): boolean => {
     const errors: Record<string, string> = {};
@@ -122,33 +132,36 @@ export function CreateProjectRegion({
 
   const content = (
     <div
-      className={variant === 'home' ? 'home-create-content' : 'panel-content'}
+      className={isHome ? 'w-full' : 'flex-1 overflow-y-auto p-4'}
       aria-labelledby={variant === 'panel' ? 'create-project-heading' : undefined}
     >
       {isDataServiceStarting ? (
-        <div className="empty-state" role="status">
-          <p className="loading-indicator" aria-hidden="true">
-            ⟳
-          </p>
-          <p>数据服务启动中，请稍候…</p>
+        <div
+          role="status"
+          className="flex min-h-[200px] flex-col items-center justify-center gap-3 text-center text-muted-foreground"
+        >
+          <Spinner label={null} size={24} />
+          <p className="text-[15px]">数据服务启动中，请稍候…</p>
         </div>
       ) : dataServiceStatus === 'failed' || dataServiceStatus === 'disconnected' ? (
-        <div className="empty-state">
-          <p>数据服务不可用</p>
-          <p className="empty-hint">无法创建项目，请检查数据服务状态</p>
-          <button className="btn-retry" onClick={onRetry}>
-            重试数据服务
-          </button>
-        </div>
+        <EmptyState
+          icon={AlertCircle}
+          message="数据服务不可用"
+          hint="无法创建项目，请检查数据服务状态"
+          actionLabel="重试数据服务"
+          onAction={onRetry}
+        />
       ) : (
         <div
-          className={`create-form ${variant === 'home' ? 'create-form-home' : ''}`}
+          className={cn('flex max-w-[600px] flex-col gap-5', isHome && 'max-w-none gap-4')}
           role="form"
           aria-label="创建新项目"
         >
-          <div className="form-field">
-            <label htmlFor="project-name">项目名称</label>
-            <input
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="project-name" className={isHome ? 'text-xs text-muted-foreground' : ''}>
+              项目名称
+            </Label>
+            <Input
               ref={nameInputRef}
               id="project-name"
               type="text"
@@ -163,22 +176,25 @@ export function CreateProjectRegion({
               aria-invalid={formErrors.name ? 'true' : undefined}
               aria-describedby={nameDescribedBy || undefined}
               aria-required="true"
+              className={isHome ? 'rounded-[10px] bg-background/88' : ''}
             />
-            <div className="form-field-footer">
+            <div className="flex min-h-5 items-center justify-between">
               {formErrors.name && (
-                <span className="form-error" id="project-name-error" role="alert">
+                <InlineError variant="field" id="project-name-error">
                   {formErrors.name}
-                </span>
+                </InlineError>
               )}
-              <span className="char-count" id="project-name-count">
+              <span className="ml-auto text-xs text-muted-foreground" id="project-name-count">
                 {unicodeLength(formName.trim())} / {MAX_NAME_LENGTH}
               </span>
             </div>
           </div>
 
-          <div className="form-field">
-            <label htmlFor="project-idea">描述你想写的小说……</label>
-            <textarea
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="project-idea" className={isHome ? 'text-xs text-muted-foreground' : ''}>
+              描述你想写的小说……
+            </Label>
+            <Textarea
               ref={ideaInputRef}
               id="project-idea"
               value={formIdea}
@@ -187,48 +203,52 @@ export function CreateProjectRegion({
                 setFormErrors((prev) => ({ ...prev, initialIdea: '' }));
               }}
               placeholder="可以是模糊的想法、灵感片段、想写的题材……"
-              rows={variant === 'home' ? 6 : 10}
+              rows={isHome ? 6 : 10}
               disabled={isCreating}
               aria-invalid={formErrors.initialIdea ? 'true' : undefined}
               aria-describedby={ideaDescribedBy || undefined}
               aria-required="true"
-            />
-            <div className="form-field-footer">
-              {formErrors.initialIdea && (
-                <span className="form-error" id="project-idea-error" role="alert">
-                  {formErrors.initialIdea}
-                </span>
+              className={cn(
+                'resize-y',
+                isHome ? 'min-h-32 rounded-[10px] bg-background/88 leading-[1.7]' : 'min-h-[150px]',
               )}
-              <span className="char-count" id="project-idea-count">
+            />
+            <div className="flex min-h-5 items-center justify-between">
+              {formErrors.initialIdea && (
+                <InlineError variant="field" id="project-idea-error">
+                  {formErrors.initialIdea}
+                </InlineError>
+              )}
+              <span className="ml-auto text-xs text-muted-foreground" id="project-idea-count">
                 {unicodeLength(formIdea.trim())} / {MAX_IDEA_LENGTH.toLocaleString()}
               </span>
             </div>
           </div>
 
-          <button
-            className="btn-create"
+          <Button
             onClick={handleCreate}
             disabled={isCreating || dataServiceStatus !== 'ready'}
             aria-busy={isCreating ? 'true' : undefined}
-            aria-label={
-              isCreating ? '正在创建项目' : variant === 'home' ? '开始整理想法' : '创建项目'
-            }
+            aria-label={isCreating ? '正在创建项目' : isHome ? '开始整理想法' : '创建项目'}
+            className={cn('self-start', isHome && 'min-h-11 self-stretch rounded-[10px] text-sm')}
           >
-            {isCreating ? '正在开始…' : variant === 'home' ? '开始整理想法' : '创建项目'}
-          </button>
+            {isCreating ? '正在开始…' : isHome ? '开始整理想法' : '创建项目'}
+          </Button>
         </div>
       )}
     </div>
   );
 
-  if (variant === 'home') {
+  if (isHome) {
     return content;
   }
 
   return (
     <>
-      <div className="panel-header">
-        <h2 id="create-project-heading">新建项目</h2>
+      <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+        <h2 id="create-project-heading" className="text-sm font-semibold">
+          新建项目
+        </h2>
       </div>
       {content}
     </>
