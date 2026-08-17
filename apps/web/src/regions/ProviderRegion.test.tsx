@@ -108,7 +108,11 @@ describe('ProviderRegion 新增流程', () => {
     render(<ProviderRegion {...makeProps({ onCreate })} />);
 
     await user.type(screen.getByLabelText('名称'), '新服务');
-    await user.selectOptions(screen.getByLabelText('协议'), 'openai-chat');
+    // B16：裸 <select> 换 shadcn Select（Radix），jsdom 下不再是原生 select
+    // 元素，selectOptions 不再适用——改点击触发器打开、点击目标 option
+    // （D-B16-3 允许的选择器/交互方式改动，语义仍是"选中 openai-chat"）。
+    await user.click(screen.getByLabelText('协议'));
+    await user.click(await screen.findByRole('option', { name: /openai-chat/ }));
     await user.type(screen.getByLabelText('服务地址'), 'https://api.example.com/v1');
     await user.type(screen.getByLabelText('模型标识'), 'example-model');
 

@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Cpu } from 'lucide-react';
 import type {
   ConnectionTestResult,
   CreateProviderProfileInput,
@@ -34,6 +35,19 @@ import type {
 import { PROVIDER_PROTOCOLS } from '@ai-novel/contracts';
 import { ERROR_CODE_LABELS } from '../safety/error-code-labels';
 import { toSafeUserError } from '../safety/safe-error';
+import { EmptyState } from '@/components/EmptyState';
+import { InlineError } from '@/components/InlineError';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
 
 /** 格式化时间 */
 function formatTime(iso: string | null): string {
@@ -76,13 +90,13 @@ export function ProviderRegion({
   const isReady = dataServiceStatus === 'ready';
 
   return (
-    <div className="provider-region">
+    <div className="flex flex-col gap-5">
       <ProviderCreateForm isReady={isReady} onCreate={onCreate} />
 
-      <ul className="provider-list" aria-label="模型服务列表">
+      <ul className="flex flex-col gap-3" aria-label="模型服务列表">
         {providers.length === 0 && (
-          <li className="provider-empty" role="status">
-            尚未添加任何模型服务
+          <li role="status">
+            <EmptyState icon={Cpu} message="尚未添加任何模型服务" />
           </li>
         )}
         {providers.map((provider) => (
@@ -170,10 +184,10 @@ function ProviderCreateForm({ isReady, onCreate }: ProviderCreateFormProps) {
   );
 
   return (
-    <form className="provider-create-form" onSubmit={handleSubmit} aria-label="新增模型服务">
-      <div className="form-field">
-        <label htmlFor="provider-label">名称</label>
-        <input
+    <form className="grid grid-cols-2 gap-3.5" onSubmit={handleSubmit} aria-label="新增模型服务">
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Label htmlFor="provider-label">名称</Label>
+        <Input
           id="provider-label"
           type="text"
           value={label}
@@ -184,36 +198,40 @@ function ProviderCreateForm({ isReady, onCreate }: ProviderCreateFormProps) {
           aria-describedby={labelInvalid ? 'provider-label-error' : undefined}
         />
         {labelInvalid && (
-          <span className="form-error" id="provider-label-error" role="alert">
+          <InlineError variant="field" id="provider-label-error">
             名称不能为空
-          </span>
+          </InlineError>
         )}
       </div>
 
-      <div className="form-field">
-        <label htmlFor="provider-protocol">协议</label>
-        <select
-          id="provider-protocol"
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Label htmlFor="provider-protocol">协议</Label>
+        <Select
           value={protocol}
-          onChange={(e) => setProtocol(e.target.value as ProviderProtocol)}
+          onValueChange={(value) => setProtocol(value as ProviderProtocol)}
           disabled={isSubmitting}
         >
-          {PROVIDER_PROTOCOLS.map((p) => (
-            <option key={p} value={p}>
-              {PROTOCOL_LABELS[p]}
-            </option>
-          ))}
-        </select>
-        <p className="form-hint">
+          <SelectTrigger id="provider-protocol" size="sm" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {PROVIDER_PROTOCOLS.map((p) => (
+              <SelectItem key={p} value={p}>
+                {PROTOCOL_LABELS[p]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
           {protocol === 'anthropic-messages'
             ? '地址请勿包含 /v1，系统会自动补全为 /v1/messages。'
             : '地址需包含版本段（如 https://api.deepseek.com/v1），系统会自动补全 /chat/completions。'}
         </p>
       </div>
 
-      <div className="form-field">
-        <label htmlFor="provider-base-url">服务地址</label>
-        <input
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Label htmlFor="provider-base-url">服务地址</Label>
+        <Input
           id="provider-base-url"
           type="text"
           value={baseUrl}
@@ -224,15 +242,15 @@ function ProviderCreateForm({ isReady, onCreate }: ProviderCreateFormProps) {
           aria-describedby={baseUrlInvalid ? 'provider-base-url-error' : undefined}
         />
         {baseUrlInvalid && (
-          <span className="form-error" id="provider-base-url-error" role="alert">
+          <InlineError variant="field" id="provider-base-url-error">
             请填写以 http:// 或 https:// 开头的地址
-          </span>
+          </InlineError>
         )}
       </div>
 
-      <div className="form-field">
-        <label htmlFor="provider-model">模型标识</label>
-        <input
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <Label htmlFor="provider-model">模型标识</Label>
+        <Input
           id="provider-model"
           type="text"
           value={model}
@@ -243,30 +261,27 @@ function ProviderCreateForm({ isReady, onCreate }: ProviderCreateFormProps) {
           aria-describedby={modelInvalid ? 'provider-model-error' : undefined}
         />
         {modelInvalid && (
-          <span className="form-error" id="provider-model-error" role="alert">
+          <InlineError variant="field" id="provider-model-error">
             模型标识不能为空
-          </span>
+          </InlineError>
         )}
       </div>
 
       {formError && (
-        <div className="provider-error" role="alert" aria-live="assertive">
-          <span>{formError}</span>
-          <button type="button" onClick={() => setFormError(null)} aria-label="关闭错误提示">
-            ✕
-          </button>
-        </div>
+        <InlineError className="col-span-2" onDismiss={() => setFormError(null)}>
+          {formError}
+        </InlineError>
       )}
 
-      <button
+      <Button
         type="submit"
-        className="btn-create"
         disabled={!canSubmit}
         aria-busy={isSubmitting ? 'true' : undefined}
         aria-label={isSubmitting ? '正在添加模型服务' : '添加模型服务'}
+        className="col-span-2 justify-self-start"
       >
         {isSubmitting ? '添加中…' : '添加模型服务'}
-      </button>
+      </Button>
     </form>
   );
 }
@@ -483,52 +498,60 @@ function ProviderRow({
   );
 
   return (
-    <li className={`provider-item${provider.isDefault ? ' provider-item-default' : ''}`}>
-      <div className="provider-info">
-        <p>
+    <li
+      className={cn(
+        'rounded-xl border border-border bg-secondary p-3.5',
+        provider.isDefault && 'border-primary/45',
+      )}
+    >
+      <div className="flex flex-col gap-1">
+        <p className="text-[13px] text-foreground">
           <strong>模型服务：</strong>
           {provider.label}
           {provider.isDefault && (
-            <span className="provider-default-badge" role="status">
+            <span
+              role="status"
+              className="ml-1.5 inline-flex rounded-full bg-accent px-1.5 py-px text-[10px] text-accent-foreground"
+            >
               默认
             </span>
           )}
         </p>
-        <p>
-          <strong>协议：</strong>
+        <p className="text-xs break-words text-muted-foreground">
+          <strong className="text-foreground">协议：</strong>
           {PROTOCOL_LABELS[provider.protocol]}
         </p>
-        <p>
-          <strong>模型：</strong>
+        <p className="text-xs break-words text-muted-foreground">
+          <strong className="text-foreground">模型：</strong>
           {provider.model}
         </p>
-        <p>
-          <strong>地址：</strong>
+        <p className="text-xs break-words text-muted-foreground">
+          <strong className="text-foreground">地址：</strong>
           {provider.baseUrl}
         </p>
-        <p>
-          <strong>API Key：</strong>
+        <p className="text-xs break-words text-muted-foreground">
+          <strong className="text-foreground">API Key：</strong>
           <span role="status" aria-live="polite">
             {provider.hasApiKey ? '已配置' : '未配置'}
           </span>
         </p>
         {provider.lastTestStatus !== 'never' && (
           <>
-            <p>
-              <strong>最近测试：</strong>
+            <p className="text-xs break-words text-muted-foreground">
+              <strong className="text-foreground">最近测试：</strong>
               {provider.lastTestStatus === 'success'
                 ? '连接正常'
                 : provider.lastTestErrorCode
                   ? `[${provider.lastTestErrorCode}] ${ERROR_CODE_LABELS[provider.lastTestErrorCode] ?? '测试失败'}`
                   : '测试失败'}
             </p>
-            <p>
-              <strong>测试时间：</strong>
+            <p className="text-xs break-words text-muted-foreground">
+              <strong className="text-foreground">测试时间：</strong>
               {formatTime(provider.lastTestedAt)}
             </p>
             {provider.lastTestLatencyMs !== null && (
-              <p>
-                <strong>延迟：</strong>
+              <p className="text-xs break-words text-muted-foreground">
+                <strong className="text-foreground">延迟：</strong>
                 {provider.lastTestLatencyMs}ms
               </p>
             )}
@@ -536,14 +559,14 @@ function ProviderRow({
         )}
       </div>
 
-      {/* API Key 编辑 */}
-      <div className="provider-key-section">
+      <div className="mt-2.5 flex flex-wrap items-start gap-2">
+        {/* API Key 编辑 */}
         {!provider.hasApiKey ? (
-          <div className="provider-key-input">
-            <label htmlFor={`provider-api-key-${provider.id}`} className="sr-only">
+          <div className="flex items-center gap-2">
+            <Label htmlFor={`provider-api-key-${provider.id}`} className="sr-only">
               API Key
-            </label>
-            <input
+            </Label>
+            <Input
               ref={apiKeyInputRef}
               id={`provider-api-key-${provider.id}`}
               type="password"
@@ -552,61 +575,63 @@ function ProviderRow({
               placeholder="输入 API Key"
               disabled={isSavingKey || !isReady}
               maxLength={8192}
+              className="h-8 w-44 text-xs"
             />
-            <button
+            <Button
+              size="sm"
               onClick={handleSaveApiKey}
               disabled={isSavingKey || !apiKeyInput.trim() || !isReady}
               aria-busy={isSavingKey}
               aria-label={isSavingKey ? '保存中' : '保存 API Key'}
             >
               {isSavingKey ? '保存中…' : '保存'}
-            </button>
+            </Button>
           </div>
+        ) : !deleteKeyConfirmVisible ? (
+          <Button
+            ref={deleteKeyBtnRef}
+            variant="destructive"
+            size="sm"
+            onClick={handleDeleteKeyClick}
+            disabled={!isReady}
+            aria-label="删除 API Key"
+          >
+            删除密钥
+          </Button>
         ) : (
-          <div className="provider-key-actions">
-            {!deleteKeyConfirmVisible ? (
-              <button
-                ref={deleteKeyBtnRef}
-                className="btn-danger"
-                onClick={handleDeleteKeyClick}
-                disabled={!isReady}
-                aria-label="删除 API Key"
-              >
-                删除密钥
-              </button>
-            ) : (
-              <div
-                className="delete-confirm"
-                role="group"
-                aria-label="确认删除 API Key"
-                onKeyDown={handleDeleteKeyKeyDown}
-              >
-                <span>确认删除？</span>
-                <button
-                  ref={confirmDeleteKeyBtnRef}
-                  className="btn-danger"
-                  onClick={handleDeleteKeyConfirm}
-                  disabled={isDeletingKey}
-                  aria-label="确认删除 API Key"
-                >
-                  {isDeletingKey ? '删除中…' : '确认'}
-                </button>
-                <button
-                  onClick={handleDeleteKeyCancel}
-                  disabled={isDeletingKey}
-                  aria-label="取消删除"
-                >
-                  取消
-                </button>
-              </div>
-            )}
+          <div
+            className="flex items-center gap-2 text-xs"
+            role="group"
+            aria-label="确认删除 API Key"
+            onKeyDown={handleDeleteKeyKeyDown}
+          >
+            <span>确认删除？</span>
+            <Button
+              ref={confirmDeleteKeyBtnRef}
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteKeyConfirm}
+              disabled={isDeletingKey}
+              aria-label="确认删除 API Key"
+            >
+              {isDeletingKey ? '删除中…' : '确认'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleDeleteKeyCancel}
+              disabled={isDeletingKey}
+              aria-label="取消删除"
+            >
+              取消
+            </Button>
           </div>
         )}
-      </div>
 
-      {/* 连接测试 */}
-      <div className="provider-test-section">
-        <button
+        {/* 连接测试 */}
+        <Button
+          variant="outline"
+          size="sm"
           onClick={handleTestConnection}
           disabled={isTestingConnection || !provider.hasApiKey || !isReady}
           aria-busy={isTestingConnection}
@@ -614,61 +639,66 @@ function ProviderRow({
           title={!provider.hasApiKey ? '请先配置 API Key' : undefined}
         >
           {isTestingConnection ? '正在连接…' : '测试连接'}
-        </button>
-      </div>
+        </Button>
 
-      {/* 设为默认 / 删除模型服务 */}
-      <div className="provider-actions-section">
-        <button
+        {/* 设为默认 / 删除模型服务 */}
+        <Button
+          variant="outline"
+          size="sm"
           onClick={handleSetDefault}
           disabled={isSettingDefault || provider.isDefault || !isReady}
           aria-label={provider.isDefault ? '已是默认模型服务' : '设为默认模型服务'}
         >
           {provider.isDefault ? '默认服务' : '设为默认'}
-        </button>
+        </Button>
 
         {!removeConfirmVisible ? (
-          <button
+          <Button
             ref={removeBtnRef}
-            className="btn-danger"
+            variant="destructive"
+            size="sm"
             onClick={handleRemoveClick}
             disabled={!isReady || isRemoving}
             aria-label="删除模型服务"
           >
             删除
-          </button>
+          </Button>
         ) : (
           <div
-            className="delete-confirm"
+            className="flex items-center gap-2 text-xs"
             role="group"
             aria-label="确认删除模型服务"
             onKeyDown={handleRemoveKeyDown}
           >
             <span>确认删除该模型服务？</span>
-            <button
+            <Button
               ref={confirmRemoveBtnRef}
-              className="btn-danger"
+              variant="destructive"
+              size="sm"
               onClick={handleRemoveConfirm}
               disabled={isRemoving}
               aria-label="确认删除模型服务"
             >
               {isRemoving ? '删除中…' : '确认'}
-            </button>
-            <button onClick={handleRemoveCancel} disabled={isRemoving} aria-label="取消删除">
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRemoveCancel}
+              disabled={isRemoving}
+              aria-label="取消删除"
+            >
               取消
-            </button>
+            </Button>
           </div>
         )}
       </div>
 
       {/* 错误信息 */}
       {rowError && (
-        <div className="provider-error" role="alert" aria-live="assertive">
-          <span>{rowError}</span>
-          <button onClick={() => setRowError(null)} aria-label="关闭错误提示">
-            ✕
-          </button>
-        </div>
+        <InlineError className="mt-2.5" onDismiss={() => setRowError(null)}>
+          {rowError}
+        </InlineError>
       )}
     </li>
   );
