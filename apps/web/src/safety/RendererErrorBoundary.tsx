@@ -151,7 +151,21 @@ export class RendererErrorBoundary extends Component<
     }
 
     return (
-      <div ref={this.restoredRef} tabIndex={-1} className="restored-focus-container">
+      // 专项 A（负责人反馈，滚动行为回归修复）：这层 wrapper 此前没有高度
+      // 类——它夹在「有明确高度的祖先」（如 .project-canvas-inner 的
+      // h-full、HomePage 所在 main-surface 的 flex 计算高度）与「靠
+      // h-full + overflow-y-auto 撑滚动条的子内容」（各 Region 根节点、
+      // HomePage 根节点）之间。子节点的 h-full（=100%）本应对齐祖先的
+      // 定高，但 wrapper 自身是默认 auto 高度，百分比高度对着一个 auto
+      // 高度父级无法解析、退化为 auto——子节点因此收缩成"刚好等于自身内容
+      // 高度"，永远不会真正溢出，于是它的 overflow-y-auto 形同虚设；真正
+      // 溢出的内容被再外一层（project-canvas-inner 的 overflow-hidden）
+      // 悄悄裁掉，且没有任何滚动条可用（实测坐实：内容超出卡片时被截断，
+      // 无法滚动查看）。补 h-full min-h-0 让这层透明传递祖先的定高，
+      // 子节点的 overflow-y-auto 才能在真正需要时生效。祖先高度不确定的
+      // 场景（如抽屉里的 TaskCenter/ProviderRegion）h-full 解析为
+      // auto，等同不加，不引入新行为。
+      <div ref={this.restoredRef} tabIndex={-1} className="restored-focus-container h-full min-h-0">
         <RendererErrorBoundaryInner key={this.state.resetCount}>
           {this.props.children}
         </RendererErrorBoundaryInner>

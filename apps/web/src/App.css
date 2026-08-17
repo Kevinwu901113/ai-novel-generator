@@ -67,13 +67,37 @@
   }
 }
 
-/* 全局重置 */
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+/*
+ * 全局重置。
+ *
+ * B16b（专项 B 排查坐实的架构级问题，追加修复）：这条重置此前是不带 @layer
+ * 的普通规则——CSS Cascade Layers 规则规定「不在任何 @layer 内的普通声明，
+ * 优先级恒高于任何 @layer 内的声明，无视选择器特异度」。tailwind.css 的全部
+ * utilities（`px-*`/`py-*`/`p-*`/`m-*`……）都注册在 `layer(utilities)` 里
+ * （D-B14-1），于是这条 `* { margin:0; padding:0 }` 一直在无条件吃掉全站
+ * 所有 Tailwind 内外边距 utility 的效果——包括 shadcn Button 的 `px-3`、
+ * App.tsx header 的 `px-6`、本批四个 Region 新写的全部 `p-*`/`px-*`/`py-*`
+ * class，计算样式统统被清零到 0px（用 devtools/getComputedStyle 逐一核实
+ * 过）。视觉上不总是明显——`gap-*`（flex/grid 间距）不受影响，很多布局靠
+ * gap 撑出间距掩盖了问题——但确实是顶栏 provider pill 贴边裁切（专项 B）
+ * 的直接成因：header 的 `px-6` 与按钮自身的 `px-3` 双双归零，右侧内容
+ * 失去所有安全边距，文本一长就顶到视口边缘。
+ *
+ * 修复：把重置本身放进 `base` layer（tailwind.css 已用
+ * `@layer theme, base, components, utilities;` 声明了层序，base 优先级
+ * 低于 utilities）——之后任何 Tailwind margin/padding utility 都能正常
+ * 覆盖这条重置；本文件其余仍未加 @layer 的存量选择器（如
+ * `.error-boundary-fallback` 的 `padding: 16px`）不受影响，继续按"无层
+ * 恒赢"规则覆盖这条已加层的重置，行为与之前一致。
+ */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
 }
 
 /* ── 无障碍工具类 ──────────────────────────────────────────── */
@@ -230,28 +254,13 @@ body {
   color: var(--color-empty-hint);
 }
 
-/* ── 重试按钮 ───────────────────────────────────────── */
 /*
  * B16（顺手清理）：.btn-retry（非 inline 版）与 .global-error 均已零引用——
  * 前者是更早版本的孤儿选择器，后者随 B15 顶部错误红条改 toast（D-B15 1d）
- * 失去目标元素，当时未清理。.btn-retry-inline 仍被 TaskCenter.tsx 使用，
- * 留待 task-center/ 迁移时一并清理。
+ * 失去目标元素，当时未清理。.btn-retry-inline 随 research/blueprint/
+ * chapter/task-center 四批消费者全部迁 Tailwind（内联 Button + InlineError
+ * 接管），本批一并删除。
  */
-
-.btn-retry-inline {
-  margin-left: 8px;
-  padding: 2px 8px;
-  background-color: var(--color-primary);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.btn-retry-inline:hover {
-  background-color: var(--color-primary-hover);
-}
 
 /*
  * B16：ProviderRegion 已迁 Tailwind——.provider-section、.provider-info、

@@ -433,9 +433,19 @@ export function App() {
                   任务活动
                 </Button>
               )}
-              <Button variant="outline" size="sm" onClick={handleOpenSettings}>
-                <Settings size={16} aria-hidden="true" />
-                {defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}
+              {/* 专项 B（负责人反馈）：模型名称 pill 在典型桌面宽度（1280-2000px）
+                  下曾贴着视口右缘裁切——按钮本身不限宽 + whitespace-nowrap，
+                  长服务名称把 header 撑出视口。这里给按钮 min-w-0（允许在
+                  flex 行里收窄）、给文字套一层 max-width + truncate（超出省略号
+                  收尾，完整名称仍在 DOM 里，可通过 title 悬停查看，语义不丢）。 */}
+              <Button variant="outline" size="sm" onClick={handleOpenSettings} className="min-w-0">
+                <Settings size={16} aria-hidden="true" className="shrink-0" />
+                <span
+                  className="max-w-[200px] truncate"
+                  title={defaultProvider?.hasApiKey ? defaultProvider.label : undefined}
+                >
+                  {defaultProvider?.hasApiKey ? defaultProvider.label : '配置模型'}
+                </span>
               </Button>
             </div>
           </header>

@@ -140,7 +140,21 @@
     --card-foreground: var(--foreground);
     --popover: var(--panel);
     --popover-foreground: var(--foreground);
-    --primary: var(--color-primary-400);
+    /*
+     * B16b（专项 C 暗色对比度核查坐实的问题，追加修复）：白色文字
+     * （--primary-foreground）叠在 --color-primary-400（#7471ef）上实测
+     * 对比度仅 3.92:1，不足 WCAG AA 正文文本要求的 4.5:1（getComputedStyle
+     * 逐一核实：默认态 Button——"开始整理想法""添加模型服务"等全站主按钮、
+     * ResearchBundleView 强度徽标与版本链当前态、TaskList 选中态——全部
+     * 命中）。改用同一色阶下一档 --color-primary-500（#6460da，仍是靛蓝紫
+     * 家族，未引入新色）：白字对比度实测提升到 4.97:1，达标。影响面：暗色
+     * 模式下全部 --primary 消费者（默认态 Button 背景、部分选中态背景/
+     * 徽标）视觉上略深一档，light 模式与 --color-primary-600 不受影响；
+     * --ring（焦点环）保持 primary-400 不变——焦点环是非文字 UI 指示器，
+     * WCAG 非文字对比度门槛是 3:1（已达标），且更亮的 400 对焦点可见性
+     * 更有利。
+     */
+    --primary: var(--color-primary-500);
     --primary-foreground: #ffffff;
     --secondary: #262626;
     --secondary-foreground: var(--foreground);
