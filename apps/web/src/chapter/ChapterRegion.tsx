@@ -22,6 +22,10 @@ import { CandidateView } from './CandidateView';
 import { CandidateGatePanel } from './CandidateGatePanel';
 import { CandidateEscalationPanel } from './CandidateEscalationPanel';
 import { chapterPhaseLabel, isChapterWorking, showsCandidate } from './chapter-logic';
+import { InlineError } from '@/components/InlineError';
+import { Spinner } from '@/components/Spinner';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export interface ChapterRegionProps {
   readonly projectId: string;
@@ -42,28 +46,30 @@ function ChapterListRow({
   const canRestart =
     item.phase === 'failed' || item.phase === 'blocked' || item.phase === 'cancelled';
   return (
-    <li className="chapter-list-row">
-      <div className="chapter-list-main">
-        <span className="chapter-list-title">{item.title}</span>
-        <span className="chapter-list-goal">{item.goal}</span>
+    <li className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3.5 py-2.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="font-semibold">{item.title}</span>
+        <span className="text-[13px] text-muted-foreground">{item.goal}</span>
       </div>
-      <span className="chapter-list-phase">{chapterPhaseLabel(item.phase)}</span>
-      <div className="chapter-list-actions">
+      <span className="text-[13px] whitespace-nowrap text-muted-foreground">
+        {chapterPhaseLabel(item.phase)}
+      </span>
+      <div className="flex items-center gap-2">
         {started ? (
           <>
-            <button type="button" onClick={onOpen} disabled={busy}>
+            <Button type="button" variant="outline" size="sm" onClick={onOpen} disabled={busy}>
               查看
-            </button>
+            </Button>
             {canRestart && (
-              <button type="button" className="btn-primary" onClick={onStart} disabled={busy}>
+              <Button type="button" size="sm" onClick={onStart} disabled={busy}>
                 重新生成
-              </button>
+              </Button>
             )}
           </>
         ) : (
-          <button type="button" className="btn-primary" onClick={onStart} disabled={busy}>
+          <Button type="button" size="sm" onClick={onStart} disabled={busy}>
             开始生成
-          </button>
+          </Button>
         )}
       </div>
     </li>
@@ -84,15 +90,20 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
       : null;
 
   return (
-    <div className="chapter-region">
-      <div className="chapter-region-header">
-        <h2 id="chapter-heading">成稿</h2>
-        <div className="chapter-view-tabs" role="tablist" aria-label="成稿视图">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+      <div className="flex items-center justify-between gap-3">
+        <h2 id="chapter-heading" className="text-lg">
+          成稿
+        </h2>
+        <div className="flex gap-1" role="tablist" aria-label="成稿视图">
           <button
             type="button"
             role="tab"
             aria-selected={view === 'generate'}
-            className={view === 'generate' ? 'tab-active' : undefined}
+            className={cn(
+              'px-2 py-1 text-sm text-muted-foreground',
+              view === 'generate' && 'border-b-2 border-primary font-semibold text-foreground',
+            )}
             onClick={() => setView('generate')}
           >
             生成
@@ -101,7 +112,10 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
             type="button"
             role="tab"
             aria-selected={view === 'manuscript'}
-            className={view === 'manuscript' ? 'tab-active' : undefined}
+            className={cn(
+              'px-2 py-1 text-sm text-muted-foreground',
+              view === 'manuscript' && 'border-b-2 border-primary font-semibold text-foreground',
+            )}
             onClick={() => setView('manuscript')}
           >
             稿件
@@ -112,30 +126,35 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
       {view === 'manuscript' && <ManuscriptPanel projectId={projectId} />}
 
       {view === 'generate' && error && (
-        <div className="chapter-error" role="alert">
-          <span>{error}</span>
-          <button
-            type="button"
-            className="btn-retry-inline"
-            onClick={() => void actions.refresh()}
-            disabled={loading}
-          >
-            重试
-          </button>
-        </div>
+        <InlineError>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{error}</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void actions.refresh()}
+              disabled={loading}
+            >
+              重试
+            </Button>
+          </div>
+        </InlineError>
       )}
 
       {view === 'generate' && loading && overview === null && (
-        <div className="chapter-status" role="status" aria-live="polite">
-          <span className="intake-spinner" aria-hidden="true">
-            ⟳
-          </span>
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+          aria-live="polite"
+        >
+          <Spinner label={null} size={14} />
           正在加载章节状态…
         </div>
       )}
 
       {view === 'generate' && overview !== null && overview.blueprintId === null && (
-        <div className="chapter-status" role="status">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           还不能开始写正文：需要先在"蓝图"阶段接受一份故事蓝图。
         </div>
       )}
@@ -145,8 +164,10 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
         overview.blueprintId !== null &&
         selectedItem === null && (
           <>
-            <p className="chapter-hint">选择一章开始生成。每次生成一章，生成完由你确认。</p>
-            <ul className="chapter-list">
+            <p className="text-[13px] text-muted-foreground">
+              选择一章开始生成。每次生成一章，生成完由你确认。
+            </p>
+            <ul className="m-0 flex w-full max-w-[820px] list-none flex-col gap-2 p-0">
               {overview.chapters.map((item) => (
                 <ChapterListRow
                   key={item.blueprintChapterId}
@@ -161,58 +182,68 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
         )}
 
       {view === 'generate' && selectedItem !== null && (
-        <div className="chapter-detail">
-          <div className="chapter-detail-header">
-            <button type="button" className="btn-link" onClick={() => actions.select(null)}>
+        <div className="flex w-full max-w-[820px] flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              className="w-fit border-none bg-transparent p-0 font-[inherit] text-sm text-primary"
+              onClick={() => actions.select(null)}
+            >
               ← 返回章节列表
             </button>
-            <h3>{selectedItem.title}</h3>
-            <p className="chapter-list-goal">{selectedItem.goal}</p>
+            <h3 className="mt-2 text-base">{selectedItem.title}</h3>
+            <p className="text-[13px] text-muted-foreground">{selectedItem.goal}</p>
           </div>
 
-          {actionError && (
-            <div className="chapter-error" role="alert">
-              {actionError}
-            </div>
-          )}
+          {actionError && <InlineError>{actionError}</InlineError>}
 
           {runState === null ? (
             selectedItem.runId === null ? (
-              <div className="chapter-status" role="status">
+              <div className="flex items-center gap-3 text-sm text-muted-foreground" role="status">
                 <p>这一章还没有开始生成。</p>
-                <button
+                <Button
                   type="button"
-                  className="btn-primary"
+                  size="sm"
                   onClick={() => void actions.startRun(selectedItem.blueprintChapterId)}
                   disabled={busy}
                 >
                   开始生成
-                </button>
+                </Button>
               </div>
             ) : (
-              <div className="chapter-status" role="status" aria-live="polite">
+              <div
+                className="flex items-center gap-2 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
                 正在加载本章内容…
               </div>
             )
           ) : (
             <>
-              <div className="chapter-phase" role="status" aria-live="polite">
-                {isChapterWorking(runState.phase) && (
-                  <span className="intake-spinner" aria-hidden="true">
-                    ⟳
-                  </span>
-                )}
+              <div
+                className="flex items-center gap-2 text-sm text-muted-foreground"
+                role="status"
+                aria-live="polite"
+              >
+                {isChapterWorking(runState.phase) && <Spinner label={null} size={14} />}
                 {chapterPhaseLabel(runState.phase)}
               </div>
 
               {runState.phase === 'accepted_pending_commit' && (
-                <div className="chapter-info-card" role="status">
+                <div
+                  className="max-w-[640px] rounded-lg border border-border bg-secondary px-4 py-3 text-sm"
+                  role="status"
+                >
                   你已采用这一版，正在写入稿件…
                 </div>
               )}
 
               {runState.phase === 'completed' && (
-                <div className="chapter-info-card" role="status">
+                <div
+                  className="max-w-[640px] rounded-lg border border-border bg-secondary px-4 py-3 text-sm"
+                  role="status"
+                >
                   这一章已写入稿件。切到上方的"稿件"可以继续编辑正文或导出整本。
                 </div>
               )}
@@ -220,16 +251,19 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
               {(runState.phase === 'failed' ||
                 runState.phase === 'blocked' ||
                 runState.phase === 'cancelled') && (
-                <div className="chapter-info-card" role="status">
+                <div
+                  className="max-w-[640px] space-y-2 rounded-lg border border-border bg-secondary px-4 py-3 text-sm"
+                  role="status"
+                >
                   <p>这次流程已经结束，可以重新发起本章生成。</p>
-                  <button
+                  <Button
                     type="button"
-                    className="btn-primary"
+                    size="sm"
                     onClick={() => void actions.startRun(selectedItem.blueprintChapterId)}
                     disabled={busy}
                   >
                     重新生成
-                  </button>
+                  </Button>
                 </div>
               )}
 
@@ -243,7 +277,10 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
               )}
 
               {!showsCandidate(runState) && !isChapterWorking(runState.phase) && (
-                <div className="chapter-status" role="status">
+                <div
+                  className="flex items-center gap-2 text-sm text-muted-foreground"
+                  role="status"
+                >
                   这一章还没有可查看的正文。
                 </div>
               )}

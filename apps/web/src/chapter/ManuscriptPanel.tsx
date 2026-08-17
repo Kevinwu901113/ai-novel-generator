@@ -3,10 +3,16 @@
  *
  * 章节列表 + 正文编辑 + 导出。写入走 CAS：保存时回传加载到的版本号，服务端拒绝
  * 覆盖期间落地的新版本；冲突时**不丢用户输入**，给出"重新加载"的明确出路。
+ *
+ * D-B16-2：正文阅读区（标题输入 + 正文文本域）是产品核心体验，不套 shadcn
+ * 卡片视觉——字号/行高/限宽等排版参数原值平移，只把颜色/边框换成 token。
  */
 
 import type { ManuscriptExportFormatDto, ManuscriptVersionSummaryDto } from '@ai-novel/contracts';
 import { useManuscript } from './useManuscript';
+import { InlineError } from '@/components/InlineError';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
 
 /** 版本来源的中文说明（界面上不出现 AI_GENERATION 这类工程标识） */
 function versionSourceLabel(source: ManuscriptVersionSummaryDto['source']): string {
@@ -64,118 +70,145 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
   };
 
   return (
-    <div className="manuscript-panel">
+    <div className="flex w-full max-w-[760px] flex-col gap-3">
       {error && (
-        <div className="chapter-error" role="alert">
-          <span>{error}</span>
-          <button
-            type="button"
-            className="btn-retry-inline"
-            onClick={() => void actions.refresh()}
-            disabled={loading}
-          >
-            重试
-          </button>
-        </div>
+        <InlineError>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{error}</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void actions.refresh()}
+              disabled={loading}
+            >
+              重试
+            </Button>
+          </div>
+        </InlineError>
       )}
 
       {exportNotice && (
-        <div className="chapter-info-card" role="status">
+        <div
+          className="rounded-lg border border-border bg-secondary px-4 py-3 text-sm"
+          role="status"
+        >
           {exportNotice}
         </div>
       )}
 
       {loading && workspace === null && (
-        <div className="chapter-status" role="status" aria-live="polite">
+        <div
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+          role="status"
+          aria-live="polite"
+        >
           正在加载稿件…
         </div>
       )}
 
       {workspace !== null && workspace.manuscriptId === null && (
-        <div className="chapter-status" role="status">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
           稿件还是空的。在"生成"里写完一章并采用后，正文会出现在这里。
         </div>
       )}
 
       {workspace !== null && workspace.manuscriptId !== null && (
         <>
-          <div className="manuscript-toolbar">
-            <span className="manuscript-title">{workspace.title}</span>
-            <div className="manuscript-export">
-              <button type="button" onClick={exportAs('txt')}>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold">{workspace.title}</span>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={exportAs('txt')}>
                 导出 TXT
-              </button>
-              <button type="button" onClick={exportAs('markdown')}>
+              </Button>
+              <Button type="button" variant="outline" size="sm" onClick={exportAs('markdown')}>
                 导出 Markdown
-              </button>
+              </Button>
             </div>
           </div>
 
-          <ul className="chapter-list">
+          <ul className="m-0 flex list-none flex-col gap-2 p-0">
             {workspace.chapters.map((item) => (
-              <li key={item.chapterId} className="chapter-list-row">
-                <div className="chapter-list-main">
-                  <span className="chapter-list-title">{item.title}</span>
-                  <span className="chapter-list-goal">{item.wordCount} 字</span>
+              <li
+                key={item.chapterId}
+                className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3.5 py-2.5"
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="font-semibold">{item.title}</span>
+                  <span className="text-[13px] text-muted-foreground">{item.wordCount} 字</span>
                 </div>
-                <div className="chapter-list-actions">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      actions.select(selectedChapterId === item.chapterId ? null : item.chapterId)
-                    }
-                  >
-                    {selectedChapterId === item.chapterId ? '收起' : '编辑'}
-                  </button>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    actions.select(selectedChapterId === item.chapterId ? null : item.chapterId)
+                  }
+                >
+                  {selectedChapterId === item.chapterId ? '收起' : '编辑'}
+                </Button>
               </li>
             ))}
           </ul>
 
           {chapter !== null && persistedDraft !== null && (
-            <div className="manuscript-draft-banner" role="status" aria-live="polite">
+            <div
+              className="space-y-2 rounded-lg border border-status-attention/30 bg-status-attention/10 px-4 py-3 text-sm text-status-attention"
+              role="status"
+              aria-live="polite"
+            >
               <p>有一份未保存的草稿（{new Date(persistedDraft.updatedAt).toLocaleString()}）</p>
               {persistedDraft.stale && (
                 <p>正文在此期间已被更新（AI 写入或版本恢复），这份草稿基于更早的版本。</p>
               )}
-              <div className="manuscript-draft-banner-actions">
-                <button type="button" onClick={() => actions.restoreDraft()}>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" onClick={() => actions.restoreDraft()}>
                   恢复到草稿
-                </button>
-                <button type="button" onClick={() => void actions.discardDraft()}>
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void actions.discardDraft()}
+                >
                   丢弃草稿
-                </button>
+                </Button>
               </div>
             </div>
           )}
 
           {chapter !== null && draft !== null && (
-            <section className="manuscript-editor" aria-label="章节正文编辑">
-              <label className="candidate-feedback-label" htmlFor="manuscript-title">
+            <section
+              className="flex flex-col gap-2 rounded-lg border border-border px-4 py-3.5"
+              aria-label="章节正文编辑"
+            >
+              <Label className="text-[13px]" htmlFor="manuscript-title">
                 章节标题
-              </label>
+              </Label>
+              {/* D-B16-2：正文阅读区专用排版——字号/行高原值平移，不用 shadcn
+                  Input/Textarea 的默认卡片视觉，只把边框/背景颜色接到 token。 */}
               <input
                 id="manuscript-title"
-                className="manuscript-title-input"
+                className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm outline-none focus-visible:border-primary"
                 value={draft.title}
                 maxLength={200}
                 onChange={(e) => actions.edit({ ...draft, title: e.target.value })}
                 disabled={saving}
               />
 
-              <label className="candidate-feedback-label" htmlFor="manuscript-content">
+              <Label className="text-[13px]" htmlFor="manuscript-content">
                 正文
-              </label>
+              </Label>
               <textarea
                 id="manuscript-content"
-                className="manuscript-content-input"
+                className="w-full resize-y rounded-md border border-border bg-transparent px-2 py-1.5 text-sm leading-[1.8] outline-none focus-visible:border-primary"
                 value={draft.content}
                 rows={18}
                 onChange={(e) => actions.edit({ ...draft, content: e.target.value })}
                 disabled={saving}
               />
 
-              <div className="manuscript-autosave-status" role="status" aria-live="polite">
+              <div className="text-sm text-muted-foreground" role="status" aria-live="polite">
                 {autosaveStatus?.kind === 'saving' && '正在自动保存…'}
                 {autosaveStatus?.kind === 'saved' &&
                   `已自动保存于 ${formatTime(autosaveStatus.at)}`}
@@ -183,25 +216,28 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
               </div>
 
               {saveError && (
-                <div className="chapter-error" role="alert">
-                  <span>{saveError}</span>
-                  {/* 冲突时的明确出路：重新加载服务端当前版本（会丢弃本地修改，
-                      故文案如实说明），用户也可以先把正文复制走。 */}
-                  <button
-                    type="button"
-                    className="btn-retry-inline"
-                    onClick={() => void actions.reload()}
-                    disabled={saving}
-                  >
-                    放弃本地修改并重新加载
-                  </button>
-                </div>
+                <InlineError>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>{saveError}</span>
+                    {/* 冲突时的明确出路：重新加载服务端当前版本（会丢弃本地修改，
+                        故文案如实说明），用户也可以先把正文复制走。 */}
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void actions.reload()}
+                      disabled={saving}
+                    >
+                      放弃本地修改并重新加载
+                    </Button>
+                  </div>
+                </InlineError>
               )}
 
-              <div className="manuscript-versions">
+              <div className="flex flex-col gap-1.5">
                 <button
                   type="button"
-                  className="btn-link"
+                  className="w-fit border-none bg-transparent p-0 font-[inherit] text-sm text-primary"
                   onClick={() => void actions.toggleVersions()}
                   aria-expanded={versions !== null}
                 >
@@ -210,46 +246,49 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
                     : `查看版本历史（共 ${chapter.versionCount} 版）`}
                 </button>
                 {versions !== null && (
-                  <ul className="manuscript-version-list">
+                  <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
                     {versions.map((version) => (
-                      <li key={version.versionId}>
-                        <span className="manuscript-version-label">
+                      <li key={version.versionId} className="flex items-center gap-2.5 text-[13px]">
+                        <span className="text-muted-foreground">
                           第 {version.versionNumber} 版 · {versionSourceLabel(version.source)}
                           {version.isCurrent ? ' · 当前' : ''}
                         </span>
                         {!version.isCurrent && (
-                          <button
+                          <Button
                             type="button"
+                            variant="outline"
+                            size="sm"
                             onClick={() => void actions.restore(version.versionId)}
                             disabled={saving}
                           >
                             恢复到这一版
-                          </button>
+                          </Button>
                         )}
                       </li>
                     ))}
                   </ul>
                 )}
-                <p className="candidate-gate-desc">
+                <p className="text-xs text-muted-foreground">
                   恢复只是把"当前版本"指回那一版，任何一版都不会被删除。
                 </p>
               </div>
 
-              <div className="manuscript-editor-actions">
-                <button
+              <div className="flex items-center gap-3">
+                <Button
                   type="button"
-                  className="btn-primary"
                   onClick={() => void actions.save()}
                   disabled={saving || !dirty}
                 >
                   {saving ? '保存中…' : '保存为新版本'}
-                </button>
-                <span className="candidate-meta">
+                </Button>
+                <span className="text-xs text-muted-foreground">
                   当前第 {chapter.versionNumber ?? 0} 版 · 共 {chapter.versionCount} 版
                   {dirty ? ' · 有未保存修改' : ''}
                 </span>
               </div>
-              <p className="candidate-gate-desc">保存会追加一个新版本，旧版本不会被删除或覆盖。</p>
+              <p className="text-xs text-muted-foreground">
+                保存会追加一个新版本，旧版本不会被删除或覆盖。
+              </p>
             </section>
           )}
         </>

@@ -7,6 +7,7 @@
  */
 
 import { CANDIDATE_ESCALATION_OPTIONS } from './chapter-logic';
+import { Button } from '@/components/ui/button';
 
 export interface CandidateEscalationPanelProps {
   readonly busy: boolean;
@@ -15,15 +16,25 @@ export interface CandidateEscalationPanelProps {
 
 export function CandidateEscalationPanel({ busy, onSubmit }: CandidateEscalationPanelProps) {
   return (
-    <section className="candidate-escalation" aria-labelledby="candidate-escalation-heading">
-      <h4 id="candidate-escalation-heading">改写次数已经用完了，接下来怎么办？</h4>
-      <ul className="candidate-escalation-options">
+    <section
+      className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3.5"
+      aria-labelledby="candidate-escalation-heading"
+    >
+      <h4 id="candidate-escalation-heading" className="text-[15px]">
+        改写次数已经用完了，接下来怎么办？
+      </h4>
+      <ul className="m-0 flex list-none flex-col gap-2 p-0">
         {CANDIDATE_ESCALATION_OPTIONS.map((option) => (
-          <li key={option.outcome}>
-            <button type="button" onClick={() => onSubmit(option.outcome)} disabled={busy}>
+          <li key={option.outcome} className="flex flex-col items-start gap-1.5">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onSubmit(option.outcome)}
+              disabled={busy}
+            >
               {option.label}
-            </button>
-            <p className="candidate-gate-desc">{option.description}</p>
+            </Button>
+            <p className="text-xs text-muted-foreground">{option.description}</p>
           </li>
         ))}
       </ul>

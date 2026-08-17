@@ -25,25 +25,32 @@ export function CandidateView({
   const issueCount = critiques.reduce((sum, c) => sum + c.issues.length, 0);
 
   return (
-    <section className="candidate-view" aria-labelledby="candidate-heading">
-      <div className="candidate-header">
-        <h4 id="candidate-heading">{candidate.title}</h4>
-        <span className="candidate-meta">
+    <section
+      className="flex flex-col gap-2 rounded-lg border border-border bg-secondary px-4 py-3.5"
+      aria-labelledby="candidate-heading"
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <h4 id="candidate-heading" className="text-[15px]">
+          {candidate.title}
+        </h4>
+        <span className="text-xs text-muted-foreground">
           第 {candidate.revisionNo} 版 · {candidateSourceLabel(candidate.source)}
         </span>
       </div>
 
-      <div className="candidate-content">
+      <div>
         {paragraphs.map((paragraph, index) => (
-          <p key={`${index}-${paragraph.slice(0, 8)}`}>{paragraph}</p>
+          <p key={`${index}-${paragraph.slice(0, 8)}`} className="mb-2.5 leading-loose">
+            {paragraph}
+          </p>
         ))}
       </div>
 
       {critiques.length > 0 && (
-        <div className="candidate-critiques">
+        <div>
           <button
             type="button"
-            className="btn-link"
+            className="border-none bg-transparent p-0 font-[inherit] text-sm text-primary"
             onClick={onToggleCritiques}
             aria-expanded={showCritiques}
           >
@@ -52,27 +59,28 @@ export function CandidateView({
               : `查看自查结果（${critiques.length} 项，${issueCount} 条问题）`}
           </button>
           {showCritiques && (
-            <ul className="critique-list">
+            <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0">
               {critiques.map((critique) => (
-                <li key={critique.dimension} className="critique-item">
-                  <div className="critique-head">
-                    <span className="critique-dimension">
+                <li key={critique.dimension} className="rounded-md border border-border px-3 py-2">
+                  <div className="flex items-baseline gap-2.5 text-[13px]">
+                    <span className="font-semibold">
                       {critiqueDimensionLabel(critique.dimension)}
                     </span>
-                    <span className="critique-verdict">
-                      {critique.verdict === 'pass' ? '没有阻塞问题' : '建议修改'}
-                    </span>
+                    <span>{critique.verdict === 'pass' ? '没有阻塞问题' : '建议修改'}</span>
                   </div>
-                  <p className="critique-summary">{critique.summary}</p>
+                  <p className="my-1 text-[13px] text-muted-foreground">{critique.summary}</p>
                   {critique.issues.length > 0 && (
-                    <ul className="critique-issues">
+                    <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0">
                       {critique.issues.map((issue, index) => (
-                        <li key={`${critique.dimension}-${index}`}>
-                          <span className="issue-problem">{issue.problem}</span>
+                        <li
+                          key={`${critique.dimension}-${index}`}
+                          className="flex flex-col gap-0.5 text-[13px]"
+                        >
+                          <span>{issue.problem}</span>
                           {issue.excerpt.length > 0 && (
-                            <span className="issue-excerpt">原文：{issue.excerpt}</span>
+                            <span className="text-muted-foreground">原文：{issue.excerpt}</span>
                           )}
-                          <span className="issue-suggestion">建议：{issue.suggestion}</span>
+                          <span className="text-muted-foreground">建议：{issue.suggestion}</span>
                         </li>
                       ))}
                     </ul>

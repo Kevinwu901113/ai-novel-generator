@@ -19,6 +19,9 @@ import {
   regenerateRemaining,
   rewriteOptionCopy,
 } from './chapter-logic';
+import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface CandidateGatePanelProps {
   readonly state: ChapterRunStateDto;
@@ -34,28 +37,27 @@ export function CandidateGatePanel({ state, busy, onSubmit }: CandidateGatePanel
   const trimmed = feedback.trim();
 
   return (
-    <section className="candidate-gate" aria-labelledby="candidate-gate-heading">
-      <h4 id="candidate-gate-heading">这一版怎么处理？</h4>
+    <section
+      className="flex flex-col gap-3 rounded-lg border border-border px-4 py-3.5"
+      aria-labelledby="candidate-gate-heading"
+    >
+      <h4 id="candidate-gate-heading" className="text-[15px]">
+        这一版怎么处理？
+      </h4>
 
-      <div className="candidate-gate-option">
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => onSubmit('accept', null)}
-          disabled={busy}
-        >
+      <div className="flex flex-col items-start gap-1.5">
+        <Button type="button" onClick={() => onSubmit('accept', null)} disabled={busy}>
           {acceptOption.label}
-        </button>
-        <p className="candidate-gate-desc">{acceptOption.description}</p>
+        </Button>
+        <p className="text-xs text-muted-foreground">{acceptOption.description}</p>
       </div>
 
-      <div className="candidate-gate-option">
-        <label className="candidate-feedback-label" htmlFor="candidate-feedback">
+      <div className="flex flex-col items-start gap-1.5">
+        <Label className="text-[13px]" htmlFor="candidate-feedback">
           你的修改意见（可留空）
-        </label>
-        <textarea
+        </Label>
+        <Textarea
           id="candidate-feedback"
-          className="candidate-feedback"
           value={feedback}
           maxLength={MAX_CHAPTER_FEEDBACK_LENGTH}
           rows={3}
@@ -63,21 +65,27 @@ export function CandidateGatePanel({ state, busy, onSubmit }: CandidateGatePanel
           onChange={(e) => setFeedback(e.target.value)}
           disabled={busy}
         />
-        <button
+        <Button
           type="button"
+          variant="outline"
           onClick={() => onSubmit('request_rewrite', trimmed.length > 0 ? trimmed : null)}
           disabled={busy}
         >
           {rewriteCopy.label}
-        </button>
-        <p className="candidate-gate-desc">{rewriteCopy.description}</p>
+        </Button>
+        <p className="text-xs text-muted-foreground">{rewriteCopy.description}</p>
       </div>
 
-      <div className="candidate-gate-option">
-        <button type="button" onClick={() => onSubmit('reject', null)} disabled={busy}>
+      <div className="flex flex-col items-start gap-1.5">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => onSubmit('reject', null)}
+          disabled={busy}
+        >
           {regenerateCopy.label}
-        </button>
-        <p className="candidate-gate-desc">{regenerateCopy.description}</p>
+        </Button>
+        <p className="text-xs text-muted-foreground">{regenerateCopy.description}</p>
       </div>
     </section>
   );
