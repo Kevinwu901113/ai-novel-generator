@@ -705,6 +705,43 @@ IPC_CHANNELS 从 contracts 移除（命令面 RPC_COMMANDS）；TD-001/002/004 �
 
 ---
 
+### 2026-08-17 D12 前端界面重设计：Tailwind v4 + shadcn/ui，保留「纸感写作台」视觉身份
+
+**背景**：WebUI 迁移（D11）合并后，负责人拍板下一阶段做前端界面设计改造。现状摸底：
+5535 行单文件 App.css、token 只覆盖颜色（22 个变量，403 处硬编码色 / 79 个十六进制值）、
+三套强调色并存、暗色模式靠 38 个手写 `@media` 块、无基础组件抽象（12+ 种 ad-hoc 按钮类）、
+约 1/3 CSS + 1300 行 TSX 服务于已从入口摘除的旧 Grill 工作台/创作契约面板。
+底子好的部分：无障碍资产扎实（`src/accessibility/`、近 2000 行 a11y 测试、60 处
+live region）、中文文案纪律（界面不出现工程概念）、inline style 仅 1 处、零 UI 依赖。
+
+**决策**：负责人三项拍板——①技术路线全面转 Tailwind CSS v4 + shadcn/ui（Radix 原语 +
+lucide-react），弃手写 CSS 体系；②旧 Grill 工作台与创作契约面板死代码全部删除（git
+历史保留，重接入时按新设计重写）；③使用场景桌面为主，移动端做到「顺手看稿」即可。
+子决策：
+
+- **视觉身份保留，不用 shadcn 默认风**：暖白纸感画布（`#f4f3ef` 系）、近黑侧 rail、
+  宋体展示标题、克制动效、中文文案纪律全部延续；shadcn 主题变量映射为现有配色。
+- **强调色统一为靛蓝紫系**（logo `#514cc9` 家族）作为唯一 primary；蓝 `#2563eb` 退役。
+- **暗色模式继续跟随系统**（不做手动开关）；token 单点定义，38 个手写暗色块销账。
+- **无障碍红线**：`src/accessibility/` 工具、`accessibility.test.tsx`、role/aria 语义
+  保留；Dialog/Drawer/Select 的焦点管理改由 Radix 原语接管（替换手写焦点陷阱）。
+- **分四批**：B14 基建与死代码清理（视觉零变化）→ B15 基础组件与壳层 → B16 各
+  Region 逐屏迁移 → B17 收口（App.css 移除、暗色/移动端销账 TD-035 桌面外最小集）。
+- 迁移期 Tailwind **不启用 preflight**，避免重置冲击存量 App.css；B17 收口时启用。
+
+**理由**：负责人在「手写 token 体系 / headless 库 / 全面 shadcn」三案中选最彻底一案，
+接受重写成本换开发速度与弹层交互质量。视觉身份与文案是产品资产，与实现技术解耦保留。
+死 CSS 占全文件 1/3，留着会让 token 收敛白做一遍。
+
+**影响**：apps/web 新增依赖 tailwindcss / @tailwindcss/vite / shadcn 生态（radix、
+lucide-react、cva 等）——「生产运行时零外部依赖」原则不受影响（仅构建期/前端依赖）。
+19 个 .tsx 测试作为迁移防线必须逐批全绿；断言类名的用例随批调整。
+详见 `b14-ui-foundation-design.md`（后续批次设计文档随批新增）。
+
+**状态**：已确认
+
+---
+
 ## 待确认决策
 
 [待确认的决策记录]
