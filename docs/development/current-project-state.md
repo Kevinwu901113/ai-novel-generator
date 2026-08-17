@@ -89,6 +89,17 @@ GE-5/6/7/8 已全部 COMPLETE，完整纵向链路已具备。旧 Grill 工作�
 **2026-08-17 WebUI 迁移**（D11，B11-B13）：Electron 桌面壳退役，浏览器经访问令牌进入，
 四阶段旅程与全部能力不变，稿件导出改浏览器下载，老桌面版数据由数据根探测直接沿用。
 
+**2026-08-17 前端界面重设计**（D12，B14-B17，功能分支，待负责人验收合并）：技术路线
+从手写 CSS（App.css，迁移前 5535 行）全面转 Tailwind CSS v4 + shadcn/ui（Radix 原语 +
+lucide-react），保留暖白纸感画布/近黑侧栏/宋体展示标题的视觉身份不变；强调色统一为
+靛蓝紫（`#514cc9` 家族，蓝 `#2563eb` 退役）；旧 Grill 工作台/创作契约面板死代码删除
+（git 历史保留）。四批次：B14 基建与死代码清理（视觉零变化）→ B15 基础组件与壳层
+（Sheet 抽屉、toast、rail 图标）→ B16 各 Region 逐屏迁移 → B17 收口（启用 Tailwind
+官方 preflight、App.css 文件删除、100dvh/safe-area/触控目标等移动端最小集，TD-035
+最小集部分转 PARTIALLY_RESOLVED）。无障碍资产（`src/accessibility/`、role/aria/键盘
+语义、~2000 行 a11y 测试）全程保留，弹层焦点管理改由 Radix 原语接管。详见
+`decision-log.md` D12、`b14-ui-foundation-design.md`..`b17-cleanup-design.md`。
+
 ## 4. Canonical Assets（复用路线）
 
 - **Grill** → GE-3 适配为 Idea Intake（对话式，隐藏状态机/提案/任务细节；复用 `grill_*` 表）。
