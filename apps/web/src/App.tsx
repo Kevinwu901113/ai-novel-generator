@@ -442,8 +442,12 @@ export function App() {
 
           <main className="main-surface">
             {currentProject ? (
-              <section ref={grillSectionRef} className="project-workspace" aria-label="创作旅程">
-                <div className="project-journey-bar">
+              <section
+                ref={grillSectionRef}
+                className="flex h-full min-h-0 flex-col bg-canvas"
+                aria-label="创作旅程"
+              >
+                <div className="flex shrink-0 justify-center border-b border-border bg-card px-6">
                   <JourneyNav
                     frontierStage={frontierStage}
                     viewStage={viewStage}
@@ -452,12 +456,18 @@ export function App() {
                   />
                 </div>
                 {journey.error && (
-                  <div className="journey-probe-error" role="status" aria-live="polite">
+                  <div
+                    className="mx-4 mt-2 rounded border border-status-attention/30 bg-status-attention/10 px-3 py-2 text-[13px] text-status-attention"
+                    role="status"
+                    aria-live="polite"
+                  >
                     {journey.error}（正在自动重试）
                   </div>
                 )}
-                <div className="project-canvas">
-                  <div className="project-canvas-inner">
+                <div className="min-h-0 flex-1 overflow-hidden px-7 pt-5 pb-7">
+                  {/* B16：project-canvas-inner 类名保留——仍是 research/blueprint/chapter
+                      Region（1b 待迁）内部排版的祖先选择器锚点，自身盒模型样式已迁 Tailwind。 */}
+                  <div className="project-canvas-inner mx-auto h-full w-full max-w-[1040px] overflow-hidden rounded-2xl border border-border bg-card shadow-[0_18px_50px_var(--color-shadow)]">
                     <RendererErrorBoundary label="创作旅程">
                       {viewStage === 'manuscript' ? (
                         <ChapterRegion key={currentProject.id} projectId={currentProject.id} />
@@ -513,8 +523,10 @@ export function App() {
             <TaskCenter projectId={currentProject?.id ?? null} />
           </RendererErrorBoundary>
           {currentProject && (
-            <details className="drawer-details">
-              <summary>项目信息</summary>
+            <details className="group mt-7 border-t border-border pt-6">
+              <summary className="cursor-pointer text-[13px] text-muted-foreground group-open:mb-3.5 group-open:text-foreground">
+                项目信息
+              </summary>
               <RendererErrorBoundary label="项目状态">
                 <ProjectStatusRegion currentProject={currentProject} />
               </RendererErrorBoundary>
@@ -528,12 +540,16 @@ export function App() {
           description="配置生成模型、联网搜索与本地运行状态"
           onClose={handleCloseDrawer}
         >
-          <section className="drawer-section" aria-labelledby="provider-heading">
-            <div className="drawer-section-heading">
+          <section aria-labelledby="provider-heading">
+            <div className="mb-4 flex items-start gap-2.5">
               <Sparkles size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
-                <h3 id="provider-heading">模型提供商</h3>
-                <p>正文、蓝图和创作要求都使用这里的默认模型。</p>
+                <h3 id="provider-heading" className="text-sm">
+                  模型提供商
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  正文、蓝图和创作要求都使用这里的默认模型。
+                </p>
               </div>
             </div>
             <RendererErrorBoundary label="模型服务">
@@ -550,12 +566,19 @@ export function App() {
             </RendererErrorBoundary>
           </section>
 
-          <section className="drawer-section" aria-labelledby="search-key-heading">
-            <div className="drawer-section-heading">
+          <section
+            className="mt-7 border-t border-border pt-6"
+            aria-labelledby="search-key-heading"
+          >
+            <div className="mb-4 flex items-start gap-2.5">
               <Search size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
-                <h3 id="search-key-heading">联网搜索</h3>
-                <p>可选。需要历史或现实资料时，使用 Tavily 完成调研。</p>
+                <h3 id="search-key-heading" className="text-sm">
+                  联网搜索
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  可选。需要历史或现实资料时，使用 Tavily 完成调研。
+                </p>
               </div>
             </div>
             <RendererErrorBoundary label="搜索服务">
@@ -566,27 +589,31 @@ export function App() {
             </RendererErrorBoundary>
           </section>
 
-          <section className="drawer-section system-overview" aria-labelledby="system-heading">
-            <div className="drawer-section-heading">
+          <section className="mt-7 border-t border-border pt-6" aria-labelledby="system-heading">
+            <div className="mb-4 flex items-start gap-2.5">
               <Database size={18} aria-hidden="true" className="mt-0.5 text-accent-foreground" />
               <div>
-                <h3 id="system-heading">本地运行</h3>
-                <p>项目和稿件只保存在这台电脑。</p>
+                <h3 id="system-heading" className="text-sm">
+                  本地运行
+                </h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">项目和稿件只保存在这台电脑。</p>
               </div>
             </div>
-            <dl>
-              <div>
-                <dt>数据服务</dt>
-                <dd>{isDataServiceReady ? 'SQLite 已就绪' : '暂不可用'}</dd>
+            <dl className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg border border-border bg-secondary p-2.5">
+                <dt className="text-[11px] text-muted-foreground">数据服务</dt>
+                <dd className="mt-0.5 text-xs font-semibold">
+                  {isDataServiceReady ? 'SQLite 已就绪' : '暂不可用'}
+                </dd>
               </div>
-              <div>
-                <dt>桌面服务</dt>
-                <dd>{health?.ok ? '正常' : '检查中'}</dd>
+              <div className="rounded-lg border border-border bg-secondary p-2.5">
+                <dt className="text-[11px] text-muted-foreground">桌面服务</dt>
+                <dd className="mt-0.5 text-xs font-semibold">{health?.ok ? '正常' : '检查中'}</dd>
               </div>
               {health && (
-                <div>
-                  <dt>版本</dt>
-                  <dd>{health.version}</dd>
+                <div className="rounded-lg border border-border bg-secondary p-2.5">
+                  <dt className="text-[11px] text-muted-foreground">版本</dt>
+                  <dd className="mt-0.5 text-xs font-semibold">{health.version}</dd>
                 </div>
               )}
             </dl>

@@ -9,9 +9,13 @@
  *
  * 只有已到达过的阶段（reachedStages，含当前）可点击切换 viewStage；未到达的
  * 阶段保持不可点（disabled + aria-disabled）。
+ *
+ * B16：迁 Tailwind（视觉与 B15 壳层对齐）。外层容器（居中、底部分隔线、
+ * 面板底色）由 App.tsx 的旅程条负责，本组件只负责阶段列表自身。
  */
 
 import { JOURNEY_STAGES, type JourneyStage } from '../intake/intake-logic';
+import { cn } from '@/lib/utils';
 
 export interface JourneyNavProps {
   /** 推进阶段：Graph 真实位置，标示"当前进度" */
@@ -32,22 +36,23 @@ export function JourneyNav({
 }: JourneyNavProps) {
   const frontierIndex = JOURNEY_STAGES.findIndex((s) => s.id === frontierStage);
   return (
-    <nav className="journey-nav" aria-label="创作旅程阶段">
-      <ol>
+    <nav className="w-full max-w-[920px] py-3.5" aria-label="创作旅程阶段">
+      <ol className="flex list-none justify-center gap-[clamp(18px,5vw,64px)]">
         {JOURNEY_STAGES.map((stage, i) => {
           const reached = reachedStages.has(stage.id);
           const isFrontier = stage.id === frontierStage;
           const isViewed = stage.id === viewStage;
+          const isDone = i < frontierIndex;
           return (
-            <li
-              key={stage.id}
-              className={`journey-step ${
-                i < frontierIndex ? 'done' : i === frontierIndex ? 'current' : 'upcoming'
-              }${isViewed ? ' viewing' : ''}`}
-            >
+            <li key={stage.id} className="flex">
               <button
                 type="button"
-                className="journey-step-btn"
+                className={cn(
+                  'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[13px] text-muted-foreground disabled:cursor-default',
+                  reached && 'cursor-pointer hover:bg-secondary',
+                  isFrontier && 'font-semibold text-foreground',
+                  isViewed && 'bg-secondary outline outline-1 outline-primary',
+                )}
                 disabled={!reached}
                 aria-disabled={!reached}
                 aria-current={isFrontier ? 'step' : undefined}
@@ -56,10 +61,17 @@ export function JourneyNav({
                   if (reached) onSelectStage(stage.id);
                 }}
               >
-                <span className="journey-step-index" aria-hidden="true">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'inline-flex size-5 shrink-0 items-center justify-center rounded-full border border-border text-xs',
+                    isFrontier && 'border-primary bg-primary text-primary-foreground',
+                    !isFrontier && isDone && 'border-status-ready bg-status-ready text-white',
+                  )}
+                >
                   {i + 1}
                 </span>
-                <span className="journey-step-label">{stage.label}</span>
+                <span>{stage.label}</span>
                 {isFrontier && <span className="sr-only">（当前进度）</span>}
                 {isViewed && <span className="sr-only">（正在查看）</span>}
               </button>
