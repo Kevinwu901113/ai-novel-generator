@@ -24,7 +24,7 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   if (error && !stats) {
     return (
       <div
-        className="task-stats-error"
+        className="rounded-md bg-destructive/10 px-2 py-2 text-center text-xs text-destructive"
         data-testid="task-stats-error"
         role="alert"
         aria-live="assertive"
@@ -37,9 +37,9 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   // 有错误但有上次成功数据时，显示数据和过期提示
   if (error && stats) {
     return (
-      <div className="task-stats" data-testid="task-stats">
+      <div className="grid grid-cols-2 gap-2" data-testid="task-stats">
         <div
-          className="task-stats-stale-notice"
+          className="col-span-2 rounded-md bg-status-attention/10 px-2 py-1.5 text-xs text-status-attention"
           data-testid="task-stats-stale"
           role="status"
           aria-live="polite"
@@ -54,7 +54,11 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   // 无数据且无错误时，显示加载中
   if (!stats) {
     return (
-      <div className="task-stats-loading" role="status" aria-live="polite">
+      <div
+        className="px-2 py-2 text-center text-xs text-muted-foreground"
+        role="status"
+        aria-live="polite"
+      >
         加载统计中…
       </div>
     );
@@ -62,7 +66,7 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
 
   // 正常显示
   return (
-    <div className="task-stats" data-testid="task-stats">
+    <div className="grid grid-cols-2 gap-2" data-testid="task-stats">
       <TaskStatsContent stats={stats} />
     </div>
   );
@@ -78,44 +82,39 @@ function TaskStatsContent({ stats }: { stats: TaskStatsPublicData }) {
 
   return (
     <>
-      <div className="task-stats-item">
-        <span className="task-stats-label">模型调用</span>
-        <span className="task-stats-value">{formatNumber(stats.invocationCount)}</span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">成功</span>
-        <span className="task-stats-value task-stats-success">
-          {formatNumber(stats.succeededCount)}
-        </span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">失败</span>
-        <span className="task-stats-value task-stats-failed">
-          {formatNumber(stats.failedCount)}
-        </span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">输入 Token</span>
-        <span className="task-stats-value">{formatNumber(stats.totalInputTokens)}</span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">输出 Token</span>
-        <span className="task-stats-value">{formatNumber(stats.totalOutputTokens)}</span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">总 Token</span>
-        <span className="task-stats-value">{formatNumber(stats.totalTokens)}</span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">总延迟</span>
-        <span className="task-stats-value">{formatLatency(stats.totalLatencyMs)}</span>
-      </div>
-      <div className="task-stats-item">
-        <span className="task-stats-label">平均延迟</span>
-        <span className="task-stats-value">
-          {avgLatency !== null ? formatLatency(avgLatency) : '—'}
-        </span>
-      </div>
+      <StatItem label="模型调用" value={formatNumber(stats.invocationCount)} />
+      <StatItem
+        label="成功"
+        value={formatNumber(stats.succeededCount)}
+        valueClassName="text-status-ready"
+      />
+      <StatItem
+        label="失败"
+        value={formatNumber(stats.failedCount)}
+        valueClassName="text-destructive"
+      />
+      <StatItem label="输入 Token" value={formatNumber(stats.totalInputTokens)} />
+      <StatItem label="输出 Token" value={formatNumber(stats.totalOutputTokens)} />
+      <StatItem label="总 Token" value={formatNumber(stats.totalTokens)} />
+      <StatItem label="总延迟" value={formatLatency(stats.totalLatencyMs)} />
+      <StatItem label="平均延迟" value={avgLatency !== null ? formatLatency(avgLatency) : '—'} />
     </>
+  );
+}
+
+function StatItem({
+  label,
+  value,
+  valueClassName,
+}: {
+  readonly label: string;
+  readonly value: string;
+  readonly valueClassName?: string;
+}) {
+  return (
+    <div className="flex flex-col rounded border border-border bg-background px-2 py-1.5">
+      <span className="mb-0.5 text-[11px] text-muted-foreground">{label}</span>
+      <span className={`font-mono text-sm font-semibold ${valueClassName ?? ''}`}>{value}</span>
+    </div>
   );
 }

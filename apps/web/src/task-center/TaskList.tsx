@@ -15,6 +15,10 @@
  * - polling 时保持焦点在同一任务 DOM 节点
  * - 焦点任务消失时移动到最近合法项（仅当焦点在列表内）
  * - 空列表清理 activeTaskId
+ *
+ * B16：状态/类型筛选的裸 <select> 换 shadcn Select（Radix）——下方任务列表
+ * 本体仍是手写 role="listbox"/role="option" + roving tabindex，键盘导航
+ * 语义原样保留，不受筛选控件迁移影响。
  */
 
 import {
@@ -32,6 +36,18 @@ import {
   buildTaskTypeOptions,
 } from './task-labels';
 import { formatTaskShortId, formatTime } from './task-formatters';
+import { TaskStatusBadge } from './TaskStatusBadge';
+import { EmptyState } from '@/components/EmptyState';
+import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { cn } from '@/lib/utils';
+import { ListX } from 'lucide-react';
 
 interface TaskListProps {
   tasks: ReadonlyArray<TaskPublicData>;
@@ -249,50 +265,64 @@ export function TaskList({
   // ── 渲染 ──────────────────────────────────────────────────────────
 
   return (
-    <div className="task-list-container">
+    <div className="flex flex-col gap-2">
       {/* 筛选栏 */}
-      <div className="task-filters">
-        <label className="task-filter-label">
-          状态：
-          <select
-            className="task-filter-select"
-            value={statusFilter}
-            onChange={(e) => onStatusFilterChange(e.target.value)}
-            data-testid="status-filter"
-          >
-            {TASK_STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="task-filter-label">
-          类型：
-          <select
-            className="task-filter-select"
-            value={typeFilter}
-            onChange={(e) => onTypeFilterChange(e.target.value)}
-            data-testid="type-filter"
-          >
-            {typeOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="flex flex-wrap gap-3">
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="status-filter" className="text-xs text-muted-foreground">
+            状态：
+          </Label>
+          <Select value={statusFilter} onValueChange={onStatusFilterChange}>
+            <SelectTrigger
+              id="status-filter"
+              size="sm"
+              data-testid="status-filter"
+              className="h-7 w-auto text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TASK_STATUS_OPTIONS.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor="type-filter" className="text-xs text-muted-foreground">
+            类型：
+          </Label>
+          <Select value={typeFilter} onValueChange={onTypeFilterChange}>
+            <SelectTrigger
+              id="type-filter"
+              size="sm"
+              data-testid="type-filter"
+              className="h-7 w-auto text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {typeOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {/* 列表 */}
       {tasks.length === 0 ? (
-        <div className="task-list-empty" data-testid="task-empty">
-          暂无任务
+        <div data-testid="task-empty">
+          <EmptyState icon={ListX} message="暂无任务" hint="生成任务开始后会显示在这里。" />
         </div>
       ) : (
         <ul
           ref={listRef}
-          className="task-list"
+          className="m-0 flex max-h-[300px] list-none flex-col gap-0.5 overflow-y-auto p-0"
           role="listbox"
           aria-label="任务列表"
           onKeyDown={handleKeyDown}
@@ -320,23 +350,36 @@ export function TaskList({
                 tabIndex={isFocused ? 0 : -1}
                 aria-selected={isActive ? 'true' : 'false'}
                 aria-label={buildTaskAriaLabel(task)}
-                className={`task-item ${isActive ? 'active' : ''}`}
+                className={cn(
+                  'flex cursor-pointer flex-col rounded border border-transparent px-2.5 py-2',
+                  isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary',
+                )}
                 onClick={() => handleOptionClick(task.id)}
                 onFocus={() => handleOptionFocus(task.id)}
               >
-                <div className="task-item-header">
-                  <span className="task-item-id">{formatTaskShortId(task.id)}</span>
-                  <span className={`task-status-badge status-${task.status.toLowerCase()}`}>
-                    {taskStatusLabel(task.status)}
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-mono text-xs font-semibold">
+                    {formatTaskShortId(task.id)}
                   </span>
+                  <TaskStatusBadge status={task.status} />
                 </div>
-                <div className="task-item-meta">
-                  <span className="task-item-type">{taskTypeLabel(task.taskType)}</span>
-                  <span className="task-item-attempts">尝试 {task.attemptCount}</span>
+                <div
+                  className={cn(
+                    'mt-0.5 flex items-center gap-2 text-[11px]',
+                    isActive ? 'text-primary-foreground/70' : 'text-muted-foreground',
+                  )}
+                >
+                  <span className="text-xs">{taskTypeLabel(task.taskType)}</span>
+                  <span>尝试 {task.attemptCount}</span>
                 </div>
-                <div className="task-item-times">
+                <div
+                  className={cn(
+                    'mt-0.5 text-[11px]',
+                    isActive ? 'text-primary-foreground/70' : 'text-muted-foreground',
+                  )}
+                >
                   <span>{formatTime(task.createdAt)}</span>
-                  {task.finishedAt && <span>→ {formatTime(task.finishedAt)}</span>}
+                  {task.finishedAt && <span> → {formatTime(task.finishedAt)}</span>}
                 </div>
               </li>
             );

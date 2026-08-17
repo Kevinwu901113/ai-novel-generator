@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, cleanup, act, waitFor, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type {
   TaskPublicData,
   TaskStatsPublicData,
@@ -626,24 +627,28 @@ describe('三、TaskCenter 键盘导航', () => {
 
   // 19. 筛选后焦点合法
   it('筛选后焦点合法', async () => {
+    // B16：状态筛选换成 shadcn Select（Radix）后走真实指针事件序列，与本
+    // describe 块全局的 fake timers 搭配容易卡死（findBy*/waitFor 内部轮询
+    // 依赖真实时钟）——本用例单独切回真实时钟，断言的键盘可达性语义
+    // （roving tabindex）未改变。
+    vi.useRealTimers();
+    const user = userEvent.setup();
     setupTaskDesktop();
     await act(async () => {
       render(<TaskCenter projectId={mockProjectId} />);
-      await flushMicrotasks();
     });
-
-    const select = screen.getByTestId('status-filter');
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(
-      select,
-      'FAILED',
+    await waitFor(() =>
+      expect(screen.getAllByTestId('task-item').length).toBeGreaterThanOrEqual(2),
     );
-    act(() => {
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
 
-    const filteredItems = screen.getAllByTestId('task-item');
-    expect(filteredItems.length).toBe(1);
-    expect(filteredItems[0]).toHaveAttribute('tabindex', '0');
+    await user.click(screen.getByTestId('status-filter'));
+    await user.click(await screen.findByRole('option', { name: '失败' }));
+
+    await waitFor(() => {
+      const filteredItems = screen.getAllByTestId('task-item');
+      expect(filteredItems.length).toBe(1);
+      expect(filteredItems[0]).toHaveAttribute('tabindex', '0');
+    });
   });
 
   // 20. polling refresh 不夺焦点

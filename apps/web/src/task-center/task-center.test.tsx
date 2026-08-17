@@ -8,7 +8,8 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { TaskCenter } from './TaskCenter';
 import type { TaskPublicData, TaskStatsPublicData, DesktopAPI } from '@ai-novel/contracts';
 
@@ -233,43 +234,47 @@ describe('TaskCenter DOM 交互', () => {
 
   // 3. 状态筛选
   it('状态筛选只显示匹配的任务', async () => {
+    // B16：状态筛选换成 shadcn Select（Radix）后走真实指针事件序列，与本
+    // describe 块全局的 fake timers 搭配容易卡死（findBy*/waitFor 内部轮询
+    // 依赖真实时钟，见 ResearchRegion.test.tsx 同类注记）——本用例单独切回
+    // 真实时钟，不影响其余用例。
+    vi.useRealTimers();
+    const user = userEvent.setup();
     setupDesktop(createMockTasksAPI());
-    await renderAsync(<TaskCenter projectId={mockProjectId} />);
-
-    expect(screen.getAllByTestId('task-item').length).toBe(2);
-
-    const select = screen.getByTestId('status-filter');
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(
-      select,
-      'FAILED',
-    );
-    act(() => {
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+    await act(async () => {
+      render(<TaskCenter projectId={mockProjectId} />);
     });
+    await waitFor(() => expect(screen.getAllByTestId('task-item').length).toBe(2));
 
-    const items = screen.getAllByTestId('task-item');
-    expect(items).toHaveLength(1);
-    expect(items[0]).toHaveTextContent('失败');
+    // 裸 <select> 换 shadcn Select 后不再是原生 select 元素，原先"直接改
+    // .value + 派发 change 事件"的手法不再适用——改点击触发器打开、点击
+    // 目标 option（D-B16-3 允许的选择器/交互方式改动，语义仍是"筛选到
+    // FAILED 状态"）。
+    await user.click(screen.getByTestId('status-filter'));
+    await user.click(await screen.findByRole('option', { name: '失败' }));
+
+    await waitFor(() => {
+      const items = screen.getAllByTestId('task-item');
+      expect(items).toHaveLength(1);
+      expect(items[0]).toHaveTextContent('失败');
+    });
   });
 
   // 4. 类型筛选
   it('类型筛选只显示匹配的任务', async () => {
+    vi.useRealTimers();
+    const user = userEvent.setup();
     const tasks = [mockTask1, mockTaskUnknownType];
     setupDesktop(createMockTasksAPI({ list: vi.fn().mockResolvedValue(tasks) }));
-    await renderAsync(<TaskCenter projectId={mockProjectId} />);
-
-    expect(screen.getAllByTestId('task-item').length).toBe(2);
-
-    const select = screen.getByTestId('type-filter');
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(
-      select,
-      'FUTURE_TASK_TYPE',
-    );
-    act(() => {
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+    await act(async () => {
+      render(<TaskCenter projectId={mockProjectId} />);
     });
+    await waitFor(() => expect(screen.getAllByTestId('task-item').length).toBe(2));
 
-    expect(screen.getAllByTestId('task-item')).toHaveLength(1);
+    await user.click(screen.getByTestId('type-filter'));
+    await user.click(await screen.findByRole('option', { name: /未知任务/ }));
+
+    await waitFor(() => expect(screen.getAllByTestId('task-item')).toHaveLength(1));
   });
 
   // 5. 未知任务类型 fallback
@@ -784,36 +789,33 @@ describe('TaskCenter DOM 交互', () => {
 
   // 27. 切换项目重置 status/type filter
   it('切换项目重置 status/type filter', async () => {
+    // B16：同上，Select 交互改走真实时钟。
+    vi.useRealTimers();
+    const user = userEvent.setup();
     const api = setupDesktop(createMockTasksAPI());
     let rerender: ReturnType<typeof render>['rerender'];
     await act(async () => {
       const result = render(<TaskCenter projectId={mockProjectId} />);
       rerender = result.rerender;
-      await flushMicrotasks();
     });
+    await waitFor(() => expect(screen.getAllByTestId('task-item').length).toBe(2));
 
-    expect(screen.getAllByTestId('task-item').length).toBe(2);
-
-    // 设置筛选
-    const statusSelect = screen.getByTestId('status-filter');
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(
-      statusSelect,
-      'FAILED',
-    );
-    act(() => {
-      statusSelect.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-
-    expect(screen.getAllByTestId('task-item').length).toBe(1);
+    // 设置筛选（B16：Select 交互方式，理由同上）
+    await user.click(screen.getByTestId('status-filter'));
+    await user.click(await screen.findByRole('option', { name: '失败' }));
+    await waitFor(() => expect(screen.getAllByTestId('task-item').length).toBe(1));
 
     // 切换项目
     api.list.mockResolvedValue([mockTask1]);
     await act(async () => {
       rerender(<TaskCenter projectId="proj-00000002" />);
-      await flushMicrotasks();
     });
 
-    expect(screen.getByTestId('status-filter')).toHaveValue('ALL');
+    // B16：Radix Select 触发器是按钮而非原生 select，toHaveValue 不适用——
+    // 改断言触发器可见文本回到"全部"（语义仍是"筛选条件被重置"）。
+    await waitFor(() => {
+      expect(screen.getByTestId('status-filter')).toHaveTextContent('全部');
+    });
   });
 
   // 28. GRILL_QUESTION_PLAN 类型安全显示
