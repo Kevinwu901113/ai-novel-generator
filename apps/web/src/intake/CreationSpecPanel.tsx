@@ -11,6 +11,10 @@ import { useCallback, useState } from 'react';
 import type { ContractPatchOperationDTO, ContractVersionPublicData } from '@ai-novel/contracts';
 import { formatChapterLength } from '../contract/contract-labels';
 import { toSafeUserError } from '../safety/safe-error';
+import { InlineError } from '@/components/InlineError';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface CreationSpecPanelProps {
   readonly projectId: string;
@@ -182,97 +186,95 @@ export function CreationSpecPanel({ projectId, spec, onSaved }: CreationSpecPane
     setDraft((prev) => ({ ...prev, [key]: value }));
 
   return (
-    <section className="spec-panel" aria-labelledby="spec-heading">
-      <div className="spec-panel-header">
-        <h3 id="spec-heading">创作要求</h3>
+    <section className="max-w-[760px] border-t border-border pt-3" aria-labelledby="spec-heading">
+      <div className="flex items-center justify-between">
+        <h3 id="spec-heading" className="text-[15px] font-semibold">
+          创作要求
+        </h3>
         {!editing && (
-          <button className="btn-secondary" onClick={startEdit}>
+          <Button variant="outline" size="sm" onClick={startEdit}>
             编辑
-          </button>
+          </Button>
         )}
       </div>
 
-      {error && (
-        <div className="spec-error" role="alert">
-          {error}
-        </div>
-      )}
+      {error && <InlineError className="mt-2">{error}</InlineError>}
 
       {editing ? (
-        <div className="spec-edit-form">
-          <label>
+        <div className="mt-2 flex flex-col gap-2.5">
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             故事前提
-            <textarea
+            <Textarea
               value={draft.premise}
               onChange={(e) => field('premise', e.target.value)}
               rows={4}
             />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             类型（用逗号或顿号分隔）
-            <input value={draft.genre} onChange={(e) => field('genre', e.target.value)} />
+            <Input value={draft.genre} onChange={(e) => field('genre', e.target.value)} />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             基调（用逗号或顿号分隔）
-            <input value={draft.tone} onChange={(e) => field('tone', e.target.value)} />
+            <Input value={draft.tone} onChange={(e) => field('tone', e.target.value)} />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             主题（可留空）
-            <input value={draft.themes} onChange={(e) => field('themes', e.target.value)} />
+            <Input value={draft.themes} onChange={(e) => field('themes', e.target.value)} />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             目标读者
-            <input
+            <Input
               value={draft.targetAudience}
               onChange={(e) => field('targetAudience', e.target.value)}
             />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             单章目标字数（可留空，500–40,000）
-            <input
+            <Input
               inputMode="numeric"
               value={draft.chapterLengthTarget}
               onChange={(e) => field('chapterLengthTarget', e.target.value)}
               placeholder="例如 15000"
             />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             单章最少字数（可留空）
-            <input
+            <Input
               inputMode="numeric"
               value={draft.chapterLengthMinimum}
               onChange={(e) => field('chapterLengthMinimum', e.target.value)}
               placeholder="例如 14000"
             />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             单章最多字数（可留空）
-            <input
+            <Input
               inputMode="numeric"
               value={draft.chapterLengthMaximum}
               onChange={(e) => field('chapterLengthMaximum', e.target.value)}
               placeholder="例如 16000"
             />
           </label>
-          <label>
+          <label className="flex flex-col gap-1 text-[13px] text-muted-foreground">
             结构（可留空）
-            <textarea
+            <Textarea
               value={draft.structure}
               onChange={(e) => field('structure', e.target.value)}
               rows={2}
             />
           </label>
-          <div className="spec-edit-actions">
-            <button className="btn-primary" onClick={() => void save()} disabled={saving}>
+          <div className="flex gap-2">
+            <Button onClick={() => void save()} disabled={saving}>
               {saving ? '保存中…' : '保存'}
-            </button>
-            <button className="btn-secondary" onClick={cancelEdit} disabled={saving}>
+            </Button>
+            <Button variant="outline" onClick={cancelEdit} disabled={saving}>
               取消
-            </button>
+            </Button>
           </div>
         </div>
       ) : (
-        <dl className="spec-view">
+        <dl className="mt-2 [&_dd]:mt-0.5 [&_dd]:mb-2.5 [&_dd]:whitespace-pre-wrap [&_dt]:text-xs [&_dt]:text-muted-foreground">
           <dt>故事前提</dt>
           <dd>{spec.sections.premise}</dd>
           <dt>类型</dt>

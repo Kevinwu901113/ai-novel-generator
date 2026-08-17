@@ -14,6 +14,10 @@ import { useCallback, useState } from 'react';
 import { ESCALATION_OPTIONS } from './intake-logic';
 import { useIntake } from './useIntake';
 import { CreationSpecPanel } from './CreationSpecPanel';
+import { InlineError } from '@/components/InlineError';
+import { Spinner } from '@/components/Spinner';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 
 export interface IntakeRegionProps {
   readonly projectId: string;
@@ -37,36 +41,40 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
   const { phase } = intake;
 
   return (
-    <div className="intake-region">
-      <div className="intake-header">
-        <h2 id="intake-heading">创作访谈</h2>
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-[30px_clamp(28px,5vw,64px)]">
+      <div>
+        <h2 id="intake-heading" className="text-lg font-semibold">
+          创作访谈
+        </h2>
       </div>
 
-      {intake.error && (
-        <div className="intake-error" role="alert">
-          {intake.error}
-        </div>
-      )}
+      {intake.error && <InlineError>{intake.error}</InlineError>}
 
       {/* 消息流 */}
-      <div className="intake-messages" role="log" aria-label="访谈记录">
+      <div className="flex flex-col gap-2.5" role="log" aria-label="访谈记录">
         {intake.messages.map((msg, i) =>
           msg.kind === 'goal' ? (
-            <div key={`goal-${i}`} className="intake-msg intake-msg-goal">
-              <span className="intake-msg-label">你的想法</span>
-              <p>{msg.text}</p>
+            <div
+              key={`goal-${i}`}
+              className="max-w-[760px] rounded-lg border border-l-2 border-border border-l-primary/50 bg-muted px-3 py-2.5"
+            >
+              <span className="text-xs text-muted-foreground">你的想法</span>
+              <p className="mt-1 whitespace-pre-wrap">{msg.text}</p>
             </div>
           ) : (
-            <div key={msg.questionId} className="intake-msg intake-msg-question">
-              <span className="intake-msg-label">追问</span>
-              <p>{msg.text}</p>
+            <div
+              key={msg.questionId}
+              className="max-w-[760px] rounded-lg border border-border bg-muted px-3 py-2.5"
+            >
+              <span className="text-xs text-muted-foreground">追问</span>
+              <p className="mt-1 whitespace-pre-wrap">{msg.text}</p>
               {msg.answer !== null && (
-                <div className="intake-msg-answer">
-                  <span className="intake-msg-label">你的回答</span>
-                  <p>{msg.answer}</p>
+                <div className="mt-2 border-t border-dashed border-border pt-2">
+                  <span className="text-xs text-muted-foreground">你的回答</span>
+                  <p className="mt-1 whitespace-pre-wrap">{msg.answer}</p>
                 </div>
               )}
-              {msg.skipped && <p className="intake-msg-skipped">（已跳过）</p>}
+              {msg.skipped && <p className="mt-1 text-sm text-muted-foreground">（已跳过）</p>}
             </div>
           ),
         )}
@@ -74,11 +82,11 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
 
       {/* 相位区 */}
       {phase.kind === 'awaiting-answer' && intake.pendingQuestion && (
-        <div className="intake-answer-area">
+        <div className="flex max-w-[760px] flex-col gap-2">
           <label htmlFor="intake-answer-input" className="sr-only">
             回答当前问题
           </label>
-          <textarea
+          <Textarea
             id="intake-answer-input"
             value={answerText}
             onChange={(e) => setAnswerText(e.target.value)}
@@ -86,67 +94,65 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
             rows={4}
             disabled={intake.busy}
           />
-          <div className="intake-answer-actions">
-            <button
-              className="btn-primary"
+          <div className="flex flex-wrap gap-2">
+            <Button
               onClick={() => void handleSubmit()}
               disabled={intake.busy || answerText.trim().length === 0}
             >
               回答
-            </button>
-            <button
-              className="btn-secondary"
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => void intake.skipQuestion()}
               disabled={intake.busy}
             >
               跳过这个问题
-            </button>
-            <button
-              className="btn-secondary"
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => void intake.finishInterview()}
               disabled={intake.busy}
             >
               我说完了，就这样整理
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       {(phase.kind === 'extracting' || phase.kind === 'working') && (
-        <div className="intake-status" role="status" aria-live="polite">
-          <span className="intake-spinner" aria-hidden="true">
-            ⟳
-          </span>
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Spinner label={null} size={16} />
           正在整理你的创作要求…
         </div>
       )}
 
       {phase.kind === 'no-run' && (
-        <div className="intake-status" role="status">
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
           访谈还没有开始。
-          <button
-            className="btn-primary"
-            onClick={() => void intake.restartInterview()}
-            disabled={intake.busy}
-          >
+          <Button onClick={() => void intake.restartInterview()} disabled={intake.busy}>
             开始访谈
-          </button>
+          </Button>
         </div>
       )}
 
       {phase.kind === 'escalation' && (
-        <div className="intake-escalation">
+        <div className="max-w-[760px]">
           <p>访谈遇到了需要你决定的情况，接下来想怎么做？</p>
-          <div className="intake-escalation-options">
+          <div className="mt-2 flex flex-col gap-2">
             {ESCALATION_OPTIONS.map((opt) => (
               <button
                 key={opt.outcome}
-                className="intake-escalation-option"
+                type="button"
+                className="flex flex-col items-start gap-0.5 rounded-md border border-border bg-muted px-3 py-2.5 text-left font-inherit text-foreground hover:border-primary"
                 onClick={() => void intake.chooseEscalation(opt.outcome)}
                 disabled={intake.busy}
               >
                 <strong>{opt.label}</strong>
-                <span>{opt.description}</span>
+                <span className="text-xs text-muted-foreground">{opt.description}</span>
               </button>
             ))}
           </div>
@@ -154,33 +160,33 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
       )}
 
       {phase.kind === 'terminal' && phase.status === 'failed' && (
-        <div className="intake-failed" role="alert">
+        <InlineError className="max-w-[760px]">
           <p>这次访谈中断了。别担心，你的想法和已整理的创作要求都还在。</p>
-          <button
-            className="btn-primary"
+          <Button
+            className="mt-1"
             onClick={() => void intake.restartInterview()}
             disabled={intake.busy}
           >
             重新开始访谈
-          </button>
-        </div>
+          </Button>
+        </InlineError>
       )}
 
       {phase.kind === 'terminal' && phase.status !== 'failed' && (
-        <div className="intake-status" role="status">
+        <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
           {phase.status === 'cancelled' ? '访谈已取消。' : '访谈已结束。'}
-          <button
-            className="btn-secondary"
+          <Button
+            variant="outline"
             onClick={() => void intake.restartInterview()}
             disabled={intake.busy}
           >
             重新开始访谈
-          </button>
+          </Button>
         </div>
       )}
 
       {phase.kind === 'beyond-intake' && (
-        <div className="intake-status" role="status">
+        <div role="status" className="text-sm text-muted-foreground">
           创作要求已整理，正在继续调研与蓝图流程。
         </div>
       )}

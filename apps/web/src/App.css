@@ -934,111 +934,12 @@ body {
   }
 }
 
-/* ── B4：对话式访谈 ───────────────────────────────────────────── */
-
-.intake-region {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  overflow-y: auto;
-  height: 100%;
-}
-
-.intake-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.intake-error,
-.spec-error {
-  padding: 8px 12px;
-  border-radius: 4px;
-  background-color: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
-  font-size: 13px;
-}
-
-@media (prefers-color-scheme: dark) {
-  .intake-error,
-  .spec-error {
-    background-color: #3f1d1d;
-    color: #fca5a5;
-    border-color: #7f1d1d;
-  }
-}
-
-.intake-messages {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.intake-msg {
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg-panel);
-  max-width: 640px;
-}
-
-.intake-msg p {
-  margin: 4px 0 0;
-  white-space: pre-wrap;
-}
-
-.intake-msg-label {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.intake-msg-goal {
-  background-color: var(--color-bg-secondary);
-}
-
-.intake-msg-answer {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--color-border);
-}
-
-.intake-msg-skipped {
-  color: var(--color-empty-hint);
-  font-size: 13px;
-}
-
-.intake-answer-area {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-width: 640px;
-}
-
-.intake-answer-area textarea {
-  width: 100%;
-  resize: vertical;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font: inherit;
-}
-
-.intake-answer-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.intake-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--color-text-secondary);
-  font-size: 14px;
-}
+/*
+ * B16：IntakeRegion/CreationSpecPanel 已迁 Tailwind——B4 对话式访谈、创作要求
+ * 面板两段整段删除（.btn-secondary 随之删除，.btn-primary 保留：chapter/*
+ * 1b 待迁仍用）。.intake-spinner 保留：research/blueprint/chapter Region
+ * （1b 待迁）仍复用这个类名做旋转指示。
+ */
 
 .intake-spinner {
   display: inline-block;
@@ -1052,134 +953,6 @@ body {
   to {
     transform: rotate(360deg);
   }
-}
-
-.intake-escalation {
-  max-width: 640px;
-}
-
-.intake-escalation-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.intake-escalation-option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg-panel);
-  color: var(--color-text);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-}
-
-.intake-escalation-option:hover:not(:disabled) {
-  border-color: var(--color-primary);
-}
-
-.intake-escalation-option span {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-}
-
-.intake-failed {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-  max-width: 640px;
-}
-
-/* ── B4：创作要求面板 ─────────────────────────────────────────── */
-
-.spec-panel {
-  border-top: 1px solid var(--color-border);
-  padding-top: 12px;
-  max-width: 640px;
-}
-
-.spec-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.spec-panel-header h3 {
-  margin: 0;
-  font-size: 15px;
-}
-
-.spec-view {
-  margin: 8px 0 0;
-}
-
-.spec-view dt {
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  margin-top: 8px;
-}
-
-.spec-view dd {
-  margin: 2px 0 0;
-  white-space: pre-wrap;
-}
-
-.spec-edit-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.spec-edit-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  color: var(--color-text-secondary);
-}
-
-.spec-edit-form input,
-.spec-edit-form textarea {
-  padding: 6px 8px;
-  border-radius: 4px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg);
-  color: var(--color-text);
-  font: inherit;
-}
-
-.spec-edit-actions {
-  display: flex;
-  gap: 8px;
-}
-
-/* B4：次级按钮（与 btn-primary 配套） */
-.btn-secondary {
-  padding: 6px 14px;
-  border-radius: 6px;
-  border: 1px solid var(--color-border);
-  background-color: var(--color-bg-panel);
-  color: var(--color-text);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-}
-
-.btn-secondary:hover:not(:disabled) {
-  border-color: var(--color-primary);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ── B6：Web Research 旅程区域 ────────────────────────────────── */
@@ -2341,21 +2114,17 @@ body {
  * B16：project-workspace / project-journey-bar / project-canvas 自身盒模型
  * 迁 Tailwind（见 App.tsx）。project-canvas-inner 类名保留在 DOM 上不删——
  * 下面这两组嵌套选择器仍是 research/blueprint/chapter Region（1b 待迁）内部
- * 排版的祖先锚点。
+ * 排版的祖先锚点。IntakeRegion 已迁 Tailwind，`.intake-region` 等选择器随之
+ * 从下面两组列表中退出（等效 padding/max-width 已内联进
+ * IntakeRegion.tsx/CreationSpecPanel.tsx 自身的 className）。
  */
 
-.project-canvas-inner .intake-region,
 .project-canvas-inner .research-region,
 .project-canvas-inner .blueprint-region,
 .project-canvas-inner .chapter-region {
   padding: 30px clamp(28px, 5vw, 64px);
 }
 
-.project-canvas-inner .intake-msg,
-.project-canvas-inner .intake-answer-area,
-.project-canvas-inner .intake-escalation,
-.project-canvas-inner .intake-failed,
-.project-canvas-inner .spec-panel,
 .project-canvas-inner .research-info-card,
 .project-canvas-inner .research-key-missing,
 .project-canvas-inner .research-stale-banner,
