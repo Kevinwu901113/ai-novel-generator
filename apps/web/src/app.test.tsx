@@ -1359,3 +1359,69 @@ describe('App：成稿阶段可达性（B10）', () => {
     );
   });
 });
+
+// ── B18：移动端导航收纳（D-B18-3）────────────────────────────────────
+
+describe('App：移动端导航收纳（B18，D-B18-3）', () => {
+  /**
+   * 覆盖 vitest.setup 的全局 matchMedia stub（恒 matches:false）：让 App 的
+   * 移动断点查询（max-width）按用例返回真/假。同名导航控件（首页/新建项目/
+   * 打开设置）在任一断点下都必须唯一——双导航同时进 DOM 的重复控件问题
+   * 正是本批坐实后改条件渲染的原因，这里钉住不回退。
+   */
+  function mockMatchMedia(mobileMatches: boolean) {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('max-width') ? mobileMatches : false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+    return () => {
+      window.matchMedia = original;
+    };
+  }
+
+  afterEach(() => {
+    cleanup();
+    window.desktop = undefined as unknown as DesktopAPI;
+  });
+
+  it('桌面（≥768px）：左侧导航栏挂载，三入口同名控件唯一', async () => {
+    const restore = mockMatchMedia(false);
+    try {
+      setupDesktop();
+      render(<App />);
+      await screen.findByRole('button', { name: '开始整理想法' });
+      expect(screen.getAllByRole('button', { name: '首页' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: '新建项目' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: '打开设置' })).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it('移动（<768px）：导航收纳到底部，三入口可达、同名控件唯一，设置抽屉真实可开', async () => {
+    const restore = mockMatchMedia(true);
+    try {
+      setupDesktop();
+      render(<App />);
+      await screen.findByRole('button', { name: '开始整理想法' });
+      expect(screen.getAllByRole('button', { name: '首页' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: '新建项目' })).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: '打开设置' })).toHaveLength(1);
+
+      // 底部导航的设置入口要真的能打开抽屉（不是只有视觉存在）
+      await act(async () => {
+        screen.getByRole('button', { name: '打开设置' }).click();
+      });
+      expect(await screen.findByText('创作服务设置')).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+});

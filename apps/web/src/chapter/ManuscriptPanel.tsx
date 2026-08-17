@@ -115,8 +115,11 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
 
       {workspace !== null && workspace.manuscriptId !== null && (
         <>
-          <div className="flex items-center justify-between gap-3">
-            <span className="font-semibold">{workspace.title}</span>
+          {/* B18（D-B18-2）：flex-wrap——375pt 实测坐实 justify-between 下标题被
+              固定宽的导出按钮组压到 0 宽竖排、按钮溢出视口；换行化后窄屏标题
+              整行、按钮组换行，宽屏单行不变。 */}
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+            <span className="min-w-0 font-semibold">{workspace.title}</span>
             <div className="flex gap-2">
               <Button type="button" variant="outline" size="sm" onClick={exportAs('txt')}>
                 导出 TXT
@@ -131,9 +134,9 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
             {workspace.chapters.map((item) => (
               <li
                 key={item.chapterId}
-                className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3.5 py-2.5"
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-secondary px-3.5 py-2.5"
               >
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
                   <span className="font-semibold">{item.title}</span>
                   <span className="text-[13px] text-muted-foreground">{item.wordCount} 字</span>
                 </div>
@@ -199,9 +202,11 @@ export function ManuscriptPanel({ projectId }: ManuscriptPanelProps) {
               <Label className="text-[13px]" htmlFor="manuscript-content">
                 正文
               </Label>
+              {/* B18（D-B18-1）：编辑与阅读同规格（.reading-prose：17px/1.9/40em），
+                  字数直觉一致；w-full 保留，容器窄于 40em 时跟随容器。 */}
               <textarea
                 id="manuscript-content"
-                className="w-full resize-y rounded-md border border-border bg-transparent px-2 py-1.5 text-sm leading-[1.8] outline-none focus-visible:border-primary"
+                className="reading-prose w-full resize-y rounded-md border border-border bg-transparent px-2 py-1.5 outline-none focus-visible:border-primary"
                 value={draft.content}
                 rows={18}
                 onChange={(e) => actions.edit({ ...draft, content: e.target.value })}

@@ -41,7 +41,7 @@ export function IntakeRegion({ projectId }: IntakeRegionProps) {
   const { phase } = intake;
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-[30px_clamp(28px,5vw,64px)]">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-[30px_clamp(16px,5vw,64px)]">
       <div>
         <h2 id="intake-heading" className="text-lg font-semibold">
           创作访谈

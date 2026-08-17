@@ -46,14 +46,16 @@ function ChapterListRow({
   const canRestart =
     item.phase === 'failed' || item.phase === 'blocked' || item.phase === 'cancelled';
   return (
-    <li className="flex items-center gap-3 rounded-lg border border-border bg-secondary px-3.5 py-2.5">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+    // B18（D-B18-2）：flex-wrap + 标题列 basis-48——宽度充足时单行不变；不足时
+    // （375pt 实测坐实：固定宽的阶段文案+按钮把 min-w-0 flex-1 的标题列压到
+    // 0 宽、中文逐字竖排）标题占满整行，阶段与按钮换到第二行。阶段文案的
+    // whitespace-nowrap 一并去掉，避免第二行被它重新撑溢出。
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-secondary px-3.5 py-2.5">
+      <div className="flex min-w-0 flex-1 basis-48 flex-col gap-0.5">
         <span className="font-semibold">{item.title}</span>
         <span className="text-[13px] text-muted-foreground">{item.goal}</span>
       </div>
-      <span className="text-[13px] whitespace-nowrap text-muted-foreground">
-        {chapterPhaseLabel(item.phase)}
-      </span>
+      <span className="text-[13px] text-muted-foreground">{chapterPhaseLabel(item.phase)}</span>
       <div className="flex items-center gap-2">
         {started ? (
           <>
@@ -90,7 +92,7 @@ export function ChapterRegion({ projectId }: ChapterRegionProps) {
       : null;
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(16px,5vw,64px)] py-[30px]">
       <div className="flex items-center justify-between gap-3">
         <h2 id="chapter-heading" className="text-lg">
           成稿

@@ -67,7 +67,7 @@ export function BlueprintRegion({
   const stale = phase.kind === 'stale';
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(16px,5vw,64px)] py-[30px]">
       <div>
         <h2 id="blueprint-heading" className="text-lg">
           故事蓝图

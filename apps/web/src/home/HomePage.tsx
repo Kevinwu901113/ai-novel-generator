@@ -51,7 +51,7 @@ export function HomePage({
   onOpenSettings,
 }: HomePageProps) {
   return (
-    <div className="h-full overflow-y-auto px-[clamp(34px,6vw,92px)] pt-[62px] pb-[72px]">
+    <div className="h-full overflow-y-auto px-[clamp(20px,6vw,92px)] pt-[62px] pb-[72px]">
       <section
         ref={createSectionRef}
         // B17（1b，768px 断点）：第二列 minmax(420px,…) 的硬下限在 <420px 窄

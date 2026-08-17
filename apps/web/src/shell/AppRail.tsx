@@ -58,7 +58,7 @@ function RailButton({
 export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRailProps) {
   return (
     <nav
-      className="flex flex-col items-center gap-[22px] border-r border-white/[0.06] bg-rail pt-[max(18px,env(safe-area-inset-top))] pr-2.5 pb-[max(14px,env(safe-area-inset-bottom))] pl-[max(10px,env(safe-area-inset-left))] text-rail-foreground"
+      className="hidden flex-col items-center gap-[22px] border-r border-white/[0.06] bg-rail pt-[max(18px,env(safe-area-inset-top))] pr-2.5 pb-[max(14px,env(safe-area-inset-bottom))] pl-[max(10px,env(safe-area-inset-left))] text-rail-foreground md:flex"
       aria-label="全局导航"
     >
       <div
@@ -86,6 +86,46 @@ export function AppRail({ isHome, onHome, onNewProject, onOpenSettings }: AppRai
         ariaLabel="打开设置"
         onClick={onOpenSettings}
         className="mt-auto"
+      />
+    </nav>
+  );
+}
+
+/**
+ * 移动端底部导航（B18，D-B18-3）：<768px 时 AppRail 隐藏（76px 常驻左栏在
+ * 375pt 屏上占 20% 宽却无对应收益），同三项入口改由底部横条承接。作为主列
+ * flex 尾部的 shrink-0 行渲染（不用 fixed 覆盖，不与内部滚动容器抢 z 轴）；
+ * 每项 min-h 48px 触控目标，底边补 safe-area。桌面（≥768px）整体隐藏，与
+ * AppRail 互斥，同一可访问名称不会同时出现两份。
+ */
+export function AppBottomNav({ isHome, onHome, onNewProject, onOpenSettings }: AppRailProps) {
+  return (
+    <nav
+      className="flex shrink-0 items-stretch justify-around border-t border-white/[0.06] bg-rail px-2 pt-1 pb-[max(6px,env(safe-area-inset-bottom))] text-rail-foreground md:hidden"
+      aria-label="全局导航"
+    >
+      <RailButton
+        icon={Home}
+        label="首页"
+        ariaLabel="首页"
+        ariaCurrent={isHome ? 'page' : undefined}
+        active={isHome}
+        onClick={onHome}
+        className="min-h-[48px] max-w-[120px]"
+      />
+      <RailButton
+        icon={Plus}
+        label="新建"
+        ariaLabel="新建项目"
+        onClick={onNewProject}
+        className="min-h-[48px] max-w-[120px]"
+      />
+      <RailButton
+        icon={Settings}
+        label="设置"
+        ariaLabel="打开设置"
+        onClick={onOpenSettings}
+        className="min-h-[48px] max-w-[120px]"
       />
     </nav>
   );

@@ -210,6 +210,25 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/*
+ * ── 小说正文阅读排版（B18，D-B18-1）─────────────────────────────────────
+ *
+ * 小说正文的唯一排版权威：行宽/字号/行高/颜色是一组不可拆散的约束（行宽的
+ * 「字/行」语义依赖字号），故用组件类而不是散装 utility——散装会重演各消费点
+ * 排版漂移（B18 评审坐实：候选 leading-loose、编辑器 text-sm leading-[1.8]、
+ * 820px 容器一行 ~50 字并存）。CJK 下 1 字 ≈ 1em，40em ≈ 40 字/行，落在中文
+ * 长文舒适区（35–42 字）。消费点：候选正文段落、稿件编辑 textarea。
+ */
+@layer components {
+  .reading-prose {
+    max-width: 40em;
+    font-size: 17px;
+    line-height: 1.9;
+    color: var(--foreground);
+    overflow-wrap: break-word;
+  }
+}
+
 /**
  * 焦点可见样式。
  * 为所有可交互元素提供明确的焦点指示器。

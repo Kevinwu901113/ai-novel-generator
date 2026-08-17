@@ -30,11 +30,12 @@ import { toSafeUserError } from './safety/safe-error';
 import { ProjectStatusRegion, ProviderRegion } from './regions';
 import { HomePage } from './home/HomePage';
 import { AppDrawer } from './shell/AppDrawer';
-import { AppRail } from './shell/AppRail';
+import { AppBottomNav, AppRail } from './shell/AppRail';
 import type { DrawerId } from './shell-state';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
+import { useMediaQuery } from '@/lib/use-media-query';
 import { Spinner } from './components/Spinner';
 import { toastError, dismissToast } from './lib/toast';
 
@@ -47,6 +48,10 @@ const GLOBAL_ERROR_TOAST_ID = 'app-global-error';
 export function App() {
   const [health, setHealth] = useState<HealthCheckResponse | null>(null);
   const [openDrawer, setOpenDrawer] = useState<DrawerId | null>(null);
+
+  // B18（D-B18-3）：<768px 时导航从左栏换底部横条。条件渲染保证同名控件在
+  // 可访问性树里只有一份（CSS 断点类只管视觉，见 use-media-query 注释）。
+  const isMobileNav = useMediaQuery('(max-width: 767.98px)');
 
   // 数据服务状态
   const [dataServiceStatus, setDataServiceStatus] = useState<DataServiceStatus>('starting');
@@ -373,13 +378,17 @@ export function App() {
 
   return (
     <>
-      <div className="grid h-dvh grid-cols-[76px_minmax(0,1fr)] overflow-hidden bg-canvas">
-        <AppRail
-          isHome={!currentProject}
-          onHome={handleHome}
-          onNewProject={handleNewProject}
-          onOpenSettings={handleOpenSettings}
-        />
+      {/* B18（D-B18-3）：<768px 单列 + 底部导航（AppRail hidden md:flex 自隐藏），
+          ≥768px 恢复 76px 左栏两列布局。 */}
+      <div className="grid h-dvh grid-cols-[minmax(0,1fr)] overflow-hidden bg-canvas md:grid-cols-[76px_minmax(0,1fr)]">
+        {!isMobileNav && (
+          <AppRail
+            isHome={!currentProject}
+            onHome={handleHome}
+            onNewProject={handleNewProject}
+            onOpenSettings={handleOpenSettings}
+          />
+        )}
 
         <div className="flex min-h-0 min-w-0 flex-col">
           <header
@@ -461,11 +470,13 @@ export function App() {
                   已占大半宽度）文字会被压缩至 0，只剩图标——可访问名称不受
                   影响（span 文案仍在 DOM，只是视觉裁剪），但图标独木按钮本身
                   只有 32px 高，补 after: 伪元素命中区到 44px（同关闭钮手法）。 */}
+              {/* B18（D-B18-3）：<md 隐藏——移动端设置入口由底部导航承接，芯片
+                  在窄屏退化成图标独木、信息量为零还占位。 */}
               <Button
                 variant="outline"
                 size="sm"
                 onClick={handleOpenSettings}
-                className="relative min-w-0 shrink after:absolute after:-inset-1.5 after:content-['']"
+                className="relative hidden min-w-0 shrink after:absolute after:-inset-1.5 after:content-[''] md:inline-flex"
               >
                 <Settings size={16} aria-hidden="true" className="shrink-0" />
                 <span
@@ -553,6 +564,15 @@ export function App() {
               </RendererErrorBoundary>
             )}
           </main>
+
+          {isMobileNav && (
+            <AppBottomNav
+              isHome={!currentProject}
+              onHome={handleHome}
+              onNewProject={handleNewProject}
+              onOpenSettings={handleOpenSettings}
+            />
+          )}
         </div>
 
         <AppDrawer

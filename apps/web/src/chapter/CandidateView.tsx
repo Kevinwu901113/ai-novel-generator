@@ -38,9 +38,11 @@ export function CandidateView({
         </span>
       </div>
 
-      <div>
+      {/* B18（D-B18-1）：正文排版走 .reading-prose 权威（行宽 40em/17px/1.9），
+          不再由 820px 布局容器兜底行宽。 */}
+      <div className="reading-prose">
         {paragraphs.map((paragraph, index) => (
-          <p key={`${index}-${paragraph.slice(0, 8)}`} className="mb-2.5 leading-loose">
+          <p key={`${index}-${paragraph.slice(0, 8)}`} className="mb-3">
             {paragraph}
           </p>
         ))}

@@ -55,19 +55,25 @@ export function ResearchRegion({
   const initialLoading = research.loading && research.state === null;
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(28px,5vw,64px)] py-[30px]">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto px-[clamp(16px,5vw,64px)] py-[30px]">
       <div>
         <h2 id="research-heading" className="text-lg">
           资料调研
         </h2>
       </div>
 
+      {/* B18（D-B18-4）：回看横幅按"是否真有调研资料"分文——原文案无条件承诺
+          "以下是调研结果"，与跳过调研项目同屏的"调研还没有开始"自相矛盾。 */}
       {showBeyondResearchNotice && (
         <div
           className="max-w-[760px] rounded-lg border border-border bg-secondary px-4 py-3"
           role="status"
         >
-          <p>创作旅程已进入后续阶段。以下是本项目当前的调研结果。</p>
+          <p>
+            {phase.kind === 'ready' || phase.kind === 'stale'
+              ? '创作旅程已进入后续阶段。以下是本项目当时的调研结果。'
+              : '创作旅程已进入后续阶段。本项目没有留下调研资料。'}
+          </p>
         </div>
       )}
 
@@ -84,15 +90,17 @@ export function ResearchRegion({
         </div>
       ) : (
         <>
+          {/* B18（D-B18-4）：回看态（已越过调研阶段）改过去时陈述——"还没有开始"
+              是未来时，在已进入后续阶段的项目里误导用户以为流程卡在这里。 */}
           {phase.kind === 'no-run' && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-              调研还没有开始。
+              {showBeyondResearchNotice ? '本项目没有进行过调研。' : '调研还没有开始。'}
             </div>
           )}
 
           {phase.kind === 'not-started' && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-              尚未开始调研。
+              {showBeyondResearchNotice ? '本项目没有进行过调研。' : '尚未开始调研。'}
             </div>
           )}
 
