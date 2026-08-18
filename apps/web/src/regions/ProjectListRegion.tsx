@@ -4,7 +4,8 @@
  * 独立渲染项目列表，支持首页卡片与兼容的侧栏形态，包含：
  * - 数据服务状态判断
  * - 项目列表渲染（使用真实 button）
- * - 格式化时间显示
+ * - 格式化时间显示（B21/D-B21-3：卡片正文显示相对时间，秒级时间戳退到
+ *   title 悬停与可访问名称里，信息不丢）
  *
  * 此组件被 RendererErrorBoundary 包裹，
  * 崩溃时不影响其他区域。
@@ -23,6 +24,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { Spinner } from '@/components/Spinner';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { formatRelativeTime } from '@/lib/format-relative-time';
 
 interface ProjectListRegionProps {
   variant?: 'sidebar' | 'cards';
@@ -140,8 +142,11 @@ export function ProjectListRegion({
                 </span>
                 <span className="flex min-w-0 flex-col gap-1.5">
                   <span className="truncate text-sm font-semibold">{p.name}</span>
-                  <span className="text-[11px] text-muted-foreground">
-                    最近打开 · {formatTime(p.lastOpenedAt ?? p.createdAt)}
+                  <span
+                    className="text-[11px] text-muted-foreground"
+                    title={formatTime(p.lastOpenedAt ?? p.createdAt)}
+                  >
+                    最近打开 · {formatRelativeTime(p.lastOpenedAt ?? p.createdAt)}
                   </span>
                   <span
                     aria-hidden="true"
@@ -173,8 +178,9 @@ export function ProjectListRegion({
                     'mt-0.5 text-[11px]',
                     isActive ? 'text-primary-foreground/70' : 'text-muted-foreground',
                   )}
+                  title={formatTime(p.lastOpenedAt ?? p.createdAt)}
                 >
-                  最近打开 · {formatTime(p.lastOpenedAt ?? p.createdAt)}
+                  最近打开 · {formatRelativeTime(p.lastOpenedAt ?? p.createdAt)}
                 </span>
               </button>
             )}

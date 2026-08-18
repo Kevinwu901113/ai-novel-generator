@@ -571,6 +571,11 @@ export function App() {
                           generating={hasActiveBlueprintGenerate(journey.progress)}
                           stateLoading={journey.loading}
                           onRefresh={handleHumanDecisionSettled}
+                          // B21（D-B21-2）：就绪面板的「去成稿逐章生成」等价于
+                          // 用户自己点旅程导航的"成稿"，走同一条阶段锁定路径。
+                          onGoToManuscript={() => {
+                            handleSelectJourneyStage('manuscript');
+                          }}
                         />
                       ) : viewStage === 'research' ? (
                         <ResearchRegion

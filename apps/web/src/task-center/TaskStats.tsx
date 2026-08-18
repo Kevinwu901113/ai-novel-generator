@@ -37,9 +37,9 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
   // 有错误但有上次成功数据时，显示数据和过期提示
   if (error && stats) {
     return (
-      <div className="grid grid-cols-2 gap-2" data-testid="task-stats">
+      <div className="flex flex-col gap-2" data-testid="task-stats">
         <div
-          className="col-span-2 rounded-md bg-status-attention/10 px-2 py-1.5 text-xs text-status-attention"
+          className="rounded-md bg-status-attention/10 px-2 py-1.5 text-xs text-status-attention"
           data-testid="task-stats-stale"
           role="status"
           aria-live="polite"
@@ -66,7 +66,7 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
 
   // 正常显示
   return (
-    <div className="grid grid-cols-2 gap-2" data-testid="task-stats">
+    <div className="flex flex-col gap-2" data-testid="task-stats">
       <TaskStatsContent stats={stats} />
     </div>
   );
@@ -74,7 +74,9 @@ export function TaskStats({ stats, error }: TaskStatsProps) {
 
 /**
  * 统计内容展示组件。
- * 提取出来以便复用。
+ *
+ * B21（D-B21-1）：八块工程指标平铺改为一行产品摘要（调用/成功/失败）；
+ * Token/延迟是排障与成本信息，收进「用量与延迟」折叠，不占首屏权重。
  */
 function TaskStatsContent({ stats }: { stats: TaskStatsPublicData }) {
   const avgLatency =
@@ -82,22 +84,34 @@ function TaskStatsContent({ stats }: { stats: TaskStatsPublicData }) {
 
   return (
     <>
-      <StatItem label="模型调用" value={formatNumber(stats.invocationCount)} />
-      <StatItem
-        label="成功"
-        value={formatNumber(stats.succeededCount)}
-        valueClassName="text-status-ready"
-      />
-      <StatItem
-        label="失败"
-        value={formatNumber(stats.failedCount)}
-        valueClassName="text-destructive"
-      />
-      <StatItem label="输入 Token" value={formatNumber(stats.totalInputTokens)} />
-      <StatItem label="输出 Token" value={formatNumber(stats.totalOutputTokens)} />
-      <StatItem label="总 Token" value={formatNumber(stats.totalTokens)} />
-      <StatItem label="总延迟" value={formatLatency(stats.totalLatencyMs)} />
-      <StatItem label="平均延迟" value={avgLatency !== null ? formatLatency(avgLatency) : '—'} />
+      <p className="text-sm" data-testid="task-stats-summary">
+        {formatNumber(stats.invocationCount)} 次模型调用
+        {stats.invocationCount > 0 && (
+          <>
+            {' · '}
+            <span className="text-status-ready">成功 {formatNumber(stats.succeededCount)}</span>
+            {' · '}
+            <span className={stats.failedCount > 0 ? 'text-destructive' : undefined}>
+              失败 {formatNumber(stats.failedCount)}
+            </span>
+          </>
+        )}
+      </p>
+      <details className="group">
+        <summary className="cursor-pointer text-xs text-muted-foreground group-open:mb-2">
+          用量与延迟
+        </summary>
+        <div className="grid grid-cols-2 gap-2">
+          <StatItem label="输入 Token" value={formatNumber(stats.totalInputTokens)} />
+          <StatItem label="输出 Token" value={formatNumber(stats.totalOutputTokens)} />
+          <StatItem label="总 Token" value={formatNumber(stats.totalTokens)} />
+          <StatItem label="总延迟" value={formatLatency(stats.totalLatencyMs)} />
+          <StatItem
+            label="平均延迟"
+            value={avgLatency !== null ? formatLatency(avgLatency) : '—'}
+          />
+        </div>
+      </details>
     </>
   );
 }

@@ -1324,7 +1324,28 @@ const COMPLETED_PROJECT_RUN = {
   createdAt: NOW_B6,
 };
 
-function createChapterStageDesktopAPI() {
+/** 已接受的蓝图正文（B21 用例需要 ready 相位真的渲染出就绪面板） */
+const READY_BLUEPRINT = {
+  id: 'bp-1',
+  projectId: 'proj-new-0001',
+  version: 1,
+  premise: '一个关于客栈远客的故事前提',
+  characters: [{ name: '林澈', role: '主角', description: '沉默寡言的旅人' }],
+  relationships: ['林澈与掌柜是旧识'],
+  world: '边境小镇的客栈',
+  conflict: '远客与本地人立场对立',
+  ending: '远客留了下来',
+  plotlines: [{ name: '主线', summary: '一次投宿引出的旧账' }],
+  chapters: [{ id: 'ch-1', title: '第一章 远客', goal: '引出客栈与主角' }],
+  createdAt: NOW_B6,
+};
+
+/**
+ * @param blueprintDoc 蓝图正文（默认 null——B10 的成稿可达性用例不看蓝图正文）。
+ *   B21（D-B21-2）的「去成稿逐章生成」用例需要 ready 相位真的渲染出就绪面板，
+ *   而面板只在正文可用时挂载，故这里给一份正文。
+ */
+function createChapterStageDesktopAPI(blueprintDoc: unknown = null) {
   return createMockDesktopAPI({
     graph: {
       listRuns: vi.fn().mockResolvedValue([COMPLETED_PROJECT_RUN]),
@@ -1344,7 +1365,7 @@ function createChapterStageDesktopAPI() {
         escalationActive: false,
         rewriteUsed: 0,
       }),
-      getBlueprint: vi.fn().mockResolvedValue(null),
+      getBlueprint: vi.fn().mockResolvedValue(blueprintDoc),
     },
     chapter: {
       getOverview: vi.fn().mockResolvedValue({
@@ -1394,6 +1415,41 @@ describe('App：成稿阶段可达性（B10）', () => {
         expect(screen.getByRole('heading', { name: '成稿' })).toBeInTheDocument();
         expect(screen.getByText('第一章 远客')).toBeInTheDocument();
         expect(screen.getByRole('button', { name: '开始生成' })).toBeInTheDocument();
+      },
+      { timeout: 10000 },
+    );
+  });
+
+  // B21（D-B21-2）：项目就绪面板的跳转按钮必须真的能把用户送到成稿阶段——
+  // 按钮无接线就是空承诺（D-B8-7），这条钉住接线本身。
+  it('项目就绪后点蓝图页的"去成稿逐章生成"→ 中栏挂 ChapterRegion', async () => {
+    await createProjectAndWaitForJourney(createChapterStageDesktopAPI(READY_BLUEPRINT));
+
+    // 就绪项目的 frontier 直接落在成稿（D-B10-6），先回看蓝图才能看到就绪面板
+    const nav = await screen.findByRole('navigation', { name: '创作旅程阶段' });
+    const blueprintBtn = await waitFor(
+      () => {
+        const btn = within(nav).getByRole('button', { name: /蓝图/ });
+        expect(btn).not.toBeDisabled();
+        return btn;
+      },
+      { timeout: 10000 },
+    );
+    await act(async () => {
+      blueprintBtn.click();
+    });
+
+    const goBtn = await waitFor(() => screen.getByRole('button', { name: '去成稿逐章生成' }), {
+      timeout: 10000,
+    });
+    await act(async () => {
+      goBtn.click();
+    });
+
+    await waitFor(
+      () => {
+        expect(screen.getByRole('heading', { name: '成稿' })).toBeInTheDocument();
+        expect(screen.getByText('第一章 远客')).toBeInTheDocument();
       },
       { timeout: 10000 },
     );

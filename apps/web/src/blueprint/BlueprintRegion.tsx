@@ -49,6 +49,11 @@ export interface BlueprintRegionProps {
    * 防止按钮以旧态提前重新可点（B8 独立复查）。
    */
   readonly onRefresh: () => void | Promise<void>;
+  /**
+   * B21（D-B21-2）：项目就绪面板的「去成稿逐章生成」跳转，由 App 提供
+   * （切旅程阶段是 App 的职责）；缺省时就绪面板不渲染按钮。
+   */
+  readonly onGoToManuscript?: () => void;
 }
 
 export function BlueprintRegion({
@@ -58,6 +63,7 @@ export function BlueprintRegion({
   generating,
   stateLoading,
   onRefresh,
+  onGoToManuscript,
 }: BlueprintRegionProps) {
   const phase = deriveBlueprintPhase(state, terminalStatus, generating);
   const blueprintRef = showsBlueprintContent(phase) ? (state?.blueprintRef ?? null) : null;
@@ -174,7 +180,10 @@ export function BlueprintRegion({
             (blueprint.blueprint ? (
               <>
                 {phase.kind === 'ready' && (
-                  <ProjectReadyPanel chapterCount={blueprint.blueprint.chapters.length} />
+                  <ProjectReadyPanel
+                    chapterCount={blueprint.blueprint.chapters.length}
+                    onGoToManuscript={onGoToManuscript}
+                  />
                 )}
                 <BlueprintView blueprint={blueprint.blueprint} stale={stale} />
                 {/* 只有 gate 真的在等人工时才给决策按钮——stale 也可能出现在

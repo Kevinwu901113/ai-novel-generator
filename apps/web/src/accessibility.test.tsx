@@ -1500,8 +1500,8 @@ describe('七、动态状态公告', () => {
     expect(staleNotice).toBeInTheDocument();
     expect(staleNotice.closest('[role="status"]')).toBeInTheDocument();
 
-    // 旧统计仍显示
-    expect(screen.getByText('10')).toBeInTheDocument();
+    // 旧统计仍显示（B21/D-B21-1 起统计瘦身为一行摘要，调用次数不再是独立数字块）
+    expect(screen.getByTestId('task-stats-summary')).toHaveTextContent('10 次模型调用');
   });
 
   // 40d. stats!=null, error=null：正常显示
@@ -1517,7 +1517,7 @@ describe('七、动态状态公告', () => {
     };
     render(<TaskStats stats={stats} error={null} />);
 
-    expect(screen.getByText('10')).toBeInTheDocument();
+    expect(screen.getByTestId('task-stats-summary')).toHaveTextContent('10 次模型调用');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.queryByText(/统计可能已过期/)).not.toBeInTheDocument();
   });

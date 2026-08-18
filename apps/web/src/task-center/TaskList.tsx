@@ -1,7 +1,9 @@
 /**
  * 任务列表组件。
  *
- * 显示任务短 ID、类型、状态、尝试次数、创建/完成时间。
+ * B21（D-B21-1）：任务行以任务名为主——首行「任务类型 + 状态徽章」，次行
+ * 「开始时间（相对） · 耗时 · 尝试 N（仅 N>1）」。哈希短 ID 不再出现在列表里
+ * （写作者不消费哈希），只在点开的任务详情中可见，排障场景仍可达。
  * 选中项清晰标记。
  *
  * 无障碍特性：
@@ -35,7 +37,7 @@ import {
   TASK_STATUS_OPTIONS,
   buildTaskTypeOptions,
 } from './task-labels';
-import { formatTaskShortId, formatTime } from './task-formatters';
+import { formatLatency, formatTime } from './task-formatters';
 import { TaskStatusBadge } from './TaskStatusBadge';
 import { EmptyState } from '@/components/EmptyState';
 import { Label } from '@/components/ui/label';
@@ -47,6 +49,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { formatRelativeTime } from '@/lib/format-relative-time';
 import { ListX } from 'lucide-react';
 
 interface TaskListProps {
@@ -62,17 +65,24 @@ interface TaskListProps {
 
 /**
  * 构建任务项的可访问名称。
+ *
+ * B21（D-B21-1）：任务名优先——哈希 ID 从行与可访问名称中移除（写作者不消费
+ * 哈希；排障场景在点开的任务详情里仍可达）。
  */
 function buildTaskAriaLabel(task: TaskPublicData): string {
-  const parts: string[] = [
-    `任务 ${formatTaskShortId(task.id)}`,
-    taskTypeLabel(task.taskType),
-    taskStatusLabel(task.status),
-  ];
-  if (task.attemptCount > 0) {
-    parts.push(`尝试 ${task.attemptCount} 次`);
+  const parts: string[] = [taskTypeLabel(task.taskType), taskStatusLabel(task.status)];
+  if (task.attemptCount > 1) {
+    parts.push(`尝试 ${String(task.attemptCount)} 次`);
   }
   return parts.join('，');
+}
+
+/** 任务耗时（有完成时间才显示）；异常输入静默省略，不在行里渲染 NaN */
+function formatTaskDuration(createdAt: string, finishedAt: string): string | null {
+  const start = new Date(createdAt).getTime();
+  const end = new Date(finishedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  return formatLatency(end - start);
 }
 
 export function TaskList({
@@ -341,6 +351,9 @@ export function TaskList({
           {tasks.map((task) => {
             const isFocused = task.id === activeTaskId;
             const isActive = task.id === selectedTaskId;
+            const duration = task.finishedAt
+              ? formatTaskDuration(task.createdAt, task.finishedAt)
+              : null;
             return (
               <li
                 key={task.id}
@@ -351,9 +364,9 @@ export function TaskList({
                 aria-selected={isActive ? 'true' : 'false'}
                 aria-label={buildTaskAriaLabel(task)}
                 className={cn(
-                  // B17（1b）：min-h-11（44px）只是地板值——三行内容实际渲染高度
-                  // 已超过 44px，桌面视觉不变，只在极端场景（大号系统字体等）
-                  // 兜底触控目标下限。
+                  // B17（1b）：min-h-11（44px）只是地板值——B21 行压到两行后仍靠
+                  // 内容撑到 44px 以上，桌面视觉不变，只在极端场景（大号系统字体
+                  // 等）兜底触控目标下限。
                   'flex min-h-11 cursor-pointer flex-col justify-center rounded border border-transparent px-2.5 py-2',
                   isActive ? 'bg-primary text-primary-foreground' : 'hover:bg-secondary',
                 )}
@@ -361,9 +374,7 @@ export function TaskList({
                 onFocus={() => handleOptionFocus(task.id)}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-xs font-semibold">
-                    {formatTaskShortId(task.id)}
-                  </span>
+                  <span className="text-xs font-semibold">{taskTypeLabel(task.taskType)}</span>
                   <TaskStatusBadge status={task.status} />
                 </div>
                 <div
@@ -372,17 +383,12 @@ export function TaskList({
                     isActive ? 'text-primary-foreground/70' : 'text-muted-foreground',
                   )}
                 >
-                  <span className="text-xs">{taskTypeLabel(task.taskType)}</span>
-                  <span>尝试 {task.attemptCount}</span>
-                </div>
-                <div
-                  className={cn(
-                    'mt-0.5 text-[11px]',
-                    isActive ? 'text-primary-foreground/70' : 'text-muted-foreground',
-                  )}
-                >
-                  <span>{formatTime(task.createdAt)}</span>
-                  {task.finishedAt && <span> → {formatTime(task.finishedAt)}</span>}
+                  {/* 完整时间戳挂 title，悬停仍可查（信息不丢） */}
+                  <span title={formatTime(task.createdAt)}>
+                    {formatRelativeTime(task.createdAt)}
+                  </span>
+                  {task.finishedAt && duration !== null && <span>耗时 {duration}</span>}
+                  {task.attemptCount > 1 && <span>尝试 {task.attemptCount}</span>}
                 </div>
               </li>
             );
