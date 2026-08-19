@@ -29,11 +29,13 @@ import {
   resolveProviderForTask,
   resolveStoryGraphChapterTarget,
   ProviderNotConfiguredError,
+  STORY_GRAPH_EMBED_ROUTE_KEY,
   type StoryGraphChapterTarget,
+  type StoryIndexKind,
 } from '@ai-novel/application';
 import type { ErrorCode } from '@ai-novel/contracts';
 import { isProviderProtocol, type ProviderProtocol } from '@ai-novel/contracts';
-import type { ModelInvocationOutput } from '@ai-novel/model-gateway';
+import type { EmbeddingInvocationOutput, ModelInvocationOutput } from '@ai-novel/model-gateway';
 import {
   sha256Hex,
   TaskAlreadyClaimedError,
@@ -48,6 +50,14 @@ export interface StoryGraphExtractEngineDeps extends TaskEngineDeps {
   readonly chapterRepo: ChapterRepositoryPort;
   readonly chapterVersionRepo: ChapterVersionRepositoryPort;
   readonly storyGraph: StoryGraphRepositories;
+  /** B23：嵌入通道（仅 openai-chat 协议有 /embeddings，见 D-B23-3） */
+  readonly invokeEmbedding: (input: {
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    input: ReadonlyArray<string>;
+    protocol?: ProviderProtocol;
+  }) => Promise<EmbeddingInvocationOutput>;
 }
 
 /** 写入计数摘要（进 task.result_json；不含正文、prompt 或模型原文） */
@@ -68,6 +78,16 @@ export interface StoryGraphExtractSummary {
   readonly droppedStates: number;
   readonly droppedThreadCloses: number;
   readonly droppedMergeSuspects: number;
+}
+
+/** 后置嵌入的结果计数（B23 / D-B23-4：best-effort，永不失败任务） */
+export interface StoryGraphEmbedOutcome {
+  /** 跳过原因；null 表示确实跑了嵌入 */
+  readonly embeddingSkipped: 'NO_ROUTE' | 'NO_API_KEY' | null;
+  readonly embeddedRows: number;
+  /** 文本没变、指纹命中而省掉的行 */
+  readonly embedUnchanged: number;
+  readonly embedFailed: number;
 }
 
 export interface StoryGraphExtractExecutionResult {
@@ -408,11 +428,17 @@ function orderedPair(a: string, b: string): readonly [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+interface ApplyResult {
+  readonly summary: StoryGraphExtractSummary;
+  /** 本次新建/改动的行：后置嵌入只重算这些（D-B23-4） */
+  readonly touched: ReadonlyArray<{ readonly kind: StoryIndexKind; readonly refId: string }>;
+}
+
 function applyExtraction(
   deps: StoryGraphExtractEngineDeps,
   ctx: ApplyContext,
   parsed: ParsedStoryGraphExtraction,
-): StoryGraphExtractSummary {
+): ApplyResult {
   const { entityRepo, stateRepo, threadRepo, mergeReviewRepo } = deps.storyGraph;
   const { projectId, now, target } = ctx;
   const chapterNumber = target.chapterNumber;
@@ -432,6 +458,7 @@ function applyExtraction(
 
   // 本批新建/命中的名字 → 实体 id（跨条目复用，省掉重复查库）
   const resolvedByName = new Map<string, string>();
+  const touched: Array<{ kind: StoryIndexKind; refId: string }> = [];
   const queueSuspect = (aId: string, bId: string, reason: string): void => {
     if (aId === bId) return;
     const [entityAId, entityBId] = orderedPair(aId, bId);
@@ -471,6 +498,7 @@ function applyExtraction(
       entitiesCreated += 1;
     }
     resolvedByName.set(entity.name, entityId);
+    touched.push({ kind: 'entity', refId: entityId });
 
     for (const alias of entity.aliases) {
       if (alias === entity.name) continue;
@@ -539,6 +567,7 @@ function applyExtraction(
       createdAt: now,
     });
     statesInserted += 1;
+    touched.push({ kind: 'state', refId: stateId });
 
     // 本章之前（含本章）确立的旧边被这条取代
     for (const edge of currents) {
@@ -556,8 +585,9 @@ function applyExtraction(
   // 3. 线程开启：描述精确重复视为同一条，不重复开
   for (const thread of parsed.threadsOpen) {
     if (threadRepo.findOpenByDescription(projectId, thread.description)) continue;
+    const threadId = deps.idGenerator.generate();
     threadRepo.open({
-      id: deps.idGenerator.generate(),
+      id: threadId,
       projectId,
       kind: thread.kind,
       description: thread.description,
@@ -570,6 +600,7 @@ function applyExtraction(
       createdAt: now,
     });
     threadsOpened += 1;
+    touched.push({ kind: 'thread', refId: threadId });
   }
 
   // 4. 线程核销：id 必须真实存在且仍 open，且不能"在开启之前就被回收"
@@ -597,22 +628,197 @@ function applyExtraction(
   }
 
   return {
-    chapterId: target.chapterId,
-    chapterNumber,
-    sourceVersionId: target.versionId,
-    entitiesCreated,
-    entitiesMerged,
-    aliasesAdded,
-    statesInserted,
-    statesSuperseded,
-    statesUnchanged,
-    threadsOpened,
-    threadsClosed,
-    mergeSuspectsQueued,
-    droppedStates,
-    droppedThreadCloses,
-    droppedMergeSuspects,
+    touched,
+    summary: {
+      chapterId: target.chapterId,
+      chapterNumber,
+      sourceVersionId: target.versionId,
+      entitiesCreated,
+      entitiesMerged,
+      aliasesAdded,
+      statesInserted,
+      statesSuperseded,
+      statesUnchanged,
+      threadsOpened,
+      threadsClosed,
+      mergeSuspectsQueued,
+      droppedStates,
+      droppedThreadCloses,
+      droppedMergeSuspects,
+    },
   };
+}
+
+// ── 后置嵌入（B23 / D-B23-4）─────────────────────────────────────
+
+/** 一次 /embeddings 请求的条数上限：请求体别撑爆，失败也只赔这一批 */
+const EMBED_BATCH_SIZE = 32;
+
+const EMPTY_EMBED_OUTCOME: StoryGraphEmbedOutcome = {
+  embeddingSkipped: null,
+  embeddedRows: 0,
+  embedUnchanged: 0,
+  embedFailed: 0,
+};
+
+function chunk<T>(items: ReadonlyArray<T>, size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/**
+ * 给本次改动的行补嵌入。
+ *
+ * best-effort 的含义要精确（D-B23-4）：**任何一步失败都只计数，绝不失败任务，
+ * 也绝不回滚已经写好的图**——向量层是增强项，别名/FTS 主干不依赖它。
+ * 未配置嵌入路由是最常见的情况（D-B23-3 要求显式配置），走 NO_ROUTE 直接跳过。
+ */
+async function embedTouchedRows(
+  deps: StoryGraphExtractEngineDeps,
+  ctx: {
+    readonly projectId: string;
+    readonly taskId: string;
+    readonly touched: ReadonlyArray<{ kind: StoryIndexKind; refId: string }>;
+    readonly now: string;
+  },
+): Promise<StoryGraphEmbedOutcome> {
+  if (ctx.touched.length === 0) return EMPTY_EMBED_OUTCOME;
+
+  let profile;
+  try {
+    profile = resolveProviderForTask(
+      { providerRepo: deps.providerRepo },
+      STORY_GRAPH_EMBED_ROUTE_KEY,
+    );
+  } catch {
+    return { ...EMPTY_EMBED_OUTCOME, embeddingSkipped: 'NO_ROUTE' };
+  }
+
+  const sources = deps.storyGraph.searchRepo.listIndexSources(ctx.projectId, ctx.touched);
+  const pending = sources.filter(
+    (source) =>
+      deps.storyGraph.embeddingRepo.getContentHash(ctx.projectId, source.kind, source.refId) !==
+      source.contentHash,
+  );
+  const unchanged = sources.length - pending.length;
+  if (pending.length === 0) return { ...EMPTY_EMBED_OUTCOME, embedUnchanged: unchanged };
+
+  let apiKey: string | null;
+  try {
+    apiKey = await deps.secretStore.getSecret(profile.keychainService, profile.keychainAccount);
+  } catch {
+    apiKey = null;
+  }
+  if (!apiKey) {
+    return { ...EMPTY_EMBED_OUTCOME, embeddingSkipped: 'NO_API_KEY', embedUnchanged: unchanged };
+  }
+  const protocol = isProviderProtocol(profile.providerType) ? profile.providerType : undefined;
+
+  let embeddedRows = 0;
+  let embedFailed = 0;
+  let nextAttempt =
+    deps.invocationRepo
+      .listByTask(ctx.taskId)
+      .reduce((max, invocation) => Math.max(max, invocation.attemptNumber), 0) + 1;
+
+  for (const batch of chunk(pending, EMBED_BATCH_SIZE)) {
+    const invocationId = deps.idGenerator.generate();
+    const texts = batch.map((source) => source.text);
+    try {
+      deps.invocationRepo.create({
+        id: invocationId,
+        projectId: ctx.projectId,
+        taskId: ctx.taskId,
+        providerProfileId: profile.id,
+        model: profile.model,
+        attemptNumber: nextAttempt,
+        requestKind: 'story_graph_embed',
+        promptHash: sha256Hex(texts.join('\n')),
+        requestMetadataJson: JSON.stringify({ rowCount: batch.length }),
+      });
+      nextAttempt += 1;
+      deps.transaction(() => {
+        requireCas(
+          deps.invocationRepo.markRunning(invocationId, 'PENDING'),
+          '无法标记嵌入调用为 RUNNING',
+        );
+      });
+    } catch {
+      embedFailed += batch.length;
+      continue;
+    }
+
+    let result: EmbeddingInvocationOutput;
+    try {
+      result = await deps.invokeEmbedding({
+        baseUrl: profile.baseUrl,
+        model: profile.model,
+        apiKey,
+        input: texts,
+        protocol,
+      });
+    } catch {
+      result = {
+        embeddings: [],
+        usage: { inputTokens: null, totalTokens: null },
+        latencyMs: 0,
+        errorCode: 'PROVIDER_CONNECTION_FAILED',
+        errorMessage: '嵌入调用异常',
+      };
+    }
+
+    if (result.errorCode || result.embeddings.length !== batch.length) {
+      embedFailed += batch.length;
+      try {
+        deps.transaction(() => {
+          deps.invocationRepo.markFailed(
+            invocationId,
+            ['RUNNING'],
+            result.errorCode ?? 'PROVIDER_RESPONSE_INVALID',
+            result.errorMessage ?? '嵌入结果条数与请求不符',
+            result.latencyMs,
+          );
+        });
+      } catch {
+        // 账本记不上也不影响任务成败
+      }
+      continue;
+    }
+
+    try {
+      deps.transaction(() => {
+        batch.forEach((source, index) => {
+          deps.storyGraph.embeddingRepo.upsert({
+            id: deps.idGenerator.generate(),
+            projectId: ctx.projectId,
+            kind: source.kind,
+            refId: source.refId,
+            model: profile.model,
+            vector: result.embeddings[index],
+            contentHash: source.contentHash,
+            createdAt: ctx.now,
+          });
+        });
+        deps.invocationRepo.markSucceeded(invocationId, 'RUNNING', {
+          responseMetadataJson: JSON.stringify({ rowCount: batch.length }),
+          inputTokens: result.usage.inputTokens,
+          outputTokens: null,
+          cacheReadTokens: null,
+          cacheWriteTokens: null,
+          totalTokens: result.usage.totalTokens,
+          latencyMs: result.latencyMs,
+          finishReason: null,
+          providerRequestId: null,
+        });
+      });
+      embeddedRows += batch.length;
+    } catch {
+      embedFailed += batch.length;
+    }
+  }
+
+  return { embeddingSkipped: null, embeddedRows, embedUnchanged: unchanged, embedFailed };
 }
 
 // ── 任务执行 ──────────────────────────────────────────────────────
@@ -770,6 +976,7 @@ export async function executeStoryGraphExtract(
   const now = deps.clock.now();
   const extractionId = idGenerator.generate();
   let summary: StoryGraphExtractSummary;
+  let touched: ReadonlyArray<{ kind: StoryIndexKind; refId: string }> = [];
 
   transaction(() => {
     // 改章重抽：先失效本章旧记录（只动 extracted 层），再写新内容（D-B22-4）
@@ -778,7 +985,9 @@ export async function executeStoryGraphExtract(
     deps.storyGraph.threadRepo.deleteExtractedBySourceChapter(task.projectId, target.chapterId);
     deps.storyGraph.extractionRepo.deleteByChapter(task.projectId, target.chapterId);
 
-    summary = applyExtraction(deps, { projectId: task.projectId, target, now }, parsed);
+    const applied = applyExtraction(deps, { projectId: task.projectId, target, now }, parsed);
+    summary = applied.summary;
+    touched = applied.touched;
 
     // 账本记的是**真正抽到**的那一版，不是 payload 里入队时的那一版
     deps.storyGraph.extractionRepo.register({
@@ -806,8 +1015,21 @@ export async function executeStoryGraphExtract(
       }),
       '无法标记调用成功',
     );
+  });
+
+  // 后置嵌入（D-B23-4）：主事务已提交，图内容此刻已经是权威的。
+  // 任务留在 RUNNING 直到这一步结束，好让计数进得了 result_json；
+  // 中途崩掉最坏是留一个 RUNNING 任务，重跑幂等（重抽先删本章记录）。
+  const embed = await embedTouchedRows(deps, {
+    projectId: task.projectId,
+    taskId,
+    touched,
+    now,
+  });
+
+  transaction(() => {
     requireCas(
-      taskRepo.completeRunning(taskId, JSON.stringify({ extractionId, ...summary })),
+      taskRepo.completeRunning(taskId, JSON.stringify({ extractionId, ...summary, ...embed })),
       '无法标记任务成功',
     );
   });

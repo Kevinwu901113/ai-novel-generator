@@ -290,6 +290,80 @@ export interface StoryGraphRepositoryPort {
   clearExtracted(projectId: string): StoryGraphClearExtractedResult;
 }
 
+// ── 检索地基（B23）────────────────────────────────────────────────
+
+/** 可被检索的图行种类（story_embeddings.kind / story_graph_fts.kind） */
+export type StoryIndexKind = 'entity' | 'state' | 'thread';
+
+/** 一条图行的"可检索文本"及其指纹（FTS 与嵌入共用同一份文本，避免两处漂移） */
+export interface StoryIndexSource {
+  readonly kind: StoryIndexKind;
+  readonly refId: string;
+  readonly text: string;
+  /** text 的 sha256；与 story_embeddings.content_hash 比对即知要不要重算 */
+  readonly contentHash: string;
+}
+
+/** 嵌入行 */
+export interface StoryEmbeddingData {
+  readonly id: string;
+  readonly projectId: string;
+  readonly kind: StoryIndexKind;
+  readonly refId: string;
+  readonly model: string;
+  readonly dims: number;
+  readonly vector: Float32Array;
+  readonly contentHash: string;
+  readonly createdAt: string;
+}
+
+/** 写入嵌入（按 project+kind+ref_id upsert） */
+export interface CreateStoryEmbeddingInput {
+  readonly id: string;
+  readonly projectId: string;
+  readonly kind: StoryIndexKind;
+  readonly refId: string;
+  readonly model: string;
+  readonly vector: ReadonlyArray<number>;
+  readonly contentHash: string;
+  readonly createdAt: string;
+}
+
+/** FTS 命中；rank 是 fts5 的原始打分，**越小越相关** */
+export interface StoryFtsMatch {
+  readonly kind: StoryIndexKind;
+  readonly refId: string;
+  readonly rank: number;
+}
+
+export interface StoryEmbeddingRepositoryPort {
+  upsert(data: CreateStoryEmbeddingInput): void;
+  /** 已存的指纹；与新文本的 hash 相同就不必重算（D-B23-4） */
+  getContentHash(projectId: string, kind: StoryIndexKind, refId: string): string | null;
+  listByKind(projectId: string, kind: StoryIndexKind): ReadonlyArray<StoryEmbeddingData>;
+  listAll(projectId: string): ReadonlyArray<StoryEmbeddingData>;
+  deleteByRefs(projectId: string, kind: StoryIndexKind, refIds: ReadonlyArray<string>): number;
+  deleteAll(projectId: string): number;
+}
+
+export interface StoryGraphSearchPort {
+  /**
+   * FTS5 次级召回。种子文本由实现切成 trigram 安全的 MATCH 表达式
+   * （trigram 要求词 ≥ 3 字符，两字人名走别名激活那一路）。
+   */
+  searchFts(
+    projectId: string,
+    seedText: string,
+    /** 缺省 50：漏传会被绑定成 undefined 直接抛，给个安全默认值 */
+    limit?: number,
+  ): ReadonlyArray<StoryFtsMatch>;
+  /** 取这些行当前的可检索文本与指纹（嵌入写路径用） */
+  listIndexSources(
+    projectId: string,
+    refs: ReadonlyArray<{ readonly kind: StoryIndexKind; readonly refId: string }>,
+  ): ReadonlyArray<StoryIndexSource>;
+}
+
 /** 抽取管线用到的全部图仓库（一处注入，避免每层重复列举） */
 export interface StoryGraphRepositories {
   readonly entityRepo: StoryEntityRepositoryPort;
@@ -298,4 +372,6 @@ export interface StoryGraphRepositories {
   readonly extractionRepo: StoryExtractionRepositoryPort;
   readonly mergeReviewRepo: StoryMergeReviewRepositoryPort;
   readonly graphRepo: StoryGraphRepositoryPort;
+  readonly embeddingRepo: StoryEmbeddingRepositoryPort;
+  readonly searchRepo: StoryGraphSearchPort;
 }

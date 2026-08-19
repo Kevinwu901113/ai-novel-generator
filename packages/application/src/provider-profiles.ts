@@ -208,8 +208,20 @@ export async function setDefaultProvider(
 }
 
 /**
+ * 嵌入模型的路由键（D-B23-3）。
+ *
+ * 这不是一个任务类型——没有 STORY_GRAPH_EMBED 任务，tasks.task_type 的 CHECK
+ * 也不含它；它只是 provider_routes 里选嵌入模型用的伪键。
+ */
+export const STORY_GRAPH_EMBED_ROUTE_KEY = 'STORY_GRAPH_EMBED';
+
+/**
  * D6 两层路由：按任务类型覆盖优先，其次全局默认，都没有则抛错。
  * 不做第三层、不做 fallback 轮询。
+ *
+ * **例外：STORY_GRAPH_EMBED 不回落全局默认**（D-B23-3）。全局默认是聊天模型，
+ * 拿它去打 /v1/embeddings 只会得到 404 或一段没有意义的文本——嵌入模型必须显式
+ * 配置。没有显式路由时按"未配置"抛错，向量层据此整体关闭，别名/FTS 主干照常。
  */
 export function resolveProviderForTask(
   deps: { readonly providerRepo: ProviderProfileRepository },
@@ -223,6 +235,10 @@ export function resolveProviderForTask(
     if (routed && routed.enabled) {
       return routed;
     }
+  }
+
+  if (taskType === STORY_GRAPH_EMBED_ROUTE_KEY) {
+    throw new ProviderNotConfiguredError();
   }
 
   const fallback = providerRepo.getDefault();

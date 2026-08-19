@@ -86,6 +86,7 @@ export {
   deleteProvider,
   setDefaultProvider,
   resolveProviderForTask,
+  STORY_GRAPH_EMBED_ROUTE_KEY,
 } from './provider-profiles.js';
 export type { ProviderProfileDeps } from './provider-profiles.js';
 
@@ -537,7 +538,22 @@ export type {
   StoryMergeReviewRepositoryPort,
   StoryGraphRepositoryPort,
   StoryGraphRepositories,
+  StoryIndexKind,
+  StoryIndexSource,
+  StoryEmbeddingData,
+  CreateStoryEmbeddingInput,
+  StoryFtsMatch,
+  StoryEmbeddingRepositoryPort,
+  StoryGraphSearchPort,
 } from './story-graph-types.js';
+
+export {
+  serializeEmbedding,
+  deserializeEmbedding,
+  cosineSimilarity,
+  cosineTopK,
+} from './story-graph-vector.js';
+export type { EmbeddingCandidate, EmbeddingMatch } from './story-graph-vector.js';
 
 export {
   parseStoryGraphExtractPayload,

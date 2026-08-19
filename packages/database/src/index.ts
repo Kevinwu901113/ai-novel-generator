@@ -146,7 +146,10 @@ export {
   StoryExtractionRepositoryImpl,
   StoryMergeReviewRepositoryImpl,
   StoryGraphRepositoryImpl,
+  StoryEmbeddingRepositoryImpl,
+  StoryGraphSearchImpl,
   StoryGraphDataCorruptionError,
+  buildFtsMatchQuery,
   appendProfileSummaryText,
   STORY_ENTITY_PROFILE_SUMMARY_LIMIT,
 } from './story-graph-repositories.js';

@@ -15,7 +15,13 @@
  */
 
 import type { ErrorCode, ProviderProtocol } from '@ai-novel/contracts';
-import { adapterFor, type ParsedInvocation, type ProtocolAdapter } from './protocol.js';
+import {
+  adapterFor,
+  trimTrailingSlashes,
+  type ParsedInvocation,
+  type ProtocolAdapter,
+  type ProtocolRequest,
+} from './protocol.js';
 
 export type {
   ProtocolAdapter,
@@ -121,6 +127,8 @@ function errorCodeToMessage(code: ErrorCode): string {
       return '连接失败';
     case 'PROVIDER_RESPONSE_INVALID':
       return '响应格式异常';
+    case 'PROVIDER_NOT_CONFIGURED':
+      return '模型提供商配置不适用于本次调用';
     default:
       return '连接失败';
   }
@@ -150,27 +158,22 @@ function selectAdapter(protocol: ProviderProtocol | undefined): ProtocolAdapter 
   return adapterFor(protocol ?? 'anthropic-messages');
 }
 
-/**
- * 执行一次非流式模型调用并归一化结果。
- * 无论哪种协议，超时 / 网络 / HTTP 状态 / JSON 解析 / 结构校验的归一化都只在这里发生一次。
- */
-async function executeInvocation(
-  deps: ModelGatewayDeps,
-  adapter: ProtocolAdapter,
-  input: {
-    readonly baseUrl: string;
-    readonly model: string;
-    readonly apiKey: string;
-    readonly prompt: string;
-    readonly maxTokens: number;
-    readonly systemPrompt?: string;
-    readonly temperature?: number;
-  },
-  timeoutMs: number,
-): Promise<ExecuteResult> {
-  const startTime = Date.now();
-  const request = adapter.buildRequest(input);
+type JsonRequestResult =
+  | { readonly ok: true; readonly data: unknown; readonly latencyMs: number }
+  | { readonly ok: false; readonly errorCode: ErrorCode; readonly latencyMs: number };
 
+/**
+ * 发一次 POST JSON 请求并归一化结果。
+ *
+ * 超时 / 网络 / HTTP 状态 / JSON 解析的归一化只在这里发生一次——
+ * chat 与 embedding 两条路径共用，避免出现第二份 status→ErrorCode 映射（B23）。
+ */
+async function executeJsonRequest(
+  deps: ModelGatewayDeps,
+  request: ProtocolRequest,
+  timeoutMs: number,
+): Promise<JsonRequestResult> {
+  const startTime = Date.now();
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -200,16 +203,38 @@ async function executeInvocation(
     } catch {
       return { ok: false, errorCode: 'PROVIDER_RESPONSE_INVALID', latencyMs };
     }
-
-    const parsed = adapter.parse(data);
-    if (!parsed) {
-      return { ok: false, errorCode: 'PROVIDER_RESPONSE_INVALID', latencyMs };
-    }
-    return { ok: true, parsed, latencyMs };
+    return { ok: true, data, latencyMs };
   } catch (err) {
     clearTimeout(timeoutId);
     return { ok: false, errorCode: mapThrownToErrorCode(err), latencyMs: Date.now() - startTime };
   }
+}
+
+/**
+ * 执行一次非流式模型调用并归一化结果。
+ * 协议差异只在 adapter 的 buildRequest / parse 里，传输与错误归一化共用上面那条路径。
+ */
+async function executeInvocation(
+  deps: ModelGatewayDeps,
+  adapter: ProtocolAdapter,
+  input: {
+    readonly baseUrl: string;
+    readonly model: string;
+    readonly apiKey: string;
+    readonly prompt: string;
+    readonly maxTokens: number;
+    readonly systemPrompt?: string;
+    readonly temperature?: number;
+  },
+  timeoutMs: number,
+): Promise<ExecuteResult> {
+  const result = await executeJsonRequest(deps, adapter.buildRequest(input), timeoutMs);
+  if (!result.ok) return { ok: false, errorCode: result.errorCode, latencyMs: result.latencyMs };
+  const parsed = adapter.parse(result.data);
+  if (!parsed) {
+    return { ok: false, errorCode: 'PROVIDER_RESPONSE_INVALID', latencyMs: result.latencyMs };
+  }
+  return { ok: true, parsed, latencyMs: result.latencyMs };
 }
 
 const EMPTY_USAGE = {
@@ -299,6 +324,150 @@ export async function invokeModel(
     providerRequestId: result.parsed.providerRequestId,
     finishReason: result.parsed.finishReason,
     usage: result.parsed.usage,
+    latencyMs: result.latencyMs,
+    errorCode: null,
+    errorMessage: null,
+  };
+}
+
+// ── 嵌入调用（B23 / D-B23-3）──────────────────────────────────────
+
+const EMBEDDING_TIMEOUT_MS = 60_000;
+
+export interface EmbeddingInvocationInput {
+  readonly baseUrl: string;
+  readonly model: string;
+  readonly apiKey: string;
+  /** 一次可以嵌一批；批量大小由调用方控制 */
+  readonly input: ReadonlyArray<string>;
+  readonly protocol?: ProviderProtocol;
+}
+
+export interface EmbeddingInvocationOutput {
+  /** 与 input 同序同长；失败时为空数组 */
+  readonly embeddings: ReadonlyArray<ReadonlyArray<number>>;
+  readonly usage: {
+    readonly inputTokens: number | null;
+    readonly totalTokens: number | null;
+  };
+  readonly latencyMs: number;
+  readonly errorCode: ErrorCode | null;
+  readonly errorMessage: string | null;
+}
+
+const EMPTY_EMBEDDING_USAGE = { inputTokens: null, totalTokens: null } as const;
+
+function parseEmbeddingResponse(
+  data: unknown,
+  expected: number,
+): {
+  embeddings: number[][];
+  usage: { inputTokens: number | null; totalTokens: number | null };
+} | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const root = data as Record<string, unknown>;
+  if (!Array.isArray(root.data) || root.data.length !== expected) return null;
+
+  const embeddings: number[][] = [];
+  for (const raw of root.data) {
+    if (typeof raw !== 'object' || raw === null) return null;
+    const item = raw as Record<string, unknown>;
+    const vector = item.embedding;
+    if (!Array.isArray(vector) || vector.length === 0) return null;
+    if (!vector.every((v) => typeof v === 'number' && Number.isFinite(v))) return null;
+    // index 缺省时按数组顺序（OpenAI 保证同序返回）；给了就按它归位
+    const index = typeof item.index === 'number' ? item.index : embeddings.length;
+    if (!Number.isInteger(index) || index < 0 || index >= expected) return null;
+    embeddings[index] = vector as number[];
+  }
+  if (embeddings.length !== expected || embeddings.some((v) => v === undefined)) return null;
+
+  const usageRaw = root.usage;
+  const usage =
+    typeof usageRaw === 'object' && usageRaw !== null
+      ? {
+          inputTokens: numberOrNull((usageRaw as Record<string, unknown>).prompt_tokens),
+          totalTokens: numberOrNull((usageRaw as Record<string, unknown>).total_tokens),
+        }
+      : EMPTY_EMBEDDING_USAGE;
+  return { embeddings, usage };
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 批量嵌入调用（POST {baseUrl}/embeddings）。
+ *
+ * **只有 openai-chat 协议支持**：anthropic-messages 根本没有 embeddings 端点，
+ * 路由到它属于配置错误（D-B23-3），直接返回 PROVIDER_NOT_CONFIGURED 而不是
+ * 发一次注定 404 的请求。
+ *
+ * path 拼 `/embeddings` 而不是 `/v1/embeddings`：openai-chat 的 baseUrl 按仓库
+ * 既有约定**自带版本段**（`https://api.deepseek.com/v1`），与 openAiChatAdapter
+ * 拼 `/chat/completions` 同一口径；写死 /v1 会拼出 `/v1/v1/embeddings`。
+ *
+ * 与 invokeModel 一样永不抛异常：失败返回空 embeddings + 归一化 errorCode。
+ */
+export async function invokeEmbedding(
+  deps: ModelGatewayDeps,
+  input: EmbeddingInvocationInput,
+): Promise<EmbeddingInvocationOutput> {
+  const protocol: ProviderProtocol = input.protocol ?? 'anthropic-messages';
+  if (protocol !== 'openai-chat') {
+    return {
+      embeddings: [],
+      usage: EMPTY_EMBEDDING_USAGE,
+      latencyMs: 0,
+      errorCode: 'PROVIDER_NOT_CONFIGURED',
+      errorMessage: '该模型提供商协议没有嵌入端点，请改用 OpenAI 兼容协议的提供商',
+    };
+  }
+  if (input.input.length === 0) {
+    return {
+      embeddings: [],
+      usage: EMPTY_EMBEDDING_USAGE,
+      latencyMs: 0,
+      errorCode: null,
+      errorMessage: null,
+    };
+  }
+
+  const request: ProtocolRequest = {
+    url: `${trimTrailingSlashes(input.baseUrl)}/embeddings`,
+    headers: {
+      authorization: `Bearer ${input.apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ model: input.model, input: [...input.input] }),
+  };
+
+  const result = await executeJsonRequest(deps, request, EMBEDDING_TIMEOUT_MS);
+  if (!result.ok) {
+    return {
+      embeddings: [],
+      usage: EMPTY_EMBEDDING_USAGE,
+      latencyMs: result.latencyMs,
+      errorCode: result.errorCode,
+      errorMessage: errorCodeToMessage(result.errorCode),
+    };
+  }
+
+  const parsed = parseEmbeddingResponse(result.data, input.input.length);
+  if (!parsed) {
+    return {
+      embeddings: [],
+      usage: EMPTY_EMBEDDING_USAGE,
+      latencyMs: result.latencyMs,
+      errorCode: 'PROVIDER_RESPONSE_INVALID',
+      errorMessage: errorCodeToMessage('PROVIDER_RESPONSE_INVALID'),
+    };
+  }
+
+  return {
+    embeddings: parsed.embeddings,
+    usage: parsed.usage,
     latencyMs: result.latencyMs,
     errorCode: null,
     errorMessage: null,

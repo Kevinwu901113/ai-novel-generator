@@ -86,7 +86,11 @@ import type {
   TaskRow,
   ModelInvocationRow,
 } from '@ai-novel/database';
-import { testConnection as modelGatewayTestConnection, invokeModel } from '@ai-novel/model-gateway';
+import {
+  testConnection as modelGatewayTestConnection,
+  invokeModel,
+  invokeEmbedding,
+} from '@ai-novel/model-gateway';
 import {
   executeModelInvocationTest,
   sha256Hex,
@@ -1716,6 +1720,9 @@ function buildStoryGraphPumpDeps(): StoryGraphPumpDeps {
           extractionRepo: projDb.getStoryExtractionRepository(),
           mergeReviewRepo: projDb.getStoryMergeReviewRepository(),
           graphRepo: projDb.getStoryGraphRepository(),
+          // B23：检索地基（嵌入存取 + FTS 查询/可检索文本）
+          embeddingRepo: projDb.getStoryEmbeddingRepository(),
+          searchRepo: projDb.getStoryGraphSearch(),
         },
         invokeModel: async (input: {
           baseUrl: string;
@@ -1727,6 +1734,16 @@ function buildStoryGraphPumpDeps(): StoryGraphPumpDeps {
           maxTokens?: number;
         }) => {
           return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        // B23 / D-B23-3：嵌入走 STORY_GRAPH_EMBED 路由，未配置时引擎自己跳过
+        invokeEmbedding: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          input: ReadonlyArray<string>;
+          protocol?: ProviderProtocol;
+        }) => {
+          return invokeEmbedding({ fetch: globalThis.fetch, clock }, input);
         },
         transaction: <T>(fn: () => T) => projDb.transaction(fn),
       };

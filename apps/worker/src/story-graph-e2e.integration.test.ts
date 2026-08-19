@@ -70,6 +70,28 @@ const fakeProviderRepo = {
   updateTestResult: () => {},
 } as unknown as ProviderProfileRepository;
 
+/** 配了 STORY_GRAPH_EMBED 路由的 provider 仓库（openai-chat 协议才有 /embeddings） */
+const EMBED_PROFILE = {
+  ...FAKE_PROFILE,
+  id: 'embed-provider',
+  providerType: 'openai-chat',
+  model: 'text-embedding-3-small',
+} as const;
+
+const embedRoutedProviderRepo = {
+  getById: (id: string) => (id === EMBED_PROFILE.id ? EMBED_PROFILE : FAKE_PROFILE),
+  list: () => [FAKE_PROFILE, EMBED_PROFILE],
+  getDefault: () => FAKE_PROFILE,
+  getRoute: (taskType: string) => (taskType === 'STORY_GRAPH_EMBED' ? EMBED_PROFILE.id : null),
+  create: () => {},
+  update: () => {},
+  delete: () => {},
+  setDefault: () => {},
+  setRoute: () => {},
+  deleteRoute: () => {},
+  updateTestResult: () => {},
+} as unknown as ProviderProfileRepository;
+
 const fakeSecretStore: SecretStore = {
   hasSecret: async () => true,
   setSecret: async () => {},
@@ -177,8 +199,18 @@ function engineDeps(db: ProjectDatabase, script: string[]): StoryGraphExtractEng
       extractionRepo: db.getStoryExtractionRepository(),
       mergeReviewRepo: db.getStoryMergeReviewRepository(),
       graphRepo: db.getStoryGraphRepository(),
+      embeddingRepo: db.getStoryEmbeddingRepository(),
+      searchRepo: db.getStoryGraphSearch(),
     },
     invokeModel: fakeInvokeModel(script),
+    // 默认无嵌入路由：向量层整体关闭（D-B23-3），本文件覆盖的是抽取主链
+    invokeEmbedding: async () => ({
+      embeddings: [],
+      usage: { inputTokens: null, totalTokens: null },
+      latencyMs: 0,
+      errorCode: 'PROVIDER_NOT_CONFIGURED' as const,
+      errorMessage: '测试未接嵌入',
+    }),
     transaction: <T>(fn: () => T) => db.transaction(fn),
   };
 }
@@ -863,3 +895,228 @@ async function waitForTaskTerminal(taskId: string, timeoutMs = 5000): Promise<vo
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
+
+describe('抽取后置嵌入（D-B23-4：best-effort，永不失败任务）', () => {
+  async function runWithEmbedding(
+    overrides: Partial<StoryGraphExtractEngineDeps>,
+    chapterId = 'c1',
+  ): Promise<{ taskId: string; summary: Record<string, unknown> }> {
+    const db = openDb();
+    let taskId: string;
+    try {
+      const enqueued = enqueueStoryGraphExtract(enqueueDeps(db), { projectId: 'p1', chapterId });
+      if (!enqueued.enqueued) throw new Error(`入队失败: ${enqueued.reason}`);
+      taskId = enqueued.taskId;
+      await executeStoryGraphExtract(
+        { ...engineDeps(db, [CHAPTER_ONE_JSON]), ...overrides },
+        taskId,
+      );
+      const task = db.getTaskRepository().getById(taskId)!;
+      expect(task.status).toBe('SUCCEEDED');
+      return { taskId, summary: JSON.parse(task.resultJson!) as Record<string, unknown> };
+    } finally {
+      db.close();
+    }
+  }
+
+  /** 固定维度的假嵌入：向量内容不重要，重要的是条数与写入路径 */
+  function fakeEmbedGateway(calls: string[][] = []) {
+    return async (input: { input: ReadonlyArray<string> }) => {
+      calls.push([...input.input]);
+      return {
+        embeddings: input.input.map((_text, index) => [index + 1, 0.5]),
+        usage: { inputTokens: 10, totalTokens: 10 },
+        latencyMs: 3,
+        errorCode: null,
+        errorMessage: null,
+      };
+    };
+  }
+
+  it('没配 STORY_GRAPH_EMBED 路由 → 整层跳过，图照常写入', async () => {
+    let db = openDb();
+    seedChapter(db, CHAPTER_ONE_TEXT, 'c1');
+    db.close();
+
+    const { summary } = await runWithEmbedding({});
+
+    expect(summary.embeddingSkipped).toBe('NO_ROUTE');
+    expect(summary.embeddedRows).toBe(0);
+    db = openDb();
+    try {
+      // 主干不受影响：实体/状态/FTS 都在
+      expect(db.getStoryEntityRepository().findByCanonicalName('p1', '林三')).not.toBeNull();
+      expect(db.getStoryEmbeddingRepository().listAll('p1')).toEqual([]);
+      expect(db.getStoryGraphSearch().searchFts('p1', '外门弟子').length).toBeGreaterThan(0);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('配了路由 → 本次新增行全部落嵌入，且记进 model_invocations', async () => {
+    let db = openDb();
+    seedChapter(db, CHAPTER_ONE_TEXT, 'c1');
+    db.close();
+
+    const batches: string[][] = [];
+    const { taskId, summary } = await runWithEmbedding({
+      providerRepo: embedRoutedProviderRepo,
+      invokeEmbedding: fakeEmbedGateway(batches),
+    });
+
+    expect(summary.embeddingSkipped).toBeNull();
+    // 2 实体 + 2 状态边 + 1 线程
+    expect(summary.embeddedRows).toBe(5);
+    expect(summary.embedFailed).toBe(0);
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(5);
+
+    db = openDb();
+    try {
+      const embeddings = db.getStoryEmbeddingRepository().listAll('p1');
+      expect(embeddings).toHaveLength(5);
+      expect(embeddings.every((e) => e.model === 'text-embedding-3-small')).toBe(true);
+      expect(embeddings.every((e) => e.dims === 2)).toBe(true);
+      expect(new Set(embeddings.map((e) => e.kind))).toEqual(
+        new Set(['entity', 'state', 'thread']),
+      );
+
+      // 嵌入调用挂在同一个 task 下，attempt_number 不与抽取调用撞车
+      const invocations = db.getModelInvocationRepository().listByTask(taskId);
+      expect(invocations.map((i) => i.requestKind).sort()).toEqual([
+        'story_graph_embed',
+        'story_graph_extract',
+      ]);
+      const embedInvocation = invocations.find((i) => i.requestKind === 'story_graph_embed')!;
+      expect(embedInvocation.status).toBe('SUCCEEDED');
+      expect(embedInvocation.model).toBe('text-embedding-3-small');
+      expect(new Set(invocations.map((i) => i.attemptNumber)).size).toBe(invocations.length);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('改章重抽：旧行的嵌入随行清掉，新行重新嵌入（不留孤儿）', async () => {
+    let db = openDb();
+    seedChapter(db, CHAPTER_ONE_TEXT, 'c1');
+    db.close();
+    await runWithEmbedding({
+      providerRepo: embedRoutedProviderRepo,
+      invokeEmbedding: fakeEmbedGateway(),
+    });
+
+    db = openDb();
+    const firstRoundRefs = new Set(
+      db
+        .getStoryEmbeddingRepository()
+        .listAll('p1')
+        .map((e) => e.refId),
+    );
+    expect(firstRoundRefs.size).toBe(5);
+    createChapterVersion(mutationDeps(db), {
+      projectId: 'p1',
+      chapterId: 'c1',
+      title: '第一章（改）',
+      content: '青云宗的钟声响起。他已经是内门弟子。',
+      expectedCurrentVersionId: 'v-c1-1',
+      now: NOW,
+      newVersionId: 'v-c1-2',
+    });
+    db.close();
+
+    const batches: string[][] = [];
+    const { summary } = await runWithEmbedding({
+      providerRepo: embedRoutedProviderRepo,
+      invokeEmbedding: fakeEmbedGateway(batches),
+    });
+
+    db = openDb();
+    try {
+      const embeddings = db.getStoryEmbeddingRepository().listAll('p1');
+      // 本次实际发出的嵌入条数 = 指纹变化的行数，账要对得上
+      expect(batches.reduce((n, b) => n + b.length, 0)).toBe(summary.embeddedRows);
+      expect(summary.embedFailed).toBe(0);
+
+      // 旧状态边/线程行已被删除，它们的嵌入不许留下来变孤儿
+      const liveStateIds = new Set(
+        db
+          .getStoryStateRepository()
+          .listBySourceChapter('p1', 'c1')
+          .map((state) => state.id),
+      );
+      for (const embedding of embeddings) {
+        if (embedding.kind === 'state') expect(liveStateIds.has(embedding.refId)).toBe(true);
+      }
+      const liveThreadIds = new Set(
+        db
+          .getStoryThreadRepository()
+          .listOpen('p1')
+          .map((t) => t.id),
+      );
+      for (const embedding of embeddings) {
+        if (embedding.kind === 'thread') expect(liveThreadIds.has(embedding.refId)).toBe(true);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('嵌入调用失败 → 只计数，任务照样 SUCCEEDED，图不回滚', async () => {
+    let db = openDb();
+    seedChapter(db, CHAPTER_ONE_TEXT, 'c1');
+    db.close();
+
+    const { taskId, summary } = await runWithEmbedding({
+      providerRepo: embedRoutedProviderRepo,
+      invokeEmbedding: async () => ({
+        embeddings: [],
+        usage: { inputTokens: null, totalTokens: null },
+        latencyMs: 7,
+        errorCode: 'PROVIDER_RATE_LIMITED' as const,
+        errorMessage: '请求频率超限',
+      }),
+    });
+
+    expect(summary.embedFailed).toBe(5);
+    expect(summary.embeddedRows).toBe(0);
+    expect(summary.embeddingSkipped).toBeNull();
+
+    db = openDb();
+    try {
+      expect(db.getTaskRepository().getById(taskId)?.status).toBe('SUCCEEDED');
+      expect(db.getStoryEmbeddingRepository().listAll('p1')).toEqual([]);
+      // 图与 FTS 主干完好
+      expect(db.getStoryEntityRepository().findByCanonicalName('p1', '林三')).not.toBeNull();
+      expect(db.getStoryGraphSearch().searchFts('p1', '外门弟子').length).toBeGreaterThan(0);
+      const embedInvocation = db
+        .getModelInvocationRepository()
+        .listByTask(taskId)
+        .find((i) => i.requestKind === 'story_graph_embed')!;
+      expect(embedInvocation.status).toBe('FAILED');
+      expect(embedInvocation.errorCode).toBe('PROVIDER_RATE_LIMITED');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('嵌入网关抛异常也只计数（best-effort 的边界是"不传播"）', async () => {
+    let db = openDb();
+    seedChapter(db, CHAPTER_ONE_TEXT, 'c1');
+    db.close();
+
+    const { taskId, summary } = await runWithEmbedding({
+      providerRepo: embedRoutedProviderRepo,
+      invokeEmbedding: async () => {
+        throw new Error('网关炸了');
+      },
+    });
+
+    expect(summary.embedFailed).toBe(5);
+    db = openDb();
+    try {
+      expect(db.getTaskRepository().getById(taskId)?.status).toBe('SUCCEEDED');
+    } finally {
+      db.close();
+    }
+  });
+});

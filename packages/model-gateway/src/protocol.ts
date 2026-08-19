@@ -71,7 +71,7 @@ export interface ProtocolAdapter {
 
 // ── 公共工具 ──────────────────────────────────────────────────────
 
-function trimTrailingSlashes(value: string): string {
+export function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, '');
 }
 

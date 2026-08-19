@@ -9,6 +9,11 @@
  * - 自动抽取永不合并两个既有实体，疑似同实体只进待审队列（D-B22-5）。
  *
  * 只提供抽取管线（B22 工单二）需要的读写；故事圣经 UI 的查询在 B24。
+ *
+ * B23 在此之上加检索地基：写方法**显式同步** story_graph_fts（D-B23-8，不用
+ * SQL 触发器——仓库层已经是唯一写路径，显式同步可测可控），删除路径连带清掉
+ * story_embeddings 的孤儿行。可检索文本的组装口径只有一份（composeXxxText），
+ * FTS 与嵌入共用，否则两个索引会各自漂移。
  */
 
 import type { DatabaseSync } from 'node:sqlite';
@@ -25,7 +30,16 @@ import type {
   StoryExtractionRepositoryPort,
   StoryMergeReviewRepositoryPort,
   StoryGraphRepositoryPort,
+  StoryEmbeddingRepositoryPort,
+  StoryGraphSearchPort,
+  StoryEmbeddingData,
+  StoryFtsMatch,
+  StoryIndexKind,
+  StoryIndexSource,
+  CreateStoryEmbeddingInput,
 } from '@ai-novel/application';
+import { serializeEmbedding, deserializeEmbedding } from '@ai-novel/application';
+import { sha256Utf8 } from './creation-contract-repositories.js';
 import type {
   CreateStoryEntityAliasData,
   CreateStoryEntityData,
@@ -72,6 +86,7 @@ function requireLiteral<T extends string>(
 }
 
 const ORIGINS: ReadonlyArray<DbStoryOrigin> = ['extracted', 'user'];
+const INDEX_KINDS: ReadonlyArray<StoryIndexKind> = ['entity', 'state', 'thread'];
 const ENTITY_KINDS: ReadonlyArray<DbStoryEntityKind> = ['character', 'location', 'item', 'setting'];
 const THREAD_STATUSES: ReadonlyArray<DbStoryThreadStatus> = ['open', 'closed', 'abandoned'];
 const EXTRACTION_STATUSES: ReadonlyArray<DbStoryExtractionStatus> = [
@@ -170,6 +185,162 @@ function decodeMergeReview(row: Record<string, unknown>): StoryMergeReviewRow {
   };
 }
 
+// ── 可检索文本与 FTS 同步（B23 / D-B23-8）────────────────────────
+
+/** 状态边的可检索文本：谓词 + 客体（实体名或自由文本）+ 证据原文 */
+function composeStateText(
+  predicate: string,
+  objectLabel: string | null,
+  evidence: string | null,
+): string {
+  return [predicate, objectLabel, evidence].filter((part) => !!part).join(' ');
+}
+
+/** 线程的可检索文本：描述 + 许诺的回收方式 */
+function composeThreadText(description: string, promisedPayoff: string | null): string {
+  return [description, promisedPayoff].filter((part) => !!part).join(' ');
+}
+
+/** 实体的可检索文本：正名 + 全部别名 + 档案 */
+function composeEntityText(
+  canonicalName: string,
+  aliases: ReadonlyArray<string>,
+  profileSummary: string,
+): string {
+  return [canonicalName, ...aliases, profileSummary].filter((part) => !!part).join(' ');
+}
+
+/** 写入/更新一行 FTS：fts5 没有唯一约束，更新只能先删后插 */
+function syncFtsRow(db: DatabaseSync, kind: StoryIndexKind, refId: string, text: string): void {
+  db.prepare('DELETE FROM story_graph_fts WHERE kind = ? AND ref_id = ?').run(kind, refId);
+  if (text.trim().length === 0) return;
+  db.prepare('INSERT INTO story_graph_fts (kind, ref_id, text) VALUES (?, ?, ?)').run(
+    kind,
+    refId,
+    text,
+  );
+}
+
+function deleteFtsRows(
+  db: DatabaseSync,
+  kind: StoryIndexKind,
+  refIds: ReadonlyArray<string>,
+): void {
+  if (refIds.length === 0) return;
+  const placeholders = refIds.map(() => '?').join(', ');
+  db.prepare(`DELETE FROM story_graph_fts WHERE kind = ? AND ref_id IN (${placeholders})`).run(
+    kind,
+    ...refIds,
+  );
+}
+
+function deleteEmbeddingRows(
+  db: DatabaseSync,
+  projectId: string,
+  kind: StoryIndexKind,
+  refIds: ReadonlyArray<string>,
+): void {
+  if (refIds.length === 0) return;
+  const placeholders = refIds.map(() => '?').join(', ');
+  db.prepare(
+    `DELETE FROM story_embeddings
+      WHERE project_id = ? AND kind = ? AND ref_id IN (${placeholders})`,
+  ).run(projectId, kind, ...refIds);
+}
+
+/** 实体正名；id 为空或行不存在返回 null */
+function entityCanonicalName(db: DatabaseSync, entityId: string | null): string | null {
+  if (entityId === null) return null;
+  const row = db.prepare('SELECT canonical_name FROM story_entities WHERE id = ?').get(entityId) as
+    Record<string, unknown> | undefined;
+  return row ? requireString(row, 'canonical_name', 'story_entities') : null;
+}
+
+function entityAliasList(
+  db: DatabaseSync,
+  projectId: string,
+  entityId: string,
+): ReadonlyArray<string> {
+  const rows = db
+    .prepare(
+      `SELECT alias FROM story_entity_aliases
+        WHERE project_id = ? AND entity_id = ? ORDER BY created_at ASC, id ASC`,
+    )
+    .all(projectId, entityId) as Array<Record<string, unknown>>;
+  return rows.map((r) => requireString(r, 'alias', 'story_entity_aliases'));
+}
+
+/** 重算某个实体的 FTS 行（正名/别名/档案任一变化都要走这里） */
+function resyncEntityFts(db: DatabaseSync, projectId: string, entityId: string): void {
+  const row = db
+    .prepare('SELECT * FROM story_entities WHERE project_id = ? AND id = ?')
+    .get(projectId, entityId) as Record<string, unknown> | undefined;
+  if (!row) {
+    deleteFtsRows(db, 'entity', [entityId]);
+    return;
+  }
+  const entity = decodeEntity(row);
+  syncFtsRow(
+    db,
+    'entity',
+    entityId,
+    composeEntityText(
+      entity.canonicalName,
+      entityAliasList(db, projectId, entityId),
+      entity.profileSummary,
+    ),
+  );
+}
+
+// ── FTS5 MATCH 表达式（注入防线）──────────────────────────────────
+
+/** trigram 分词器的硬性下限：短于 3 字符的词永远命中不了，提前丢掉 */
+const FTS_MIN_TERM_CHARS = 3;
+/** 长句极少逐字出现在图记录里，切成滑动窗口才有召回率 */
+const FTS_WINDOW_CHARS = 6;
+const FTS_WINDOW_STRIDE = 3;
+const FTS_MAX_TERMS = 24;
+/** 查询默认条数上限 */
+const DEFAULT_FTS_LIMIT = 50;
+
+const FTS_SPLIT_PATTERN = /[\s,，。、；;:：!！?？"'“”‘’()（）【】[\]{}<>《》…—\-_/\\|+=*&^%$#@~`]+/;
+
+/**
+ * 把任意种子文本转成 fts5 MATCH 表达式。
+ *
+ * **这是注入防线**：fts5 的 MATCH 是一门查询语言，把用户/模型文本直接塞进去，
+ * 轻则语法错误抛异常（实测 `外门 AND`、`(`、`NEAR/` 都会抛），重则被当成
+ * 布尔算子改变语义。做法是把每个词当**短语字面量**：整体用双引号包住，
+ * 词内的双引号按 fts5 规则翻倍转义——这样任何字符都退化成普通字符。
+ *
+ * 无可用词时返回 null（`MATCH ''` 会抛，调用方据此直接返回空结果）。
+ */
+export function buildFtsMatchQuery(seedText: string): string | null {
+  const terms: string[] = [];
+  const seen = new Set<string>();
+  const push = (term: string): void => {
+    if (term.length < FTS_MIN_TERM_CHARS || seen.has(term) || terms.length >= FTS_MAX_TERMS) return;
+    seen.add(term);
+    terms.push(term);
+  };
+
+  for (const segment of seedText.split(FTS_SPLIT_PATTERN)) {
+    const trimmed = segment.trim();
+    if (trimmed.length < FTS_MIN_TERM_CHARS) continue;
+    if (trimmed.length <= FTS_WINDOW_CHARS) {
+      push(trimmed);
+      continue;
+    }
+    for (let i = 0; i + FTS_MIN_TERM_CHARS <= trimmed.length; i += FTS_WINDOW_STRIDE) {
+      push(trimmed.slice(i, i + FTS_WINDOW_CHARS));
+      if (terms.length >= FTS_MAX_TERMS) break;
+    }
+  }
+
+  if (terms.length === 0) return null;
+  return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' OR ');
+}
+
 // ── 实体档案追加（D-B22-5）────────────────────────────────────────
 
 /** 实体档案字符上限：超限截断最旧段落 */
@@ -223,6 +394,7 @@ export class StoryEntityRepositoryImpl implements StoryEntityRepositoryPort {
         data.createdAt,
         data.createdAt,
       );
+    resyncEntityFts(this.db, data.projectId, data.id);
   }
 
   getById(projectId: string, id: string): StoryEntityRow | null {
@@ -276,6 +448,7 @@ export class StoryEntityRepositoryImpl implements StoryEntityRepositoryPort {
           WHERE project_id = ? AND id = ?`,
       )
       .run(next, now, projectId, id);
+    if (result.changes === 1) resyncEntityFts(this.db, projectId, id);
     return result.changes === 1;
   }
 
@@ -288,6 +461,8 @@ export class StoryEntityRepositoryImpl implements StoryEntityRepositoryPort {
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
       .run(data.id, data.projectId, data.entityId, data.alias, data.origin, data.createdAt);
+    // 别名是实体可检索文本的一部分，加了就得重写那一行
+    if (result.changes === 1) resyncEntityFts(this.db, data.projectId, data.entityId);
     return result.changes === 1;
   }
 
@@ -360,6 +535,13 @@ export class StoryStateRepositoryImpl implements StoryStateRepositoryPort {
         data.origin,
         data.createdAt,
       );
+    const objectLabel = entityCanonicalName(this.db, data.objectEntityId) ?? data.objectText;
+    syncFtsRow(
+      this.db,
+      'state',
+      data.id,
+      composeStateText(data.predicate, objectLabel, data.evidenceSpan),
+    );
   }
 
   getById(projectId: string, id: string): StoryStateRow | null {
@@ -482,6 +664,9 @@ export class StoryStateRepositoryImpl implements StoryStateRepositoryPort {
     const deleted = this.db
       .prepare(`DELETE FROM story_states WHERE project_id = ? AND id IN (${placeholders})`)
       .run(projectId, ...ids);
+    // 索引是派生的派生：行没了，FTS 行与嵌入行必须同一路清掉，否则检索会指向空气
+    deleteFtsRows(this.db, 'state', ids);
+    deleteEmbeddingRows(this.db, projectId, 'state', ids);
     return Number(deleted.changes);
   }
 }
@@ -515,6 +700,12 @@ export class StoryThreadRepositoryImpl implements StoryThreadRepositoryPort {
         data.createdAt,
         data.createdAt,
       );
+    syncFtsRow(
+      this.db,
+      'thread',
+      data.id,
+      composeThreadText(data.description, data.promisedPayoff),
+    );
   }
 
   getById(projectId: string, id: string): StoryThreadRow | null {
@@ -556,6 +747,19 @@ export class StoryThreadRepositoryImpl implements StoryThreadRepositoryPort {
           WHERE project_id = ? AND id = ? AND status = 'open' AND origin = 'extracted'`,
       )
       .run(closedChapter, now, projectId, id);
+    // 核销不改文本（描述与许诺不变），但写路径保持统一：一处改文本组装即全线生效。
+    // 已核销的线程留在索引里是有意的——回放历史章节时仍要能检索到它。
+    if (result.changes === 1) {
+      const thread = this.getById(projectId, id);
+      if (thread) {
+        syncFtsRow(
+          this.db,
+          'thread',
+          id,
+          composeThreadText(thread.description, thread.promisedPayoff),
+        );
+      }
+    }
     return result.changes === 1;
   }
 
@@ -577,12 +781,23 @@ export class StoryThreadRepositoryImpl implements StoryThreadRepositoryPort {
 
   /** 改章重抽：删除该章开启的抽取线程（user 线程不动），返回删除行数 */
   deleteExtractedBySourceChapter(projectId: string, sourceChapterId: string): number {
+    const doomed = (
+      this.db
+        .prepare(
+          `SELECT id FROM story_threads
+            WHERE project_id = ? AND source_chapter_id = ? AND origin = 'extracted'`,
+        )
+        .all(projectId, sourceChapterId) as Array<Record<string, unknown>>
+    ).map((row) => requireString(row, 'id', 'story_threads'));
+    if (doomed.length === 0) return 0;
     const result = this.db
       .prepare(
         `DELETE FROM story_threads
           WHERE project_id = ? AND source_chapter_id = ? AND origin = 'extracted'`,
       )
       .run(projectId, sourceChapterId);
+    deleteFtsRows(this.db, 'thread', doomed);
+    deleteEmbeddingRows(this.db, projectId, 'thread', doomed);
     return Number(result.changes);
   }
 }
@@ -732,6 +947,17 @@ export class StoryGraphRepositoryImpl implements StoryGraphRepositoryPort {
    *   与"user 层永不受损"直接冲突）。
    */
   clearExtracted(projectId: string): StoryGraphClearExtractedResult {
+    // 先记下要删的 id：索引行（FTS / 嵌入）得跟着一起清，而 user 层的索引行必须留下
+    const doomedIds = (kind: 'story_states' | 'story_threads' | 'story_entities'): string[] =>
+      (
+        this.db
+          .prepare(`SELECT id FROM ${kind} WHERE project_id = ? AND origin = 'extracted'`)
+          .all(projectId) as Array<Record<string, unknown>>
+      ).map((row) => requireString(row, 'id', kind));
+    const doomedStateIds = doomedIds('story_states');
+    const doomedThreadIds = doomedIds('story_threads');
+    const doomedEntityIds = doomedIds('story_entities');
+
     // append-only 允许触碰的两列：先解链再删，避免逐行删除时自引用 FK 报错
     this.db
       .prepare(
@@ -772,6 +998,22 @@ export class StoryGraphRepositoryImpl implements StoryGraphRepositoryPort {
       .prepare('DELETE FROM story_extractions WHERE project_id = ?')
       .run(projectId);
 
+    // 索引同步清理：实体那一层只清真的被删掉的（被 user 记录引用而保留的实体仍要可检索）
+    deleteFtsRows(this.db, 'state', doomedStateIds);
+    deleteEmbeddingRows(this.db, projectId, 'state', doomedStateIds);
+    deleteFtsRows(this.db, 'thread', doomedThreadIds);
+    deleteEmbeddingRows(this.db, projectId, 'thread', doomedThreadIds);
+    const survivingEntityIds = new Set(
+      (
+        this.db
+          .prepare('SELECT id FROM story_entities WHERE project_id = ?')
+          .all(projectId) as Array<Record<string, unknown>>
+      ).map((row) => requireString(row, 'id', 'story_entities')),
+    );
+    const removedEntityIds = doomedEntityIds.filter((id) => !survivingEntityIds.has(id));
+    deleteFtsRows(this.db, 'entity', removedEntityIds);
+    deleteEmbeddingRows(this.db, projectId, 'entity', removedEntityIds);
+
     return {
       states: Number(states.changes),
       threads: Number(threads.changes),
@@ -780,5 +1022,189 @@ export class StoryGraphRepositoryImpl implements StoryGraphRepositoryPort {
       extractions: Number(extractions.changes),
       mergeReviews: Number(mergeReviews.changes),
     };
+  }
+}
+
+// ── 嵌入仓库（B23 / D-B23-2）──────────────────────────────────────
+
+function decodeEmbedding(row: Record<string, unknown>): StoryEmbeddingData {
+  const ctx = 'story_embeddings';
+  const vector = row.vector;
+  if (!(vector instanceof Uint8Array)) {
+    throw new StoryGraphDataCorruptionError(`${ctx}: vector 不是 BLOB`);
+  }
+  return {
+    id: requireString(row, 'id', ctx),
+    projectId: requireString(row, 'project_id', ctx),
+    kind: requireLiteral(row, 'kind', INDEX_KINDS, ctx),
+    refId: requireString(row, 'ref_id', ctx),
+    model: requireString(row, 'model', ctx),
+    dims: requireNumber(row, 'dims', ctx),
+    vector: deserializeEmbedding(vector),
+    contentHash: requireString(row, 'content_hash', ctx),
+    createdAt: requireString(row, 'created_at', ctx),
+  };
+}
+
+export class StoryEmbeddingRepositoryImpl implements StoryEmbeddingRepositoryPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  /** 每个图行至多一条嵌入：撞唯一索引就整行替换（换模型/换文本都走这里） */
+  upsert(data: CreateStoryEmbeddingInput): void {
+    this.db
+      .prepare(
+        `INSERT INTO story_embeddings
+           (id, project_id, kind, ref_id, model, dims, vector, content_hash, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(project_id, kind, ref_id) DO UPDATE SET
+           model = excluded.model,
+           dims = excluded.dims,
+           vector = excluded.vector,
+           content_hash = excluded.content_hash,
+           created_at = excluded.created_at`,
+      )
+      .run(
+        data.id,
+        data.projectId,
+        data.kind,
+        data.refId,
+        data.model,
+        data.vector.length,
+        serializeEmbedding(data.vector),
+        data.contentHash,
+        data.createdAt,
+      );
+  }
+
+  getContentHash(projectId: string, kind: StoryIndexKind, refId: string): string | null {
+    const row = this.db
+      .prepare(
+        'SELECT content_hash FROM story_embeddings WHERE project_id = ? AND kind = ? AND ref_id = ?',
+      )
+      .get(projectId, kind, refId) as Record<string, unknown> | undefined;
+    return row ? requireString(row, 'content_hash', 'story_embeddings') : null;
+  }
+
+  listByKind(projectId: string, kind: StoryIndexKind): ReadonlyArray<StoryEmbeddingData> {
+    const rows = this.db
+      .prepare(
+        'SELECT * FROM story_embeddings WHERE project_id = ? AND kind = ? ORDER BY ref_id ASC',
+      )
+      .all(projectId, kind) as Array<Record<string, unknown>>;
+    return rows.map(decodeEmbedding);
+  }
+
+  listAll(projectId: string): ReadonlyArray<StoryEmbeddingData> {
+    const rows = this.db
+      .prepare('SELECT * FROM story_embeddings WHERE project_id = ? ORDER BY kind ASC, ref_id ASC')
+      .all(projectId) as Array<Record<string, unknown>>;
+    return rows.map(decodeEmbedding);
+  }
+
+  deleteByRefs(projectId: string, kind: StoryIndexKind, refIds: ReadonlyArray<string>): number {
+    if (refIds.length === 0) return 0;
+    const placeholders = refIds.map(() => '?').join(', ');
+    const result = this.db
+      .prepare(
+        `DELETE FROM story_embeddings
+          WHERE project_id = ? AND kind = ? AND ref_id IN (${placeholders})`,
+      )
+      .run(projectId, kind, ...refIds);
+    return Number(result.changes);
+  }
+
+  deleteAll(projectId: string): number {
+    const result = this.db
+      .prepare('DELETE FROM story_embeddings WHERE project_id = ?')
+      .run(projectId);
+    return Number(result.changes);
+  }
+}
+
+// ── 检索（FTS 查询 + 可检索文本读取）──────────────────────────────
+
+export class StoryGraphSearchImpl implements StoryGraphSearchPort {
+  constructor(private readonly db: DatabaseSync) {}
+
+  /**
+   * FTS5 次级召回。种子文本经 buildFtsMatchQuery 转成短语字面量表达式，
+   * 任何字符都不会被当成查询语法（注入防线见该函数注释）。
+   * rank 越小越相关，这里按 rank 升序返回。
+   */
+  searchFts(
+    _projectId: string,
+    seedText: string,
+    limit: number = DEFAULT_FTS_LIMIT,
+  ): ReadonlyArray<StoryFtsMatch> {
+    if (limit <= 0) return [];
+    const query = buildFtsMatchQuery(seedText);
+    if (query === null) return [];
+    const rows = this.db
+      .prepare(
+        `SELECT kind, ref_id, rank FROM story_graph_fts
+          WHERE story_graph_fts MATCH ?
+          ORDER BY rank ASC, ref_id ASC
+          LIMIT ?`,
+      )
+      .all(query, limit) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      kind: requireLiteral(row, 'kind', INDEX_KINDS, 'story_graph_fts'),
+      refId: requireString(row, 'ref_id', 'story_graph_fts'),
+      rank: requireNumber(row, 'rank', 'story_graph_fts'),
+    }));
+  }
+
+  /**
+   * 取这些行当下的可检索文本 + 指纹（嵌入写路径据此判断要不要重算）。
+   * 文本组装与 FTS 同一份实现，两个索引不会各说各话。行已不存在则跳过。
+   */
+  listIndexSources(
+    projectId: string,
+    refs: ReadonlyArray<{ readonly kind: StoryIndexKind; readonly refId: string }>,
+  ): ReadonlyArray<StoryIndexSource> {
+    const sources: StoryIndexSource[] = [];
+    const seen = new Set<string>();
+    for (const ref of refs) {
+      const key = `${ref.kind}:${ref.refId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const text = this.composeText(projectId, ref.kind, ref.refId);
+      if (text === null || text.trim().length === 0) continue;
+      sources.push({ kind: ref.kind, refId: ref.refId, text, contentHash: sha256Utf8(text) });
+    }
+    return sources;
+  }
+
+  private composeText(projectId: string, kind: StoryIndexKind, refId: string): string | null {
+    if (kind === 'entity') {
+      const row = this.db
+        .prepare('SELECT * FROM story_entities WHERE project_id = ? AND id = ?')
+        .get(projectId, refId) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const entity = decodeEntity(row);
+      return composeEntityText(
+        entity.canonicalName,
+        entityAliasList(this.db, projectId, refId),
+        entity.profileSummary,
+      );
+    }
+    if (kind === 'state') {
+      const row = this.db
+        .prepare('SELECT * FROM story_states WHERE project_id = ? AND id = ?')
+        .get(projectId, refId) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const state = decodeState(row);
+      return composeStateText(
+        state.predicate,
+        entityCanonicalName(this.db, state.objectEntityId) ?? state.objectText,
+        state.evidenceSpan,
+      );
+    }
+    const row = this.db
+      .prepare('SELECT * FROM story_threads WHERE project_id = ? AND id = ?')
+      .get(projectId, refId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const thread = decodeThread(row);
+    return composeThreadText(thread.description, thread.promisedPayoff);
   }
 }

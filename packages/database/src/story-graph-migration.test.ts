@@ -19,6 +19,8 @@ import { ProjectDatabase, PROJECT_MIGRATIONS } from './project-database.js';
 const NOW = '2026-08-19T00:00:00.000Z';
 const HASH = 'a'.repeat(64);
 
+const STORY_INDEX_TABLES = ['story_embeddings', 'story_graph_fts'];
+
 const STORY_TABLES = [
   'story_entities',
   'story_entity_aliases',
@@ -195,7 +197,7 @@ describe('migration v22: 故事图谱数据层', () => {
       const version = db.database
         .prepare('SELECT MAX(version) as v FROM schema_migrations')
         .get() as { v: number };
-      expect(version.v).toBe(22);
+      expect(version.v).toBe(23);
 
       const tasks = db.getTaskRepository().listByProject('p1');
       expect(tasks.map((t) => t.taskType).sort()).toEqual(['CHAPTER_DRAFT', 'GRILL_QUESTION_PLAN']);
@@ -398,6 +400,106 @@ describe('migration v22: 故事图谱数据层', () => {
         createdAt: NOW,
       });
       expect(db.getStoryStateRepository().getById('p1', 's-user')?.origin).toBe('user');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('migration v23: 检索地基（story_embeddings + story_graph_fts）', () => {
+  it('新建数据库直接建齐两张索引表', () => {
+    const db = new ProjectDatabase(dbPath);
+    try {
+      const tables = listTables(db);
+      for (const table of STORY_INDEX_TABLES) {
+        expect(tables).toContain(table);
+      }
+      const embeddingsSql = (
+        db.database
+          .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`)
+          .get('story_embeddings') as { sql: string }
+      ).sql;
+      expect(embeddingsSql).toContain('STRICT');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('从 v22 升级：既有图数据不丢，索引表补齐', () => {
+    // 先建到 v22 并写入一条图记录
+    const legacy = new DatabaseSync(dbPath);
+    try {
+      legacy.exec('PRAGMA foreign_keys = ON');
+      const migrator = new SQLiteMigrator(legacy);
+      migrator.migrate(0, PROJECT_MIGRATIONS.slice(0, 22));
+      expect(migrator.getCurrentVersion()).toBe(22);
+      legacy
+        .prepare(
+          `INSERT INTO project_metadata (id, name, initial_idea, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run('p1', '项目一', '一个故事', 'drafting', NOW, NOW);
+      legacy
+        .prepare(
+          `INSERT INTO story_entities
+             (id, project_id, kind, canonical_name, profile_summary, first_chapter,
+              origin, merged_into_id, created_at, updated_at)
+           VALUES (?, ?, 'character', ?, ?, 1, 'extracted', NULL, ?, ?)`,
+        )
+        .run('e1', 'p1', '林三', '外门弟子', NOW, NOW);
+    } finally {
+      legacy.close();
+    }
+
+    const db = new ProjectDatabase(dbPath);
+    try {
+      const version = db.database
+        .prepare('SELECT MAX(version) as v FROM schema_migrations')
+        .get() as { v: number };
+      expect(version.v).toBe(23);
+      expect(db.getStoryEntityRepository().findByCanonicalName('p1', '林三')?.id).toBe('e1');
+      for (const table of STORY_INDEX_TABLES) {
+        expect(listTables(db)).toContain(table);
+      }
+      // v22 时代写进去的旧行没有 FTS 索引（v23 之前没有这张表）——
+      // 回填重建会把它们重新灌进去，这里如实断言现状而不是假装它已经在了
+      expect(db.getStoryGraphSearch().searchFts('p1', '外门弟子', 10)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('FTS 虚表可用：trigram 子串命中，两字词按分词器语义命中不了', () => {
+    const db = new ProjectDatabase(dbPath);
+    try {
+      seedProject(db);
+      db.database
+        .prepare('INSERT INTO story_graph_fts (kind, ref_id, text) VALUES (?, ?, ?)')
+        .run('state', 's1', '身份 外门弟子 他还只是外门弟子。');
+
+      const hit = db.getStoryGraphSearch().searchFts('p1', '外门弟子', 10);
+      expect(hit.map((m) => m.refId)).toEqual(['s1']);
+      // trigram 的硬性下限是 3 字符：两字词永远不命中（所以主干还有别名激活那一路）
+      expect(db.getStoryGraphSearch().searchFts('p1', '外门', 10)).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('嵌入表唯一约束：同一图行至多一条嵌入', () => {
+    const db = new ProjectDatabase(dbPath);
+    try {
+      seedProject(db);
+      const insert = (id: string) =>
+        db.database
+          .prepare(
+            `INSERT INTO story_embeddings
+               (id, project_id, kind, ref_id, model, dims, vector, content_hash, created_at)
+             VALUES (?, 'p1', 'state', 's1', 'm', 2, ?, ?, ?)`,
+          )
+          .run(id, new Uint8Array(8), 'a'.repeat(64), NOW);
+      insert('emb-1');
+      expect(() => insert('emb-2')).toThrow();
     } finally {
       db.close();
     }

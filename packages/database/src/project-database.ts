@@ -56,6 +56,8 @@ import {
   StoryExtractionRepositoryImpl,
   StoryMergeReviewRepositoryImpl,
   StoryGraphRepositoryImpl,
+  StoryEmbeddingRepositoryImpl,
+  StoryGraphSearchImpl,
 } from './story-graph-repositories.js';
 import type {
   ProjectDatabaseManager,
@@ -1615,6 +1617,50 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
         ON tasks(project_id, id);
     `,
   },
+  {
+    version: 23,
+    sql: `
+      -- ── D14 / B23：图检索地基（向量 + 全文）────────────────────
+      -- 两张表都是"派生的派生"：图记录被删/重建时由写路径同步清理，
+      -- 与 B22 的来源列同款锚定语义——故 ref_id 一律不加 FK，
+      -- 悬空行不是数据损坏而是待清理垃圾（清理点在仓库层唯一写路径上）。
+
+      -- story_embeddings：向量 BLOB + 暴力余弦（D-B23-2，sqlite-vec 推迟）。
+      -- vector 是 float32 小端序列化；content_hash 是**被嵌入文本**的 sha256，
+      -- 重抽/重建时据此判断是否需要重算，省掉不变行的嵌入调用（D-B23-4）。
+      CREATE TABLE IF NOT EXISTS story_embeddings (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ref_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        vector BLOB NOT NULL,
+        content_hash TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (kind IN ('entity', 'state', 'thread')),
+        CHECK (dims > 0),
+        CHECK (length(content_hash) = 64),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      -- 每个图行至多一条嵌入（upsert 语义靠这条唯一索引）
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_story_embeddings_ref
+        ON story_embeddings(project_id, kind, ref_id);
+
+      -- story_graph_fts：中文子串检索的正解是 trigram 分词器（D-B23-8）。
+      -- **trigram 要求查询词 ≥ 3 字符**，两字人名（"林三"）永远命中不了——
+      -- 这正是别名/名称激活那一路主干存在的原因，不要指望 FTS 覆盖它。
+      -- fts5 虚表没有 STRICT/CHECK/UNIQUE：行的唯一性由仓库层写路径保证
+      -- （更新 = 先删后插），rebuild 时整表清空重灌。
+      CREATE VIRTUAL TABLE IF NOT EXISTS story_graph_fts USING fts5(
+        kind,
+        ref_id UNINDEXED,
+        text,
+        tokenize='trigram'
+      );
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -2112,6 +2158,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly storyExtractionRepo: StoryExtractionRepositoryImpl;
   private readonly storyMergeReviewRepo: StoryMergeReviewRepositoryImpl;
   private readonly storyGraphRepo: StoryGraphRepositoryImpl;
+  private readonly storyEmbeddingRepo: StoryEmbeddingRepositoryImpl;
+  private readonly storyGraphSearch: StoryGraphSearchImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -2161,6 +2209,8 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.storyExtractionRepo = new StoryExtractionRepositoryImpl(this.db);
     this.storyMergeReviewRepo = new StoryMergeReviewRepositoryImpl(this.db);
     this.storyGraphRepo = new StoryGraphRepositoryImpl(this.db);
+    this.storyEmbeddingRepo = new StoryEmbeddingRepositoryImpl(this.db);
+    this.storyGraphSearch = new StoryGraphSearchImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -2320,6 +2370,16 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   /** 故事图谱跨表仓库：前情登记表读取 + 回填清空（D-B22-4 / D-B22-6） */
   getStoryGraphRepository(): StoryGraphRepositoryImpl {
     return this.storyGraphRepo;
+  }
+
+  /** 图嵌入仓库（B23 / D-B23-2，migration v23） */
+  getStoryEmbeddingRepository(): StoryEmbeddingRepositoryImpl {
+    return this.storyEmbeddingRepo;
+  }
+
+  /** 图检索：FTS5 查询 + 可检索文本读取（B23 / D-B23-8） */
+  getStoryGraphSearch(): StoryGraphSearchImpl {
+    return this.storyGraphSearch;
   }
 
   transaction<T>(fn: () => T): T {

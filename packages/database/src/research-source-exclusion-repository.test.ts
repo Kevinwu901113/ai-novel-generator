@@ -50,7 +50,7 @@ describe('research_source_exclusions persistence (v15)', () => {
     const version = db.database
       .prepare('SELECT MAX(version) as v FROM schema_migrations')
       .get() as { v: number };
-    expect(version.v).toBe(22);
+    expect(version.v).toBe(23);
   });
 
   it('setExclusion(true) 写入，listByProject 可见', () => {
