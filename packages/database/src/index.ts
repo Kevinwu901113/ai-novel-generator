@@ -82,6 +82,26 @@ export type {
   ChapterVersionRepository,
   ChapterDraftRow,
   ChapterDraftRepository,
+  DbStoryOrigin,
+  DbStoryEntityKind,
+  DbStoryThreadStatus,
+  DbStoryExtractionStatus,
+  DbStoryMergeReviewStatus,
+  StoryEntityRow,
+  CreateStoryEntityData,
+  StoryEntityAliasRow,
+  CreateStoryEntityAliasData,
+  StoryStateRow,
+  CreateStoryStateData,
+  StoryThreadRow,
+  CreateStoryThreadData,
+  StoryExtractionRow,
+  CreateStoryExtractionData,
+  StoryMergeReviewRow,
+  CreateStoryMergeReviewData,
+  StoryEntityRegistryEntry,
+  StoryGraphPriorContext,
+  StoryGraphClearExtractedResult,
 } from './types.js';
 
 // 导出实现（供 Worker 使用）
@@ -119,4 +139,15 @@ export {
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
+export {
+  StoryEntityRepositoryImpl,
+  StoryStateRepositoryImpl,
+  StoryThreadRepositoryImpl,
+  StoryExtractionRepositoryImpl,
+  StoryMergeReviewRepositoryImpl,
+  StoryGraphRepositoryImpl,
+  StoryGraphDataCorruptionError,
+  appendProfileSummaryText,
+  STORY_ENTITY_PROFILE_SUMMARY_LIMIT,
+} from './story-graph-repositories.js';
 export { sha256Utf8 } from './creation-contract-repositories.js';

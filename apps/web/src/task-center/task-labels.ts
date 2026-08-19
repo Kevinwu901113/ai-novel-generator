@@ -45,6 +45,7 @@ const KNOWN_TASK_TYPE_LABELS: Record<string, string> = {
   CHAPTER_DRAFT: '章节初稿',
   CHAPTER_CRITIQUE: '章节自查',
   CHAPTER_REWRITE: '章节改写',
+  STORY_GRAPH_EXTRACT: '故事圣经抽取',
 };
 
 /**

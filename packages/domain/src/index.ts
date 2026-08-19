@@ -61,7 +61,9 @@ export type TaskType =
   // GE-6 / B9：章节生成四类模型任务（DRAFT 复用既有 CHAPTER_DRAFT）
   | 'CHAPTER_PLAN'
   | 'CHAPTER_CRITIQUE'
-  | 'CHAPTER_REWRITE';
+  | 'CHAPTER_REWRITE'
+  // D14 / B22：故事图谱抽取（D-B22-2 独立 runner，不占图槽位）
+  | 'STORY_GRAPH_EXTRACT';
 
 /** 模型调用状态 */
 export type ModelInvocationStatus = 'PENDING' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED';

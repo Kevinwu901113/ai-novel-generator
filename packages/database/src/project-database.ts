@@ -49,6 +49,14 @@ import {
   NodeExecutionRepositoryImpl,
   NodeExecutionResultStoreImpl,
 } from './node-execution-repositories.js';
+import {
+  StoryEntityRepositoryImpl,
+  StoryStateRepositoryImpl,
+  StoryThreadRepositoryImpl,
+  StoryExtractionRepositoryImpl,
+  StoryMergeReviewRepositoryImpl,
+  StoryGraphRepositoryImpl,
+} from './story-graph-repositories.js';
 import type {
   ProjectDatabaseManager,
   ProjectMetadataRepository,
@@ -1372,6 +1380,241 @@ export const PROJECT_MIGRATIONS: ReadonlyArray<Migration> = [
       ALTER TABLE chapter_drafts ADD COLUMN title TEXT;
     `,
   },
+  {
+    version: 22,
+    sql: `
+      -- ── D14 / B22：故事图谱数据层六表（D-B22-1）─────────────────
+      -- 图是正文的纯派生物：任何时刻可整层 DROP 重建，用户编辑走 origin='user'
+      -- 覆盖层，重抽只动 origin='extracted'。不占 Graph artifact 槽位、不改冻结
+      -- 的图定义。事件时间线（story_events）按 D-D14-1 推迟到二期，此处不建。
+      -- source_chapter_id / source_version_id 是失效锚点而非引用完整性约束
+      -- （派生层要容忍章节被删/被换），故与 chapter_scene_plans 同样不加 FK；
+      -- 图内部的实体/状态引用则加 FK，否则派生层自身会悬空。
+
+      CREATE TABLE IF NOT EXISTS story_entities (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        canonical_name TEXT NOT NULL,
+        profile_summary TEXT NOT NULL,
+        first_chapter INTEGER,
+        origin TEXT NOT NULL,
+        merged_into_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (kind IN ('character', 'location', 'item', 'setting')),
+        CHECK (origin IN ('extracted', 'user')),
+        CHECK (length(canonical_name) > 0),
+        CHECK (first_chapter IS NULL OR first_chapter > 0),
+        CHECK (merged_into_id IS NULL OR merged_into_id <> id),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        FOREIGN KEY (merged_into_id) REFERENCES story_entities(id)
+      ) STRICT;
+
+      -- 同名不等于同人（秘密身份/同名异人是剧情设定，D14 铁律），
+      -- 故 canonical_name 只建查找索引、不建唯一约束：重名进待审队列而不是被挤掉。
+      CREATE INDEX IF NOT EXISTS idx_story_entities_project_name
+        ON story_entities(project_id, canonical_name);
+
+      CREATE TABLE IF NOT EXISTS story_entity_aliases (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        alias TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        CHECK (origin IN ('extracted', 'user')),
+        CHECK (length(alias) > 0),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        FOREIGN KEY (entity_id) REFERENCES story_entities(id)
+      ) STRICT;
+
+      -- 同一别名可以指向多个实体（同名异人），但同一 (别名, 实体) 只登记一次；
+      -- 前缀 (project_id, alias) 同时是别名精确命中的查找路径。
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_story_entity_aliases_alias_entity
+        ON story_entity_aliases(project_id, alias, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_story_entity_aliases_entity
+        ON story_entity_aliases(project_id, entity_id);
+
+      -- story_states 是核心表，append-only：状态变化 = 插入新边 + 关闭旧边
+      -- （旧边填 valid_until_chapter + superseded_by_id），事实内容永不被改写。
+      -- valid_until_chapter IS NULL = 仍有效；章节戳是序号，不解析故事内绝对时间。
+      CREATE TABLE IF NOT EXISTS story_states (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        subject_entity_id TEXT NOT NULL,
+        predicate TEXT NOT NULL,
+        object_entity_id TEXT,
+        object_text TEXT,
+        valid_from_chapter INTEGER NOT NULL,
+        valid_until_chapter INTEGER,
+        source_chapter_id TEXT,
+        source_content_hash TEXT,
+        evidence_span TEXT,
+        confidence REAL,
+        origin TEXT NOT NULL,
+        superseded_by_id TEXT,
+        created_at TEXT NOT NULL,
+        -- 客体二选一：指向实体或落到自由文本，恰好一个非空
+        CHECK ((object_entity_id IS NULL) <> (object_text IS NULL)),
+        CHECK (origin IN ('extracted', 'user')),
+        CHECK (length(predicate) > 0),
+        CHECK (valid_from_chapter > 0),
+        CHECK (valid_until_chapter IS NULL OR valid_until_chapter >= valid_from_chapter),
+        CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        CHECK (source_content_hash IS NULL OR length(source_content_hash) = 64),
+        -- 抽取记录必须锚定来源，否则改章无从定向失效（D-B22-4）
+        CHECK (origin <> 'extracted'
+               OR (source_chapter_id IS NOT NULL AND source_content_hash IS NOT NULL)),
+        CHECK (superseded_by_id IS NULL OR superseded_by_id <> id),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        FOREIGN KEY (subject_entity_id) REFERENCES story_entities(id),
+        FOREIGN KEY (object_entity_id) REFERENCES story_entities(id),
+        FOREIGN KEY (superseded_by_id) REFERENCES story_states(id)
+      ) STRICT;
+
+      -- 当前有效边查找（主体 + 谓词），关闭旧边前必走
+      CREATE INDEX IF NOT EXISTS idx_story_states_current
+        ON story_states(project_id, subject_entity_id, predicate)
+        WHERE valid_until_chapter IS NULL;
+      -- 改章重抽的定向失效（按来源章）
+      CREATE INDEX IF NOT EXISTS idx_story_states_source_chapter
+        ON story_states(project_id, source_chapter_id);
+      -- superseded 链回溯：删除新边后要重开它当初关闭的旧边
+      CREATE INDEX IF NOT EXISTS idx_story_states_superseded_by
+        ON story_states(superseded_by_id)
+        WHERE superseded_by_id IS NOT NULL;
+
+      -- 伏笔/线程是一等公民：开启即 status='open'，核销填 closed_chapter。
+      CREATE TABLE IF NOT EXISTS story_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL,
+        promised_payoff TEXT,
+        opened_chapter INTEGER NOT NULL,
+        closed_chapter INTEGER,
+        source_chapter_id TEXT,
+        source_content_hash TEXT,
+        evidence_span TEXT,
+        origin TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (status IN ('open', 'closed', 'abandoned')),
+        CHECK (origin IN ('extracted', 'user')),
+        CHECK (length(kind) > 0),
+        CHECK (length(description) > 0),
+        CHECK (opened_chapter > 0),
+        CHECK (closed_chapter IS NULL OR closed_chapter >= opened_chapter),
+        CHECK (status = 'closed' OR closed_chapter IS NULL),
+        CHECK (status <> 'closed' OR closed_chapter IS NOT NULL),
+        CHECK (source_content_hash IS NULL OR length(source_content_hash) = 64),
+        CHECK (origin <> 'extracted'
+               OR (source_chapter_id IS NOT NULL AND source_content_hash IS NOT NULL)),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      -- open 线程全量读取（前情登记表 + 后续检索的伏笔清单）
+      CREATE INDEX IF NOT EXISTS idx_story_threads_project_status
+        ON story_threads(project_id, status);
+      CREATE INDEX IF NOT EXISTS idx_story_threads_source_chapter
+        ON story_threads(project_id, source_chapter_id);
+
+      -- 抽取账本：惰性失效的锚点（版本 + 内容哈希与 MANUSCRIPT_COMMIT 幂等判据同构）。
+      CREATE TABLE IF NOT EXISTS story_extractions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        chapter_id TEXT NOT NULL,
+        source_version_id TEXT NOT NULL,
+        source_content_hash TEXT NOT NULL,
+        task_id TEXT,
+        status TEXT NOT NULL,
+        extracted_at TEXT NOT NULL,
+        CHECK (status IN ('pending', 'succeeded', 'failed')),
+        CHECK (length(source_content_hash) = 64),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id)
+      ) STRICT;
+
+      CREATE INDEX IF NOT EXISTS idx_story_extractions_project_chapter
+        ON story_extractions(project_id, chapter_id, extracted_at DESC);
+
+      -- 同名异人待审队列：自动抽取只能提交待审，永不自行合并两个既有实体。
+      CREATE TABLE IF NOT EXISTS story_merge_reviews (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        entity_a_id TEXT NOT NULL,
+        entity_b_id TEXT NOT NULL,
+        suggested_reason TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        decided_at TEXT,
+        CHECK (status IN ('pending', 'merged', 'rejected')),
+        CHECK (entity_a_id <> entity_b_id),
+        CHECK (status <> 'pending' OR decided_at IS NULL),
+        CHECK (status = 'pending' OR decided_at IS NOT NULL),
+        FOREIGN KEY (project_id) REFERENCES project_metadata(id),
+        FOREIGN KEY (entity_a_id) REFERENCES story_entities(id),
+        FOREIGN KEY (entity_b_id) REFERENCES story_entities(id)
+      ) STRICT;
+
+      -- 同一对实体至多一条待审：逐章重复怀疑不刷屏
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_story_merge_reviews_pending
+        ON story_merge_reviews(project_id, entity_a_id, entity_b_id)
+        WHERE status = 'pending';
+
+      -- ── 重建 tasks 表：task_type CHECK 加入 STORY_GRAPH_EXTRACT（D14 / B22）──
+      -- 镜像 v13/v14/v16/v17 重建模式：创建 tasks_new → 复制 → 删除 → 重命名 → 重建索引。
+      -- 抽取任务不是图节点任务（D-B22-2 走独立 runner），只放宽 CHECK，不动图定义。
+      CREATE TABLE tasks_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        task_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_version_json TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        result_json TEXT,
+        error_code TEXT,
+        error_message TEXT,
+        attempt_count INTEGER NOT NULL DEFAULT 0,
+        dedupe_key TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        stale_at TEXT,
+        cancelled_at TEXT,
+        CHECK (task_type IN ('PROVIDER_CONNECTION_TEST', 'MODEL_INVOCATION_TEST', 'GRILL_QUESTION_PLAN', 'CREATION_CONTRACT_DRAFT', 'CHAPTER_DRAFT', 'SPEC_EXTRACT', 'RESEARCH_RUN', 'BLUEPRINT_GENERATE', 'CHAPTER_PLAN', 'CHAPTER_CRITIQUE', 'CHAPTER_REWRITE', 'STORY_GRAPH_EXTRACT')),
+        CHECK (status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELLED', 'STALE')),
+        CHECK (attempt_count >= 0),
+        CHECK (json_valid(input_version_json)),
+        CHECK (json_valid(payload_json)),
+        CHECK (result_json IS NULL OR json_valid(result_json))
+      ) STRICT;
+
+      INSERT INTO tasks_new (
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      )
+      SELECT
+        id, project_id, task_type, status, input_version_json, payload_json,
+        result_json, error_code, error_message, attempt_count, dedupe_key,
+        created_at, updated_at, started_at, finished_at, stale_at, cancelled_at
+      FROM tasks;
+
+      DROP TABLE tasks;
+      ALTER TABLE tasks_new RENAME TO tasks;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+      CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_dedupe_active
+        ON tasks(dedupe_key)
+        WHERE dedupe_key IS NOT NULL AND status IN ('PENDING', 'RUNNING');
+      CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_project_id
+        ON tasks(project_id, id);
+    `,
+  },
 ];
 
 // ── 项目元数据仓库实现 ────────────────────────────────────────────
@@ -1863,6 +2106,12 @@ export class ProjectDatabase implements ProjectDatabaseManager {
   private readonly manuscriptTransaction: ManuscriptTransactionPortImpl;
   private readonly nodeExecutionRepo: NodeExecutionRepositoryImpl;
   private readonly nodeExecutionResultStore: NodeExecutionResultStoreImpl;
+  private readonly storyEntityRepo: StoryEntityRepositoryImpl;
+  private readonly storyStateRepo: StoryStateRepositoryImpl;
+  private readonly storyThreadRepo: StoryThreadRepositoryImpl;
+  private readonly storyExtractionRepo: StoryExtractionRepositoryImpl;
+  private readonly storyMergeReviewRepo: StoryMergeReviewRepositoryImpl;
+  private readonly storyGraphRepo: StoryGraphRepositoryImpl;
 
   constructor(dbPath: string) {
     this.db = new DatabaseSync(dbPath);
@@ -1906,6 +2155,12 @@ export class ProjectDatabase implements ProjectDatabaseManager {
     this.manuscriptTransaction = new ManuscriptTransactionPortImpl(this.db);
     this.nodeExecutionRepo = new NodeExecutionRepositoryImpl(this.db);
     this.nodeExecutionResultStore = new NodeExecutionResultStoreImpl(this.db);
+    this.storyEntityRepo = new StoryEntityRepositoryImpl(this.db);
+    this.storyStateRepo = new StoryStateRepositoryImpl(this.db);
+    this.storyThreadRepo = new StoryThreadRepositoryImpl(this.db);
+    this.storyExtractionRepo = new StoryExtractionRepositoryImpl(this.db);
+    this.storyMergeReviewRepo = new StoryMergeReviewRepositoryImpl(this.db);
+    this.storyGraphRepo = new StoryGraphRepositoryImpl(this.db);
   }
 
   get database(): DatabaseSync {
@@ -2035,6 +2290,36 @@ export class ProjectDatabase implements ProjectDatabaseManager {
 
   getNodeExecutionResultStore(): NodeExecutionResultStoreImpl {
     return this.nodeExecutionResultStore;
+  }
+
+  /** 故事图谱实体仓库（D14 / B22，migration v22） */
+  getStoryEntityRepository(): StoryEntityRepositoryImpl {
+    return this.storyEntityRepo;
+  }
+
+  /** 故事图谱状态边仓库（append-only，D-B22-1） */
+  getStoryStateRepository(): StoryStateRepositoryImpl {
+    return this.storyStateRepo;
+  }
+
+  /** 故事图谱线程（伏笔）仓库 */
+  getStoryThreadRepository(): StoryThreadRepositoryImpl {
+    return this.storyThreadRepo;
+  }
+
+  /** 故事图谱抽取账本仓库（失效锚点） */
+  getStoryExtractionRepository(): StoryExtractionRepositoryImpl {
+    return this.storyExtractionRepo;
+  }
+
+  /** 故事图谱同名异人待审队列仓库（D-B22-5） */
+  getStoryMergeReviewRepository(): StoryMergeReviewRepositoryImpl {
+    return this.storyMergeReviewRepo;
+  }
+
+  /** 故事图谱跨表仓库：前情登记表读取 + 回填清空（D-B22-4 / D-B22-6） */
+  getStoryGraphRepository(): StoryGraphRepositoryImpl {
+    return this.storyGraphRepo;
   }
 
   transaction<T>(fn: () => T): T {

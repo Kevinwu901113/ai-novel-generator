@@ -1061,7 +1061,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(21);
+      expect(version).toBe(22);
       // 既有 v6 数据保留
       const task = db.getTaskRepository().getById('t1');
       expect(task?.taskType).toBe('CREATION_CONTRACT_DRAFT');
@@ -1086,7 +1086,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(21);
+      expect(version).toBe(22);
     } finally {
       db.close();
     }
@@ -1102,7 +1102,7 @@ describe('migration v7', () => {
           v: number;
         }
       ).v;
-      expect(version).toBe(21);
+      expect(version).toBe(22);
       const triggers = (
         db2.database
           .prepare(

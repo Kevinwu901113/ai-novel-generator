@@ -39,8 +39,10 @@ GRILL_QUESTION_PLAN 的独立 runner 形态（`apps/worker/src/grill-plan-runner
 - 输入 = 权威版本正文（chapter_versions current，绝不取候选）+ 前情登记表
   （该项目已知实体 canonical_name + 别名 + open threads 清单）。
 - 输出 = 类型化 JSON：`entities[] / states[] / threads_open[] / threads_close[] /
-  merge_suspects[]`，每条带 evidence（原文短引片段）；严格解析照 spec-extract
-  纪律（越界/缺字段整体判失败重试，不静默丢弃）。
+merge_suspects[]`，每条带 evidence（原文短引片段）；严格解析照 spec-extract
+  纪律：**结构非法**（缺字段/类型错/越界）整体判失败重试；**语义无效**
+  （如核销引用了不存在的线程 id）丢弃该条并计入结果统计——模型幻觉出的
+  引用不该拖垮整章抽取。
 - 写入 = 单事务：登记 story_extractions（含 source_version_id + content_hash）、
   合并实体（见 D-B22-5）、开/关状态边、开/核销线程、疑似合并入待审队列。
 - 改章重抽 = 先失效该章来源的 extracted 记录（及 superseded 链下游）再写入；
@@ -59,6 +61,24 @@ B24（故事圣经 UI 需要可读档案时再上），登记 TD。**自动抽�
 extracted 图记录（user 覆盖层保留）→ 按章节顺序逐章入队抽取。B22 无 UI 入口
 （B24 接故事圣经的「重建」按钮），验收用命令直接驱动；进度经任务中心既有任务
 列表可见（任务名注册进 task-labels：「故事圣经抽取」）。
+
+### D-B22-7 工单一验收裁定（设计未覆盖的边角，2026-08-19）
+
+- **改章失效不级联删除下游，改「链接拼接」**：重抽第 N 章只删 `source_chapter=N`
+  的 extracted 边；被删边的前驱边重新链接到链上最近的存续后继
+  （`superseded_by` 指向后继、`valid_until` 取后继的 `valid_from`），无存续后继
+  则重开（两列置 NULL）。理由：下游边锚定在未改动章节的正文上，证据仍然成立，
+  级联删除只制造要靠全量重建才能补回的空洞；`story-graph-design.md` §3 的
+  「级联失效」按此口径收窄，全量重建命令仍是增量 bug 的兜底。
+- **回填清空连已裁决的 merge_reviews 一并清**：重建后成员实体引用全部失效，
+  留任何裁决记录都是悬空语义。
+- **回填清空保留仍被 user 记录引用的 extracted 实体**：「清空 extracted」与
+  「user 层永不受损」冲突时后者优先。
+- 其余工单一自主判断（线程补来源锚、账本 status 取值、来源列不加 FK、
+  重抽撤回线程核销等）全部追认，口径以实现为准。
+- 已知交叉点留给 B24：拼接只修补 extracted 前驱——若 B24 允许 user 边
+  supersede 抽取边，重抽时 user 前驱会悬空（FK 会拦住删除），届时随用户
+  覆盖层编辑语义一并定。
 
 ## 2. 工单拆分
 
