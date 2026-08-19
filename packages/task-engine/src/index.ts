@@ -385,3 +385,4 @@ export type {
 export * from './spec-extract.js';
 export * from './research-run.js';
 export * from './blueprint-generate.js';
+export * from './story-graph-extract.js';

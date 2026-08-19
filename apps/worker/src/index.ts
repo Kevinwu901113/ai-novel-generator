@@ -5,7 +5,7 @@
  *
  * 职责：
  * - initialize()：数据根准备、app.sqlite、SecretStore、启动一致性恢复（全部完成才算 ready）
- * - dispatchCommand()：81 个业务命令的唯一分发入口，分发到 application 层用例
+ * - dispatchCommand()：82 个业务命令的唯一分发入口，分发到 application 层用例
  *
  * 信封：入 { requestId, command, payload }，出 { requestId, success, data?, error? }。
  * 普通 import 零副作用（不初始化真实用户数据库、不注册生命周期、不 process.exit）。
@@ -121,11 +121,13 @@ import { dispatchBlueprintCommand, type BlueprintHandlerContext } from './bluepr
 import { createLeadingTrailingDebouncer } from './leading-trailing-debounce.js';
 import {
   ExecutorRegistry,
+  enqueueStoryGraphExtract,
   productionArtifactResolver,
   TAVILY_SEARCH_SECRET_REF,
   type ArtifactResolverPort,
   type NodeExecutorRunner,
   type NodeRunnerDeps,
+  type StoryGraphChapterQueryDeps,
 } from '@ai-novel/application';
 import { IDEA_TO_NOVEL_PROJECT_GRAPH_V1, CHAPTER_GENERATION_GRAPH_V1 } from '@ai-novel/domain';
 import {
@@ -146,6 +148,17 @@ import { registerChapterExecutors } from './chapter-executors.js';
 import { registerManuscriptCommitExecutor } from './manuscript-commit-executor.js';
 import { dispatchChapterCommand, type ChapterHandlerContext } from './chapter-handlers.js';
 import { dispatchManuscriptCommand, type ManuscriptHandlerContext } from './manuscript-handlers.js';
+import {
+  dispatchStoryGraphCommand,
+  type StoryGraphHandlerContext,
+} from './story-graph-handlers.js';
+import type { StoryGraphExtractEngineDeps } from '@ai-novel/task-engine';
+import {
+  pumpStoryGraphExtract,
+  recoverPendingStoryGraphExtracts as recoverPendingStoryGraphExtractsModule,
+  type StoryGraphPumpDeps,
+  type StoryGraphPumpResult,
+} from './story-graph-runner.js';
 import { createSafeWebFetch, createTavilySearchProvider } from '@ai-novel/research-engine';
 import { buildGrillSessionDeps as buildGrillDepsForEngine } from './grill-handlers.js';
 
@@ -853,6 +866,8 @@ export async function initialize(): Promise<void> {
 
   // 恢复 PENDING 的创作契约草案任务（幂等重新调度，CAS claim）
   recoverPendingContractDrafts(dataRoot);
+  // B22：故事图谱抽取（派生层，串行；失败不阻塞 readiness）
+  recoverPendingStoryGraphExtracts(dataRoot);
 
   // 恢复中断的 Graph run（await runner 后关 DB；按 recoveryPolicy reconcile）
   await recoverGraphRuns();
@@ -911,6 +926,9 @@ registerManuscriptCommitExecutor(productionRegistry, productionRunners, {
   getProjectDb: (projectId: string) => getProjectDb(projectId),
   idGenerator: createIdGenerator(),
   clock: createClock(),
+  // B22 触发点之一：提交成功后排一次图抽取（D-B22-3）
+  onChapterVersionCommitted: (projectId: string, chapterId: string) =>
+    queueStoryGraphExtract(projectId, chapterId),
 });
 
 /** D-B3-1 live drive 与任务后推进共用的 NodeRunnerDeps 构造（同一 projDb 生命周期内使用） */
@@ -1670,6 +1688,127 @@ function recoverPendingContractDrafts(dataRoot: string): void {
   });
 }
 
+/**
+ * 构建故事图谱抽取 runner 依赖（D14 / B22）。
+ *
+ * 抽取任务不是图节点任务（D-B22-2）：走独立 runner，不进 graph-task-runner 的
+ * 图节点任务集合，也不碰任何图定义。
+ */
+function buildStoryGraphPumpDeps(): StoryGraphPumpDeps {
+  return {
+    openDb: (projectId: string) => getProjectDb(projectId),
+    buildEngineDeps: (projDb: ProjectDatabase): StoryGraphExtractEngineDeps => {
+      const clock = createClock();
+      return {
+        taskRepo: new TaskRepositoryAdapter(projDb),
+        invocationRepo: new ModelInvocationRepositoryAdapter(projDb),
+        secretStore: secretStore!,
+        providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+        idGenerator: createIdGenerator(),
+        clock,
+        manuscriptRepo: projDb.getManuscriptRepository(),
+        chapterRepo: projDb.getChapterRepository(),
+        chapterVersionRepo: projDb.getChapterVersionRepository(),
+        storyGraph: {
+          entityRepo: projDb.getStoryEntityRepository(),
+          stateRepo: projDb.getStoryStateRepository(),
+          threadRepo: projDb.getStoryThreadRepository(),
+          extractionRepo: projDb.getStoryExtractionRepository(),
+          mergeReviewRepo: projDb.getStoryMergeReviewRepository(),
+          graphRepo: projDb.getStoryGraphRepository(),
+        },
+        invokeModel: async (input: {
+          baseUrl: string;
+          model: string;
+          apiKey: string;
+          prompt: string;
+          systemPrompt?: string;
+          protocol?: ProviderProtocol;
+          maxTokens?: number;
+        }) => {
+          return invokeModel({ fetch: globalThis.fetch, clock }, input);
+        },
+        transaction: <T>(fn: () => T) => projDb.transaction(fn),
+      };
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    getInvocationRepo: (projDb: ProjectDatabase) => new ModelInvocationRepositoryAdapter(projDb),
+    getChapterQueryDeps: (projDb: ProjectDatabase) => storyGraphChapterQueryDeps(projDb),
+  };
+}
+
+function storyGraphChapterQueryDeps(projDb: ProjectDatabase): StoryGraphChapterQueryDeps {
+  return {
+    manuscriptRepo: projDb.getManuscriptRepository(),
+    chapterRepo: projDb.getChapterRepository(),
+    chapterVersionRepo: projDb.getChapterVersionRepository(),
+  };
+}
+
+/** 串行泵：同项目至多一个抽取任务在跑，挑章节序最小的 PENDING（D-B22-2） */
+function pumpStoryGraph(projectId: string): StoryGraphPumpResult {
+  if (!appDb || !secretStore) return { started: false, reason: 'SCHEDULE_FAILED' };
+  return pumpStoryGraphExtract(buildStoryGraphPumpDeps(), projectId);
+}
+
+/**
+ * 触发点共用入口（D-B22-3）：为某章排队抽取并立刻尝试开跑。
+ *
+ * 派生层纪律：任何失败都只记日志，绝不把稿件提交/保存带下水。
+ */
+function queueStoryGraphExtract(projectId: string, chapterId: string): void {
+  try {
+    const projDb = getProjectDb(projectId);
+    let shouldPump = false;
+    try {
+      const clock = createClock();
+      const result = enqueueStoryGraphExtract(
+        {
+          ...storyGraphChapterQueryDeps(projDb),
+          taskRepo: new TaskRepositoryAdapter(projDb),
+          extractionRepo: projDb.getStoryExtractionRepository(),
+          idGenerator: createIdGenerator(),
+          clock,
+          transaction: <T>(fn: () => T) => projDb.transaction(fn),
+        },
+        { projectId, chapterId },
+      );
+      shouldPump = result.enqueued;
+    } finally {
+      projDb.close();
+    }
+    if (shouldPump) pumpStoryGraph(projectId);
+  } catch (err) {
+    console.error('[worker] 故事图谱抽取入队失败（不影响主流程）', err);
+  }
+}
+
+/**
+ * 启动恢复：每个有 PENDING 抽取任务的项目泵一次，之后靠结算接力（D-B22-2）。
+ */
+function recoverPendingStoryGraphExtracts(dataRoot: string): void {
+  const projectsPath = join(dataRoot, 'projects');
+  if (!existsSync(projectsPath)) return;
+
+  recoverPendingStoryGraphExtractsModule({
+    listProjectDbs: () => {
+      const result: Array<{ projectId: string; projDb: ProjectDatabase }> = [];
+      for (const entry of readdirSync(projectsPath)) {
+        const dbPath = join(projectsPath, entry, 'project.sqlite');
+        if (!existsSync(dbPath)) continue;
+        try {
+          result.push({ projectId: entry, projDb: new ProjectDatabase(dbPath) });
+        } catch {
+          // 无法打开的数据库留待下次恢复
+        }
+      }
+      return result;
+    },
+    getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+    pump: (projectId: string) => pumpStoryGraph(projectId),
+  });
+}
+
 async function handleRequestQuestionPlan(
   payload: unknown,
 ): Promise<GrillRequestQuestionPlanResult> {
@@ -2024,8 +2163,25 @@ export async function dispatchCommand(request: RPCRequest): Promise<RPCResponse>
           getProjectDb,
           idGenerator: createIdGenerator(),
           clock: createClock(),
+          // B22 触发点之二：用户显式保存/恢复出新的权威版本后排一次图抽取（D-B22-3）
+          onChapterVersionCommitted: (projectId: string, chapterId: string) =>
+            queueStoryGraphExtract(projectId, chapterId),
         };
         data = dispatchManuscriptCommand(request.command, request.payload, manuscriptCtx);
+        break;
+      }
+      // B22：故事圣经重建（纯后台，无 UI 入口；D-B22-6）
+      case 'storyGraph.rebuild': {
+        const storyGraphCtx: StoryGraphHandlerContext = {
+          getProjectDb,
+          getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),
+          idGenerator: createIdGenerator(),
+          clock: createClock(),
+          pumpExtract: (projectId: string) => {
+            pumpStoryGraph(projectId);
+          },
+        };
+        data = dispatchStoryGraphCommand(request.command, request.payload, storyGraphCtx);
         break;
       }
       default:

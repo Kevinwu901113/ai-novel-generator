@@ -45,6 +45,11 @@ export interface ManuscriptCommitContext {
   getProjectDb(projectId: string): ProjectDatabase;
   idGenerator: IdGenerator;
   clock: Clock;
+  /**
+   * B22 / D-B22-3：章节权威版本落地后排一次故事图谱抽取。
+   * 派生层不阻塞主流程——回调自己吞错误，提交路径不受影响。
+   */
+  onChapterVersionCommitted?(projectId: string, chapterId: string): void;
 }
 
 export const MANUSCRIPT_COMMIT_DESCRIPTOR: NodeExecutorDescriptor = {
@@ -78,6 +83,19 @@ function findInsertBeforeChapterId(
     if (link) return link.chapterId;
   }
   return null;
+}
+
+/** 触发图抽取；派生层的任何失败都不许把主流程带下水（D-B22-3） */
+function notifyChapterVersionCommitted(
+  ctx: ManuscriptCommitContext,
+  projectId: string,
+  chapterId: string,
+): void {
+  try {
+    ctx.onChapterVersionCommitted?.(projectId, chapterId);
+  } catch (err) {
+    console.error('[worker] 故事图谱抽取排队失败（不影响稿件提交）', err);
+  }
 }
 
 function manuscriptCommitExecute(
@@ -161,6 +179,7 @@ function manuscriptCommitExecute(
           ),
         );
       if (current && current.contentHash === candidateHash) {
+        notifyChapterVersionCommitted(ctx, ectx.projectId, link.chapterId);
         return {
           artifact: {
             kind: 'manuscript' as const,
@@ -188,6 +207,8 @@ function manuscriptCommitExecute(
       creationContractVersionId: state.creationSpecVersionId,
       now,
     });
+
+    notifyChapterVersionCommitted(ctx, ectx.projectId, link.chapterId);
 
     return {
       artifact: {

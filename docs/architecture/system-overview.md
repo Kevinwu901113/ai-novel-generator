@@ -62,11 +62,11 @@
 - **SQLite 同步访问的唯一位置（数据库唯一写入者）**，由 apps/server 进程内直调
   `dispatchCommand()` / `initialize()`（不再是独立进程，不再有 IPC 序列化）。
 - 业务命令执行（dispatch：project.\* / provider.\* / task.\* / grill.\* / contract.\* / graph.\*，
-  共 81 个 command）。
+  共 82 个 command）。
 - GraphRunService 组合根（GE-1 起）；启动恢复（reconcile + recoverInFlightRuns，`initialize()`
   重入幂等）。
-- SecretStore（macOS Keychain）；后台执行器调度（grill-plan / contract-draft；GE-2+ graph
-  节点执行器）。
+- SecretStore（macOS Keychain）；后台执行器调度（grill-plan / contract-draft / story-graph；
+  GE-2+ graph 节点执行器）。
 
 ## 安全边界
 

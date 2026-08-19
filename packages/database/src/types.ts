@@ -662,213 +662,9 @@ export interface GrillQuestionPlanProposalRepository {
 }
 
 // ── 故事图谱（project.sqlite，migration v22）──────────────────────
-// 图是正文的派生层：extracted 记录可整层重建，user 覆盖层永不被重抽触碰
-// （D-B22-1 / D-B22-4）。
-
-/** 图记录来源：自动抽取 / 用户覆盖层 */
-export type DbStoryOrigin = 'extracted' | 'user';
-
-/** 实体种类 */
-export type DbStoryEntityKind = 'character' | 'location' | 'item' | 'setting';
-
-/** 线程（伏笔）状态 */
-export type DbStoryThreadStatus = 'open' | 'closed' | 'abandoned';
-
-/** 抽取账本状态 */
-export type DbStoryExtractionStatus = 'pending' | 'succeeded' | 'failed';
-
-/** 同名异人待审状态 */
-export type DbStoryMergeReviewStatus = 'pending' | 'merged' | 'rejected';
-
-/** 实体行 */
-export interface StoryEntityRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly kind: DbStoryEntityKind;
-  readonly canonicalName: string;
-  readonly profileSummary: string;
-  readonly firstChapter: number | null;
-  readonly origin: DbStoryOrigin;
-  /** 软合并后指向存续实体（可回退）；B22 只写待审队列，不自动填此列 */
-  readonly mergedIntoId: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-/** 创建实体数据（updated_at 初始化为 createdAt） */
-export interface CreateStoryEntityData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly kind: DbStoryEntityKind;
-  readonly canonicalName: string;
-  readonly profileSummary: string;
-  readonly firstChapter: number | null;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-}
-
-/** 实体别名行 */
-export interface StoryEntityAliasRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly entityId: string;
-  readonly alias: string;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-}
-
-/** 创建别名数据 */
-export interface CreateStoryEntityAliasData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly entityId: string;
-  readonly alias: string;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-}
-
-/** 状态/关系边行（append-only：内容列写入后不再改，只关闭） */
-export interface StoryStateRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly subjectEntityId: string;
-  readonly predicate: string;
-  readonly objectEntityId: string | null;
-  readonly objectText: string | null;
-  readonly validFromChapter: number;
-  /** NULL = 仍有效 */
-  readonly validUntilChapter: number | null;
-  readonly sourceChapterId: string | null;
-  readonly sourceContentHash: string | null;
-  readonly evidenceSpan: string | null;
-  readonly confidence: number | null;
-  readonly origin: DbStoryOrigin;
-  readonly supersededById: string | null;
-  readonly createdAt: string;
-}
-
-/**
- * 插入状态边数据。
- *
- * 没有 validUntilChapter / supersededById：新边一律以"仍有效"落库，
- * 关闭旧边是独立的 supersede 调用（D-B22-1）。
- */
-export interface CreateStoryStateData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly subjectEntityId: string;
-  readonly predicate: string;
-  readonly objectEntityId: string | null;
-  readonly objectText: string | null;
-  readonly validFromChapter: number;
-  readonly sourceChapterId: string | null;
-  readonly sourceContentHash: string | null;
-  readonly evidenceSpan: string | null;
-  readonly confidence: number | null;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-}
-
-/** 线程（伏笔）行 */
-export interface StoryThreadRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly kind: string;
-  readonly description: string;
-  readonly status: DbStoryThreadStatus;
-  readonly promisedPayoff: string | null;
-  readonly openedChapter: number;
-  readonly closedChapter: number | null;
-  readonly sourceChapterId: string | null;
-  readonly sourceContentHash: string | null;
-  readonly evidenceSpan: string | null;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
-
-/** 开启线程数据（status 恒为 'open'，核销走独立调用） */
-export interface CreateStoryThreadData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly kind: string;
-  readonly description: string;
-  readonly promisedPayoff: string | null;
-  readonly openedChapter: number;
-  readonly sourceChapterId: string | null;
-  readonly sourceContentHash: string | null;
-  readonly evidenceSpan: string | null;
-  readonly origin: DbStoryOrigin;
-  readonly createdAt: string;
-}
-
-/** 抽取账本行 */
-export interface StoryExtractionRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly chapterId: string;
-  readonly sourceVersionId: string;
-  readonly sourceContentHash: string;
-  readonly taskId: string | null;
-  readonly status: DbStoryExtractionStatus;
-  readonly extractedAt: string;
-}
-
-/** 登记抽取数据 */
-export interface CreateStoryExtractionData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly chapterId: string;
-  readonly sourceVersionId: string;
-  readonly sourceContentHash: string;
-  readonly taskId: string | null;
-  readonly status: DbStoryExtractionStatus;
-  readonly extractedAt: string;
-}
-
-/** 待审队列行 */
-export interface StoryMergeReviewRow {
-  readonly id: string;
-  readonly projectId: string;
-  readonly entityAId: string;
-  readonly entityBId: string;
-  readonly suggestedReason: string;
-  readonly status: DbStoryMergeReviewStatus;
-  readonly createdAt: string;
-  readonly decidedAt: string | null;
-}
-
-/** 提交待审数据（status 恒为 'pending'，裁决在 B24） */
-export interface CreateStoryMergeReviewData {
-  readonly id: string;
-  readonly projectId: string;
-  readonly entityAId: string;
-  readonly entityBId: string;
-  readonly suggestedReason: string;
-  readonly createdAt: string;
-}
-
-/** 前情登记表条目：实体 + 其全部别名 */
-export interface StoryEntityRegistryEntry {
-  readonly entity: StoryEntityRow;
-  readonly aliases: ReadonlyArray<string>;
-}
-
-/** 前情登记表：抽取输入里的"该项目已知什么"（D-B22-4，指代消解的锚） */
-export interface StoryGraphPriorContext {
-  readonly entities: ReadonlyArray<StoryEntityRegistryEntry>;
-  readonly openThreads: ReadonlyArray<StoryThreadRow>;
-}
-
-/** 回填重建时清空 extracted 层的逐表计数 */
-export interface StoryGraphClearExtractedResult {
-  readonly states: number;
-  readonly threads: number;
-  readonly aliases: number;
-  readonly entities: number;
-  readonly extractions: number;
-  readonly mergeReviews: number;
-}
+// Canonical types live in @ai-novel/application（抽取引擎在 task-engine，
+// 而 task-engine 不依赖 database，端口必须落在共同依赖的应用层）；这里只留别名，
+// 保持 database 侧既有导出名不变。
 
 // ── 创作契约（project.sqlite）──────────────────────────────────
 // Canonical types live in @ai-novel/application; these are aliases.
@@ -898,7 +694,49 @@ import type {
   ChapterRepositoryPort,
   ChapterVersionRepositoryPort,
   ChapterDraftRepositoryPort,
+  StoryOrigin,
+  StoryEntityKind,
+  StoryThreadStatus,
+  StoryExtractionStatus,
+  StoryMergeReviewStatus,
+  StoryEntityData,
+  CreateStoryEntityInput,
+  StoryEntityAliasData,
+  CreateStoryEntityAliasInput,
+  StoryStateData,
+  CreateStoryStateInput,
+  StoryThreadData,
+  CreateStoryThreadInput,
+  StoryExtractionData,
+  CreateStoryExtractionInput,
+  StoryMergeReviewData,
+  CreateStoryMergeReviewInput,
+  StoryEntityRegistryEntry as StoryEntityRegistryEntryPort,
+  StoryGraphPriorContext as StoryGraphPriorContextPort,
+  StoryGraphClearExtractedResult as StoryGraphClearExtractedResultPort,
 } from '@ai-novel/application';
+
+export type DbStoryOrigin = StoryOrigin;
+export type DbStoryEntityKind = StoryEntityKind;
+export type DbStoryThreadStatus = StoryThreadStatus;
+export type DbStoryExtractionStatus = StoryExtractionStatus;
+export type DbStoryMergeReviewStatus = StoryMergeReviewStatus;
+
+export type StoryEntityRow = StoryEntityData;
+export type CreateStoryEntityData = CreateStoryEntityInput;
+export type StoryEntityAliasRow = StoryEntityAliasData;
+export type CreateStoryEntityAliasData = CreateStoryEntityAliasInput;
+export type StoryStateRow = StoryStateData;
+export type CreateStoryStateData = CreateStoryStateInput;
+export type StoryThreadRow = StoryThreadData;
+export type CreateStoryThreadData = CreateStoryThreadInput;
+export type StoryExtractionRow = StoryExtractionData;
+export type CreateStoryExtractionData = CreateStoryExtractionInput;
+export type StoryMergeReviewRow = StoryMergeReviewData;
+export type CreateStoryMergeReviewData = CreateStoryMergeReviewInput;
+export type StoryEntityRegistryEntry = StoryEntityRegistryEntryPort;
+export type StoryGraphPriorContext = StoryGraphPriorContextPort;
+export type StoryGraphClearExtractedResult = StoryGraphClearExtractedResultPort;
 
 export type DbProposalStatus = ProposalStatus;
 export type DbContractVersionCreatedBy = ContractVersionCreatedBy;

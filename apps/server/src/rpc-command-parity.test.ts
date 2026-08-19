@@ -51,10 +51,10 @@ describe('worker dispatchCommand ↔ contracts RPC 命令面一致性', () => {
     expect(existsSync(WORKER_SRC)).toBe(true);
   });
 
-  it('解析器本身有效：81 个 case 是防退化锚点（worker 增删命令时本断言会提醒同步 contracts）', () => {
-    expect(workerCases.length).toBe(81);
+  it('解析器本身有效：82 个 case 是防退化锚点（worker 增删命令时本断言会提醒同步 contracts）', () => {
+    expect(workerCases.length).toBe(82);
     // 不重复：合并 case 语法下每个命令只应出现一次
-    expect(new Set(workerCases).size).toBe(81);
+    expect(new Set(workerCases).size).toBe(82);
   });
 
   it('已知锚点命令都在（防正则改坏后静默退化为部分比对）', () => {

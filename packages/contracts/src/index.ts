@@ -1400,6 +1400,28 @@ export function isValidGetManuscriptWorkspaceInput(
   return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
 }
 
+// ── 故事图谱（D14 / B22，纯后台：无 UI 入口，验收用命令直接驱动）──
+
+/** 重建整个项目的故事图谱（清空 extracted 层后逐章重抽，D-B22-6） */
+export interface RebuildStoryGraphInputDto {
+  readonly projectId: string;
+}
+
+export function isValidRebuildStoryGraphInput(value: unknown): value is RebuildStoryGraphInputDto {
+  if (!hasRequiredExactKeys(value, ['projectId'])) return false;
+  return isBoundedTrimmedId((value as Record<string, unknown>).projectId);
+}
+
+/** 重建结果：清掉多少 extracted 记录、排了多少章的抽取任务 */
+export interface RebuildStoryGraphResultDto {
+  readonly clearedStates: number;
+  readonly clearedThreads: number;
+  readonly clearedEntities: number;
+  readonly clearedExtractions: number;
+  readonly enqueuedChapters: number;
+  readonly skippedChapters: number;
+}
+
 export interface GetManuscriptChapterInputDto {
   readonly projectId: string;
   readonly chapterId: string;
@@ -4257,7 +4279,7 @@ export * from './idea-to-novel-graph.js';
 // ── B11：Web RPC 命令面（apps/server HTTP 传输用）──────────────────
 //
 // 背景：Electron IPC → HTTP RPC 迁移。worker 的 dispatchCommand（apps/worker/src/index.ts）
-// 接受 `{ requestId, command, payload }` 信封，81 个命令。此前全部输入校验挂在
+// 接受 `{ requestId, command, payload }` 信封，82 个命令。此前全部输入校验挂在
 // apps/desktop/src/main/index.ts 的 82 个 ipcMain.handle 里（renderer→main 边界）；
 // HTTP 化后 main 这层不存在了，校验必须搬到这里供 apps/server 复用——否则部分
 // handler（如 research 域）内部对 payload 零校验，会把不设防的入口直接暴露给
@@ -4368,6 +4390,8 @@ export const RPC_COMMANDS = {
   MANUSCRIPT_LIST_VERSIONS: 'manuscript.listVersions',
   MANUSCRIPT_RESTORE_VERSION: 'manuscript.restoreVersion',
   MANUSCRIPT_EXPORT: 'manuscript.export',
+  // 故事图谱（D14 / B22）
+  STORY_GRAPH_REBUILD: 'storyGraph.rebuild',
 } as const;
 
 export type RpcCommand = (typeof RPC_COMMANDS)[keyof typeof RPC_COMMANDS];
@@ -4546,4 +4570,6 @@ export const RPC_COMMAND_VALIDATORS: Readonly<Record<RpcCommand, RpcValidator | 
   [RPC_COMMANDS.MANUSCRIPT_LIST_VERSIONS]: isValidListManuscriptVersionsInput,
   [RPC_COMMANDS.MANUSCRIPT_RESTORE_VERSION]: isValidRestoreManuscriptVersionInput,
   [RPC_COMMANDS.MANUSCRIPT_EXPORT]: isValidExportManuscriptInput,
+
+  [RPC_COMMANDS.STORY_GRAPH_REBUILD]: isValidRebuildStoryGraphInput,
 };

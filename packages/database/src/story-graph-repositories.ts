@@ -19,6 +19,14 @@ import {
   optionalNumber,
 } from './creation-contract-repositories.js';
 import type {
+  StoryEntityRepositoryPort,
+  StoryStateRepositoryPort,
+  StoryThreadRepositoryPort,
+  StoryExtractionRepositoryPort,
+  StoryMergeReviewRepositoryPort,
+  StoryGraphRepositoryPort,
+} from '@ai-novel/application';
+import type {
   CreateStoryEntityAliasData,
   CreateStoryEntityData,
   CreateStoryExtractionData,
@@ -193,7 +201,7 @@ export function appendProfileSummaryText(existing: string, addition: string): st
 
 // ── 实体仓库 ──────────────────────────────────────────────────────
 
-export class StoryEntityRepositoryImpl {
+export class StoryEntityRepositoryImpl implements StoryEntityRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   create(data: CreateStoryEntityData): void {
@@ -324,7 +332,7 @@ function resolveSpliceLink(doomed: ReadonlyMap<string, SpliceLink>, startId: str
   return empty;
 }
 
-export class StoryStateRepositoryImpl {
+export class StoryStateRepositoryImpl implements StoryStateRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   /** 插入新边，一律以"仍有效"落库（valid_until_chapter / superseded_by_id 恒为 NULL） */
@@ -480,7 +488,7 @@ export class StoryStateRepositoryImpl {
 
 // ── 线程（伏笔）仓库 ──────────────────────────────────────────────
 
-export class StoryThreadRepositoryImpl {
+export class StoryThreadRepositoryImpl implements StoryThreadRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   /** 开启线程（status 恒为 'open'） */
@@ -581,7 +589,7 @@ export class StoryThreadRepositoryImpl {
 
 // ── 抽取账本仓库 ──────────────────────────────────────────────────
 
-export class StoryExtractionRepositoryImpl {
+export class StoryExtractionRepositoryImpl implements StoryExtractionRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   register(data: CreateStoryExtractionData): void {
@@ -627,7 +635,7 @@ export class StoryExtractionRepositoryImpl {
 
 // ── 待审队列仓库 ──────────────────────────────────────────────────
 
-export class StoryMergeReviewRepositoryImpl {
+export class StoryMergeReviewRepositoryImpl implements StoryMergeReviewRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   /**
@@ -667,7 +675,7 @@ export class StoryMergeReviewRepositoryImpl {
 
 // ── 跨表：前情登记表读取 + 回填清空 ───────────────────────────────
 
-export class StoryGraphRepositoryImpl {
+export class StoryGraphRepositoryImpl implements StoryGraphRepositoryPort {
   constructor(private readonly db: DatabaseSync) {}
 
   /**

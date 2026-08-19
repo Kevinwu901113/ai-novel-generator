@@ -164,6 +164,11 @@ export function scheduleRunnerRun<TDeps>(
   taskId: string,
   execute: (engineDeps: TDeps, taskId: string) => Promise<unknown>,
   messages: SettleMessages,
+  /**
+   * 结算并关闭 DB 之后的回调（B22 / D-B22-2 的串行接力用）。
+   * 调用点在 finally 内且自带 try/catch：回调抛错不破坏 runner 的"不抛给调用方"保证。
+   */
+  onSettled?: () => void,
 ): RunnerScheduleResult {
   let projDb: ProjectDatabase;
   try {
@@ -205,6 +210,13 @@ export function scheduleRunnerRun<TDeps>(
       }
     } finally {
       closeDb();
+      if (onSettled) {
+        try {
+          onSettled();
+        } catch {
+          // 接力失败不产生 unhandled rejection，也不回头影响已结算的任务
+        }
+      }
     }
   })().catch(() => {
     // 最终保险：禁止 unhandled rejection

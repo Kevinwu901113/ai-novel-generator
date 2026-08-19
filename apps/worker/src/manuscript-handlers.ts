@@ -55,6 +55,11 @@ export interface ManuscriptHandlerContext {
   getProjectDb(projectId: string): ProjectDatabase;
   idGenerator: { generate(): string };
   clock: { now(): string };
+  /**
+   * B22 / D-B22-3：用户显式保存出新版本后排一次故事图谱抽取。
+   * 派生层不阻塞主流程——回调自己吞错误，保存路径不受影响。
+   */
+  onChapterVersionCommitted?(projectId: string, chapterId: string): void;
 }
 
 /** 导出结果（与 contracts ExportManuscriptResultDto 同形；浏览器端负责下载落盘） */
@@ -194,6 +199,12 @@ export function saveManuscriptChapter(
     });
     const detail = getManuscriptChapterInternal(projDb, input.projectId, input.chapterId);
     if (!detail) throw new AppError('VALIDATION_ERROR', '章节不存在');
+    // 新版本已落地才触发：CAS 失败会在上面抛出，不会走到这里（D-B22-3）
+    try {
+      ctx.onChapterVersionCommitted?.(input.projectId, input.chapterId);
+    } catch (err) {
+      console.error('[worker] 故事图谱抽取排队失败（不影响稿件保存）', err);
+    }
     return detail;
   });
 }
@@ -260,6 +271,12 @@ export function restoreManuscriptVersion(
     });
     const detail = getManuscriptChapterInternal(projDb, input.projectId, input.chapterId);
     if (!detail) throw new AppError('VALIDATION_ERROR', '章节不存在');
+    // 新版本已落地才触发：CAS 失败会在上面抛出，不会走到这里（D-B22-3）
+    try {
+      ctx.onChapterVersionCommitted?.(input.projectId, input.chapterId);
+    } catch (err) {
+      console.error('[worker] 故事图谱抽取排队失败（不影响稿件保存）', err);
+    }
     return detail;
   });
 }

@@ -506,3 +506,54 @@ export {
   parkHumanNodes,
   failNodeInTransaction,
 } from './graph-run.js';
+
+// ── 故事图谱（D14 / B22）──────────────────────────────────────────
+
+export type {
+  StoryOrigin,
+  StoryEntityKind,
+  StoryThreadStatus,
+  StoryExtractionStatus,
+  StoryMergeReviewStatus,
+  StoryEntityData,
+  CreateStoryEntityInput,
+  StoryEntityAliasData,
+  CreateStoryEntityAliasInput,
+  StoryStateData,
+  CreateStoryStateInput,
+  StoryThreadData,
+  CreateStoryThreadInput,
+  StoryExtractionData,
+  CreateStoryExtractionInput,
+  StoryMergeReviewData,
+  CreateStoryMergeReviewInput,
+  StoryEntityRegistryEntry,
+  StoryGraphPriorContext,
+  StoryGraphClearExtractedResult,
+  StoryEntityRepositoryPort,
+  StoryStateRepositoryPort,
+  StoryThreadRepositoryPort,
+  StoryExtractionRepositoryPort,
+  StoryMergeReviewRepositoryPort,
+  StoryGraphRepositoryPort,
+  StoryGraphRepositories,
+} from './story-graph-types.js';
+
+export {
+  parseStoryGraphExtractPayload,
+  listStoryGraphChapterSlots,
+  resolveStoryGraphChapterTarget,
+  enqueueStoryGraphExtract,
+  rebuildStoryGraph,
+} from './story-graph-pipeline.js';
+export type {
+  StoryGraphExtractPayload,
+  StoryGraphChapterQueryDeps,
+  StoryGraphChapterSlot,
+  StoryGraphChapterTarget,
+  EnqueueStoryGraphExtractDeps,
+  EnqueueStoryGraphExtractInput,
+  EnqueueStoryGraphExtractResult,
+  RebuildStoryGraphDeps,
+  RebuildStoryGraphResult,
+} from './story-graph-pipeline.js';
