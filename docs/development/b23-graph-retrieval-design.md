@@ -43,10 +43,12 @@ openai-chat 协议 provider 可路由（gateway 新增 `invokeEmbedding`，走
 
 图的章节戳 = 稿件 slot 序（B22 口径，含 archived 占号）。生成章的 N：
 有 manuscript_chapter_links 绑定 → 该章 slot 号；未绑定（首次生成）→
-max slot + 1。检索取 `valid_from_chapter < N` 的当前有效状态边（重生成
-第 N 章不喂它自己旧内容的状态），线程取「N 时点仍未核销」
-（opened < N 且 (closed IS NULL OR closed >= N)）。user 覆盖层优先于同
-subject+predicate 的 extracted 记录（D14 §2 既定）。
+max slot + 1。检索取「N 时点的事实」（工单二验收裁定细化）：状态边
+`valid_from < N AND (valid_until IS NULL OR valid_until >= N)`——
+valid_until = N 的边正是第 N 章当时成立、恰被本章改写的事实，必须纳入；
+线程 `opened < N AND (closed IS NULL OR closed >= N) AND status <>
+'abandoned'`。重生成第 N 章不喂它自己旧内容的状态（valid_from = N 排除）。
+user 覆盖层优先于同 subject+predicate 的 extracted 记录（D14 §2 既定）。
 
 ### D-B23-6 组装与预算
 
@@ -83,3 +85,18 @@ UNINDEXED + text）。由仓库层写方法显式同步（插边/删边/线程�
 自查（任一消费 loadContext 的任务），比对开关开/关两态的 prompt payload
 （storyGraph 段存在且内容正确、近 3 章 goal 保留）；嵌入未配置时降级路径
 实测。dogfood 双臂另排。
+
+## 4. 验收记录（2026-08-19）
+
+- 两工单合计 98 条新测试，`pnpm check` 全绿（3389 过）。中途经历一次网络
+  中断与一次 Opus 额度中断，均从断点续起，无返工。
+- 两态 prompt 对比由**逐字节回归断言**覆盖（不传依赖 vs 传了但检索抛错，
+  捕获的 prompt 字符串必须完全相等；有图时 storyGraph 段 + 近 3 章 goal
+  另有断言）；真实 server 上的双臂生成即 dogfood 实验，随 D-B23-7 与负责人
+  同步排期，不重复做一次性实测。
+- 工单二 8 条偏离全部追认，其中判据升级已回写 D-B23-5（valid_until = N
+  纳入、abandoned 线程排除）。
+- 已知边界（观察项，不阻塞）：①线程包不占 8k 预算，线程极多时 payload
+  上限由线程数决定；②别名激活是全量 indexOf 扫描，别名数千条时需倒排；
+  ③storyGraph 段靠字段名让模型自解释，无专门 prompt 指引——dogfood 若
+  发现模型不消费此段，补一段 system 指引即可。

@@ -254,6 +254,8 @@ function buildHarness(options: {
   feedbacks?: ChapterRewriteFeedback[];
   scenePlans?: ChapterScenePlan[];
   preexistingResult?: NodeExecutionResultEnvelope;
+  /** B23：图检索依赖；不传 = 功能关闭（B23 之前的行为） */
+  storyGraphContext?: ChapterNodeExecutionDeps['storyGraphContext'];
 }): Harness {
   const taskStore = new Map<string, TaskData>([
     ['t1', mockTask(options.taskType, options.payloadJson ?? '{}')],
@@ -497,6 +499,7 @@ function buildHarness(options: {
     candidateRepo,
     critiqueRepo,
     rewriteFeedbackRepo,
+    storyGraphContext: options.storyGraphContext,
   };
 
   return {
@@ -1115,5 +1118,245 @@ describe('executeChapterRewrite', () => {
         (call[0] as { systemPrompt: string }).systemPrompt.includes('分段改写助手'),
       ),
     ).toBe(true);
+  });
+});
+
+// ── B23：图检索注入 prompt（D-B23-6/7）────────────────────────────
+
+/** 五章蓝图：只有章数够多，"近 3 章 goal"的截断才看得出来 */
+function longBlueprintFixture(): StoryBlueprint {
+  const base = blueprintFixture();
+  return {
+    ...base,
+    chapters: [
+      { id: 'ch-1', title: '第一章 接头', goal: '交代人物与困境' },
+      { id: 'ch-2a', title: '第二章 备货', goal: '筹措盘缠' },
+      { id: 'ch-3', title: '第三章 出发', goal: '离开边城' },
+      { id: 'ch-4', title: '第四章 岔路', goal: '选择路线' },
+      // 章节目标里点名主角：种子文本命中别名/名称激活那一路（B23 主干）
+      { id: CHAPTER_ID, title: '第五章 越境', goal: '林荞越境途中遭遇伏击' },
+    ],
+  };
+}
+
+function storyGraphDepsReturning(context: {
+  entities: Array<{ name: string; kind: string; profile: string }>;
+  states: Array<{ subject: string; predicate: string; object: string; sinceChapter: number }>;
+  openThreads: Array<{
+    kind: string;
+    description: string;
+    promisedPayoff: string | null;
+    openedChapter: number;
+  }>;
+}): ChapterNodeExecutionDeps['storyGraphContext'] {
+  return {
+    graphRepo: {
+      loadPriorContext: () => ({
+        entities: context.entities.map((e, index) => ({
+          entity: {
+            id: `e-${index}`,
+            projectId: PROJECT_ID,
+            kind: e.kind as 'character',
+            canonicalName: e.name,
+            profileSummary: e.profile,
+            firstChapter: 1,
+            origin: 'extracted' as const,
+            mergedIntoId: null,
+            createdAt: NOW,
+            updatedAt: NOW,
+          },
+          aliases: [],
+        })),
+        openThreads: context.openThreads.map((t, index) => ({
+          id: `t-${index}`,
+          projectId: PROJECT_ID,
+          kind: t.kind,
+          description: t.description,
+          status: 'open' as const,
+          promisedPayoff: t.promisedPayoff,
+          openedChapter: t.openedChapter,
+          closedChapter: null,
+          sourceChapterId: 'c1',
+          sourceContentHash: null,
+          evidenceSpan: null,
+          origin: 'extracted' as const,
+          createdAt: NOW,
+          updatedAt: NOW,
+        })),
+      }),
+      clearExtracted: () => {
+        throw new Error('检索不该写');
+      },
+    },
+    stateRepo: {
+      listValidAtChapter: () =>
+        context.states.map((st, index) => ({
+          id: `s-${index}`,
+          projectId: PROJECT_ID,
+          subjectEntityId: `e-${context.entities.findIndex((e) => e.name === st.subject)}`,
+          predicate: st.predicate,
+          objectEntityId: null,
+          objectText: st.object,
+          validFromChapter: st.sinceChapter,
+          validUntilChapter: null,
+          sourceChapterId: 'c1',
+          sourceContentHash: null,
+          evidenceSpan: null,
+          confidence: null,
+          origin: 'extracted' as const,
+          supersededById: null,
+          createdAt: NOW,
+        })),
+    } as never,
+    threadRepo: {
+      listOpenAtChapter: () =>
+        context.openThreads.map((t, index) => ({
+          id: `t-${index}`,
+          projectId: PROJECT_ID,
+          kind: t.kind,
+          description: t.description,
+          status: 'open' as const,
+          promisedPayoff: t.promisedPayoff,
+          openedChapter: t.openedChapter,
+          closedChapter: null,
+          sourceChapterId: 'c1',
+          sourceContentHash: null,
+          evidenceSpan: null,
+          origin: 'extracted' as const,
+          createdAt: NOW,
+          updatedAt: NOW,
+        })),
+    } as never,
+    searchRepo: { searchFts: () => [], listIndexSources: () => [] },
+    embeddingRepo: { listAll: () => [] } as never,
+    providerRepo: createFakeProviderRepo(),
+    secretStore: {
+      hasSecret: async () => true,
+      setSecret: async () => {},
+      getSecret: async () => 'k',
+      deleteSecret: async () => {},
+    },
+    invokeEmbedding: async () => ({
+      embeddings: [],
+      usage: { inputTokens: null, totalTokens: null },
+      latencyMs: 0,
+      errorCode: 'PROVIDER_NOT_CONFIGURED' as const,
+      errorMessage: '未配置',
+    }),
+    chapterQuery: {
+      manuscriptRepo: { getActiveByProject: () => null },
+      chapterRepo: { listByManuscript: () => [] },
+      chapterVersionRepo: {},
+    } as never,
+    linkRepo: { get: () => null } as never,
+  };
+}
+
+describe('B23 图检索注入 chapterContextPayload', () => {
+  const GRAPH = {
+    entities: [{ name: '林荞', kind: 'character', profile: '走私者，旧伤未愈' }],
+    states: [{ subject: '林荞', predicate: '身份', object: '走私者', sinceChapter: 1 }],
+    openThreads: [
+      {
+        kind: 'foreshadow',
+        description: '货箱夹层里的信',
+        promisedPayoff: '揭示雇主身份',
+        openedChapter: 2,
+      },
+    ],
+  };
+
+  it('有图：payload 出现 storyGraph 段，前情目标只留近 3 章', async () => {
+    const harness = buildHarness({
+      taskType: 'CHAPTER_PLAN',
+      nodeId: 'CHAPTER_PLAN',
+      responseText: JSON.stringify({
+        schemaVersion: 1,
+        title: '第五章 越境',
+        scenes: [{ summary: '越境前的最后准备', beats: ['清点货物'] }],
+      }),
+      blueprint: longBlueprintFixture(),
+      storyGraphContext: storyGraphDepsReturning(GRAPH),
+    });
+
+    await executeChapterPlan(harness.deps, 't1');
+
+    const prompt = JSON.parse(harness.invokeModel.mock.calls[0][0].prompt) as {
+      chapter: {
+        precedingChapterGoals: Array<{ title: string }>;
+        storyGraph?: typeof GRAPH;
+      };
+    };
+    expect(prompt.chapter.storyGraph).toBeDefined();
+    expect(prompt.chapter.storyGraph!.entities[0].name).toBe('林荞');
+    expect(prompt.chapter.storyGraph!.openThreads[0].description).toBe('货箱夹层里的信');
+    // 蓝图里本章之前有 4 章，有图时只留最近 3 章
+    expect(prompt.chapter.precedingChapterGoals.map((c) => c.title)).toEqual([
+      '第二章 备货',
+      '第三章 出发',
+      '第四章 岔路',
+    ]);
+  });
+
+  it('无图（功能关闭）：payload 保持全量前情目标且没有 storyGraph 字段', async () => {
+    const harness = buildHarness({
+      taskType: 'CHAPTER_PLAN',
+      nodeId: 'CHAPTER_PLAN',
+      responseText: JSON.stringify({
+        schemaVersion: 1,
+        title: '第五章 越境',
+        scenes: [{ summary: '越境前的最后准备', beats: ['清点货物'] }],
+      }),
+      blueprint: longBlueprintFixture(),
+    });
+
+    await executeChapterPlan(harness.deps, 't1');
+
+    const prompt = JSON.parse(harness.invokeModel.mock.calls[0][0].prompt) as {
+      chapter: { precedingChapterGoals: unknown[]; storyGraph?: unknown };
+    };
+    expect(prompt.chapter.storyGraph).toBeUndefined();
+    expect(prompt.chapter.precedingChapterGoals).toHaveLength(4);
+  });
+
+  it('检索失败降级：prompt 与"功能关闭"逐字节一致（回归保障）', async () => {
+    const responseText = JSON.stringify({
+      schemaVersion: 1,
+      title: '第五章 越境',
+      scenes: [{ summary: '越境前的最后准备', beats: ['清点货物'] }],
+    });
+    const baseline = buildHarness({
+      taskType: 'CHAPTER_PLAN',
+      nodeId: 'CHAPTER_PLAN',
+      responseText,
+      blueprint: longBlueprintFixture(),
+    });
+    await executeChapterPlan(baseline.deps, 't1');
+
+    const brokenDeps = storyGraphDepsReturning(GRAPH);
+    const degraded = buildHarness({
+      taskType: 'CHAPTER_PLAN',
+      nodeId: 'CHAPTER_PLAN',
+      responseText,
+      blueprint: longBlueprintFixture(),
+      storyGraphContext: {
+        ...brokenDeps!,
+        graphRepo: {
+          loadPriorContext: () => {
+            throw new Error('DB 炸了');
+          },
+          clearExtracted: () => {
+            throw new Error('检索不该写');
+          },
+        },
+      },
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await executeChapterPlan(degraded.deps, 't1');
+    spy.mockRestore();
+
+    expect(degraded.invokeModel.mock.calls[0][0].prompt).toBe(
+      baseline.invokeModel.mock.calls[0][0].prompt,
+    );
   });
 });

@@ -248,6 +248,15 @@ export interface StoryStateRepositoryPort {
     predicate: string,
   ): ReadonlyArray<StoryStateData>;
   listBySourceChapter(projectId: string, sourceChapterId: string): ReadonlyArray<StoryStateData>;
+  /**
+   * 因果截断（D-B23-5）：在第 N 章**开篇时刻**成立的状态边。
+   *
+   * 判据 `valid_from < N AND (valid_until IS NULL OR valid_until >= N)`：
+   * 前半截防剧透（第 N 章自己确立的状态不喂回给它），后半截让"第 N 章当时
+   * 才被改写的旧状态"仍然可见——重生成第 N 章时它就是当时的事实。
+   * user 覆盖层一并返回，取舍交给调用方（D14 §2：user 优先）。
+   */
+  listValidAtChapter(projectId: string, chapterNumber: number): ReadonlyArray<StoryStateData>;
   /** 关闭旧边：只填 valid_until_chapter + superseded_by_id */
   supersede(
     projectId: string,
@@ -264,6 +273,12 @@ export interface StoryThreadRepositoryPort {
   getById(projectId: string, id: string): StoryThreadData | null;
   findOpenByDescription(projectId: string, description: string): StoryThreadData | null;
   listOpen(projectId: string): ReadonlyArray<StoryThreadData>;
+  /**
+   * 第 N 章时点仍未核销的线程（D-B23-5）：
+   * `opened < N AND (closed IS NULL OR closed >= N)`。
+   * 与 listOpen 的区别是它回答"当时"而不是"现在"。
+   */
+  listOpenAtChapter(projectId: string, chapterNumber: number): ReadonlyArray<StoryThreadData>;
   /** 核销：status → closed + closed_chapter */
   close(projectId: string, id: string, closedChapter: number, now: string): boolean;
   /** 重抽某章前撤回该章做过的核销，返回重开行数 */

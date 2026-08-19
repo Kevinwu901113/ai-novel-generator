@@ -65,6 +65,11 @@ import {
 import { compensateFinalization } from './chapter-generation.js';
 import { resolveChapterLengthRequirement } from './chapter-length.js';
 import { analyzeChineseProseQuality } from './prose-quality.js';
+import {
+  retrieveStoryGraphForChapter,
+  type StoryGraphContext,
+  type StoryGraphContextDeps,
+} from './story-graph-retrieval.js';
 
 // ── deps / 结果类型 ───────────────────────────────────────────────
 
@@ -79,6 +84,13 @@ export interface ChapterNodeExecutionDeps extends TaskEngineDeps {
   readonly critiqueRepo: ChapterCritiqueRepositoryPort;
   /** B10（D-B10-3）：候选 Gate 的改写意见（图决策 DTO 无 feedback 字段，独立存储） */
   readonly rewriteFeedbackRepo: ChapterRewriteFeedbackRepositoryPort;
+  /**
+   * B23：故事图谱检索（D-B23-1/7）。
+   *
+   * 缺省 undefined = 功能关闭：worker 在装配阶段按 env 决定传不传，
+   * 既有调用方（测试、旧装配）一行不改就是旧行为。
+   */
+  readonly storyGraphContext?: StoryGraphContextDeps;
 }
 
 /** 最终事务内持久化的产物摘要（决定 envelope 与 task.result） */
@@ -521,6 +533,13 @@ export interface ChapterTaskContext {
   readonly critiques: ReadonlyArray<ChapterCritique>;
   /** 用户对当前候选提出的改写意见（B10 D-B10-3；未提意见时 null） */
   readonly userFeedback: string | null;
+  /**
+   * B23：图检索切片。
+   *
+   * null 有两种来源——功能关闭，或检索失败降级；两者对 prompt 的效果相同
+   * （不输出 storyGraph 段、前情目标保持全量）。图确实为空时是**空对象**而非 null。
+   */
+  readonly storyGraph: StoryGraphContext | null;
 }
 
 function countProseCharacters(content: string): number {
@@ -567,7 +586,7 @@ function readBinding(
   };
 }
 
-function loadContext(
+async function loadContext(
   deps: ChapterNodeExecutionDeps,
   input: {
     readonly projectId: string;
@@ -575,7 +594,7 @@ function loadContext(
     readonly nodeId: string;
     readonly payload: ChapterTaskPayload;
   },
-): ChapterTaskContext {
+): Promise<ChapterTaskContext> {
   const binding = readBinding(deps, input.graphRunId, input.projectId);
   const found = deps.blueprintRepo.getById(input.projectId, binding.storyBlueprintId);
   if (!found) {
@@ -596,6 +615,26 @@ function loadContext(
   } catch {
     throw new TaskExecutionError('TASK_EXECUTION_FAILED', 'creationSpec sections 损坏');
   }
+  const scenePlan = deps.scenePlanRepo.getLatestByRun(input.projectId, input.graphRunId);
+  const chapter = blueprint.chapters[chapterIndex]!;
+
+  // B23：种子文本 = 本章标题 + 目标 +（已有的）场景计划文本。
+  // 四类章节任务共用这一处装配，图检索一次接线全线受益（D-B23-6）。
+  const storyGraph = deps.storyGraphContext
+    ? await retrieveStoryGraphForChapter(deps.storyGraphContext, {
+        projectId: input.projectId,
+        blueprintChapterId: binding.blueprintChapterId,
+        seedText: [
+          chapter.title,
+          chapter.goal,
+          scenePlan?.title ?? '',
+          ...(scenePlan?.scenes ?? []).map((scene) => [scene.summary, ...scene.beats].join(' ')),
+        ]
+          .filter((part) => part.length > 0)
+          .join('\n'),
+      })
+    : null;
+
   const candidate = deps.candidateRepo.getLatestByRun(input.projectId, input.graphRunId);
   const critiques = candidate
     ? deps.critiqueRepo.listByCandidateRevision(
@@ -610,11 +649,11 @@ function loadContext(
     nodeId: input.nodeId,
     payload: input.payload,
     blueprint,
-    chapter: blueprint.chapters[chapterIndex]!,
+    chapter,
     chapterNumber: chapterIndex + 1,
     precedingChapters: blueprint.chapters.slice(0, chapterIndex),
     creationSpec,
-    scenePlan: deps.scenePlanRepo.getLatestByRun(input.projectId, input.graphRunId),
+    scenePlan,
     candidate,
     critiques,
     userFeedback: candidate
@@ -624,6 +663,7 @@ function loadContext(
           candidate.revisionNo,
         )?.feedback ?? null)
       : null,
+    storyGraph,
   };
 }
 
@@ -642,14 +682,22 @@ function blueprintContextPayload(ctx: ChapterTaskContext): Record<string, unknow
   };
 }
 
+/** 有图时前情目标只留近 3 章：远章的"发生过什么"由图状态替代（D-B23-6） */
+const PRECEDING_GOALS_WITH_GRAPH = 3;
+
 function chapterContextPayload(ctx: ChapterTaskContext): Record<string, unknown> {
-  return {
+  const preceding = ctx.storyGraph
+    ? ctx.precedingChapters.slice(-PRECEDING_GOALS_WITH_GRAPH)
+    : ctx.precedingChapters;
+  const base = {
     chapterNumber: ctx.chapterNumber,
     totalChapters: ctx.blueprint.chapters.length,
     title: ctx.chapter.title,
     goal: ctx.chapter.goal,
-    precedingChapterGoals: ctx.precedingChapters.map((c) => ({ title: c.title, goal: c.goal })),
+    precedingChapterGoals: preceding.map((c) => ({ title: c.title, goal: c.goal })),
   };
+  // 无图（关闭或降级）时连字段都不出现：payload 与 B23 之前逐字节一致
+  return ctx.storyGraph ? { ...base, storyGraph: ctx.storyGraph } : base;
 }
 
 export function buildChapterPlanPrompt(ctx: ChapterTaskContext): string {
@@ -1248,7 +1296,7 @@ async function runChapterModelTask<P>(
   let systemPrompt: string;
   let prompt: string;
   try {
-    ctx = loadContext(deps, {
+    ctx = await loadContext(deps, {
       projectId: task.projectId,
       graphRunId: execution.graphRunId,
       nodeId: execution.nodeId,

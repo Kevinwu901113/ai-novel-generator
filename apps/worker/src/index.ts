@@ -156,7 +156,7 @@ import {
   dispatchStoryGraphCommand,
   type StoryGraphHandlerContext,
 } from './story-graph-handlers.js';
-import type { StoryGraphExtractEngineDeps } from '@ai-novel/task-engine';
+import type { StoryGraphContextDeps, StoryGraphExtractEngineDeps } from '@ai-novel/task-engine';
 import {
   pumpStoryGraphExtract,
   recoverPendingStoryGraphExtracts as recoverPendingStoryGraphExtractsModule,
@@ -999,8 +999,43 @@ export interface RecoveryOptions {
   readonly scheduleTask?: (projectId: string, taskId: string) => void;
 }
 
-/** 构建真实 Graph task scheduler（幂等；执行 Graph 全部 task-backed 节点的任务） */
-function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
+/**
+ * 图检索开关（D-B23-7）：环境变量 `AI_NOVEL_STORY_GRAPH_CONTEXT=off` 全局关，缺省开。
+ *
+ * 判定放在装配阶段：关掉时连依赖都不构造，章节任务侧看到的就是"没有这个能力"，
+ * 而不是"有能力但被跳过"——dogfood 双臂对照要的正是这种干净的两态。
+ */
+export function isStoryGraphContextEnabled(): boolean {
+  return (process.env.AI_NOVEL_STORY_GRAPH_CONTEXT ?? '').trim().toLowerCase() !== 'off';
+}
+
+/** 章节任务的图检索依赖（三路召回仓库 + 章号映射 + 嵌入通道） */
+function buildStoryGraphContextDeps(projDb: ProjectDatabase, clock: Clock): StoryGraphContextDeps {
+  return {
+    graphRepo: projDb.getStoryGraphRepository(),
+    stateRepo: projDb.getStoryStateRepository(),
+    threadRepo: projDb.getStoryThreadRepository(),
+    searchRepo: projDb.getStoryGraphSearch(),
+    embeddingRepo: projDb.getStoryEmbeddingRepository(),
+    providerRepo: new ProviderProfileRepositoryAdapter(appDb!),
+    secretStore: secretStore!,
+    invokeEmbedding: async (input: {
+      baseUrl: string;
+      model: string;
+      apiKey: string;
+      input: ReadonlyArray<string>;
+      protocol?: ProviderProtocol;
+    }) => invokeEmbedding({ fetch: globalThis.fetch, clock }, input),
+    chapterQuery: storyGraphChapterQueryDeps(projDb),
+    linkRepo: projDb.getManuscriptChapterLinkRepository(),
+  };
+}
+
+/**
+ * 构建真实 Graph task scheduler（幂等；执行 Graph 全部 task-backed 节点的任务）。
+ * 导出供装配测试断言"开关关闭时依赖里没有图检索"（B23 / D-B23-7）。
+ */
+export function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
   return {
     openDb: (projectId: string) => getProjectDb(projectId),
     buildEngineDeps: (projDb: ProjectDatabase) => {
@@ -1054,6 +1089,11 @@ function buildGraphTaskRunnerDeps(): GraphTaskRunnerDeps {
         candidateRepo: projDb.getChapterCandidateRepository(),
         critiqueRepo: projDb.getChapterCritiqueRepository(),
         rewriteFeedbackRepo: projDb.getChapterRewriteFeedbackRepository(),
+        // B23（D-B23-7）：图检索接线。开关关闭时**不传这个字段**，
+        // loadContext 那边 undefined 即等价于 B23 之前的行为。
+        storyGraphContext: isStoryGraphContextEnabled()
+          ? buildStoryGraphContextDeps(projDb, clock)
+          : undefined,
       };
     },
     getTaskRepo: (projDb: ProjectDatabase) => new TaskRepositoryAdapter(projDb),

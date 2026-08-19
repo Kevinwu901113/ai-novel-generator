@@ -582,6 +582,19 @@ export class StoryStateRepositoryImpl implements StoryStateRepositoryPort {
     return rows.map(decodeState);
   }
 
+  /** 因果截断（D-B23-5）：第 N 章开篇时刻成立的边，含 user 覆盖层 */
+  listValidAtChapter(projectId: string, chapterNumber: number): ReadonlyArray<StoryStateRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM story_states
+          WHERE project_id = ? AND valid_from_chapter < ?
+            AND (valid_until_chapter IS NULL OR valid_until_chapter >= ?)
+          ORDER BY valid_from_chapter DESC, created_at ASC, id ASC`,
+      )
+      .all(projectId, chapterNumber, chapterNumber) as Array<Record<string, unknown>>;
+    return rows.map(decodeState);
+  }
+
   /**
    * 关闭旧边：填 valid_until_chapter + superseded_by_id（append-only 的唯一写法）。
    *
@@ -735,6 +748,20 @@ export class StoryThreadRepositoryImpl implements StoryThreadRepositoryPort {
           ORDER BY opened_chapter ASC, created_at ASC, id ASC`,
       )
       .all(projectId) as Array<Record<string, unknown>>;
+    return rows.map(decodeThread);
+  }
+
+  /** 第 N 章时点仍未核销的线程（D-B23-5：回答"当时"而不是"现在"） */
+  listOpenAtChapter(projectId: string, chapterNumber: number): ReadonlyArray<StoryThreadRow> {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM story_threads
+          WHERE project_id = ? AND opened_chapter < ?
+            AND (closed_chapter IS NULL OR closed_chapter >= ?)
+            AND status <> 'abandoned'
+          ORDER BY opened_chapter ASC, created_at ASC, id ASC`,
+      )
+      .all(projectId, chapterNumber, chapterNumber) as Array<Record<string, unknown>>;
     return rows.map(decodeThread);
   }
 
